@@ -60,7 +60,7 @@ def clusterDigits(imgNb):
 	while vidInd < len(vidPaths):
 		#The number of images decoded in the current video
 		videoImgCount = 0
-		print(vidInd)
+
 		cap = cv2.VideoCapture(vidPaths[vidInd])
 		ret, frame = cap.read()
 		while ret:
@@ -85,7 +85,6 @@ def clusterDigits(imgNb):
 
 	print("Clustering the digits ... ")
 	for key in pos.keys():
-		print("\t ",key)
 		imgPaths = glob.glob("../data/timeImg/{}/*.png".format(key))
 		data = []
 
@@ -131,7 +130,6 @@ class DigitIdentifier:
 				#This is a 2D matrix where each row is one example of the class
 				imgList = np.concatenate(list(map(lambda x:cv2.imread(x).reshape((-1))[np.newaxis],sorted(glob.glob(label+"/*.png".format(digName)))[:neigbhorsNb])),axis=0)
 				self.refDict[digName][label] = imgList
-				print(digName,self.refDict[digName][label].shape)
 
 	def findDigits(self,img):
 		''' Crop the digits on an image and identify them with KNN algorithm
@@ -151,7 +149,7 @@ class DigitIdentifier:
 
 		rawResDict = {}
 		for digName in pos.keys():
-			digit = frame[pos[digName]["Y1"]:pos[digName]["Y2"],pos[digName]["X1"]:pos[digName]["X2"],:]
+			digit = img[pos[digName]["Y1"]:pos[digName]["Y2"],pos[digName]["X1"]:pos[digName]["X2"],:]
 			flatDigit = digit.reshape((-1))
 
 			#This 3D tensor contains all the examples for all the class
@@ -162,8 +160,6 @@ class DigitIdentifier:
 			ind = np.argmin(meanDist)
 
 			label = sorted(glob.glob("../data/timeImg/{}/*/".format(digName)))[ind].split("/")[-2]
-
-			cv2.imwrite("../data/{}_{}.png".format(digName,label),digit)
 
 			rawResDict[digName] = int(label) if digit.sum() >= blankDigitNorm else None
 
@@ -182,7 +178,7 @@ class DigitIdentifier:
 			resDict["time"] = rawResDict["digit2"]+0.1*rawResDict["digit1"]
 		else:
 			#If the time is inferior to 100, the fourth digit will be blank
-			if frame[hundredsDigitPos["Y1"]:hundredsDigitPos["Y2"],hundredsDigitPos["X1"]:hundredsDigitPos["X2"],:].sum() < blankDigitNorm:
+			if img[hundredsDigitPos["Y1"]:hundredsDigitPos["Y2"],hundredsDigitPos["X1"]:hundredsDigitPos["X2"],:].sum() < blankDigitNorm:
 				resDict["time"] = 10*rawResDict["digit3"]+rawResDict["digit2"]+0.1*rawResDict["digit1"]
 			else:
 				resDict["time"] = 100+10*rawResDict["digit3"]+rawResDict["digit2"]+0.1*rawResDict["digit1"]
