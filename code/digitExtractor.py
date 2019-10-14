@@ -193,14 +193,4 @@ if __name__ == "__main__":
 
 	args = parser.parse_args()
 
-	#clusterDigits(args.img_nb)
-	digitId = DigitIdentifier()
-
-	cap = cv2.VideoCapture("../data/HH569 EMB2 FREEZE.avi")
-	ret, frame = cap.read()
-	imgCount = 0
-	while ret:
-		resDict = digitId.findDigits(frame)
-		cv2.imwrite("../data/{}_wellInd{}_time{}.png".format(imgCount,resDict["wellInd"],resDict["time"]),frame)
-		ret, frame = cap.read()
-		imgCount += 1
+	clusterDigits(args.img_nb)
