@@ -8,7 +8,7 @@ import numpy as np
 import digitExtractor
 import cv2
 
-labels = ["tPB2","tPNa","tPNf","t2","t3","t4","t5","t6","t7","t8","t9+","tM","tSB","tB","tEB","tHB"]
+labelDict = {"tPB2":0,"tPNa":1,"tPNf":2,"t2":3,"t3":4,"t4":5,"t5":6,"t6":7,"t7":8,"t8":9,"t9+":10,"tM":11,"tSB":12,"tB":13,"tEB":14,"tHB":15}
 
 def formatData():
 
@@ -35,10 +35,6 @@ def formatData():
 
     digExt = digitExtractor.DigitIdentifier()
 
-    badlyPositionedImageNb = 0
-    badlyPositionedImageVidNames = []
-    totalImgNb = 0
-
     for vidPath in vidPaths:
         print(vidPath)
 
@@ -47,11 +43,7 @@ def formatData():
         if not os.path.exists("../data/annotations/{}_phases.csv".format(vidName)):
 
             csvPath = os.path.dirname(vidPath) + "/"+ os.path.basename(vidPath).split("_")[0] + "_EXPORT.csv"
-
-            if not os.path.exists(csvPath):
-                raise OSError("Missing csv path for {}".format(vidPath))
-
-            df = pd.read_csv(csvPath)[["Well"]+labels]
+            df = pd.read_csv(csvPath)[["Well"]+list(labelDict.keys())]
 
             labDict = {}
             imgCount = 0
@@ -67,22 +59,12 @@ def formatData():
             while ret:
 
                 #Select only the label columns of the well
-                line = df.loc[df['Well'] == wellInd][labels]
+                line = df.loc[df['Well'] == wellInd][list(labelDict.keys())]
 
                 #Removes label columns that do not appear in the video (i.e. those with NaN value)
                 line = line.transpose()
                 line = line[np.isnan(line[line.columns[0]]) == 0]
                 line = line.transpose()
-
-                #Counting the number of badly positionned images
-                #If the well index found on the image does not appear in the excel sheet,
-                #or is different from the index found in the begining of the video
-                #it means the well index found is wrong and therefore the image is baddly positionned
-                lineTest = df.loc[df['Well'] ==  resDict["wellInd"]][labels]
-                if lineTest.empty:
-                    badlyPositionedImageNb += 1
-                    if not vidName in badlyPositionedImageVidNames:
-                        badlyPositionedImageVidNames.append(vidName)
 
                 #Getting the true label of the image
                 label = line.columns[max((resDict["time"] > line).sum(axis=1).item()-1,0)]
@@ -104,18 +86,17 @@ def formatData():
 
                 imgCount +=1
 
-            totalImgNb += imgCount
-
             #Adding the last phase
             labDict[currentLabel] = (startOfCurrentPhase,imgCount-1)
 
             #Writing the start and end frames of each phase in a csv file
             with open("../data/annotations/{}_phases.csv".format(vidName),"w") as text_file:
-                for label in labels:
+                for label in labelDict.keys():
                     if label in labDict.keys():
                         print(label+","+str(labDict[label][0])+","+str(labDict[label][1]),file=text_file)
 
-    print("proportion of badly positioned images : ",badlyPositionedImageNb/totalImgNb, "in videos : ",badlyPositionedImageVidNames)
+def getLabels():
+    return labelDict
 
 if __name__ == "__main__":
     formatData()
