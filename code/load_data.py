@@ -55,14 +55,13 @@ class SeqTrDataset(torch.utils.data.Dataset):
     Args:
     - propStart (float): the proportion of the dataset at which to start using the videos. For example : propEnd=0.5 and propEnd=1 will only use the last half of the videos
     - propEnd (float): the proportion of the dataset at which to stop using the videos. For example : propEnd=0 and propEnd=0.5 will only use the first half of the videos
-    - lMin (int): the minimum length of a sequence during training
-    - lMax (int): the maximum length of a sequence during training
+    - trLen (int): the length of a sequence during training
     - imgSize (int): the size of each side of the image
     - resizeImage (bool): a boolean to indicate if the image should be resized using cropping or not
     - exp_id (str): the name of the experience
     '''
 
-    def __init__(self,propStart,propEnd,lMin,lMax,imgSize,resizeImage,exp_id):
+    def __init__(self,propStart,propEnd,trLen,imgSize,resizeImage,exp_id):
 
         super(SeqTrDataset, self).__init__()
 
@@ -70,7 +69,7 @@ class SeqTrDataset(torch.utils.data.Dataset):
 
         self.videoPaths = np.array(self.videoPaths)[int(propStart*len(self.videoPaths)):int(propEnd*len(self.videoPaths))]
         self.imgSize = imgSize
-        self.lMin,self.lMax = lMin,lMax
+        self.trLen = trLen
         self.nbImages = 0
         self.exp_id = exp_id
 
@@ -88,8 +87,8 @@ class SeqTrDataset(torch.utils.data.Dataset):
 
     def __getitem__(self,vidInd):
 
-        data = torch.zeros(self.lMax,3,self.imgSize,self.imgSize)
-        targ = torch.zeros(self.lMax)
+        data = torch.zeros(self.trLen,3,self.imgSize,self.imgSize)
+        targ = torch.zeros(self.trLen)
         vidNames = []
 
         vidName = os.path.basename(os.path.splitext(self.videoPaths[vidInd])[0])
@@ -104,15 +103,15 @@ class SeqTrDataset(torch.utils.data.Dataset):
         frameInds = np.arange(frameNb)
 
         ################# Frame selection ##################
-        startFrame = np.random.randint(frameNb-self.lMax)
-        frameInds,gt = frameInds[startFrame:startFrame+self.lMax],gt[startFrame:startFrame+self.lMax]
+        startFrame = np.random.randint(frameNb-self.trLen)
+        frameInds,gt = frameInds[startFrame:startFrame+self.trLen],gt[startFrame:startFrame+self.trLen]
 
         video = pims.Video(self.videoPaths[vidInd])
 
         #Building the frame sequence
         frameSeq = torch.cat(list(map(lambda x:self.preproc(video[x]).unsqueeze(0),np.array(frameInds))),dim=0)
 
-        return frameSeq.unsqueeze(0),torch.tensor(gt).float().unsqueeze(0),vidName
+        return frameSeq.unsqueeze(0),torch.tensor(gt).unsqueeze(0),vidName
 
 class TestLoader():
     '''
@@ -179,8 +178,8 @@ class TestLoader():
 
 def buildSeqTrainLoader(args):
 
-    train_dataset = SeqTrDataset(args.train_part_beg,args.train_part_end,args.l_min,args.l_max,\
-                                        args.img_size,args.resize_image,args.exp_id,args.avg_scene_len)
+    train_dataset = SeqTrDataset(args.train_part_beg,args.train_part_end,args.tr_len,\
+                                        args.img_size,args.resize_image,args.exp_id)
     sampler = Sampler(len(train_dataset.videoPaths))
     trainLoader = torch.utils.data.DataLoader(dataset=train_dataset,batch_size=args.batch_size,sampler=sampler, collate_fn=collateSeq, # use custom collate function here
                       pin_memory=False,num_workers=args.num_workers)
@@ -231,9 +230,7 @@ def addArgs(argreader):
     argreader.parser.add_argument('--val_batch_size', type=int,metavar='BS',
                         help='The batchsize to use for validation')
 
-    argreader.parser.add_argument('--l_min', type=int,metavar='LMIN',
-                        help='The minimum length of a training sequence')
-    argreader.parser.add_argument('--l_max', type=int,metavar='LMAX',
+    argreader.parser.add_argument('--tr_len', type=int,metavar='LMAX',
                         help='The maximum length of a training sequence')
     argreader.parser.add_argument('--val_l', type=int,metavar='LMAX',
                         help='Length of sequences for validation.')
@@ -257,6 +254,8 @@ def addArgs(argreader):
     argreader.parser.add_argument('--resize_image', type=args.str2bool, metavar='S',
                         help='to resize the image to the size indicated by the img_width and img_heigth arguments.')
 
+    argreader.parser.add_argument('--class_nb', type=int, metavar='S',
+                        help='The number of class of to model')
 
     return argreader
 
@@ -266,8 +265,8 @@ if __name__ == "__main__":
     train_part_end = 0.5
     val_part_beg = 0.5
     val_part_end = 1
-    l_min = 5
-    l_max = 5
+
+    tr_len = 5
     val_l = 5
     img_size = 500
     resize_image = False
@@ -277,7 +276,7 @@ if __name__ == "__main__":
     num_workers = 1
 
     '''
-    train_dataset = SeqTrDataset(train_part_beg,train_part_end,l_min,l_max,\
+    train_dataset = SeqTrDataset(train_part_beg,train_part_end,tr_len,\
                                         img_size,resize_image,exp_id)
     sampler = Sampler(len(train_dataset.videoPaths))
     trainLoader = torch.utils.data.DataLoader(dataset=train_dataset,batch_size=batch_size,sampler=sampler, collate_fn=collateSeq, # use custom collate function here
