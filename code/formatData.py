@@ -12,13 +12,12 @@ labelDict = {"tPB2":0,"tPNa":1,"tPNf":2,"t2":3,"t3":4,"t4":5,"t5":6,"t6":7,"t7":
 
 def formatData():
 
-    vidPaths=sorted(glob.glob("../data/*avi"))
-
     #Adding an underscore between the name of the video and the "EXPORT.xls" in the name of the excel files
     for xlsPath in glob.glob("../data/*.xls"):
         #Checking if it has already been done before doing it so it does not add a second underscore
         if xlsPath.find("_EXPORT") == -1:
             newName = xlsPath[:xlsPath.find("EXPORT")]+"_EXPORT.xls"
+            newName = newName.replace(" ","")
             os.rename(xlsPath,newName)
 
     #Removing space in video names
@@ -34,6 +33,8 @@ def formatData():
         subprocess.call("libreoffice --headless --convert-to csv --outdir ../data/ ../data/*.xls",shell=True)
 
     digExt = digitExtractor.DigitIdentifier()
+
+    vidPaths=sorted(glob.glob("../data/*avi"))
 
     for vidPath in vidPaths:
         print(vidPath)
@@ -61,9 +62,12 @@ def formatData():
                 #Select only the label columns of the well
                 line = df.loc[df['Well'] == wellInd][list(labelDict.keys())]
 
+                for col in line.columns:
+                    line[col] = line[col].apply(lambda x:x.replace(",",".") if type(x) == str else x).astype(float)
+
                 #Removes label columns that do not appear in the video (i.e. those with NaN value)
                 line = line.transpose()
-                line = line[np.isnan(line[line.columns[0]]) == 0]
+                line = line[np.isnan(line) == 0]
                 line = line.transpose()
 
                 #Getting the true label of the image
