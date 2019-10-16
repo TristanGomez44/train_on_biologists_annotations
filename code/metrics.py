@@ -14,4 +14,4 @@ def binaryToMetrics(pred,target):
 
     acc = (pred == target).sum()/(pred.numel())
 
-    return acc
+    return {"Accuracy":acc}
