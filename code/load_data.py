@@ -24,14 +24,14 @@ class Sampler(torch.utils.data.sampler.Sampler):
     """ The sampler for the SeqTrDataset dataset
     """
 
-    def __init__(self, nb_videos):
+    def __init__(self, nb_videos,nb_images):
         self.nb_videos = nb_videos
-
+        self.nb_images = nb_images
     def __iter__(self):
-        return iter(torch.randperm(self.nb_videos))
+        return iter(torch.randint(0,self.nb_videos,size=(self.nb_images,)))
 
     def __len__(self):
-        return self.nb_videos
+        return self.nb_images
 
 def collateSeq(batch):
 
@@ -180,7 +180,7 @@ def buildSeqTrainLoader(args):
 
     train_dataset = SeqTrDataset(args.train_part_beg,args.train_part_end,args.tr_len,\
                                         args.img_size,args.resize_image,args.exp_id)
-    sampler = Sampler(len(train_dataset.videoPaths))
+    sampler = Sampler(len(train_dataset.videoPaths),train_dataset.nbImages)
     trainLoader = torch.utils.data.DataLoader(dataset=train_dataset,batch_size=args.batch_size,sampler=sampler, collate_fn=collateSeq, # use custom collate function here
                       pin_memory=False,num_workers=args.num_workers)
 
