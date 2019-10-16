@@ -98,5 +98,13 @@ def formatData():
 def getLabels():
     return labelDict
 
+def getReversedLabels():
+
+    revDict = {}
+    for key in labelDict.keys():
+        revDict[labelDict[key]] = key
+
+    return revDict
+
 if __name__ == "__main__":
     formatData()
