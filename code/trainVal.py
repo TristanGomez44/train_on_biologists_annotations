@@ -56,38 +56,36 @@ def epochSeqTr(model,optim,log_interval,loader, epoch, args,writer,**kwargs):
 
     for batch_idx,(data,target,vidNames) in enumerate(loader):
 
-        if target.sum() > 0:
+        if (batch_idx % log_interval == 0):
+            print("\t",batch_idx*len(data)*len(data[0]),"/",len(loader.dataset))
 
-            if (batch_idx % log_interval == 0):
-                print("\t",batch_idx*len(data)*len(target[0]),"/",len(loader.dataset))
+        #Puting tensors on cuda
+        if args.cuda:
+            data, target = data.cuda(), target.cuda()
 
-            #Puting tensors on cuda
-            if args.cuda:
-                data, target = data.cuda(), target.cuda()
+        #Computing predictions
+        output = model(data)
 
-            #Computing predictions
-            output = model(data)
+        #Computing loss
+        output = output[:,args.train_step_to_ignore:output.size(1)-args.train_step_to_ignore]
+        target = target[:,args.train_step_to_ignore:target.size(1)-args.train_step_to_ignore]
 
-            #Computing loss
-            output = output[:,args.train_step_to_ignore:output.size(1)-args.train_step_to_ignore]
-            target = target[:,args.train_step_to_ignore:target.size(1)-args.train_step_to_ignore]
+        loss = F.cross_entropy(output.view(output.size(0)*output.size(1),-1), target.view(-1))
 
-            loss = F.cross_entropy(output.view(output.size(0)*output.size(1),-1), target.view(-1))
+        loss.backward()
+        optim.step()
+        optim.zero_grad()
 
-            loss.backward()
-            optim.step()
-            optim.zero_grad()
+        #Metrics
+        pred = output.argmax(dim=-1)
+        metrDict_sample = metrics.binaryToMetrics(pred,target)
 
-            #Metrics
-            pred = output.argmax(dim=-1)
-            acc = metrics.binaryToMetrics(pred,target)
+        metrDict["Accuracy"] += metrDict_sample["Accuracy"]
+        metrDict["Loss"] += loss.detach().data.item()
+        validBatch += 1
 
-            metrDict["Accuracy"] += acc
-            metrDict["Loss"] += loss.detach().data.item()
-            validBatch += 1
-
-            if validBatch > 3 and args.debug:
-                break
+        if validBatch > 3 and args.debug:
+            break
 
     torch.save(model.state_dict(), "../models/{}/model{}_epoch{}".format(args.exp_id,args.model_id, epoch))
     writeSummaries(metrDict,validBatch,writer,epoch,"train",args.model_id,args.exp_id)
