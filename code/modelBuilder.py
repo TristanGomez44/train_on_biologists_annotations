@@ -3,7 +3,7 @@ from torch import nn
 from torch.nn import functional as F
 from torch.nn import DataParallel
 import resnet
-
+import vgg
 import args
 
 def buildFeatModel(featModelName):
@@ -16,7 +16,12 @@ def buildFeatModel(featModelName):
 
     '''
 
-    featModel = getattr(resnet,featModelName)(pretrained=True)
+    if featModelName.find("resnet") != -1:
+        featModel = getattr(resnet,featModelName)(pretrained=True)
+    elif featModelName.find("vgg") != -1:
+        featModel = getattr(vgg,featModelName)(pretrained=True)
+    else:
+        raise ValueError("Unknown model type : ",featModelName)
 
     return featModel
 
@@ -31,6 +36,8 @@ class CNN(nn.Module):
 
         if featModelName=="resnet50" or featModelName=="resnet101" or featModelName=="resnet151":
             self.nbFeat = 256*2**(4-1)
+        elif featModelName.find("vgg") != -1:
+            self.nbFeat = 4096
         else:
             self.nbFeat = 64*2**(4-1)
 
