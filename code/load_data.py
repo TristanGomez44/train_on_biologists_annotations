@@ -174,7 +174,7 @@ class TestLoader():
         else:
             self.currFrameInd += L
 
-        return frameSeq.unsqueeze(0),torch.tensor(gt).float().unsqueeze(0),vidName,torch.tensor(frameInds).int()
+        return frameSeq.unsqueeze(0),torch.tensor(gt).unsqueeze(0),vidName,torch.tensor(frameInds).int()
 
 def buildSeqTrainLoader(args):
 
