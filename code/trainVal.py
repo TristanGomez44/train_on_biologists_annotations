@@ -47,7 +47,7 @@ def epochSeqTr(model,optim,log_interval,loader, epoch, args,writer,**kwargs):
 
     print("Epoch",epoch," : train")
 
-    metrDict = {"Loss":0,"Accuracy":0}
+    metrDict = {"Loss":0,"Accuracy":0,"Accuracy (Viterbi)":0}
 
     validBatch = 0
 
@@ -77,9 +77,9 @@ def epochSeqTr(model,optim,log_interval,loader, epoch, args,writer,**kwargs):
         optim.zero_grad()
 
         #Metrics
-        metrDict_sample = metrics.binaryToMetrics(output,target,model.transMat)
+        metDictSample = metrics.binaryToMetrics(output,target,model.transMat)
         for key in metDictSample.keys():
-            metrDict[key] += metrDict_sample[key]
+            metrDict[key] += metDictSample[key]
         metrDict["Loss"] += loss.detach().data.item()
         validBatch += 1
 
@@ -126,7 +126,7 @@ def epochSeqVal(model,log_interval,loader, epoch, args,writer):
 
     print("Epoch",epoch," : val")
 
-    metrDict = {"Loss":0,"Accuracy":0}
+    metrDict = {"Loss":0,"Accuracy":0,"Accuracy (Viterbi)":0}
 
     nbVideos = 0
 
@@ -450,7 +450,7 @@ def main(argv=None):
         outDictEpochs = {}
         targDictEpochs = {}
 
-        net.transMat = computeTransMat(net,args.train_part_beg,args.train_part_end)
+        computeTransMat(net,args.train_part_beg,args.train_part_end)
 
         for epoch in range(startEpoch, args.epochs + 1):
 
