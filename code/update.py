@@ -24,7 +24,7 @@ def computeScore(model,allFeats,allTarget,valLTemp,vidName):
 
     for i in range(len(chunkList)):
 
-        output = model.computeScore(chunkList[i])
+        output = model.tempModel(chunkList[i],batchSize=1)
 
         if allOutput is None:
             allOutput = output

@@ -148,7 +148,7 @@ def epochSeqVal(model,log_interval,loader, epoch, args,writer):
         if args.cuda:
             data, target,frameInds = data.cuda(), target.cuda(),frameInds.cuda()
 
-        feat = model.computeFeat(data).data
+        feat = model.visualModel(data).data
         update.updateFrameDict(frameIndDict,frameInds,vidName)
 
         if newVideo and not videoBegining:
