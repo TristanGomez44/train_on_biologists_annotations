@@ -48,10 +48,10 @@ def updateMetrics(args,model,allFeat,allTarget,precVidName,nbVideos,metrDict,out
     targDict[precVidName] = allTarget
 
     if args.compute_val_metrics:
-        loss = F.cross_entropy(allOutput,allTarget,weight=weights).data.item()
+        loss = F.cross_entropy(allOutput.squeeze(0),allTarget.squeeze(0)).data.item()
         metrDict["Loss"] += loss
-        allPred = output.view(allOutput.size(0)*allOutput.size(1),allOutput.size(2)).argmax(dim=-1)
-        metrDict["Accuracy"] += metrics.binaryToMetrics(allPred,allTarget)
+        allPred = allOutput.view(allOutput.size(0)*allOutput.size(1),allOutput.size(2)).argmax(dim=-1)
+        metrDict["Accuracy"] += metrics.binaryToMetrics(allPred,allTarget)["Accuracy"]
 
     nbVideos += 1
 
