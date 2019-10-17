@@ -77,10 +77,9 @@ def epochSeqTr(model,optim,log_interval,loader, epoch, args,writer,**kwargs):
         optim.zero_grad()
 
         #Metrics
-        pred = output.argmax(dim=-1)
-        metrDict_sample = metrics.binaryToMetrics(pred,target)
-
-        metrDict["Accuracy"] += metrDict_sample["Accuracy"]
+        metrDict_sample = metrics.binaryToMetrics(output,target,model.transMat)
+        for key in metDictSample.keys():
+            metrDict[key] += metrDict_sample[key]
         metrDict["Loss"] += loss.detach().data.item()
         validBatch += 1
 
@@ -89,6 +88,22 @@ def epochSeqTr(model,optim,log_interval,loader, epoch, args,writer,**kwargs):
 
     torch.save(model.state_dict(), "../models/{}/model{}_epoch{}".format(args.exp_id,args.model_id, epoch))
     writeSummaries(metrDict,validBatch,writer,epoch,"train",args.model_id,args.exp_id)
+
+def computeTransMat(model,trPropStart,trPropEnd):
+
+    videoPaths = load_data.findVideos(trPropStart,trPropEnd)
+
+    for videoPath in videoPaths:
+        videoName = os.path.splitext(os.path.basename(videoPath))[0]
+        target = load_data.getGT(videoName)
+        #Updating the transition matrix
+        for i in range(len(target)-1):
+            model.transMat[target[i],target[i+1]] += 1
+
+    model.transMat = model.transMat/model.transMat.sum(dim=1,keepdim=True)
+
+    plt.imshow(model.transMat, cmap='hot', interpolation='nearest')
+    plt.savefig("../vis/transMat_{}_{}.png".format(trPropStart,trPropEnd))
 
 def epochSeqVal(model,log_interval,loader, epoch, args,writer):
     '''
@@ -434,6 +449,8 @@ def main(argv=None):
 
         outDictEpochs = {}
         targDictEpochs = {}
+
+        net.transMat = computeTransMat(net,args.train_part_beg,args.train_part_end)
 
         for epoch in range(startEpoch, args.epochs + 1):
 
