@@ -47,6 +47,8 @@ class CNN(nn.Module):
         self.dropout = nn.Dropout(p=dropout)
         self.linLay = nn.Linear(self.nbFeat,classNb)
 
+        self.transMat = torch.zeros((classNb,classNb))
+
     def forward(self,x):
         # N x T x C x H x L
         x = self.computeFeat(x)
@@ -98,7 +100,7 @@ class CNN3D(CNN):
         return x
 
 def netBuilder(args):
-    if args.feat.find("resnet") != -1:
+    if args.feat.find("resnet") != -1 or args.feat.find("vgg") != -1:
         net = CNN(args.feat,args.dropout,args.class_nb)
     elif args.feat == "r2plus1d_18":
         net = CNN3D(args.feat,args.dropout,args.class_nb)
