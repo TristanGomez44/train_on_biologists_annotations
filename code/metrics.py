@@ -32,6 +32,9 @@ def viterbi_decode(tag_sequence,transition_matrix,top_k=1):
     viterbi_score : float
         The score of the viterbi path.
     """
+
+    transition_matrix = transition_matrix.to(tag_sequence.device)
+
     sequence_length, num_tags = list(tag_sequence.size())
 
     path_scores = []
@@ -90,21 +93,14 @@ def binaryToMetrics(output,target,transition_matrix):
     acc = (pred == target).sum()/(pred.numel())
 
     #Accuracy with viterbi
-    print(output.size())
     pred = []
     for outSeq in output:
         predSeq,_ = viterbi_decode(outSeq,transition_matrix,top_k=1)
-        print(predSeq)
-        pred.append(predSeq.unsqueeze(0))
 
-    pred = torch.cat(pred,dim=0)
+        pred.append(torch.tensor(predSeq[0]).unsqueeze(0))
+
+    pred = torch.cat(pred,dim=0).to(target.device)
     accViterb = (pred == target).sum()/(pred.numel())
 
-    print(pred)
-
     metDict = {"Accuracy":acc,'Accuracy (Viterbi)':accViterb}
-
-    print(metDict)
-    sys.exit(0)
-
     return metDict
