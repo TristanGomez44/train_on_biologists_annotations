@@ -90,7 +90,7 @@ def binaryToMetrics(output,target,transition_matrix):
 
     #Simple Accuracy
     pred = output.argmax(dim=-1)
-    acc = (pred == target).sum()/(pred.numel())
+    acc = (pred == target).float().sum()/(pred.numel())
 
     #Accuracy with viterbi
     pred = []
@@ -100,7 +100,7 @@ def binaryToMetrics(output,target,transition_matrix):
         pred.append(torch.tensor(predSeq[0]).unsqueeze(0))
 
     pred = torch.cat(pred,dim=0).to(target.device)
-    accViterb = (pred == target).sum()/(pred.numel())
+    accViterb = (pred == target).float().sum()/(pred.numel())
 
     metDict = {"Accuracy":acc,'Accuracy (Viterbi)':accViterb}
     return metDict
