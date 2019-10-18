@@ -27,11 +27,12 @@ class Sampler(torch.utils.data.sampler.Sampler):
     """ The sampler for the SeqTrDataset dataset
     """
 
-    def __init__(self, nb_videos,nb_images):
+    def __init__(self, nb_videos,nb_images,seqLen):
         self.nb_videos = nb_videos
         self.nb_images = nb_images
+        self.seqLen = seqLen
     def __iter__(self):
-        return iter(torch.randint(0,self.nb_videos,size=(self.nb_images,)))
+        return iter(torch.randint(0,self.nb_videos,size=(self.nb_images//self.seqLen,)))
 
     def __len__(self):
         return self.nb_images
@@ -213,7 +214,7 @@ def buildSeqTrainLoader(args):
 
     train_dataset = SeqTrDataset(args.train_part_beg,args.train_part_end,args.tr_len,\
                                         args.img_size,args.resize_image,args.exp_id,args.augment_data)
-    sampler = Sampler(len(train_dataset.videoPaths),train_dataset.nbImages)
+    sampler = Sampler(len(train_dataset.videoPaths),train_dataset.nbImages,args.tr_len)
     trainLoader = torch.utils.data.DataLoader(dataset=train_dataset,batch_size=args.batch_size,sampler=sampler, collate_fn=collateSeq, # use custom collate function here
                       pin_memory=False,num_workers=args.num_workers)
 
@@ -314,7 +315,7 @@ if __name__ == "__main__":
     #'''
     train_dataset = SeqTrDataset(train_part_beg,train_part_end,tr_len,\
                                         img_size,resize_image,exp_id)
-    sampler = Sampler(len(train_dataset.videoPaths),train_dataset.nbImages)
+    sampler = Sampler(len(train_dataset.videoPaths),train_dataset.nbImages,tr_len)
     trainLoader = torch.utils.data.DataLoader(dataset=train_dataset,batch_size=batch_size,sampler=sampler, collate_fn=collateSeq, # use custom collate function here
                       pin_memory=False,num_workers=num_workers)
 
