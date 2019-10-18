@@ -20,6 +20,9 @@ warnings.filterwarnings('ignore',module=".*av.*")
 import utils
 import formatData
 
+import albumentations
+from albumentations import Compose
+
 class Sampler(torch.utils.data.sampler.Sampler):
     """ The sampler for the SeqTrDataset dataset
     """
@@ -61,7 +64,7 @@ class SeqTrDataset(torch.utils.data.Dataset):
     - exp_id (str): the name of the experience
     '''
 
-    def __init__(self,propStart,propEnd,trLen,imgSize,resizeImage,exp_id):
+    def __init__(self,propStart,propEnd,trLen,imgSize,resizeImage,exp_id,augmentData):
 
         super(SeqTrDataset, self).__init__()
 
@@ -78,16 +81,28 @@ class SeqTrDataset(torch.utils.data.Dataset):
                 fps = utils.getVideoFPS(videoPath)
                 self.nbImages += utils.getVideoFrameNb(videoPath)
 
-        normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
-        self.preproc = transforms.Compose([transforms.ToPILImage(),transforms.ToTensor(),normalize])
+        self.normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
         self.FPSDict = {}
+
+        self.augmentData = augmentData
+        if augmentData:
+            self.transf = Compose([
+                    albumentations.RandomBrightness(limit=0.2, p=0.5),
+                    albumentations.ElasticTransform(alpha=25, sigma=25, alpha_affine=25, p=0.5),
+                    albumentations.OpticalDistortion(distort_limit=0.1, shift_limit=0.1, p=0.5),
+                    albumentations.Flip(p=0.5),
+                    albumentations.ShiftScaleRotate(shift_limit=0.1, scale_limit=0.1, rotate_limit=360, p=0.5),
+                    albumentations.RandomSizedCrop((368,imgSize), imgSize, imgSize, p=0.5),
+                    albumentations.RandomContrast(limit=0, p=0.5)
+                ], p=1)
+        else:
+            self.transf = None
 
     def __len__(self):
         return self.nbImages
 
     def __getitem__(self,vidInd):
 
-        data = torch.zeros(self.trLen,3,self.imgSize,self.imgSize)
         targ = torch.zeros(self.trLen)
         vidNames = []
 
@@ -109,7 +124,25 @@ class SeqTrDataset(torch.utils.data.Dataset):
         video = pims.Video(self.videoPaths[vidInd])
 
         #Building the frame sequence
-        frameSeq = torch.cat(list(map(lambda x:self.preproc(video[x]).unsqueeze(0),np.array(frameInds))),dim=0)
+        #The videos are in black and white but there as still encoded using 3 channels
+        #Therefore, the three channels carry the same values
+        frameSeq = np.concatenate(list(map(lambda x:video[x][np.newaxis,:,:,0],np.array(frameInds))),axis=0)
+        # Shape of tensor : T x H x W
+        frameSeq = frameSeq.transpose((1,2,0))
+        # H x W x T
+        if self.augmentData:
+            frameSeq = self.transf(image=frameSeq)["image"]
+        # H x W x T
+        frameSeq = torch.tensor(frameSeq)
+        # H x W x T
+        frameSeq = frameSeq.permute(2,0,1)
+        # T x H x W
+        frameSeq = frameSeq.unsqueeze(1)
+        # T x 1 x H x W
+        frameSeq = frameSeq.expand(frameSeq.size(0),3,frameSeq.size(2),frameSeq.size(3))
+        # T x 3 x H x W
+
+        frameSeq = torch.cat(list(map(lambda x:self.normalize(x).unsqueeze(0),frameSeq.float())),dim=0)
 
         return frameSeq.unsqueeze(0),torch.tensor(gt).unsqueeze(0),vidName
 
@@ -179,7 +212,7 @@ class TestLoader():
 def buildSeqTrainLoader(args):
 
     train_dataset = SeqTrDataset(args.train_part_beg,args.train_part_end,args.tr_len,\
-                                        args.img_size,args.resize_image,args.exp_id)
+                                        args.img_size,args.resize_image,args.exp_id,args.augment_data)
     sampler = Sampler(len(train_dataset.videoPaths),train_dataset.nbImages)
     trainLoader = torch.utils.data.DataLoader(dataset=train_dataset,batch_size=args.batch_size,sampler=sampler, collate_fn=collateSeq, # use custom collate function here
                       pin_memory=False,num_workers=args.num_workers)
@@ -236,7 +269,7 @@ def addArgs(argreader):
                         help='Length of sequences for validation.')
 
     argreader.parser.add_argument('--img_size', type=int,metavar='WIDTH',
-                        help='The size of each edge of the resized images, if resize_image is True, else, the size of the image')
+                        help='The size of each edge of the images.')
 
     argreader.parser.add_argument('--train_part_beg', type=float,metavar='START',
                         help='The (normalized) start position of the dataset to use for training')
@@ -257,6 +290,9 @@ def addArgs(argreader):
     argreader.parser.add_argument('--class_nb', type=int, metavar='S',
                         help='The number of class of to model')
 
+    argreader.parser.add_argument('--augment_data', type=args.str2bool, metavar='S',
+                        help='Set to True to augment the training data with transformations')
+
     return argreader
 
 if __name__ == "__main__":
@@ -275,17 +311,17 @@ if __name__ == "__main__":
     batch_size = 5
     num_workers = 1
 
-    '''
+    #'''
     train_dataset = SeqTrDataset(train_part_beg,train_part_end,tr_len,\
                                         img_size,resize_image,exp_id)
-    sampler = Sampler(len(train_dataset.videoPaths))
+    sampler = Sampler(len(train_dataset.videoPaths),train_dataset.nbImages)
     trainLoader = torch.utils.data.DataLoader(dataset=train_dataset,batch_size=batch_size,sampler=sampler, collate_fn=collateSeq, # use custom collate function here
                       pin_memory=False,num_workers=num_workers)
 
     for batch in trainLoader:
         print(batch[0].shape,batch[1].shape,batch[2])
         sys.exit(0)
-    '''
+    #'''
 
     '''
     valLoader = TestLoader(val_l,val_part_beg,val_part_end,\
