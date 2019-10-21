@@ -27,6 +27,9 @@ import load_data
 import metrics
 import utils
 import update
+import warnings
+
+warnings.simplefilter('error', UserWarning)
 
 def epochSeqTr(model,optim,log_interval,loader, epoch, args,writer,**kwargs):
     ''' Train a model during one epoch
@@ -54,7 +57,7 @@ def epochSeqTr(model,optim,log_interval,loader, epoch, args,writer,**kwargs):
     allOut = None
     allGT = None
 
-    for batch_idx,(data,target,vidNames) in enumerate(loader):
+    for batch_idx,(data,target,_,_) in enumerate(loader):
 
         if (batch_idx % log_interval == 0):
             print("\t",batch_idx*len(data)*len(data[0]),"/",len(loader.dataset))
@@ -86,8 +89,10 @@ def epochSeqTr(model,optim,log_interval,loader, epoch, args,writer,**kwargs):
         if validBatch > 3 and args.debug:
             break
 
-    torch.save(model.state_dict(), "../models/{}/model{}_epoch{}".format(args.exp_id,args.model_id, epoch))
-    writeSummaries(metrDict,validBatch,writer,epoch,"train",args.model_id,args.exp_id)
+    #If the training set is empty (which we might want to just evaluate the model), then allOut and allGT will still be None
+    if validBatch > 0:
+        torch.save(model.state_dict(), "../models/{}/model{}_epoch{}".format(args.exp_id,args.model_id, epoch))
+        writeSummaries(metrDict,validBatch,writer,epoch,"train",args.model_id,args.exp_id)
 
 def computeTransMat(model,trPropStart,trPropEnd):
 
@@ -100,10 +105,11 @@ def computeTransMat(model,trPropStart,trPropEnd):
         for i in range(len(target)-1):
             model.transMat[target[i],target[i+1]] += 1
 
-    model.transMat = model.transMat/model.transMat.sum(dim=1,keepdim=True)
+    if len(videoPaths) > 0:
+        model.transMat = model.transMat/model.transMat.sum(dim=1,keepdim=True)
 
-    plt.imshow(model.transMat, cmap='hot', interpolation='nearest')
-    plt.savefig("../vis/transMat_{}_{}.png".format(trPropStart,trPropEnd))
+        plt.imshow(model.transMat, cmap='hot', interpolation='nearest')
+        plt.savefig("../vis/transMat_{}_{}.png".format(trPropStart,trPropEnd))
 
 def epochSeqVal(model,log_interval,loader, epoch, args,writer):
     '''
@@ -464,14 +470,10 @@ def main(argv=None):
             else:
                 net.load_state_dict(torch.load("../models/{}/model{}_epoch{}".format(args.no_train[0],args.no_train[1],epoch)))
 
-            #Checking if validation has already been done
-            if len(glob.glob("../results/{}/{}_epoch{}_*".format(args.exp_id,args.model_id,epoch))) < len(kwargsVal["loader"].videoPaths):
-                with torch.no_grad():
-                    outDict,targDict = valFunc(**kwargsVal)
-                outDictEpochs[epoch] = outDict
-                targDictEpochs[epoch] = targDict
-            else:
-                print("Validation epoch {} already done !".format(epoch))
+            with torch.no_grad():
+                outDict,targDict = valFunc(**kwargsVal)
+            outDictEpochs[epoch] = outDict
+            targDictEpochs[epoch] = targDict
 
 if __name__ == "__main__":
     main()
