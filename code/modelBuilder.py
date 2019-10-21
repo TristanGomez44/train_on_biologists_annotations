@@ -98,12 +98,12 @@ class LinearTempModel(TempModel):
     def __init__(self,nbFeat,nbClass,dropout):
         super(LinearTempModel,self).__init__(nbFeat,nbClass)
 
-        self.dropout = nn.Dropout(p=dropout)
+        #self.dropout = nn.Dropout(p=dropout)
         self.linLay = nn.Linear(self.nbFeat,self.nbClass)
 
     def forward(self,x,batchSize):
         # NT x D
-        x = self.dropout(x)
+        #x = self.dropout(x)
         x = self.linLay(x)
         # NT x classNb
         x = x.view(batchSize,-1,self.nbClass)
@@ -134,7 +134,7 @@ def netBuilder(args):
 
     ############### Visual Model #######################
     if args.feat.find("resnet") != -1:
-        if featModelName=="resnet50" or featModelName=="resnet101" or featModelName=="resnet151":
+        if args.feat=="resnet50" or args.feat=="resnet101" or args.feat=="resnet151":
             nbFeat = 256*2**(4-1)
         else:
             nbFeat = 64*2**(4-1)
