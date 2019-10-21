@@ -32,7 +32,11 @@ class Sampler(torch.utils.data.sampler.Sampler):
         self.nb_images = nb_images
         self.seqLen = seqLen
     def __iter__(self):
-        return iter(torch.randint(0,self.nb_videos,size=(self.nb_images//self.seqLen,)))
+
+        if self.nb_images > 0:
+            return iter(torch.randint(0,self.nb_videos,size=(self.nb_images//self.seqLen,)))
+        else:
+            return iter([])
 
     def __len__(self):
         return self.nb_images
@@ -71,7 +75,7 @@ class SeqTrDataset(torch.utils.data.Dataset):
 
         self.videoPaths = findVideos(propStart,propEnd)
 
-        self.videoPaths = np.array(self.videoPaths)[int(propStart*len(self.videoPaths)):int(propEnd*len(self.videoPaths))]
+        print("Number of training videos : ",len(self.videoPaths))
         self.imgSize = imgSize
         self.trLen = trLen
         self.nbImages = 0
@@ -119,7 +123,7 @@ class SeqTrDataset(torch.utils.data.Dataset):
         frameInds = np.arange(frameNb)
 
         ################# Frame selection ##################
-        startFrame = np.random.randint(frameNb-self.trLen)
+        startFrame = torch.randint(0,frameNb-self.trLen,size=(1,))
         frameInds,gt = frameInds[startFrame:startFrame+self.trLen],gt[startFrame:startFrame+self.trLen]
 
         video = pims.Video(self.videoPaths[vidInd])
@@ -145,7 +149,7 @@ class SeqTrDataset(torch.utils.data.Dataset):
 
         frameSeq = torch.cat(list(map(lambda x:self.normalize(x).unsqueeze(0),frameSeq.float())),dim=0)
 
-        return frameSeq.unsqueeze(0),torch.tensor(gt).unsqueeze(0),vidName
+        return frameSeq.unsqueeze(0),torch.tensor(gt).unsqueeze(0),vidName,torch.tensor(frameInds).int()
 
 class TestLoader():
     '''
@@ -166,7 +170,7 @@ class TestLoader():
         self.evalL = evalL
         self.videoPaths = findVideos(propStart,propEnd)
         self.exp_id = exp_id
-
+        print("Number of eval videos",len(self.videoPaths))
         normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
         self.preproc = transforms.Compose([transforms.ToTensor(),normalize])
 
@@ -198,7 +202,7 @@ class TestLoader():
         frameNb = utils.getVideoFrameNb(videoPath)
 
         frameInds = np.arange(self.currFrameInd,min(self.currFrameInd+L,frameNb))
-        frameSeq = torch.cat(list(map(lambda x:self.preproc(video[x]).unsqueeze(0),np.array(frameInds))),dim=0)
+        frameSeq = torch.cat(list(map(lambda x:self.preproc(video[x][:,:,0:1].repeat(repeats=3,axis=-1)).unsqueeze(0),np.array(frameInds))),dim=0)
 
         gt = getGT(vidName)[self.currFrameInd:min(self.currFrameInd+L,frameNb)]
 
@@ -312,7 +316,7 @@ if __name__ == "__main__":
     batch_size = 5
     num_workers = 1
 
-    #'''
+    '''
     train_dataset = SeqTrDataset(train_part_beg,train_part_end,tr_len,\
                                         img_size,resize_image,exp_id)
     sampler = Sampler(len(train_dataset.videoPaths),train_dataset.nbImages,tr_len)
@@ -322,9 +326,9 @@ if __name__ == "__main__":
     for batch in trainLoader:
         print(batch[0].shape,batch[1].shape,batch[2])
         sys.exit(0)
-    #'''
-
     '''
+
+    #'''
     valLoader = TestLoader(val_l,val_part_beg,val_part_end,\
                                         img_size,resize_image,\
                                         exp_id)
@@ -333,4 +337,4 @@ if __name__ == "__main__":
         print(batch[0].shape,batch[1].shape,batch[2],batch[3])
         sys.exit(0)
 
-    '''
+    #'''

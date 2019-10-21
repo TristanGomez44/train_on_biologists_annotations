@@ -92,15 +92,20 @@ def binaryToMetrics(output,target,transition_matrix):
     pred = output.argmax(dim=-1)
     acc = (pred == target).float().sum()/(pred.numel())
 
-    #Accuracy with viterbi
-    pred = []
-    for outSeq in output:
-        predSeq,_ = viterbi_decode(outSeq,transition_matrix,top_k=1)
+    if torch.isnan(transition_matrix).sum() == 0:
 
-        pred.append(torch.tensor(predSeq[0]).unsqueeze(0))
+        #Accuracy with viterbi
+        pred = []
+        for outSeq in output:
+            predSeq,_ = viterbi_decode(outSeq,transition_matrix,top_k=1)
 
-    pred = torch.cat(pred,dim=0).to(target.device)
-    accViterb = (pred == target).float().sum()/(pred.numel())
+            pred.append(torch.tensor(predSeq[0]).unsqueeze(0))
+
+        pred = torch.cat(pred,dim=0).to(target.device)
+        accViterb = (pred == target).float().sum()/(pred.numel())
+
+    else:
+        accViterb = 0
 
     metDict = {"Accuracy":acc,'Accuracy (Viterbi)':accViterb}
     return metDict
