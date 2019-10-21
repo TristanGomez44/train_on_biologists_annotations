@@ -98,12 +98,12 @@ class LinearTempModel(TempModel):
     def __init__(self,nbFeat,nbClass,dropout):
         super(LinearTempModel,self).__init__(nbFeat,nbClass)
 
-        #self.dropout = nn.Dropout(p=dropout)
+        self.dropout = nn.Dropout(p=dropout)
         self.linLay = nn.Linear(self.nbFeat,self.nbClass)
 
     def forward(self,x,batchSize):
         # NT x D
-        #x = self.dropout(x)
+        x = self.dropout(x)
         x = self.linLay(x)
         # NT x classNb
         x = x.view(batchSize,-1,self.nbClass)
