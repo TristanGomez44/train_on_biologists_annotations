@@ -87,6 +87,7 @@ class SeqTrDataset(torch.utils.data.Dataset):
                 self.nbImages += utils.getVideoFrameNb(videoPath)
 
         self.normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+        self.toTensor = torchvision.transforms.ToTensor()
         self.FPSDict = {}
 
         self.augmentData = augmentData
@@ -138,15 +139,12 @@ class SeqTrDataset(torch.utils.data.Dataset):
         if self.augmentData:
             frameSeq = self.transf(image=frameSeq)["image"]
         # H x W x T
-        frameSeq = torch.tensor(frameSeq)
-        # H x W x T
-        frameSeq = frameSeq.permute(2,0,1)
+        frameSeq = self.toTensor(frameSeq)
         # T x H x W
         frameSeq = frameSeq.unsqueeze(1)
         # T x 1 x H x W
         frameSeq = frameSeq.expand(frameSeq.size(0),3,frameSeq.size(2),frameSeq.size(3))
         # T x 3 x H x W
-
         frameSeq = torch.cat(list(map(lambda x:self.normalize(x).unsqueeze(0),frameSeq.float())),dim=0)
 
         return frameSeq.unsqueeze(0),torch.tensor(gt).unsqueeze(0),vidName,torch.tensor(frameInds).int()
