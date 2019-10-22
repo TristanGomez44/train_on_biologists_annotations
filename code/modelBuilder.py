@@ -36,11 +36,19 @@ class Model(nn.Module):
         self.tempModel = tempModel
 
         self.transMat = torch.zeros((self.tempModel.nbClass,self.tempModel.nbClass))
+        self.priors = torch.zeros((self.tempModel.nbClass))
 
     def forward(self,x):
         x = self.visualModel(x)
         x = self.tempModel(x,self.visualModel.batchSize)
         return x
+
+    def setTransMat(self,transMat):
+        self.transMat = transMat
+    def setPriors(self,priors):
+        self.priors = priors
+
+################################# Visual Model ##########################""
 
 class VisualModel(nn.Module):
 
@@ -83,6 +91,8 @@ class CNN3D(VisualModel):
         x = x.contiguous().view(x.size(0)*x.size(1),-1)
         # NT x D
         return x
+
+################################ Temporal Model ########################""
 
 class TempModel(nn.Module):
 
@@ -130,6 +140,64 @@ class LSTMTempModel(TempModel):
         # N x T x classNb
         return x
 
+class ScoreConvTempModel(TempModel):
+
+    def __init__(self,nbFeat,nbClass,dropout,kerSize,chan,biLay,attention):
+
+        super(ScoreConvTempModel,self).__init__(nbFeat,nbClass)
+
+        self.linTempMod = LinearTempModel(nbFeat=nbFeat,nbClass=self.nbClass,dropout=dropout)
+        self.scoreConv = ScoreConv(kerSize,chan,biLay,attention)
+
+    def forward(self,x,batchSize):
+        # NT x D
+        x = self.linTempMod(x,batchSize)
+        # N x T x classNb
+        x = x.unsqueeze(1)
+        # N x 1 x T x classNb
+        x = self.scoreConv(x)
+        # N x 1 x T x classNb
+        x = x.squeeze(1)
+    
+        return x
+
+class ScoreConv(nn.Module):
+    ''' This is a module that reads the classes scores just before they are passed to the softmax by
+    the temporal model. It apply one or two convolution layers to the signal and uses 1x1 convolution to
+    outputs a transformed signal of the same shape as the input signal.
+
+    It can return this transformed signal and can also returns this transformed signal multiplied
+    by the input, like an attention layer.
+
+    Args:
+    - kerSize (int): the kernel size of the convolution(s)
+    - chan (int): the number of channel when using two convolutions
+    - biLay (bool): whether or not to apply two convolutional layers instead of one
+    - attention (bool): whether or not to multiply the transformed signal by the input before returning it
+
+    '''
+
+    def __init__(self,kerSize,chan,biLay,attention=False):
+
+        super(ScoreConv,self).__init__()
+
+        self.attention = attention
+
+        if biLay:
+            self.conv1 = torch.nn.Conv2d(1,chan,kerSize,padding=kerSize//2)
+            self.conv2 = torch.nn.Conv2d(chan,1,1)
+            self.layers = nn.Sequential(self.conv1,nn.ReLU(),self.conv2)
+        else:
+            self.layers = torch.nn.Conv2d(1,1,kerSize,padding=kerSize//2)
+
+    def forward(self,x):
+
+        if not self.attention:
+            return self.layers(x)
+        else:
+            weights = self.layers(x)
+            return weights*x
+
 def netBuilder(args):
 
     ############### Visual Model #######################
@@ -153,6 +221,8 @@ def netBuilder(args):
         tempModel = LSTMTempModel(nbFeat,args.class_nb,args.dropout,args.lstm_lay,args.lstm_hid_size)
     elif args.temp_mod == "linear":
         tempModel = LinearTempModel(nbFeat,args.class_nb,args.dropout)
+    elif args.temp_mod == "score_conv":
+        tempModel = ScoreConvTempModel(nbFeat,args.class_nb,args.dropout,args.score_conv_ker_size,args.score_conv_chan,args.score_conv_bilay,args.score_conv_attention)
     else:
         raise ValueError("Unknown temporal model type : ",args.temp_mod)
 
@@ -170,12 +240,24 @@ def addArgs(argreader):
                         help='The dropout amount on each layer of the RNN except the last one')
 
     argreader.parser.add_argument('--temp_mod', type=str,metavar='MOD',
-                        help='The temporal model. Can be "linear" or "lstm".')
+                        help='The temporal model. Can be "linear", "lstm" or "score_conv".')
 
     argreader.parser.add_argument('--lstm_lay', type=int,metavar='N',
                         help='Number of layers for the lstm temporal model')
 
     argreader.parser.add_argument('--lstm_hid_size', type=int,metavar='N',
                         help='Size of hidden layers for the lstm temporal model')
+
+    argreader.parser.add_argument('--score_conv_ker_size', type=int, metavar='N',
+                        help='The size of the 2d convolution kernel to apply on scores if temp model is a ScoreConvTempModel.')
+
+    argreader.parser.add_argument('--score_conv_bilay', type=args.str2bool, metavar='N',
+                        help='To apply two convolution (the second is a 1x1 conv) on the scores instead of just one layer')
+
+    argreader.parser.add_argument('--score_conv_attention', type=args.str2bool, metavar='N',
+                        help='To apply the score convolution(s) as an attention layer.')
+
+    argreader.parser.add_argument('--score_conv_chan', type=int, metavar='N',
+                        help='The number of channel of the score convolution layer (used only if --score_conv_bilay')
 
     return argreader
