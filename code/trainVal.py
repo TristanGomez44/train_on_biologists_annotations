@@ -94,22 +94,26 @@ def epochSeqTr(model,optim,log_interval,loader, epoch, args,writer,**kwargs):
         torch.save(model.state_dict(), "../models/{}/model{}_epoch{}".format(args.exp_id,args.model_id, epoch))
         writeSummaries(metrDict,validBatch,writer,epoch,"train",args.model_id,args.exp_id)
 
-def computeTransMat(model,trPropStart,trPropEnd):
+def computeTransMat(transMat,priors,propStart,propEnd):
 
-    videoPaths = load_data.findVideos(trPropStart,trPropEnd)
+    videoPaths = load_data.findVideos(propStart,propEnd)
 
     for videoPath in videoPaths:
         videoName = os.path.splitext(os.path.basename(videoPath))[0]
         target = load_data.getGT(videoName)
         #Updating the transition matrix
         for i in range(len(target)-1):
-            model.transMat[target[i],target[i+1]] += 1
+            transMat[target[i],target[i+1]] += 1
+            priors[target[i]] += 1
 
+        #Taking the last target of the sequence into account only for prior
+        priors[target[-1]] += 1
+
+    #Just in case where propStart==propEnd, which is true for example, when the training set is empty
     if len(videoPaths) > 0:
-        model.transMat = model.transMat/model.transMat.sum(dim=1,keepdim=True)
-
-        plt.imshow(model.transMat, cmap='hot', interpolation='nearest')
-        plt.savefig("../vis/transMat_{}_{}.png".format(trPropStart,trPropEnd))
+        return transMat/transMat.sum(dim=1,keepdim=True),priors/priors.sum()
+    else:
+        return transMat,priors
 
 def epochSeqVal(model,log_interval,loader, epoch, args,writer):
     '''
@@ -456,7 +460,9 @@ def main(argv=None):
         outDictEpochs = {}
         targDictEpochs = {}
 
-        computeTransMat(net,args.train_part_beg,args.train_part_end)
+        transMat,priors = computeTransMat(net.transMat,net.priors,args.train_part_beg,args.train_part_end)
+        net.setTransMat(transMat)
+        net.setPriors(priors)
 
         for epoch in range(startEpoch, args.epochs + 1):
 
