@@ -4,6 +4,7 @@ import torch
 import scipy as sp
 import torch
 import sys
+import torch.nn.functional as F
 # Code taken from https://gist.github.com/PetrochukM/afaa3613a99a8e7213d2efdd02ae4762#file-top_k_viterbi-py-L5
 # Credits to AllenNLP for the base implementation and base tests:
 # https://github.com/allenai/allennlp/blob/master/allennlp/nn/util.py#L174
@@ -79,17 +80,31 @@ def viterbi_decode(tag_sequence,transition_matrix,top_k=1):
     return viterbi_paths, viterbi_scores
 
 
-def binaryToMetrics(output,target,transition_matrix):
+def regressionPred2Confidence(regresPred,nbClass):
+    #Converting each element of output into a list of confidence for each class
+    #Therefore the shape will go from a matrix to a 3D tensor
+    output = torch.abs(regresPred.unsqueeze(2)-torch.arange(nbClass).unsqueeze(0).unsqueeze(0).to(regresPred.device).float())
+    conf = F.softmax(-output,dim=-1)
+
+    return conf
+
+def binaryToMetrics(output,target,transition_matrix,regression):
     ''' Computes metrics over a batch of targets and predictions
 
     Args:
     - pred (list): the batch of predicted class
     - target (list): the batch of ground truth class
+    - transition_matrix (torch.tensor) : this matrix contains at row i and column j the empirical probability to go from state i to j
 
     '''
 
     #Simple Accuracy
-    pred = output.argmax(dim=-1)
+    if regression:
+        pred = torch.round(output).long()
+        output = regressionPred2Confidence(output,transition_matrix.size(0))
+    else:
+        pred = output.argmax(dim=-1)
+
     acc = (pred == target).float().sum()/(pred.numel())
 
     if torch.isnan(transition_matrix).sum() == 0:

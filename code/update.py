@@ -35,7 +35,7 @@ def computeScore(model,allFeats,allTarget,valLTemp,vidName):
 
     return allOutput
 
-def updateMetrics(args,model,allFeat,allTarget,precVidName,nbVideos,metrDict,outDict,targDict):
+def updateMetrics(args,model,allFeat,allTarget,precVidName,nbVideos,metrDict,outDict,targDict,regression):
     ''' Update the current estimation
 
     Also compute the scene change scores if the temporal model is a CNN
@@ -44,15 +44,23 @@ def updateMetrics(args,model,allFeat,allTarget,precVidName,nbVideos,metrDict,out
 
     allOutput = computeScore(model,allFeat,allTarget,args.val_l_temp,precVidName)
 
-    outDict[precVidName] = allOutput
-    targDict[precVidName] = allTarget
-
     if args.compute_val_metrics:
-        loss = F.cross_entropy(allOutput.squeeze(0),allTarget.squeeze(0)).data.item()
+        if args.regression:
+            #Converting the output of the sigmoid between 0 and 1 to a scale between -0.5 and class_nb+0.5
+            allOutput = (torch.sigmoid(allOutput)*(args.class_nb+1)-0.5)
+            loss = F.mse_loss(allOutput,allTarget.float())
+
+        else:
+            loss = F.cross_entropy(allOutput.squeeze(0),allTarget.squeeze(0)).data.item()
+
         metrDict["Loss"] += loss
-        metDictSample = metrics.binaryToMetrics(allOutput,allTarget,model.transMat)
+        metDictSample = metrics.binaryToMetrics(allOutput,allTarget,model.transMat,regression)
+        allOutput = metrics.regressionPred2Confidence(allOutput,args.class_nb)
         for key in metDictSample.keys():
             metrDict[key] += metDictSample[key]
+
+    outDict[precVidName] = allOutput
+    targDict[precVidName] = allTarget
 
     nbVideos += 1
 

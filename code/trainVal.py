@@ -73,14 +73,19 @@ def epochSeqTr(model,optim,log_interval,loader, epoch, args,writer,**kwargs):
         output = output[:,args.train_step_to_ignore:output.size(1)-args.train_step_to_ignore]
         target = target[:,args.train_step_to_ignore:target.size(1)-args.train_step_to_ignore]
 
-        loss = F.cross_entropy(output.view(output.size(0)*output.size(1),-1), target.view(-1))
+        if args.regression:
+            #Converting the output of the sigmoid between 0 and 1 to a scale between -0.5 and class_nb+0.5
+            output = (torch.sigmoid(output)*(args.class_nb+1)-0.5)
+            loss = F.mse_loss(output.view(-1),target.view(-1).float())
+        else:
+            loss = F.cross_entropy(output.view(output.size(0)*output.size(1),-1), target.view(-1))
 
         loss.backward()
         optim.step()
         optim.zero_grad()
 
         #Metrics
-        metDictSample = metrics.binaryToMetrics(output,target,model.transMat)
+        metDictSample = metrics.binaryToMetrics(output,target,model.transMat,args.regression)
         for key in metDictSample.keys():
             metrDict[key] += metDictSample[key]
         metrDict["Loss"] += loss.detach().data.item()
@@ -162,7 +167,7 @@ def epochSeqVal(model,log_interval,loader, epoch, args,writer):
         update.updateFrameDict(frameIndDict,frameInds,vidName)
 
         if newVideo and not videoBegining:
-            allOutput,nbVideos = update.updateMetrics(args,model,allFeat,allTarget,precVidName,nbVideos,metrDict,outDict,targDict)
+            allOutput,nbVideos = update.updateMetrics(args,model,allFeat,allTarget,precVidName,nbVideos,metrDict,outDict,targDict,args.regression)
         if newVideo:
             allTarget = target
             allFeat = feat.unsqueeze(0)
@@ -177,7 +182,7 @@ def epochSeqVal(model,log_interval,loader, epoch, args,writer):
             break
 
     if not args.debug:
-        allOutput,nbVideos = update.updateMetrics(args,model,allFeat,allTarget,precVidName,nbVideos,metrDict,outDict,targDict)
+        allOutput,nbVideos = update.updateMetrics(args,model,allFeat,allTarget,precVidName,nbVideos,metrDict,outDict,targDict,args.regression)
 
     for key in outDict.keys():
         fullArr = torch.cat((frameIndDict[key].float(),outDict[key].squeeze(0)),dim=1)
