@@ -24,6 +24,8 @@ import modelBuilder
 import metrics
 import utils
 import formatData
+import trainVal
+import formatData
 
 def evalModel(exp_id,model_id,model_name,epoch):
     '''
@@ -188,6 +190,39 @@ def buildVideoNameDict(test_part_beg,test_part_end,resFilePaths):
 
     return videoNameDict
 
+def plotData(nbClass):
+
+    transMat = torch.zeros((nbClass,nbClass))
+    priors = torch.zeros((nbClass,))
+    transMat,priors = trainVal.computeTransMat(transMat,priors,0,1)
+
+    labels = list(formatData.getLabels().keys())[:nbClass]
+
+    plt.figure()
+    image = plt.imshow(torch.sqrt(transMat), cmap='hot', interpolation='nearest')
+    plt.xticks(np.arange(len(labels)),labels,rotation=45)
+    plt.yticks(np.arange(len(labels)),labels)
+    plt.xlabel("Following phase")
+    plt.ylabel("Current phase")
+    ticks = np.arange(10)/10
+    cb = plt.colorbar(image,ticks=ticks)
+    cb.ax.set_yticklabels([round(i*i,2) for i in ticks])
+    plt.tight_layout()
+    plt.savefig("../vis/transMat.png")
+
+    videoPaths = load_data.findVideos(0,1)
+    nbImages=0
+    for videoPath in videoPaths:
+        nbImages += len(load_data.getGT(os.path.splitext(os.path.basename(videoPath))[0]))
+
+    plt.figure()
+    plt.bar(labels,priors*nbImages)
+    plt.xticks(rotation=45)
+    plt.xlabel("Developpement phases")
+    plt.ylabel("Number of image")
+    plt.tight_layout()
+    plt.savefig("../vis/prior.png")
+
 def main(argv=None):
 
     #Getting arguments from config file and command line
@@ -205,6 +240,10 @@ def main(argv=None):
                                                                             The --model_id argument must be set, along with the --model_name, --exp_id arguments.')
     argreader.parser.add_argument('--model_name',type=str,metavar="NAME",help='The name of the model as will appear in the latex table produced by the --eval_model argument.')
 
+    ######################## Database plot #################################
+
+    argreader.parser.add_argument('--plot_data',type=int,metavar="N",help='To plot the state transition matrix and the prior vector/ The value is the number of classes.')
+
     argreader = load_data.addArgs(argreader)
 
     #Reading the comand line arg
@@ -217,6 +256,8 @@ def main(argv=None):
         plotScore(args.exp_id,args.model_id,args.epoch_to_plot)
     if not args.eval_model is None:
         evalModel(args.exp_id,args.model_id,args.model_name,epoch=args.eval_model)
+    if not args.plot_data is None:
+        plotData(args.plot_data)
 
 if __name__ == "__main__":
     main()
