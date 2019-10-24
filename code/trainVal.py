@@ -185,7 +185,7 @@ def epochSeqVal(model,log_interval,loader, epoch, args,writer):
         allOutput,nbVideos = update.updateMetrics(args,model,allFeat,allTarget,precVidName,nbVideos,metrDict,outDict,targDict,args.regression)
 
     for key in outDict.keys():
-        fullArr = torch.cat((frameIndDict[key].float(),outDict[key].squeeze(0)),dim=1)
+        fullArr = torch.cat((frameIndDict[key].float(),outDict[key].squeeze(0).squeeze(1)),dim=1)
         np.savetxt("../results/{}/{}_epoch{}_{}.csv".format(args.exp_id,args.model_id,epoch,key),fullArr.cpu().detach().numpy())
 
     writeSummaries(metrDict,validBatch,writer,epoch,"val",args.model_id,args.exp_id,nbVideos=nbVideos)
@@ -354,9 +354,9 @@ def main(argv=None):
     #Building the arg reader
     argreader = ArgReader(argv)
 
-    argreader.parser.add_argument('--comp_feat', action='store_true',help='To compute and write in a file the features of all images in the test set. All the arguments used to \
+    argreader.parser.add_argument('--comp_feat',type=str2bool,help='To compute and write in a file the features of all images in the test set. All the arguments used to \
                                     build the model and the test data loader should be set.')
-    argreader.parser.add_argument('--no_train', type=str,nargs=2,help='To use to re-evaluate a model at each epoch after training. At each epoch, the model is not trained but \
+    argreader.parser.add_argument('--no_train',type=str,nargs=2,help='To use to re-evaluate a model at each epoch after training. At each epoch, the model is not trained but \
                                                                             the weights of the corresponding epoch are loaded and then the model is evaluated.\
                                                                             The values of this argument are the exp_id and the model_id of the model to get the weights from.')
 
