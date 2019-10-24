@@ -4,6 +4,7 @@ import sys
 import args
 from args import ArgReader
 from args import str2bool
+from args import str2StrList
 
 import glob
 
@@ -356,9 +357,12 @@ def main(argv=None):
 
     argreader.parser.add_argument('--comp_feat',type=str2bool,help='To compute and write in a file the features of all images in the test set. All the arguments used to \
                                     build the model and the test data loader should be set.')
-    argreader.parser.add_argument('--no_train',type=str,nargs=2,help='To use to re-evaluate a model at each epoch after training. At each epoch, the model is not trained but \
+    argreader.parser.add_argument('--no_train',type=str2bool,help='To use to re-evaluate a model at each epoch after training. At each epoch, the model is not trained but \
                                                                             the weights of the corresponding epoch are loaded and then the model is evaluated.\
-                                                                            The values of this argument are the exp_id and the model_id of the model to get the weights from.')
+                                                                            The arguments --exp_id_no_train and the --model_id_no_train must be set')
+
+    argreader.parser.add_argument('--exp_id_no_train',type=str,help="To use when --no_train is set to True. This is the exp_id of the model to get the weights from.")
+    argreader.parser.add_argument('--model_id_no_train',type=str,help="To use when --no_train is set to True. This is the model_id of the model to get the weights from.")
 
     argreader = addInitArgs(argreader)
     argreader = addOptimArgs(argreader)
