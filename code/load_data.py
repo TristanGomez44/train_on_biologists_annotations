@@ -296,6 +296,9 @@ def addArgs(argreader):
     argreader.parser.add_argument('--augment_data', type=args.str2bool, metavar='S',
                         help='Set to True to augment the training data with transformations')
 
+    argreader.parser.add_argument('--multi_gpu', type=args.str2bool, metavar='S',
+                        help='Set to True to use mulitple gpus')
+
     return argreader
 
 if __name__ == "__main__":

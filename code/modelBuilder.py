@@ -250,6 +250,9 @@ def netBuilder(args):
     ############### Whole Model ##########################
     net = Model(visualModel,tempModel)
 
+    if args.multi_gpu:
+        net = torch.nn.DataParallel(net)
+
     return net
 
 def addArgs(argreader):
