@@ -112,9 +112,10 @@ def binaryToMetrics(output,target,transition_matrix,regression):
         #Accuracy with viterbi
         pred = []
         for outSeq in output:
-            predSeq,_ = viterbi_decode(outSeq,transition_matrix,top_k=1)
+            outSeq = torch.nn.functional.softmax(outSeq, dim=-1)
+            predSeqs,_ = viterbi_decode(torch.log(outSeq),torch.log(transition_matrix),top_k=1)
 
-            pred.append(torch.tensor(predSeq[0]).unsqueeze(0))
+            pred.append(torch.tensor(predSeqs[0]).unsqueeze(0))
 
         pred = torch.cat(pred,dim=0).to(target.device)
         accViterb = (pred == target).float().sum()/(pred.numel())
