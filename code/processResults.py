@@ -27,6 +27,8 @@ import formatData
 import trainVal
 import formatData
 
+import sys
+
 import matplotlib.patheffects as path_effects
 
 def evalModel(exp_id,model_id,model_name,epoch):
@@ -108,7 +110,7 @@ def computeMetrics(path,videoName,resFilePaths,videoNameDict,metTun,metric):
 def formatMetr(metricValuesArr):
     return "$"+str(round(metricValuesArr.mean(),2))+" \pm "+str(round(metricValuesArr.std(),2))+"$"
 
-def plotScore(exp_id,model_id,epoch,trainPartBeg,trainPartEnd):
+def plotScore(exp_id,model_id,epoch,trainPartBeg,trainPartEnd,scoreAxNb=4):
     ''' This function plots the scores given by a model to seral videos.
 
     It also plots the distance between shot features and it also produces features showing the correlation between
@@ -125,10 +127,10 @@ def plotScore(exp_id,model_id,epoch,trainPartBeg,trainPartEnd):
     #This dictionnary returns a label using its index
     revLabelDict = formatData.getReversedLabels()
     labDict = formatData.getLabels()
+    reverLabDict = formatData.getReversedLabels()
     cmap = cm.hsv(np.linspace(0, 1, len(revLabelDict.keys())))
 
     resFilePaths = sorted(glob.glob("../results/{}/{}_epoch{}*.csv".format(exp_id,model_id,epoch)))
-    print("../results/{}/{}_epoch{}*.csv".format(exp_id,model_id,epoch))
     videoPaths = load_data.findVideos(propStart=0,propEnd=1)
     videoNames = list(map(lambda x:os.path.basename(os.path.splitext(x)[0]),videoPaths))
 
@@ -146,69 +148,58 @@ def plotScore(exp_id,model_id,epoch,trainPartBeg,trainPartEnd):
             nbFrames = scores[-1,0]
             scores = scores[:,1:]
 
-            scoreAxNb = 4
-
-            f, axList = plt.subplots(scoreAxNb+2, 1,figsize=(30,5))
-            #ax1 = fig.add_subplot(111)
+            f, axList = plt.subplots(scoreAxNb+3, 1,figsize=(30,5))
             ax1 = axList[0]
-            #box = ax1.get_position()
-            #ax1.set_position([box.x0, box.y0, box.width * 0.1, box.height])
 
-            ax1.set_xlim(0,nbFrames)
+            #ax1.set_xlim(0,nbFrames)
             ax1.set_xlabel("GT")
-            #for item in ([ax1.title, ax1.xaxis.label, ax1.yaxis.label] + ax1.get_xticklabels() + ax1.get_yticklabels()):
-            #    item.set_fontsize(20)
 
             legHandles = []
 
             #Plot the ground truth phases
             gt = np.genfromtxt("../data/annotations/"+videoName+"_phases.csv",dtype=str,delimiter=",")
-            for i,phase in enumerate(gt):
-                rect = patches.Rectangle((int(phase[1]),0),int(phase[2])-int(phase[1]),1,linewidth=1,color=cmap[labDict[phase[0]]],alpha=1,label=phase[0])
-                legHandles += [ax1.add_patch(rect)]
+            legHandles = plotPhases(gt,legHandles,labDict,cmap,axList[0],nbFrames,"GT")
 
-            #for i in range(scores.shape[0]):
-                #scores = torch.nn.functional.softmax(torch.tensor(scores[i,:]),dim=-1).numpy()
+            #Plot the scores
             expVal = np.exp(scores)
             scores = expVal/expVal.sum(axis=-1,keepdims=True)
 
-            #Plot the scores
+            axList[1].set_ylabel("Scores",rotation="horizontal",fontsize=20,horizontalalignment="right",position=(0,-2.5))
             for i in range(scores.shape[1]):
-                #scoresSoftM = torch.nn.functional.softmax(torch.tensor(scores[:,i]),dim=-1)
-
                 ax = axList[i//((scores.shape[1]+1)//scoreAxNb)+1]
                 ax.set_xlim(0,nbFrames)
                 fill = ax.fill_between(np.arange(len(scores[:,i])), 0, scores[:,i],label=revLabelDict[i],color=cmap[i])
-                #ax.plot(np.arange(len(scores[:,i])),scores[:,i],label=revLabelDict[i],color=cmap[i])
+
+            #Plot the prediction only considering the scores and not the state transition matrix
+            predSeq = scores.argmax(axis=-1)
+            predSeq = labelIndList2FrameInd(predSeq,reverLabDict)
+            legHandles = plotPhases(predSeq,legHandles,labDict,cmap,axList[-2],nbFrames,"Prediction")
 
             #Plot the prediction with viterbi decoding
             transMat = torch.zeros((scores.shape[1],scores.shape[1]))
             priors = torch.zeros((scores.shape[1],))
             transMat,_ = trainVal.computeTransMat(transMat,priors,trainPartBeg,trainPartEnd)
-
             predSeqs,_ = metrics.viterbi_decode(torch.log(torch.tensor(scores).float()),torch.log(transMat),top_k=1)
-
-            reverLabDict = formatData.getReversedLabels()
-
             predSeq = labelIndList2FrameInd(predSeqs[0],reverLabDict)
-
-            for i,phase in enumerate(predSeq):
-                rect = patches.Rectangle((int(phase[1]),0),int(phase[2])-int(phase[1]),1,linewidth=1,color=cmap[labDict[phase[0]]],alpha=1,label=phase[0])
-                axList[-1].set_xlim(0,nbFrames)
-                axList[-1].add_patch(rect)
+            legHandles = plotPhases(predSeq,legHandles,labDict,cmap,axList[-1],nbFrames,"Prediction (Viterbi)")
 
             plt.xlabel("Time (frame index)")
-            #plt.ylabel("Probability")
-            #plt.tight_layout()
-            #plt.text(10,0,)
-            plt.text(0, 15, "Prediction", fontsize=14, transform=plt.gcf().transFigure)
             ax1.legend(bbox_to_anchor=(1.1, 1.05),prop={'size': 15})
             plt.subplots_adjust(hspace=0.6)
             plt.savefig("../vis/{}/{}_epoch{}_video{}_scores.png".format(exp_id,model_id,epoch,fileName))
             plt.close()
-
+            sys.exit(0)
         else:
             raise ValueError("Unkown video : ",path)
+
+def plotPhases(phases,legHandles,labDict,cmap,ax,nbFrames,ylab):
+    for i,phase in enumerate(phases):
+        rect = patches.Rectangle((int(phase[1]),0),int(phase[2])-int(phase[1]),1,linewidth=1,color=cmap[labDict[phase[0]]],alpha=1,label=phase[0])
+        legHandles += [ax.add_patch(rect)]
+    ax.set_xlim(0,nbFrames)
+    ax.set_ylabel(ylab,rotation="horizontal",fontsize=20,horizontalalignment="right",position=(0,0.1))
+
+    return legHandles
 
 def labelIndList2FrameInd(labelList,reverLabDict):
 
