@@ -28,6 +28,18 @@ def buildFeatModel(featModelName):
 
     return featModel
 
+#This class is just the class nn.DataParallel that allow running computation on multiple gpus
+#but it adds the possibility to access the attribute of the model
+class DataParallelModel(nn.DataParallel):
+    def __init__(self, model):
+        super(DataParallelModel, self).__init__(model)
+
+    def __getattr__(self, name):
+        try:
+            return super(DataParallelModel, self).__getattr__(name)
+        except AttributeError:
+            return getattr(self.module, name)
+
 class Model(nn.Module):
 
     def __init__(self,visualModel,tempModel):
@@ -251,7 +263,7 @@ def netBuilder(args):
     net = Model(visualModel,tempModel)
 
     if args.multi_gpu:
-        net = torch.nn.DataParallel(net)
+        net = DataParallelModel(net)
 
     return net
 
