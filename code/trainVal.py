@@ -278,7 +278,6 @@ def initialize_Net_And_EpochNumber(net,exp_id,model_id,cuda,start_mode,init_path
 
         params = torch.load(init_path)
 
-        #params = {"module."+k:v if k.find("module") == -1 else k:v for k,v in params.items()}
         paramsFormated = {}
         for key in params.keys():
             keyFormat =  "module."+key if key.find("module") == -1 else key
