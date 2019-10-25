@@ -277,7 +277,14 @@ def initialize_Net_And_EpochNumber(net,exp_id,model_id,cuda,start_mode,init_path
     elif start_mode == "fine_tune":
 
         params = torch.load(init_path)
-        net.load_state_dict(params)
+
+        #params = {"module."+k:v if k.find("module") == -1 else k:v for k,v in params.items()}
+        paramsFormated = {}
+        for key in params.keys():
+            keyFormat =  "module."+key if key.find("module") == -1 else key
+            paramsFormated[keyFormat] = params[key]
+
+        net.load_state_dict(paramsFormated)
         startEpoch = utils.findLastNumbers(init_path)
 
     return startEpoch
