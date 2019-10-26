@@ -254,7 +254,7 @@ def get_OptimConstructor_And_Kwargs(optimStr,momentum):
 
     return optimConst,kwargs
 
-def initialize_Net_And_EpochNumber(net,exp_id,model_id,cuda,start_mode,init_path):
+def initialize_Net_And_EpochNumber(net,exp_id,model_id,cuda,start_mode,init_path,strict):
     '''Initialize a network
 
     If init is None, the network will be left unmodified. Its initial parameters will be saved.
@@ -278,13 +278,40 @@ def initialize_Net_And_EpochNumber(net,exp_id,model_id,cuda,start_mode,init_path
 
         params = torch.load(init_path)
 
-        paramsFormated = {}
-        for key in params.keys():
-            keyFormat =  "module."+key if key.find("module") == -1 else key
-            paramsFormated[keyFormat] = params[key]
+        #Checking if the key of the model start with "module."
+        startsWithModule = (list(net.state_dict().keys())[0].find("module.") != -1)
 
-        net.load_state_dict(paramsFormated)
-        startEpoch = utils.findLastNumbers(init_path)
+        if startsWithModule:
+            paramsFormated = {}
+            for key in params.keys():
+                keyFormat =  "module."+key if key.find("module") == -1 else key
+                paramsFormated[keyFormat] = params[key]
+            params = paramsFormated
+
+        else:
+            paramsFormated = {}
+            for key in params.keys():
+                keyFormat =  key.replace("module.","")
+                paramsFormated[keyFormat] = params[key]
+            params = paramsFormated
+
+        #Removing keys corresponding to parameter which shape are different in the checkpoint and in the current model
+        #For example, this is necessary to load a model trained on n classes to bootstrap a model with m != n classes.
+        keysToRemove = []
+        for key in params.keys():
+            if key in net.state_dict().keys():
+                if net.state_dict()[key].size() != params[key].size():
+                    keysToRemove.append(key)
+        for key in keysToRemove:
+            params.pop(key)
+
+        missingKeys,unExpectedKeys = net.load_state_dict(params,strict)
+
+        #Start epoch is 1 if strict if false because strict=False means that it is another model which is being trained
+        if strict:
+            startEpoch = utils.findLastNumbers(init_path)
+        else:
+            startEpoch = 1
 
     return startEpoch
 
@@ -325,10 +352,8 @@ def addInitArgs(argreader):
                 help='The mode to use to initialise the model. Can be \'scratch\' or \'fine_tune\'.')
     argreader.parser.add_argument('--init_path', type=str,metavar='SM',
                 help='The path to the weight file to use to initialise the network')
-    argreader.parser.add_argument('--init_path_visual', type=str,metavar='SM',
-                help='The path to the weight file to use to initialise the visual model')
-    argreader.parser.add_argument('--init_path_visual_temp', type=str,metavar='SM',
-                help='The path to the weight file to use to initialise the visual and the temporal model')
+    argreader.parser.add_argument('--strict_init', type=str2bool,metavar='SM',
+                help='Set to True to make torch.load_state_dict throw an error when not all keys match (to use with --init_path)')
 
     return argreader
 def addOptimArgs(argreader):
@@ -462,7 +487,7 @@ def main(argv=None):
         #Getting the contructor and the kwargs for the choosen optimizer
         optimConst,kwargsOpti = get_OptimConstructor_And_Kwargs(args.optim,args.momentum)
 
-        startEpoch = initialize_Net_And_EpochNumber(net,args.exp_id,args.model_id,args.cuda,args.start_mode,args.init_path)
+        startEpoch = initialize_Net_And_EpochNumber(net,args.exp_id,args.model_id,args.cuda,args.start_mode,args.init_path,args.strict_init)
 
         #If no learning rate is schedule is indicated (i.e. there's only one learning rate),
         #the args.lr argument will be a float and not a float list.
