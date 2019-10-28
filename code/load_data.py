@@ -88,6 +88,13 @@ class SeqTrDataset(torch.utils.data.Dataset):
 
         self.normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
         self.toTensor = torchvision.transforms.ToTensor()
+        self.resizeImage = resizeImage
+
+        if self.resizeImage:
+            self.reSizeFunc = torchvision.transforms.Compose([torchvision.transforms.ToPILImage(),torchvision.transforms.Resize(imgSize)])
+        else:
+            self.reSizeFunc = None
+
         self.FPSDict = {}
 
         self.augmentData = augmentData
@@ -98,7 +105,7 @@ class SeqTrDataset(torch.utils.data.Dataset):
                     albumentations.OpticalDistortion(distort_limit=0.1, shift_limit=0.1, p=0.5),
                     albumentations.Flip(p=0.5),
                     albumentations.ShiftScaleRotate(shift_limit=0.1, scale_limit=0.1, rotate_limit=360, p=0.5),
-                    albumentations.RandomSizedCrop((368,imgSize), imgSize, imgSize, p=0.5),
+                    albumentations.RandomSizedCrop((int(0.736*imgSize),imgSize), imgSize, imgSize, p=0.5),
                     albumentations.RandomContrast(limit=0, p=0.5)
                 ], p=1)
         else:
@@ -129,10 +136,16 @@ class SeqTrDataset(torch.utils.data.Dataset):
 
         video = pims.Video(self.videoPaths[vidInd])
 
+        def preproc(x):
+            if self.resizeImage:
+                return np.asarray(self.reSizeFunc(video[x]))[np.newaxis,:,:,0]
+            else:
+                return video[x][np.newaxis,:,:,0]
+
         #Building the frame sequence
         #The videos are in black and white but there as still encoded using 3 channels
         #Therefore, the three channels carry the same values
-        frameSeq = np.concatenate(list(map(lambda x:video[x][np.newaxis,:,:,0],np.array(frameInds))),axis=0)
+        frameSeq = np.concatenate(list(map(preproc,np.array(frameInds))),axis=0)
         # Shape of tensor : T x H x W
         frameSeq = frameSeq.transpose((1,2,0))
         # H x W x T
@@ -170,7 +183,11 @@ class TestLoader():
         self.exp_id = exp_id
         print("Number of eval videos",len(self.videoPaths))
         normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
-        self.preproc = transforms.Compose([transforms.ToTensor(),normalize])
+
+        if resizeImage:
+            self.preproc = transforms.Compose([torchvision.transforms.ToPILImage(),torchvision.transforms.Resize(imgSize),transforms.ToTensor(),normalize])
+        else:
+            self.preproc = transforms.Compose([transforms.ToTensor(),normalize])
 
         self.nbImages = 0
         for videoPath in self.videoPaths:
@@ -271,7 +288,7 @@ def addArgs(argreader):
     argreader.parser.add_argument('--val_l', type=int,metavar='LMAX',
                         help='Length of sequences for validation.')
 
-    argreader.parser.add_argument('--img_size', type=int,metavar='WIDTH',
+    argreader.parser.add_argument('--img_size', type=int,metavar='EDGE_SIZE',
                         help='The size of each edge of the images.')
 
     argreader.parser.add_argument('--train_part_beg', type=float,metavar='START',
@@ -307,32 +324,28 @@ if __name__ == "__main__":
 
     tr_len = 5
     val_l = 5
-    img_size = 500
-    resize_image = False
+    img_size = 224
+    resize_image = True
     exp_id = "Test"
 
     batch_size = 5
     num_workers = 1
+    augmentData = True
 
-    '''
     train_dataset = SeqTrDataset(train_part_beg,train_part_end,tr_len,\
-                                        img_size,resize_image,exp_id)
+                                        img_size,resize_image,exp_id,augmentData)
     sampler = Sampler(len(train_dataset.videoPaths),train_dataset.nbImages,tr_len)
     trainLoader = torch.utils.data.DataLoader(dataset=train_dataset,batch_size=batch_size,sampler=sampler, collate_fn=collateSeq, # use custom collate function here
                       pin_memory=False,num_workers=num_workers)
 
     for batch in trainLoader:
         print(batch[0].shape,batch[1].shape,batch[2])
-        sys.exit(0)
-    '''
+        break
 
-    #'''
     valLoader = TestLoader(val_l,val_part_beg,val_part_end,\
                                         img_size,resize_image,\
                                         exp_id)
 
     for batch in valLoader:
         print(batch[0].shape,batch[1].shape,batch[2],batch[3])
-        sys.exit(0)
-
-    #'''
+        break
