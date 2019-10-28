@@ -166,7 +166,7 @@ def plotScore(exp_id,model_id,epoch,trainPartBeg,trainPartEnd,scoreAxNb=4):
 
             axList[1].set_ylabel("Scores",rotation="horizontal",fontsize=20,horizontalalignment="right",position=(0,-2.5))
             for i in range(scores.shape[1]):
-                ax = axList[i//((scores.shape[1]+1)//scoreAxNb)+1]
+                ax = axList[i%((scores.shape[1]+1)//scoreAxNb)+1]
                 ax.set_xlim(0,nbFrames)
                 fill = ax.fill_between(np.arange(len(scores[:,i])), 0, scores[:,i],label=revLabelDict[i],color=cmap[i])
 
