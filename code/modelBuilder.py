@@ -249,6 +249,10 @@ def netBuilder(args):
     else:
         raise ValueError("Unknown visual model type : ",args.feat)
 
+    if args.freeze_visual:
+        for param in visualModel.parameters():
+            param.requires_grad = False
+
     ############### Temporal Model #######################
     if args.temp_mod == "lstm":
         tempModel = LSTMTempModel(nbFeat,args.class_nb,args.regression,args.dropout,args.lstm_lay,args.lstm_hid_size)
@@ -293,10 +297,13 @@ def addArgs(argreader):
     argreader.parser.add_argument('--score_conv_bilay', type=args.str2bool, metavar='N',
                         help='To apply two convolution (the second is a 1x1 conv) on the scores instead of just one layer')
 
-    argreader.parser.add_argument('--score_conv_attention', type=args.str2bool, metavar='N',
+    argreader.parser.add_argument('--score_conv_attention', type=args.str2bool, metavar='BOOL',
                         help='To apply the score convolution(s) as an attention layer.')
 
     argreader.parser.add_argument('--score_conv_chan', type=int, metavar='N',
                         help='The number of channel of the score convolution layer (used only if --score_conv_bilay')
+
+    argreader.parser.add_argument('--freeze_visual', type=args.str2bool, metavar='BOOL',
+                        help='To freeze the weights of the visual model during training.')
 
     return argreader
