@@ -27,6 +27,9 @@ clustNb = {"digit1":10,"digit2":10,"digit3":10,"wellInd_dig1":9,"wellInd_dig2":3
 
 blankDigitNorm = 30000
 
+def getDigitYPos():
+	return pos["digit1"]["Y1"],pos["digit1"]["Y2"]
+
 def clusterDigits(imgNb):
 	"""	Extract digits from embryo images in the ../data/ folder and cluster them using k-means
 

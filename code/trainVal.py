@@ -306,6 +306,8 @@ def initialize_Net_And_EpochNumber(net,exp_id,model_id,cuda,start_mode,init_path
             params.pop(key)
 
         missingKeys,unExpectedKeys = net.load_state_dict(params,strict)
+        print("missing keys",missingKeys)
+        print("unexpected keys",unExpectedKeys)
 
         #Start epoch is 1 if strict if false because strict=False means that it is another model which is being trained
         if strict:
@@ -427,8 +429,8 @@ def main(argv=None):
 
     if args.comp_feat:
 
-        testLoader = load_data.TestLoader(args.val_l,args.dataset_test,args.test_part_beg,args.test_part_end,args.img_size,\
-                                          args.resize_image,args.exp_id)
+        testLoader = load_data.TestLoader(args.val_l,args.dataset_test,args.test_part_beg,args.test_part_end,args.img_size,args.orig_img_size,\
+                                          args.resize_image,args.exp_id,args.mask_time)
 
         if args.feat != "None":
             featModel = modelBuilder.buildFeatModel(args.feat,args.pretrain_dataset,args.lay_feat_cut)
@@ -462,8 +464,8 @@ def main(argv=None):
         trainLoader,trainDataset = load_data.buildSeqTrainLoader(args)
 
         valLoader = load_data.TestLoader(args.val_l,args.val_part_beg,args.val_part_end,\
-                                            args.img_size,args.resize_image,\
-                                            args.exp_id)
+                                            args.img_size,args.orig_img_size,args.resize_image,\
+                                            args.exp_id,args.mask_time)
 
         #Building the net
         net = modelBuilder.netBuilder(args)

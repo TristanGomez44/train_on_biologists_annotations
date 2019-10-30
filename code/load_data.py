@@ -23,6 +23,9 @@ import formatData
 import albumentations
 from albumentations import Compose
 
+import digitExtractor
+import cv2
+
 class Sampler(torch.utils.data.sampler.Sampler):
     """ The sampler for the SeqTrDataset dataset
     """
@@ -69,7 +72,7 @@ class SeqTrDataset(torch.utils.data.Dataset):
     - exp_id (str): the name of the experience
     '''
 
-    def __init__(self,propStart,propEnd,trLen,imgSize,resizeImage,exp_id,augmentData):
+    def __init__(self,propStart,propEnd,trLen,imgSize,origImgSize,resizeImage,exp_id,augmentData,maskTime):
 
         super(SeqTrDataset, self).__init__()
 
@@ -111,6 +114,9 @@ class SeqTrDataset(torch.utils.data.Dataset):
         else:
             self.transf = None
 
+        self.maskTime = maskTime
+        self.mask = computeMask(maskTime,origImgSize)
+
     def __len__(self):
         return self.nbImages
 
@@ -137,10 +143,15 @@ class SeqTrDataset(torch.utils.data.Dataset):
         video = pims.Video(self.videoPaths[vidInd])
 
         def preproc(x):
+
+            x = video[x]
+            if self.maskTime:
+                x = x*self.mask[:,:,np.newaxis]
+
             if self.resizeImage:
-                return np.asarray(self.reSizeFunc(video[x]))[np.newaxis,:,:,0]
-            else:
-                return video[x][np.newaxis,:,:,0]
+                x = np.asarray(self.reSizeFunc(x))
+
+            return x[np.newaxis,:,:,0]
 
         #Building the frame sequence
         #The videos are in black and white but there as still encoded using 3 channels
@@ -177,17 +188,27 @@ class TestLoader():
     - exp_id (str): the name of the experience
     '''
 
-    def __init__(self,evalL,propStart,propEnd,imgSize,resizeImage,exp_id):
+    def __init__(self,evalL,propStart,propEnd,imgSize,origImgSize,resizeImage,exp_id,maskTime):
         self.evalL = evalL
         self.videoPaths = findVideos(propStart,propEnd)
         self.exp_id = exp_id
         print("Number of eval videos",len(self.videoPaths))
         normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
 
+        transfList = []
+
+        self.maskTime = maskTime
+        self.mask = computeMask(maskTime,origImgSize)
+
+        if maskTime:
+            maskTrans = torchvision.transforms.Lambda(lambda x : x*self.mask[:,:,np.newaxis])
+            transfList.append(maskTrans)
+
         if resizeImage:
-            self.preproc = transforms.Compose([torchvision.transforms.ToPILImage(),torchvision.transforms.Resize(imgSize),transforms.ToTensor(),normalize])
-        else:
-            self.preproc = transforms.Compose([transforms.ToTensor(),normalize])
+            resizeTransf = transforms.Compose([torchvision.transforms.ToPILImage(),torchvision.transforms.Resize(imgSize)])
+            transfList.append(resizeTransf)
+
+        self.preproc = transforms.Compose(transfList+[transforms.ToTensor(),normalize])
 
         self.nbImages = 0
         for videoPath in self.videoPaths:
@@ -217,6 +238,7 @@ class TestLoader():
         frameNb = utils.getVideoFrameNb(videoPath)
 
         frameInds = np.arange(self.currFrameInd,min(self.currFrameInd+L,frameNb))
+
         frameSeq = torch.cat(list(map(lambda x:self.preproc(video[x][:,:,0:1].repeat(repeats=3,axis=-1)).unsqueeze(0),np.array(frameInds))),dim=0)
 
         gt = getGT(vidName)[self.currFrameInd:min(self.currFrameInd+L,frameNb)]
@@ -229,10 +251,19 @@ class TestLoader():
 
         return frameSeq.unsqueeze(0),torch.tensor(gt).unsqueeze(0),vidName,torch.tensor(frameInds).int()
 
+def computeMask(maskTime,imgSize):
+    if maskTime:
+        mask = np.ones((imgSize,imgSize)).astype("uint8")
+        Y1,Y2 = digitExtractor.getDigitYPos()
+        mask[Y1-12:Y2+12] = 0
+    else:
+        mask = None
+    return mask
+
 def buildSeqTrainLoader(args):
 
     train_dataset = SeqTrDataset(args.train_part_beg,args.train_part_end,args.tr_len,\
-                                        args.img_size,args.resize_image,args.exp_id,args.augment_data)
+                                        args.img_size,args.orig_img_size,args.resize_image,args.exp_id,args.augment_data,args.mask_time)
     sampler = Sampler(len(train_dataset.videoPaths),train_dataset.nbImages,args.tr_len)
     trainLoader = torch.utils.data.DataLoader(dataset=train_dataset,batch_size=args.batch_size,sampler=sampler, collate_fn=collateSeq, # use custom collate function here
                       pin_memory=False,num_workers=args.num_workers)
@@ -289,7 +320,9 @@ def addArgs(argreader):
                         help='Length of sequences for validation.')
 
     argreader.parser.add_argument('--img_size', type=int,metavar='EDGE_SIZE',
-                        help='The size of each edge of the images.')
+                        help='The size of each edge of the images after resizing, if resizing is desired. Else is should be equal to --orig_img_size')
+    argreader.parser.add_argument('--orig_img_size', type=int,metavar='EDGE_SIZE',
+                        help='The size of each edge of the images before preprocessing.')
 
     argreader.parser.add_argument('--train_part_beg', type=float,metavar='START',
                         help='The (normalized) start position of the dataset to use for training')
@@ -313,6 +346,9 @@ def addArgs(argreader):
     argreader.parser.add_argument('--augment_data', type=args.str2bool, metavar='S',
                         help='Set to True to augment the training data with transformations')
 
+    argreader.parser.add_argument('--mask_time', type=args.str2bool, metavar='S',
+                        help='To mask the time displayed on the images')
+
     return argreader
 
 if __name__ == "__main__":
@@ -325,15 +361,17 @@ if __name__ == "__main__":
     tr_len = 5
     val_l = 5
     img_size = 224
+    orig_img_size = 500
     resize_image = True
     exp_id = "Test"
 
     batch_size = 5
     num_workers = 1
     augmentData = True
+    maskTime = True
 
     train_dataset = SeqTrDataset(train_part_beg,train_part_end,tr_len,\
-                                        img_size,resize_image,exp_id,augmentData)
+                                        img_size,orig_img_size,resize_image,exp_id,augmentData,maskTime)
     sampler = Sampler(len(train_dataset.videoPaths),train_dataset.nbImages,tr_len)
     trainLoader = torch.utils.data.DataLoader(dataset=train_dataset,batch_size=batch_size,sampler=sampler, collate_fn=collateSeq, # use custom collate function here
                       pin_memory=False,num_workers=num_workers)
@@ -343,8 +381,8 @@ if __name__ == "__main__":
         break
 
     valLoader = TestLoader(val_l,val_part_beg,val_part_end,\
-                                        img_size,resize_image,\
-                                        exp_id)
+                                        img_size,orig_img_size,resize_image,\
+                                        exp_id,maskTime)
 
     for batch in valLoader:
         print(batch[0].shape,batch[1].shape,batch[2],batch[3])
