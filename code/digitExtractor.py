@@ -25,12 +25,19 @@ hundredsDigitPos =      {"Y1":475,"Y2":475+heigth,"X1":449,"X2":449+width}
 
 clustNb = {"digit1":10,"digit2":10,"digit3":10,"wellInd_dig1":9,"wellInd_dig2":3}
 
+#This dict map cluster index to the real class (i.e. the digit)
+clustInd2Digit = {"digit1":{0:9, 1:1, 2:7, 3:6, 4:8, 5:2, 6:4, 7:0, 8:5, 9:3},
+				  "digit2":{0:9, 1:4, 2:3, 3:5, 4:7, 5:1, 6:2, 7:8, 8:0, 9:6},
+				  "digit3":{0:4, 1:3, 2:5, 3:1, 4:7, 5:2, 6:0, 7:8, 8:9, 9:6},
+				  "wellInd_dig1":{0:8, 1:1, 2:2, 3:5, 4:7, 5:4, 6:9, 7:6, 8:3},
+				  "wellInd_dig2":{0:0, 1:1, 2:2}}
+
 blankDigitNorm = 30000
 
 def getDigitYPos():
 	return pos["digit1"]["Y1"],pos["digit1"]["Y2"]
 
-def clusterDigits(imgNb):
+def clusterDigits(dataset,imgNb):
 	"""	Extract digits from embryo images in the ../data/ folder and cluster them using k-means
 
 	Once it is finished running, in ../data/ a folder "timeImg" is created and contains 4 folders : digit1, digit2, digit3, digit4, and wellInd.
@@ -45,7 +52,7 @@ def clusterDigits(imgNb):
 	"""
 
 	print("Extracting digit from the images...")
-	vidPaths = glob.glob("../data/*avi")
+	vidPaths = glob.glob("../data/{}/*avi".format(dataset))
 	#The total nb of images decoded
 	totalImgCount = 0
 	vidInd = 0
@@ -53,12 +60,12 @@ def clusterDigits(imgNb):
 	#The number of well id crop to extract per video
 	imgNb_per_videos = imgNb//len(vidPaths)
 
-	if not os.path.exists("../data/timeImg/"):
-		os.makedirs("../data/timeImg/")
+	if not os.path.exists("../data/{}/timeImg/".format(dataset)):
+		os.makedirs("../data/{}/timeImg/".format(dataset))
 
 	for key in pos.keys():
-		if not os.path.exists("../data/timeImg/{}/".format(key)):
-			os.makedirs("../data/timeImg/{}/".format(key))
+		if not os.path.exists("../data/{}/timeImg/{}/".format(dataset,key)):
+			os.makedirs("../data/{}/timeImg/{}/".format(dataset,key))
 
 	while vidInd < len(vidPaths):
 		#The number of images decoded in the current video
@@ -78,7 +85,7 @@ def clusterDigits(imgNb):
 				if (key.find("wellInd") != -1 and videoImgCount < imgNb_per_videos) or (key.find("digit") != -1 and totalImgCount < imgNb):
 					#If the crop is blank (because there is not digit yet at this position in the video), it is not necessary to write it
 					if ((key == "digit3" or key == "wellInd_dig2") and digit.sum() > blankDigitNorm) or (key != "digit3" and key != "wellInd_dig2"):
-						cv2.imwrite("../data/timeImg/{}/{}.png".format(key,totalImgCount),digit)
+						cv2.imwrite("../data/{}/timeImg/{}/{}.png".format(dataset,key,totalImgCount),digit)
 
 			ret, frame = cap.read()
 			totalImgCount += 1
@@ -88,7 +95,7 @@ def clusterDigits(imgNb):
 
 	print("Clustering the digits ... ")
 	for key in pos.keys():
-		imgPaths = glob.glob("../data/timeImg/{}/*.png".format(key))
+		imgPaths = glob.glob("../data/{}/timeImg/{}/*.png".format(dataset,key))
 		data = []
 
 		for path in imgPaths:
@@ -98,13 +105,33 @@ def clusterDigits(imgNb):
 		data = np.concatenate(data,axis=0)
 		kmeans = KMeans(n_clusters=clustNb[key], random_state=0).fit(data)
 
+		#Moving the image in their respective folder
 		for i,imgPath in enumerate(imgPaths):
-			if not os.path.exists("../data/timeImg/{}/{}/".format(key,kmeans.labels_[i])):
-				os.makedirs("../data/timeImg/{}/{}/".format(key,kmeans.labels_[i]))
+			if not os.path.exists("../data/{}/timeImg/{}/{}/".format(dataset,key,kmeans.labels_[i])):
+				os.makedirs("../data/{}/timeImg/{}/{}/".format(dataset,key,kmeans.labels_[i]))
 			fileName = os.path.basename(imgPath)
-			os.rename(imgPath,"../data/timeImg/{}/{}/{}".format(key,kmeans.labels_[i],fileName))
+			os.rename(imgPath,"../data/{}/timeImg/{}/{}/{}".format(dataset,key,kmeans.labels_[i],fileName))
 
-	print("Done ! Don't forget to rename the folders according to the true labels of the digit in it")
+	print("Renaming the folder according to the digits they contain")
+	for key in pos.keys():
+
+		#Renaming the folders and adding a "_" not there is no name conflict
+		folders = sorted(glob.glob("../data/{}/timeImg/{}/*/".format(dataset,key)))
+		for folder in folders:
+			baseDir = "/".join(folder.split("/")[:-2])
+			dirName = folder.split("/")[-2]
+			clustInd = int(dirName)
+
+			os.rename(folder,baseDir+"/"+str(clustInd2Digit[key][clustInd])+"_")
+
+		#Removing the "_"
+		folders = sorted(glob.glob("../data/{}/timeImg/{}/*/".format(dataset,key)))
+		for folder in folders:
+			baseDir = "/".join(folder.split("/")[:-2])
+			dirName = folder.split("/")[-2]
+			os.rename(folder,baseDir+"/"+dirName.replace("_",""))
+
+	print("Done ! Don't forget to quickly check if the croped digits in timeImg correspond to the name of the folder they are in. Eg. : the digits in the folder '1' should all be 1s.")
 
 class DigitIdentifier:
 	""" This class extracts the digits of an image
@@ -117,18 +144,18 @@ class DigitIdentifier:
 
 	"""
 
-	def __init__(self,neigbhorsNb=10):
+	def __init__(self,dataset,neigbhorsNb=10):
 
 
 		super(DigitIdentifier,self).__init__()
 
 		self.refDict = {}
-
+		self.dataset = dataset
 		for digName in pos.keys():
 
 			self.refDict[digName] = {}
 
-			for label in sorted(glob.glob("../data/timeImg/{}/*/".format(digName))):
+			for label in sorted(glob.glob("../data/{}/timeImg/{}/*/".format(dataset,digName))):
 
 				#This is a 2D matrix where each row is one example of the class
 				imgList = np.concatenate(list(map(lambda x:cv2.imread(x).reshape((-1))[np.newaxis],sorted(glob.glob(label+"/*.png".format(digName)))[:neigbhorsNb])),axis=0)
@@ -162,7 +189,7 @@ class DigitIdentifier:
 			meanDist = np.sqrt(np.power(flatDigit-refTens,2).sum(axis=-1)).mean(axis=-1)
 			ind = np.argmin(meanDist)
 
-			label = sorted(glob.glob("../data/timeImg/{}/*/".format(digName)))[ind].split("/")[-2]
+			label = sorted(glob.glob("../data/{}/timeImg/{}/*/".format(self.dataset,digName)))[ind].split("/")[-2]
 
 			rawResDict[digName] = int(label) if digit.sum() >= blankDigitNorm else None
 
@@ -192,8 +219,9 @@ if __name__ == "__main__":
 
 	parser = argparse.ArgumentParser(description='Crop digits in the embryo videos and cluster them.')
 
-	parser.add_argument('--img_nb', metavar='PATH',help='The number of image to crop',type=str,default=2000)
+	parser.add_argument('--img_nb', metavar='NB',help='The number of image to crop',type=int,default=2000)
+	parser.add_argument('--dataset', metavar='DATASET',help='The dataset to extract digits from',type=str,default="small")
 
 	args = parser.parse_args()
 
-	clusterDigits(args.img_nb)
+	clusterDigits(args.dataset,args.img_nb)

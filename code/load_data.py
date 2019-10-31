@@ -72,11 +72,12 @@ class SeqTrDataset(torch.utils.data.Dataset):
     - exp_id (str): the name of the experience
     '''
 
-    def __init__(self,propStart,propEnd,trLen,imgSize,origImgSize,resizeImage,exp_id,augmentData,maskTime):
+    def __init__(self,dataset,propStart,propEnd,trLen,imgSize,origImgSize,resizeImage,exp_id,augmentData,maskTime):
 
         super(SeqTrDataset, self).__init__()
 
-        self.videoPaths = findVideos(propStart,propEnd)
+        self.dataset = dataset
+        self.videoPaths = findVideos(dataset,propStart,propEnd)
 
         print("Number of training videos : ",len(self.videoPaths))
         self.imgSize = imgSize
@@ -133,7 +134,7 @@ class SeqTrDataset(torch.utils.data.Dataset):
         frameNb = utils.getVideoFrameNb(self.videoPaths[vidInd])
 
         #Computes the label index of each frame
-        gt = getGT(vidName)
+        gt = getGT(vidName,self.dataset)
         frameInds = np.arange(frameNb)
 
         ################# Frame selection ##################
@@ -188,9 +189,10 @@ class TestLoader():
     - exp_id (str): the name of the experience
     '''
 
-    def __init__(self,evalL,propStart,propEnd,imgSize,origImgSize,resizeImage,exp_id,maskTime):
+    def __init__(self,dataset,evalL,propStart,propEnd,imgSize,origImgSize,resizeImage,exp_id,maskTime):
+        self.dataset = dataset
         self.evalL = evalL
-        self.videoPaths = findVideos(propStart,propEnd)
+        self.videoPaths = findVideos(dataset,propStart,propEnd)
         self.exp_id = exp_id
         print("Number of eval videos",len(self.videoPaths))
         normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
@@ -241,7 +243,7 @@ class TestLoader():
 
         frameSeq = torch.cat(list(map(lambda x:self.preproc(video[x][:,:,0:1].repeat(repeats=3,axis=-1)).unsqueeze(0),np.array(frameInds))),dim=0)
 
-        gt = getGT(vidName)[self.currFrameInd:min(self.currFrameInd+L,frameNb)]
+        gt = getGT(vidName,self.dataset)[self.currFrameInd:min(self.currFrameInd+L,frameNb)]
 
         if frameInds[-1] + 1 == frameNb:
             self.currFrameInd = 0
@@ -262,7 +264,7 @@ def computeMask(maskTime,imgSize):
 
 def buildSeqTrainLoader(args):
 
-    train_dataset = SeqTrDataset(args.train_part_beg,args.train_part_end,args.tr_len,\
+    train_dataset = SeqTrDataset(args.dataset_train,args.train_part_beg,args.train_part_end,args.tr_len,\
                                         args.img_size,args.orig_img_size,args.resize_image,args.exp_id,args.augment_data,args.mask_time)
     sampler = Sampler(len(train_dataset.videoPaths),train_dataset.nbImages,args.tr_len)
     trainLoader = torch.utils.data.DataLoader(dataset=train_dataset,batch_size=args.batch_size,sampler=sampler, collate_fn=collateSeq, # use custom collate function here
@@ -270,14 +272,14 @@ def buildSeqTrainLoader(args):
 
     return trainLoader,train_dataset
 
-def findVideos(propStart,propEnd):
+def findVideos(dataset,propStart,propEnd):
 
-    videoPaths = sorted(glob.glob("../data/*.avi"))
+    videoPaths = sorted(glob.glob("../data/{}/*.avi".format(dataset)))
     videoPaths = np.array(videoPaths)[int(propStart*len(videoPaths)):int(propEnd*len(videoPaths))]
 
     return videoPaths
 
-def getGT(vidName):
+def getGT(vidName,dataset):
     ''' For one video, returns the label of each frame
 
     Args:
@@ -287,9 +289,9 @@ def getGT(vidName):
 
     '''
 
-    if not os.path.exists("../data/annotations/{}_targ.csv".format(vidName)):
+    if not os.path.exists("../data/{}/annotations/{}_targ.csv".format(dataset,vidName)):
 
-        phases = np.genfromtxt("../data/annotations/{}_phases.csv".format(vidName),dtype=str,delimiter=",")
+        phases = np.genfromtxt("../data/{}/annotations/{}_phases.csv".format(dataset,vidName),dtype=str,delimiter=",")
 
         gt = np.zeros((int(phases[-1,-1])+1))
 
@@ -298,9 +300,9 @@ def getGT(vidName):
 
             gt[int(phase[1]):int(phase[2])+1] = formatData.getLabels()[phase[0]]
 
-        np.savetxt("../data/annotations/{}_targ.csv".format(vidName),gt)
+        np.savetxt("../data/{}/annotations/{}_targ.csv".format(dataset,vidName),gt)
     else:
-        gt = np.genfromtxt("../data/annotations/{}_targ.csv".format(vidName))
+        gt = np.genfromtxt("../data/{}/annotations/{}_targ.csv".format(dataset,vidName))
 
     return gt.astype(int)
 
@@ -337,6 +339,13 @@ def addArgs(argreader):
     argreader.parser.add_argument('--test_part_end', type=float,metavar='END',
                         help='The (normalized) end position of the dataset to use for testing')
 
+    argreader.parser.add_argument('--dataset_train', type=str,metavar='DATASET',
+                        help='The dataset for training. Can be "big" or "small"')
+    argreader.parser.add_argument('--dataset_val', type=str,metavar='DATASET',
+                        help='The dataset for validation. Can be "big" or "small"')
+    argreader.parser.add_argument('--dataset_test', type=str,metavar='DATASET',
+                        help='The dataset for testing. Can be "big" or "small"')
+
     argreader.parser.add_argument('--resize_image', type=args.str2bool, metavar='S',
                         help='to resize the image to the size indicated by the img_width and img_heigth arguments.')
 
@@ -357,6 +366,8 @@ if __name__ == "__main__":
     train_part_end = 0.5
     val_part_beg = 0.5
     val_part_end = 1
+    dataset_train = "small"
+    dataset_val = "small"
 
     tr_len = 5
     val_l = 5
@@ -370,7 +381,7 @@ if __name__ == "__main__":
     augmentData = True
     maskTime = True
 
-    train_dataset = SeqTrDataset(train_part_beg,train_part_end,tr_len,\
+    train_dataset = SeqTrDataset(dataset_train,train_part_beg,train_part_end,tr_len,\
                                         img_size,orig_img_size,resize_image,exp_id,augmentData,maskTime)
     sampler = Sampler(len(train_dataset.videoPaths),train_dataset.nbImages,tr_len)
     trainLoader = torch.utils.data.DataLoader(dataset=train_dataset,batch_size=batch_size,sampler=sampler, collate_fn=collateSeq, # use custom collate function here
@@ -380,7 +391,7 @@ if __name__ == "__main__":
         print(batch[0].shape,batch[1].shape,batch[2])
         break
 
-    valLoader = TestLoader(val_l,val_part_beg,val_part_end,\
+    valLoader = TestLoader(dataset_val,val_l,val_part_beg,val_part_end,\
                                         img_size,orig_img_size,resize_image,\
                                         exp_id,maskTime)
 

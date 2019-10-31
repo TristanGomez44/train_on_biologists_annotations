@@ -92,7 +92,7 @@ def binaryToMetrics(output,target,transition_matrix,regression):
     ''' Computes metrics over a batch of targets and predictions
 
     Args:
-    - pred (list): the batch of predicted class
+    - output (list): the batch of outputs
     - target (list): the batch of ground truth class
     - transition_matrix (torch.tensor) : this matrix contains at row i and column j the empirical probability to go from state i to j
 

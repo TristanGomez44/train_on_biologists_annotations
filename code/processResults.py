@@ -31,7 +31,7 @@ import sys
 
 import matplotlib.patheffects as path_effects
 
-def evalModel(exp_id,model_id,model_name,epoch):
+def evalModel(dataset,partBeg,partEnd,exp_id,model_id,model_name,epoch,regression,nbClass):
     '''
     Evaluate a model. It requires the scores for each video to have been computed already with the trainVal.py script. Check readme to
     see how to compute the scores for each video.
@@ -52,12 +52,15 @@ def evalModel(exp_id,model_id,model_name,epoch):
     '''
 
     resFilePaths = np.array(sorted(glob.glob("../results/{}/{}_epoch{}_*.csv".format(exp_id,model_id,epoch)),key=utils.findNumbers))
-    videoNameDict = buildVideoNameDict(0,1,resFilePaths)
+    videoNameDict = buildVideoNameDict(dataset,partBeg,partEnd,resFilePaths)
     resFilePaths = np.array(list(filter(lambda x:x in videoNameDict.keys(),resFilePaths)))
     print("../results/{}/{}_epoch{}_*.csv".format(exp_id,model_id,epoch))
     #Store the value of the f-score of for video and for each threshold
     metTun = {}
     metEval = {"Accuracy":    np.zeros(len(resFilePaths))}
+
+    transMat,priors = torch.zeros((nbClass,nbClass)).float(),torch.zeros((nbClass)).float()
+    transMat,_ = trainVal.computeTransMat(dataset,transMat,priors,partBeg,partEnd)
 
     for j,path in enumerate(resFilePaths):
 
@@ -65,7 +68,7 @@ def evalModel(exp_id,model_id,model_name,epoch):
         videoName = videoNameDict[path]
 
         #Compute the metrics with the default threshold (0.5) and with a threshold tuned on each video with a leave-one out method
-        metEval["Accuracy"][j] = computeMetrics(path,videoName,resFilePaths,videoNameDict,metTun,"Accuracy")
+        metEval["Accuracy"][j] = computeMetrics(path,dataset,videoName,resFilePaths,videoNameDict,metTun,"Accuracy",transMat,regression)
 
     #Writing the latex table
     printHeader = not os.path.exists("../results/metrics.csv")
@@ -78,7 +81,7 @@ def evalModel(exp_id,model_id,model_name,epoch):
 
     print("Accuracy : ",str(round(metEval["Accuracy"].mean(),2)))
 
-def computeMetrics(path,videoName,resFilePaths,videoNameDict,metTun,metric):
+def computeMetrics(path,dataset,videoName,resFilePaths,videoNameDict,metTun,metric,transMat,regression):
     '''
     Evaluate a model on a video by using the default threshold and a threshold tuned on all the other video
 
@@ -95,22 +98,18 @@ def computeMetrics(path,videoName,resFilePaths,videoNameDict,metTun,metric):
     - def_metr_dict[metric]: the metric using default threshold
 
     '''
+    print(path)
+    gt = load_data.getGT(videoName,dataset).astype(int)
+    scores = np.genfromtxt(path,delimiter=" ")[:,1:]
 
-    gt = load_data.getGT(videoName).astype(int)
-    scores = np.genfromtxt(path,delimiter=",")[:,1:]
-
-    pred = scores.argmax(axis=-1).astype(int)
-
-    print(pred[np.newaxis,:].shape)
-    print(gt[np.newaxis,:].shape)
-    metr_dict = metrics.binaryToMetrics(torch.tensor(pred[np.newaxis,:]),torch.tensor(gt[np.newaxis,:]))
+    metr_dict = metrics.binaryToMetrics(torch.tensor(scores[np.newaxis,:]).float(),torch.tensor(gt[np.newaxis,:]),transMat,regression)
 
     return metr_dict[metric]
 
 def formatMetr(metricValuesArr):
     return "$"+str(round(metricValuesArr.mean(),2))+" \pm "+str(round(metricValuesArr.std(),2))+"$"
 
-def plotScore(exp_id,model_id,epoch,trainPartBeg,trainPartEnd,scoreAxNb=4):
+def plotScore(dataset,exp_id,model_id,epoch,trainPartBeg,trainPartEnd,scoreAxNb=4):
     ''' This function plots the scores given by a model to seral videos.
 
     It also plots the distance between shot features and it also produces features showing the correlation between
@@ -131,7 +130,7 @@ def plotScore(exp_id,model_id,epoch,trainPartBeg,trainPartEnd,scoreAxNb=4):
     cmap = cm.hsv(np.linspace(0, 1, len(revLabelDict.keys())))
 
     resFilePaths = sorted(glob.glob("../results/{}/{}_epoch{}*.csv".format(exp_id,model_id,epoch)))
-    videoPaths = load_data.findVideos(propStart=0,propEnd=1)
+    videoPaths = load_data.findVideos(dataset,propStart=0,propEnd=1)
     videoNames = list(map(lambda x:os.path.basename(os.path.splitext(x)[0]),videoPaths))
 
     for path in resFilePaths:
@@ -157,7 +156,7 @@ def plotScore(exp_id,model_id,epoch,trainPartBeg,trainPartEnd,scoreAxNb=4):
             legHandles = []
 
             #Plot the ground truth phases
-            gt = np.genfromtxt("../data/annotations/"+videoName+"_phases.csv",dtype=str,delimiter=",")
+            gt = np.genfromtxt("../data/"+dataset+"/annotations/"+videoName+"_phases.csv",dtype=str,delimiter=",")
             legHandles = plotPhases(gt,legHandles,labDict,cmap,axList[0],nbFrames,"GT")
 
             #Plot the scores
@@ -178,7 +177,7 @@ def plotScore(exp_id,model_id,epoch,trainPartBeg,trainPartEnd,scoreAxNb=4):
             #Plot the prediction with viterbi decoding
             transMat = torch.zeros((scores.shape[1],scores.shape[1]))
             priors = torch.zeros((scores.shape[1],))
-            transMat,_ = trainVal.computeTransMat(transMat,priors,trainPartBeg,trainPartEnd)
+            transMat,_ = trainVal.computeTransMat(dataset,transMat,priors,trainPartBeg,trainPartEnd)
             predSeqs,_ = metrics.viterbi_decode(torch.log(torch.tensor(scores).float()),torch.log(transMat),top_k=1)
             predSeq = labelIndList2FrameInd(predSeqs[0],reverLabDict)
             legHandles = plotPhases(predSeq,legHandles,labDict,cmap,axList[-1],nbFrames,"Prediction (Viterbi)")
@@ -216,17 +215,14 @@ def labelIndList2FrameInd(labelList,reverLabDict):
     phases.append((reverLabDict[currLabel],currStartFrame,i))
     return phases
 
-def buildVideoNameDict(test_part_beg,test_part_end,resFilePaths):
+def buildVideoNameDict(dataset,test_part_beg,test_part_end,resFilePaths):
 
     ''' Build a dictionnary associating a path to a video name (it can be the path to any file than contain the name of a video in its file name) '''
 
-    videoPaths = list(filter(lambda x:x.find(".wav") == -1,sorted(glob.glob("../data/*.*"))))
-    videoPaths = list(filter(lambda x:x.find(".xml") == -1,videoPaths))
-    videoPaths = list(filter(lambda x:os.path.isfile(x),videoPaths))
-    videoPaths = np.array(videoPaths)[int(test_part_beg*len(videoPaths)):int(test_part_end*len(videoPaths))]
+    videoPaths = load_data.findVideos(dataset,test_part_beg,test_part_end)
     videoNames = list(map(lambda x:os.path.basename(os.path.splitext(x)[0]),videoPaths))
     videoNameDict = {}
-
+    print(videoNames)
     for path in resFilePaths:
         for videoName in videoNames:
             if "_"+videoName.replace("__","_")+".csv" in path.replace("__","_"):
@@ -236,11 +232,11 @@ def buildVideoNameDict(test_part_beg,test_part_end,resFilePaths):
 
     return videoNameDict
 
-def plotData(nbClass):
+def plotData(nbClass,dataset):
 
     transMat = torch.zeros((nbClass,nbClass))
     priors = torch.zeros((nbClass,))
-    transMat,priors = trainVal.computeTransMat(transMat,priors,0,1)
+    transMat,priors = trainVal.computeTransMat(dataset,transMat,priors,0,1)
 
     labels = list(formatData.getLabels().keys())[:nbClass]
 
@@ -256,10 +252,10 @@ def plotData(nbClass):
     plt.tight_layout()
     plt.savefig("../vis/transMat.png")
 
-    videoPaths = load_data.findVideos(0,1)
+    videoPaths = load_data.findVideos(dataset,0,1)
     nbImages=0
     for videoPath in videoPaths:
-        nbImages += len(load_data.getGT(os.path.splitext(os.path.basename(videoPath))[0]))
+        nbImages += len(load_data.getGT(os.path.splitext(os.path.basename(videoPath))[0],dataset))
 
     plt.figure()
     plt.bar(np.arange(nbClass),priors*nbImages)
@@ -277,21 +273,22 @@ def main(argv=None):
 
     ########### PLOT SCORE EVOLUTION ALONG VIDEO ##################
     argreader.parser.add_argument('--plot_score',action="store_true",help='To plot the probabilities produced by a model for all the videos processed by this model during validation for some epoch.\
-                                                                            The --model_id argument must be set, along with the --exp_id, --epoch_to_plot, --train_part_beg, --train_part_end (for \
+                                                                            The --model_id argument must be set, along with the --exp_id, --dataset_test, --epoch_to_plot, --train_part_beg, --train_part_end (for \
                                                                             computing the state transition matrix.)')
-
     argreader.parser.add_argument('--epoch_to_plot',type=int,metavar="N",help='The epoch at which to plot the predictions when using the --plot_score argument')
 
     ########## COMPUTE METRICS AND PUT THEM IN AN LATEX TABLE #############
     argreader.parser.add_argument('--eval_model',type=int,help='Evaluate a model using the csv files containing the scores. The value of this arg is the epoch at which to evaluate the model \
-                                                                            The --model_id argument must be set, along with the --model_name, --exp_id arguments.')
+                                                                            The --model_id argument must be set, along with the --model_name, --exp_id, --test_part_beg, --test_part_end and \
+                                                                            --dataset_test, --regression and --class_nb arguments.')
     argreader.parser.add_argument('--model_name',type=str,metavar="NAME",help='The name of the model as will appear in the latex table produced by the --eval_model argument.')
 
     ######################## Database plot #################################
 
-    argreader.parser.add_argument('--plot_data',type=int,metavar="N",help='To plot the state transition matrix and the prior vector/ The value is the number of classes.')
+    argreader.parser.add_argument('--plot_data',type=int,metavar="N",help='To plot the state transition matrix and the prior vector. The value is the number of classes. The --dataset_test must be set.')
 
     argreader = load_data.addArgs(argreader)
+    argreader = modelBuilder.addArgs(argreader)
 
     #Reading the comand line arg
     argreader.getRemainingArgs()
@@ -300,11 +297,11 @@ def main(argv=None):
     args = argreader.args
 
     if args.plot_score:
-        plotScore(args.exp_id,args.model_id,args.epoch_to_plot,args.train_part_beg,args.train_part_end)
+        plotScore(args.dataset_test,args.exp_id,args.model_id,args.epoch_to_plot,args.train_part_beg,args.train_part_end)
     if not args.eval_model is None:
-        evalModel(args.exp_id,args.model_id,args.model_name,epoch=args.eval_model)
+        evalModel(args.dataset_test,args.test_part_beg,args.test_part_end,args.exp_id,args.model_id,args.model_name,epoch=args.eval_model,regression=args.regression,nbClass=args.class_nb)
     if not args.plot_data is None:
-        plotData(args.plot_data)
+        plotData(args.plot_data,args.dataset_test)
 
 if __name__ == "__main__":
     main()

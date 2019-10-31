@@ -100,13 +100,13 @@ def epochSeqTr(model,optim,log_interval,loader, epoch, args,writer,**kwargs):
         torch.save(model.state_dict(), "../models/{}/model{}_epoch{}".format(args.exp_id,args.model_id, epoch))
         writeSummaries(metrDict,validBatch,writer,epoch,"train",args.model_id,args.exp_id)
 
-def computeTransMat(transMat,priors,propStart,propEnd):
+def computeTransMat(dataset,transMat,priors,propStart,propEnd):
 
-    videoPaths = load_data.findVideos(propStart,propEnd)
+    videoPaths = load_data.findVideos(dataset,propStart,propEnd)
 
     for videoPath in videoPaths:
         videoName = os.path.splitext(os.path.basename(videoPath))[0]
-        target = load_data.getGT(videoName)
+        target = load_data.getGT(videoName,dataset)
         #Updating the transition matrix
         for i in range(len(target)-1):
             transMat[target[i],target[i+1]] += 1
@@ -463,7 +463,7 @@ def main(argv=None):
 
         trainLoader,trainDataset = load_data.buildSeqTrainLoader(args)
 
-        valLoader = load_data.TestLoader(args.val_l,args.val_part_beg,args.val_part_end,\
+        valLoader = load_data.TestLoader(args.dataset_val,args.val_l,args.val_part_beg,args.val_part_end,\
                                             args.img_size,args.orig_img_size,args.resize_image,\
                                             args.exp_id,args.mask_time)
 
@@ -502,7 +502,7 @@ def main(argv=None):
         outDictEpochs = {}
         targDictEpochs = {}
 
-        transMat,priors = computeTransMat(net.transMat,net.priors,args.train_part_beg,args.train_part_end)
+        transMat,priors = computeTransMat(args.dataset_train,net.transMat,net.priors,args.train_part_beg,args.train_part_end)
         net.setTransMat(transMat)
         net.setPriors(priors)
 
