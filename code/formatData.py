@@ -9,18 +9,16 @@ import digitExtractor
 import cv2
 import subprocess
 from args import ArgReader
+from shutil import copyfile
 
 labelDict = {"tPB2":0,"tPNa":1,"tPNf":2,"t2":3,"t3":4,"t4":5,"t5":6,"t6":7,"t7":8,"t8":9,"t9+":10,"tM":11,"tSB":12,"tB":13,"tEB":14,"tHB":15}
 
-def formatData(dataset,pathToZip,img_for_crop_nb):
+def formatDataSmall(dataset,pathToZip,img_for_crop_nb):
 
     #Unziping and renaming the folder
-    if dataset == "small":
-        if not os.path.exists("../data/{}/".format(dataset)):
-            subprocess.call("unzip {} -d ../data/".format(pathToZip),shell=True)
-            subprocess.call("mv {} {}".format(os.path.splitext(pathToZip)[0],"../data/{}/".format(dataset)),shell=True)
-    else:
-        raise ValueError("Unkown dataset :",dataset)
+    if not os.path.exists("../data/{}/".format(dataset)):
+        subprocess.call("unzip {} -d ../data/".format(pathToZip),shell=True)
+        subprocess.call("mv {} {}".format(os.path.splitext(pathToZip)[0],"../data/{}/".format(dataset)),shell=True)
 
     #Adding an underscore between the name of the video and the "EXPORT.xls" in the name of the excel files
     for xlsPath in glob.glob("../data/{}/*.xls".format(dataset)):
@@ -60,7 +58,7 @@ def formatData(dataset,pathToZip,img_for_crop_nb):
             csvPath = os.path.dirname(vidPath) + "/"+ os.path.basename(vidPath).split("_")[0] + "_EXPORT.csv"
             df = pd.read_csv(csvPath)[["Well"]+list(labelDict.keys())]
 
-            labDict = {}
+            phaseDict = {}
             imgCount = 0
             startOfCurrentPhase = 0
             currentLabel = None
@@ -94,7 +92,7 @@ def formatData(dataset,pathToZip,img_for_crop_nb):
                 #If this condition is true, the current frame belongs to a new phase
                 if label != currentLabel:
                     #Adding the start and end frames of last phase in the dict
-                    labDict[currentLabel] = (startOfCurrentPhase,imgCount-1)
+                    phaseDict[currentLabel] = (startOfCurrentPhase,imgCount-1)
                     startOfCurrentPhase = imgCount
                     currentLabel = label
 
@@ -105,14 +103,113 @@ def formatData(dataset,pathToZip,img_for_crop_nb):
                 imgCount +=1
 
             #Adding the last phase
-            labDict[currentLabel] = (startOfCurrentPhase,imgCount-1)
+            phaseDict[currentLabel] = (startOfCurrentPhase,imgCount-1)
 
             #Writing the start and end frames of each phase in a csv file
             with open("../data/{}/annotations/{}_phases.csv".format(dataset,vidName),"w") as text_file:
                 for label in labelDict.keys():
-                    if label in labDict.keys():
-                        print(label+","+str(labDict[label][0])+","+str(labDict[label][1]),file=text_file)
+                    if label in phaseDict.keys():
+                        print(label+","+str(phaseDict[label][0])+","+str(phaseDict[label][1]),file=text_file)
 
+def formatDataBig(dataset,pathToFold,img_for_crop_nb):
+
+    if not os.path.exists("../data/{}/".format(dataset)):
+        os.makedirs("../data/{}/".format(dataset))
+
+    #Moving the videos
+    for videoPath in sorted(glob.glob(pathToFold+"/DATA/*avi")):
+        os.rename(videoPath,"../data/{}/".format(dataset)+os.path.basename(videoPath))
+
+    #Moving the excel files
+    for excelPath in sorted(glob.glob(pathToFold+"/*.xls*")):
+        os.rename(excelPath,"../data/{}/".format(dataset)+os.path.basename(excelPath))
+
+    #Moving the csv file
+    copyfile(pathToFold+"/AnnotationManuelle2017.csv","../data/{}".format(dataset)+"/AnnotationManuelle2017.csv")
+
+    #Adding an underscore between the name of the video and the "EXPORT.xls" in the name of the excel files
+    for xlsPath in glob.glob("../data/{}/*.xls".format(dataset)):
+
+        dirName = os.path.dirname(xlsPath)
+        newFileName = os.path.basename(xlsPath).replace(" ","_")
+        os.rename(xlsPath,dirName+"/"+newFileName)
+
+    #Convert the xls files into csv files if it is not already done
+    if (len(glob.glob("../data/{}/*.csv".format(dataset))) - 1) < len(glob.glob("../data/{}/*.xls*".format(dataset))):
+        subprocess.call("libreoffice --headless --convert-to csv --outdir ../data/{}/ ../data/{}/*.xls*".format(dataset,dataset),shell=True)
+
+    def preproc(x):
+
+        x = x.replace("/","").replace("DPI","").replace(" ","")
+
+        i=0
+        endOfNumber = False
+        startOfNumber = False
+
+        while not endOfNumber and i<len(x):
+
+            if x[i].isdigit():
+                if not startOfNumber:
+                    startOfNumber = True
+            else:
+                if startOfNumber:
+                    endOfNumber = True
+
+            i+=1
+
+        x = x[:i-1] if endOfNumber else x
+
+        return x
+
+    dfDict = {}
+    for csvPath in sorted(glob.glob("../data/{}/*.csv".format(dataset))):
+
+        if os.path.basename(csvPath) == "annoted31.12.2016.csv" or os.path.basename(csvPath) == "export_18-05-16.csv" or os.path.basename(csvPath) == "ALR493_EXPORT.csv" or os.path.basename(csvPath) == "DC307_EXPORT.csv":
+            df = pd.read_csv(csvPath,dtype=str,encoding = "ISO-8859-1",sep=",")
+            idColName = "PatientName"
+
+            names = df[idColName].apply(preproc)
+            df = df[["Well"]+list(labelDict.keys())]
+            df["Name"] = names
+
+            dfDict[csvPath] = df
+
+        elif os.path.basename(csvPath) == "AnnotationManuelle2017.csv":
+            df = pd.read_csv(csvPath,dtype=str,encoding = "ISO-8859-1",sep=";")
+
+            idColName = "Nom"
+            def preprocName(x):
+                x = x.split("-")[0]
+                if x.find("SLIDE") != -1:
+                    x = x[:x.find("SLIDE")]
+                return x
+            def preprocWellInd(x):
+                return x.split("-")[1]
+
+            names = df[idColName].apply(preprocName)
+            wellInds = df[idColName].apply(preprocWellInd)
+            df = df[list(set(labelDict.keys()).intersection(set(df.columns)))]
+            df["Name"] = names
+            df["Well"] = wellInds
+
+            dfDict[csvPath] = df
+
+        elif os.path.basename(csvPath) == "export_emmanuelle.csv":
+
+            df = pd.read_csv(csvPath,dtype=str,encoding = "ISO-8859-1",sep=",")
+            idColName = "Patient Name"
+
+            names = df[idColName].apply(preproc)
+            df = df[["Well"]+list(labelDict.keys())]
+            df["Name"] = names
+
+            dfDict[csvPath] = df
+
+        else:
+            raise ValueError("Unkown ground truth csv file : ",csvPath)
+
+
+            
 def getLabels():
     return labelDict
 
@@ -134,6 +231,9 @@ def main(argv=None):
     argreader.parser.add_argument('--dataset',type=str,metavar="DATASET",help='The dataset to format')
     argreader.parser.add_argument('--path_to_zip',type=str,metavar="PATH",help='The path to the zip file containing the dataset "small". Only used if it is the dataset "small" that is \
                                      being formated.',default="../data/embryo.zip")
+    argreader.parser.add_argument('--path_to_folder',type=str,metavar="PATH",help='The path to the folder containing the dataset "big". Only used if it is the dataset "big" that is \
+                                     being formated.',default="")
+
     argreader.parser.add_argument('--img_for_crop_nb',type=int,metavar="NB",help='The number of images from which to extract digits',default=2000)
 
     #Reading the comand line arg
@@ -142,7 +242,10 @@ def main(argv=None):
     #Getting the args from command line and config file
     args = argreader.args
 
-    formatData(args.dataset,args.path_to_zip,args.img_for_crop_nb)
+    if args.dataset == "small":
+        formatDataSmall(args.dataset,args.path_to_zip,args.img_for_crop_nb)
+    elif args.dataset == "big":
+        formatDataBig(args.dataset,args.path_to_folder,args.img_for_crop_nb)
 
 if __name__ == "__main__":
     main()
