@@ -72,18 +72,18 @@ def formatDataSmall(dataset,pathToZip,img_for_crop_nb):
             while ret:
 
                 #Select only the label columns of the well
-                line = df.loc[df['Well'] == wellInd][list(labelDict.keys())]
+                row = df.loc[df['Well'] == wellInd][list(labelDict.keys())]
 
-                for col in line.columns:
-                    line[col] = line[col].apply(lambda x:x.replace(",",".") if type(x) == str else x).astype(float)
+                for col in row.columns:
+                    row[col] = row[col].apply(lambda x:x.replace(",",".") if type(x) == str else x).astype(float)
 
                 #Removes label columns that do not appear in the video (i.e. those with NaN value)
-                line = line.transpose()
-                line = line[np.isnan(line) == 0]
-                line = line.transpose()
+                row = row.transpose()
+                row = row[np.isnan(row) == 0]
+                row = row.transpose()
 
                 #Getting the true label of the image
-                label = line.columns[max((resDict["time"] > line).sum(axis=1).item()-1,0)]
+                label = row.columns[max((resDict["time"] > row).sum(axis=1).item()-1,0)]
 
                 #Initialise currentLabel with the first label
                 if currentLabel is None:
@@ -137,6 +137,10 @@ def formatDataBig(dataset,pathToFold,img_for_crop_nb):
     #Convert the xls files into csv files if it is not already done
     if (len(glob.glob("../data/{}/*.csv".format(dataset))) - 1) < len(glob.glob("../data/{}/*.xls*".format(dataset))):
         subprocess.call("libreoffice --headless --convert-to csv --outdir ../data/{}/ ../data/{}/*.xls*".format(dataset,dataset),shell=True)
+
+    #The folder than will contain the annotations
+    if not os.path.exists("../data/{}/annotations/".format(dataset)):
+        os.makedirs("../data/{}/annotations".format(dataset))
 
     def preproc(x):
 
@@ -208,8 +212,127 @@ def formatDataBig(dataset,pathToFold,img_for_crop_nb):
         else:
             raise ValueError("Unkown ground truth csv file : ",csvPath)
 
+    if not os.path.exists("../data/{}/timeImg/".format(dataset)):
+        #Extracting and clustering the digits
+        digitExtractor.clusterDigits(dataset,img_for_crop_nb)
 
-            
+    digExt = digitExtractor.DigitIdentifier(dataset)
+
+    videoPaths = sorted(glob.glob("../data/{}/*.avi".format(dataset)))
+
+    #Removing the videos with big problems
+    videosToRemove = digitExtractor.getVideosToRemove()
+    for vidName in videosToRemove:
+        videoPaths.remove("../data/{}/".format(dataset)+vidName)
+
+    noAnnot = 'video_name\n'
+    multipleAnnot = 'video_name,annot1,annot2,annot3\n'
+
+    for i,vidPath in enumerate(videoPaths):
+
+        vidName = os.path.splitext(os.path.basename(vidPath))[0]
+        patientName = vidName.split("-")[0]
+
+        if not os.path.exists("../data/{}/annotations/{}_phases.csv".format(dataset,vidName)):
+
+            phaseDict = {}
+            imgCount = 0
+            startOfCurrentPhase = 0
+            currentLabel = None
+
+            #Reading the video
+            cap = cv2.VideoCapture(vidPath)
+            ret, frame = cap.read()
+            resDict = digExt.findDigits(frame,newVid=True)
+            #print(resDict["time"])
+            wellInd = resDict["wellInd"]
+
+            rowList = []
+
+            matchingCSVPaths = []
+            for csvPath in dfDict.keys():
+
+                rowLocBoolArray = (dfDict[csvPath]["Name"] == patientName)
+                if rowLocBoolArray.sum() > 0:
+
+                    patientLines = dfDict[csvPath].loc[rowLocBoolArray]
+
+                    row = patientLines.loc[patientLines['Well'] == str(wellInd)]
+                    colNames = []
+                    for colName in ["Name","Well"]+list(labelDict.keys()):
+                        if colName in list(row.columns):
+                            colNames.append(colName)
+
+                    rowList.append(row[colNames])
+                    matchingCSVPaths.append(csvPath)
+
+            if len(rowList) == 0:
+                print(i,"/",len(videoPaths),": No annotation found")
+                noAnnot += vidName + "\n"
+            else:
+                print(i,"/",len(videoPaths),vidName,":",len(rowList),"annotations found")
+
+                if len(rowList) > 1:
+                    line = vidName+','
+                    for j in range(len(rowList)):
+                        line += os.path.basename(matchingCSVPaths[j])+","
+
+                    line += "\n"
+                    multipleAnnot += line
+
+                rows = pd.concat(rowList)
+
+                #Using the first annotation found
+                row = rows.iloc[0].to_frame().transpose()
+
+                '''
+                while ret:
+
+                    #Select only the label columns of the desired well
+                    row = row[list(labelDict.keys())]
+                    for col in list(row.columns):
+                        row[col] = row[col].apply(lambda x:x.replace(",",".") if type(x) == str else x).astype(float)
+
+                    #Removes label columns that do not appear in the video (i.e. those with NaN value)
+                    row = row.transpose()
+                    row = row[np.isnan(row) == 0]
+                    row = row.transpose()
+
+                    #Getting the true label of the image
+                    label = row.columns[max((resDict["time"] > row).sum(axis=1).item()-1,0)]
+
+                    #Initialise currentLabel with the first label
+                    if currentLabel is None:
+                        currentLabel = label
+
+                    #If this condition is true, the current frame belongs to a new phase
+                    if label != currentLabel:
+                        #Adding the start and end frames of last phase in the dict
+                        phaseDict[currentLabel] = (startOfCurrentPhase,imgCount-1)
+                        startOfCurrentPhase = imgCount
+                        currentLabel = label
+
+                    ret, frame = cap.read()
+                    if not frame is None:
+                        resDict = digExt.findDigits(frame)
+
+                    imgCount +=1
+
+                #Adding the last phase
+                phaseDict[currentLabel] = (startOfCurrentPhase,imgCount-1)
+
+                #Writing the start and end frames of each phase in a csv file
+                with open("../data/{}/annotations/{}_phases.csv".format(dataset,vidName),"w") as text_file:
+                    for label in labelDict.keys():
+                        if label in phaseDict.keys():
+                            print(label+","+str(phaseDict[label][0])+","+str(phaseDict[label][1]),file=text_file)
+                '''
+
+    with open("../data/{}/tooManyAnnot.csv".format(dataset),"w") as text_file:
+        print(multipleAnnot,file=text_file)
+    with open("../data/{}/noAnnot.csv".format(dataset),"w") as text_file:
+        print(noAnnot,file=text_file)
+
 def getLabels():
     return labelDict
 
@@ -223,7 +346,7 @@ def getReversedLabels():
 
 def main(argv=None):
 
-    #Getting arguments from config file and command line
+    #Getting arguments from config file and command row
     #Building the arg reader
     argreader = ArgReader(argv)
 
@@ -236,11 +359,13 @@ def main(argv=None):
 
     argreader.parser.add_argument('--img_for_crop_nb',type=int,metavar="NB",help='The number of images from which to extract digits',default=2000)
 
-    #Reading the comand line arg
+    #Reading the comand row arg
     argreader.getRemainingArgs()
 
-    #Getting the args from command line and config file
+    #Getting the args from command row and config file
     args = argreader.args
+
+    pd.options.display.width = 0
 
     if args.dataset == "small":
         formatDataSmall(args.dataset,args.path_to_zip,args.img_for_crop_nb)
