@@ -115,7 +115,7 @@ def clusterDigits(dataset,imgNb):
 				   "digit2":10,"digit2_alt":10,"digit2_alt2":10,"digit2_alt3":10,
 				   "digit3":10,"digit3_alt":10,
 				   "wellInd_dig1":9,"wellInd_dig1_alt":2,
-				   "wellInd_dig2":3,"wellInd_dig2_alt":9}
+				   "wellInd_dig2":3,"wellInd_dig2_alt":10}
 
 		#This dict map cluster index to the real class (i.e. the digit)
 		clustInd2Digit = {"digit1":{0:5,1:1,2:3,3:7,4:9,5:2,6:4,7:8,8:0,9:6},
@@ -129,7 +129,7 @@ def clusterDigits(dataset,imgNb):
 						  "digit3":{0:0,1:1,2:2,3:3,4:7,5:4,6:5,7:8,8:6,9:9},
 						  "digit3_alt":{0:1,1:8,2:7,3:2,4:9,5:4,6:5,7:3,8:6,9:0},
 						  "wellInd_dig1":{0:2,1:1,2:6,3:3,4:4,5:7,6:5,7:9,8:8},
-						  "wellInd_dig2_alt":{0:6,1:4,2:2,3:7,4:1,5:3,6:9,7:0,8:5},
+						  "wellInd_dig2_alt":{0:6,1:4,2:2,3:7,4:1,5:3,6:9,7:0,8:5,9:8},
 						  "wellInd_dig2":{0:2,1:1,2:0},
 						  "wellInd_dig1_alt":{0:0,1:1}}
 
@@ -348,7 +348,7 @@ class DigitIdentifier:
 
 		self.lastTime = None
 
-	def findDigits(self,img,newVid=False):
+	def findDigits(self,img,newVid=False,printDict=False):
 		''' Crop the digits on an image and identify them with KNN algorithm
 
 		The image contains two information  :
@@ -427,7 +427,7 @@ class DigitIdentifier:
 			else:
 
 				rawResDict[digName] = None
-		#print(rawResDict)
+
 		mergedResDict = {}
 		if self.dataset == "big":
 			#Merging all the key,value pairs corresponding to the same digit (i.e. mergin digit1 with digit1_alt and digit1_alt2)

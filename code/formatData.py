@@ -142,75 +142,7 @@ def formatDataBig(dataset,pathToFold,img_for_crop_nb):
     if not os.path.exists("../data/{}/annotations/".format(dataset)):
         os.makedirs("../data/{}/annotations".format(dataset))
 
-    def preproc(x):
-
-        x = x.replace("/","").replace("DPI","").replace(" ","")
-
-        i=0
-        endOfNumber = False
-        startOfNumber = False
-
-        while not endOfNumber and i<len(x):
-
-            if x[i].isdigit():
-                if not startOfNumber:
-                    startOfNumber = True
-            else:
-                if startOfNumber:
-                    endOfNumber = True
-
-            i+=1
-
-        x = x[:i-1] if endOfNumber else x
-
-        return x
-
-    dfDict = {}
-    for csvPath in sorted(glob.glob("../data/{}/*.csv".format(dataset))):
-
-        if os.path.basename(csvPath) == "annoted31.12.2016.csv" or os.path.basename(csvPath) == "export_18-05-16.csv" or os.path.basename(csvPath) == "ALR493_EXPORT.csv" or os.path.basename(csvPath) == "DC307_EXPORT.csv":
-            df = pd.read_csv(csvPath,dtype=str,encoding = "ISO-8859-1",sep=",")
-            idColName = "PatientName"
-
-            names = df[idColName].apply(preproc)
-            df = df[["Well"]+list(labelDict.keys())]
-            df["Name"] = names
-
-            dfDict[csvPath] = df
-
-        elif os.path.basename(csvPath) == "AnnotationManuelle2017.csv":
-            df = pd.read_csv(csvPath,dtype=str,encoding = "ISO-8859-1",sep=";")
-
-            idColName = "Nom"
-            def preprocName(x):
-                x = x.split("-")[0]
-                if x.find("SLIDE") != -1:
-                    x = x[:x.find("SLIDE")]
-                return x
-            def preprocWellInd(x):
-                return x.split("-")[1]
-
-            names = df[idColName].apply(preprocName)
-            wellInds = df[idColName].apply(preprocWellInd)
-            df = df[list(set(labelDict.keys()).intersection(set(df.columns)))]
-            df["Name"] = names
-            df["Well"] = wellInds
-
-            dfDict[csvPath] = df
-
-        elif os.path.basename(csvPath) == "export_emmanuelle.csv":
-
-            df = pd.read_csv(csvPath,dtype=str,encoding = "ISO-8859-1",sep=",")
-            idColName = "Patient Name"
-
-            names = df[idColName].apply(preproc)
-            df = df[["Well"]+list(labelDict.keys())]
-            df["Name"] = names
-
-            dfDict[csvPath] = df
-
-        else:
-            raise ValueError("Unkown ground truth csv file : ",csvPath)
+    dfDict = collectAndFormatCSVs(dataset,labelDict)
 
     if not os.path.exists("../data/{}/timeImg/".format(dataset)):
         #Extracting and clustering the digits
@@ -228,10 +160,25 @@ def formatDataBig(dataset,pathToFold,img_for_crop_nb):
     noAnnot = 'video_name\n'
     multipleAnnot = 'video_name,annot1,annot2,annot3\n'
 
+    #Read each video, and write its annotation in the annotations folder
+    noAnnot,multipleAnnot = processVideos(videoPaths,dataset,digExt,labelDict,dfDict,noAnnot,multipleAnnot)
+
+    with open("../data/tooManyAnnot.csv","w") as text_file:
+        print(multipleAnnot,file=text_file)
+
+    print("Missing annot : ",len(noAnnot.split("\n")))
+
+    with open("../data/noAnnot.csv","w") as text_file:
+        print(noAnnot,file=text_file)
+
+def processVideos(videoPaths,dataset,digitExt,labelDict,dfDict,noAnnot,multipleAnnot):
+
     for i,vidPath in enumerate(videoPaths):
+        if i%10 == 0:
+            print(i,"/",len(videoPaths),vidPath)
 
         vidName = os.path.splitext(os.path.basename(vidPath))[0]
-        patientName = vidName.split("-")[0]
+        patientName = "-".join(vidName.split("-")[:-1])
 
         if not os.path.exists("../data/{}/annotations/{}_phases.csv".format(dataset,vidName)):
 
@@ -243,8 +190,8 @@ def formatDataBig(dataset,pathToFold,img_for_crop_nb):
             #Reading the video
             cap = cv2.VideoCapture(vidPath)
             ret, frame = cap.read()
-            resDict = digExt.findDigits(frame,newVid=True)
-            #print(resDict["time"])
+
+            resDict = digitExt.findDigits(frame,newVid=True)
             wellInd = resDict["wellInd"]
 
             rowList = []
@@ -252,12 +199,17 @@ def formatDataBig(dataset,pathToFold,img_for_crop_nb):
             matchingCSVPaths = []
             for csvPath in dfDict.keys():
 
-                rowLocBoolArray = (dfDict[csvPath]["Name"] == patientName)
+                rowLocBoolArray = (dfDict[csvPath]["Name"] == patientName.replace("-",""))
+
+                #Some videos have their real name written in another column : "Well Description"
+                rowLocBoolArray +=  (dfDict[csvPath]["Well Description"] == vidName)
+                rowLocBoolArray = (rowLocBoolArray>0)
+
                 if rowLocBoolArray.sum() > 0:
 
-                    patientLines = dfDict[csvPath].loc[rowLocBoolArray]
+                    patientRows = dfDict[csvPath].loc[rowLocBoolArray]
+                    row = patientRows.loc[patientRows['Well'] == str(wellInd)]
 
-                    row = patientLines.loc[patientLines['Well'] == str(wellInd)]
                     colNames = []
                     for colName in ["Name","Well"]+list(labelDict.keys()):
                         if colName in list(row.columns):
@@ -267,10 +219,10 @@ def formatDataBig(dataset,pathToFold,img_for_crop_nb):
                     matchingCSVPaths.append(csvPath)
 
             if len(rowList) == 0:
-                print(i,"/",len(videoPaths),": No annotation found")
                 noAnnot += vidName + "\n"
             else:
-                print(i,"/",len(videoPaths),vidName,":",len(rowList),"annotations found")
+                if i % 40 == 0:
+                    print(i,"/",len(videoPaths),vidName,":",len(rowList),"annotations found")
 
                 if len(rowList) > 1:
                     line = vidName+','
@@ -282,10 +234,12 @@ def formatDataBig(dataset,pathToFold,img_for_crop_nb):
 
                 rows = pd.concat(rowList)
 
-                #Using the first annotation found
-                row = rows.iloc[0].to_frame().transpose()
+                #Looking for the annotation with the least number of NaN in it
+                leatNaNRowInd = np.isnan(rows.drop(labels=["Name","Well"],axis=1).values.astype(float)).sum(axis=1).argmin()
 
-                '''
+                #Using the first annotation found
+                row = rows.iloc[leatNaNRowInd].to_frame().transpose()
+
                 while ret:
 
                     #Select only the label columns of the desired well
@@ -326,12 +280,65 @@ def formatDataBig(dataset,pathToFold,img_for_crop_nb):
                     for label in labelDict.keys():
                         if label in phaseDict.keys():
                             print(label+","+str(phaseDict[label][0])+","+str(phaseDict[label][1]),file=text_file)
-                '''
 
-    with open("../data/{}/tooManyAnnot.csv".format(dataset),"w") as text_file:
-        print(multipleAnnot,file=text_file)
-    with open("../data/{}/noAnnot.csv".format(dataset),"w") as text_file:
-        print(noAnnot,file=text_file)
+    return noAnnot,multipleAnnot
+
+def collectAndFormatCSVs(dataset,labelDict):
+
+    def preproc(x):
+        x = x.replace("/","").replace(" ","")
+        x = x.split("-")[0]
+        x = x.upper()
+        return x
+
+    dfDict = {}
+    for csvPath in sorted(glob.glob("../data/{}/*.csv".format(dataset))):
+
+        if os.path.basename(csvPath) == "annoted31.12.2016.csv" or os.path.basename(csvPath) == "export_18-05-16.csv" or os.path.basename(csvPath) == "ALR493_EXPORT.csv" or os.path.basename(csvPath) == "DC307_EXPORT.csv":
+            df = pd.read_csv(csvPath,dtype=str,encoding = "ISO-8859-1",sep=",")
+            idColName = "PatientName"
+
+            names = df[idColName].apply(preproc)
+            df = df[["Well","Well Description"]+list(labelDict.keys())]
+            df["Name"] = names
+
+            dfDict[csvPath] = df
+
+        elif os.path.basename(csvPath) == "AnnotationManuelle2017.csv":
+            df = pd.read_csv(csvPath,dtype=str,encoding = "ISO-8859-1",sep=";")
+
+            idColName = "Nom"
+            def preprocName(x):
+                x = x.split("-")[0]
+                return x
+            def preprocWellInd(x):
+                return x.split("-")[1]
+
+            names = df[idColName].apply(preprocName)
+            wellInds = df[idColName].apply(preprocWellInd)
+            df = df[list(set(labelDict.keys()).intersection(set(df.columns)))]
+            df["Name"] = names
+            df["Well"] = wellInds
+            df["Well Description"] = ["" for _ in range(len(names))]
+
+            dfDict[csvPath] = df
+
+        elif os.path.basename(csvPath) == "export_emmanuelle.csv":
+
+            df = pd.read_csv(csvPath,dtype=str,encoding = "ISO-8859-1",sep=",")
+            idColName = "Patient Name"
+
+            names = df[idColName].apply(preproc)
+
+            df = df[["Well"]+list(labelDict.keys())+["Well Description"]]
+            df["Name"] = names
+
+            dfDict[csvPath] = df
+
+        else:
+            raise ValueError("Unkown ground truth csv file : ",csvPath)
+
+    return dfDict
 
 def getLabels():
     return labelDict
