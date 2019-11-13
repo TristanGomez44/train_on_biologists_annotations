@@ -186,7 +186,7 @@ def computeTransMat(dataset,transMat,priors,propStart,propEnd):
     else:
         return transMat,priors
 
-def epochSeqVal(model,log_interval,loader, epoch, args,writer):
+def epochSeqVal(model,log_interval,loader, epoch, args,writer,metricEarlyStop,mode="val"):
     '''
     Validate a model. This function computes several metrics and return the best value found until this point.
 
@@ -205,7 +205,7 @@ def epochSeqVal(model,log_interval,loader, epoch, args,writer):
 
     model.eval()
 
-    print("Epoch",epoch," : val")
+    print("Epoch",epoch," : ",mode)
 
     metrDict = metrics.emptyMetrDict(args.uncertainty)
 
@@ -254,9 +254,9 @@ def epochSeqVal(model,log_interval,loader, epoch, args,writer):
         fullArr = torch.cat((frameIndDict[key].float(),outDict[key].squeeze(0).squeeze(1)),dim=1)
         np.savetxt("../results/{}/{}_epoch{}_{}.csv".format(args.exp_id,args.model_id,epoch,key),fullArr.cpu().detach().numpy())
 
-    writeSummaries(metrDict,validBatch,writer,epoch,"val",args.model_id,args.exp_id,nbVideos=nbVideos)
+    writeSummaries(metrDict,validBatch,writer,epoch,mode,args.model_id,args.exp_id,nbVideos=nbVideos)
 
-    return outDict,targDict
+    return outDict,targDict,metrDict[metricEarlyStop]
 
 def writeSummaries(metrDict,batchNb,writer,epoch,mode,model_id,exp_id,nbVideos=None):
     ''' Write the metric computed during an evaluation in a tf writer and in a csv file
@@ -265,7 +265,7 @@ def writeSummaries(metrDict,batchNb,writer,epoch,mode,model_id,exp_id,nbVideos=N
     - metrDict (dict): the dictionary containing the value of metrics (not divided by the number of batch)
     - batchNb (int): the total number of batches during the epoch
     - writer (tensorboardX.SummaryWriter): the writer to use to write the metrics to tensorboardX
-    - mode (str): either \'train\' or \'val\' to indicate if the epoch was a training epoch or a validation epoch
+    - mode (str): either 'train', 'val' or 'test' to indicate if the epoch was a training epoch or a validation epoch
     - model_id (str): the id of the model
     - exp_id (str): the experience id
     - nbVideos (int): During validation the metrics are computed over whole videos and not batches, therefore the number of videos should be indicated \
@@ -442,10 +442,14 @@ def addValArgs(argreader):
 
     argreader.parser.add_argument('--metric_early_stop', type=str,metavar='METR',
                     help='The metric to use to choose the best model')
-    argreader.parser.add_argument('--maximise_metric', type=args.str2bool,metavar='BOOL',
+    argreader.parser.add_argument('--maximise_val_metric', type=args.str2bool,metavar='BOOL',
                     help='If true, The chosen metric for chosing the best model will be maximised')
+    argreader.parser.add_argument('--max_worse_epoch_nb', type=int,metavar='NB',
+                    help='The number of epochs to wait if the validation performance does not improve.')
+    argreader.parser.add_argument('--run_test', type=args.str2bool,metavar='NB',
+                    help='Evaluate the model on the test set')
 
-    argreader.parser.add_argument('--compute_val_metrics', type=args.str2bool,metavar='BOOL',
+    argreader.parser.add_argument('--compute_metrics_during_eval', type=args.str2bool,metavar='BOOL',
                     help='If false, the metrics will not be computed during validation, but the scores produced by the models will still be saved')
 
     return argreader
@@ -567,6 +571,7 @@ def main(argv=None):
         kwargsVal = kwargsTr.copy()
 
         kwargsVal['loader'] = valLoader
+        kwargsVal["metricEarlyStop"] = args.metric_early_stop
 
         for p in net.parameters():
             paramToOpti.append(p)
@@ -593,7 +598,31 @@ def main(argv=None):
         net.setTransMat(transMat)
         net.setPriors(priors)
 
-        for epoch in range(startEpoch, args.epochs + 1):
+        epoch = startEpoch
+
+        if args.start_mode == "scratch":
+            worseEpochNb = 0
+            bestEpoch = epoch
+        else:
+            bestModelPaths = glob.glob("../models/{}/model{}_best_epoch*".format(args.exp_id,args.model_id))
+            if len(bestModelPaths) == 0:
+                worseEpochNb = 0
+                bestEpoch = epoch
+            elif len(bestModelPaths) == 1:
+                bestModelPath = bestModelPaths[0]
+                bestEpoch = int(os.path.basename(bestModelPath).split("epoch")[1])
+                worseEpochNb = startEpoch - bestEpoch
+            else:
+                raise ValueError("Wrong number of best model weight file : ",len(bestModelPaths))
+
+        if args.maximise_val_metric:
+            bestMetricVal = -np.inf
+            isBetter = lambda x,y:x>y
+        else:
+            bestMetricVal = np.inf
+            isBetter = lambda x,y:x<y
+
+        while epoch < args.epochs + 1 and worseEpochNb < args.max_worse_epoch_nb:
 
             kwargsOpti,kwargsTr,lrCounter = update.updateLR(epoch,args.epochs,args.lr,startEpoch,kwargsOpti,kwargsTr,lrCounter,net,optimConst)
 
@@ -606,9 +635,41 @@ def main(argv=None):
                 net.load_state_dict(torch.load("../models/{}/model{}_epoch{}".format(args.no_train[0],args.no_train[1],epoch)))
 
             with torch.no_grad():
-                outDict,targDict = valFunc(**kwargsVal)
+                outDict,targDict,metricVal = valFunc(**kwargsVal)
             outDictEpochs[epoch] = outDict
             targDictEpochs[epoch] = targDict
+
+            if isBetter(metricVal,bestMetricVal):
+                print("Better !")
+                if os.path.exists("../models/{}/model{}_best_epoch{}".format(args.exp_id,args.model_id,bestEpoch)):
+                    os.remove("../models/{}/model{}_best_epoch{}".format(args.exp_id,args.model_id,bestEpoch))
+
+                torch.save(net.state_dict(), "../models/{}/model{}_best_epoch{}".format(args.exp_id,args.model_id, epoch))
+                bestEpoch = epoch
+                bestMetricVal = metricVal
+                worseEpochNb = 0
+            else:
+                print("Not better since ",worseEpochNb,"epochs")
+                worseEpochNb += 1
+
+
+            epoch += 1
+        if args.run_test:
+
+            kwargsTest = kwargsVal
+            kwargsTest["mode"] = "test"
+
+            testLoader = load_data.TestLoader(args.dataset_test,args.val_l,args.test_part_beg,args.test_part_end,\
+                                                args.img_size,args.orig_img_size,args.resize_image,\
+                                                args.exp_id,args.mask_time)
+
+            kwargsTest['loader'] = testLoader
+
+            net.load_state_dict(torch.load("../models/{}/model{}_epoch{}".format(args.exp_id,args.model_id,bestEpoch)))
+            kwargsTest["model"] = net
+
+            with torch.no_grad():
+                outDict,targDict,_ = valFunc(**kwargsTest)
 
 if __name__ == "__main__":
     main()

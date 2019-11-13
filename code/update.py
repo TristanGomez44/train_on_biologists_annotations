@@ -36,15 +36,10 @@ def computeScore(model,allFeats,allTarget,valLTemp,vidName):
     return allOutput
 
 def updateMetrics(args,model,allFeat,allTarget,precVidName,nbVideos,metrDict,outDict,targDict):
-    ''' Update the current estimation
-
-    Also compute the scene change scores if the temporal model is a CNN
-
-    '''
 
     allOutput = computeScore(model,allFeat,allTarget,args.val_l_temp,precVidName)
 
-    if args.compute_val_metrics:
+    if args.compute_metrics_during_eval:
         if args.regression:
             #Converting the output of the sigmoid between 0 and 1 to a scale between -0.5 and class_nb+0.5
             allOutput = (torch.sigmoid(allOutput)*(args.class_nb+1)-0.5)
@@ -57,7 +52,6 @@ def updateMetrics(args,model,allFeat,allTarget,precVidName,nbVideos,metrDict,out
         metDictSample = metrics.binaryToMetrics(allOutput,allTarget,model.transMat,args.regression,args.uncertainty)
         metDictSample["Loss"] = loss
         metrDict = metrics.updateMetrDict(metrDict,metDictSample)
-
         if args.regression:
             allOutput = metrics.regressionPred2Confidence(allOutput,args.class_nb)
 
