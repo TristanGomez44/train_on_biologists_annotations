@@ -5,6 +5,7 @@ import scipy as sp
 import torch
 import sys
 import torch.nn.functional as F
+import math
 # Code taken from https://gist.github.com/PetrochukM/afaa3613a99a8e7213d2efdd02ae4762#file-top_k_viterbi-py-L5
 # Credits to AllenNLP for the base implementation and base tests:
 # https://github.com/allenai/allennlp/blob/master/allennlp/nn/util.py#L174
@@ -88,7 +89,29 @@ def regressionPred2Confidence(regresPred,nbClass):
 
     return conf
 
-def binaryToMetrics(output,target,transition_matrix,regression):
+
+def emptyMetrDict(uncertainty=False):
+    if not uncertainty:
+        return {"Loss":0,"Accuracy":0,"Accuracy (Viterbi)":0}
+    else:
+        return {"Loss":0,"Accuracy":0,"Accuracy (Viterbi)":0,"Entropy (Correct)":None,"Entropy (Incorrect)":None}
+
+def updateMetrDict(metrDict,metrDictSample):
+
+    for metric in metrDict.keys():
+
+        if metric in list(metrDictSample.keys()):
+            if metric.find("Entropy") == -1:
+                metrDict[metric] += metrDictSample[metric]
+            else:
+                if metrDict[metric] is None:
+                    metrDict[metric] = metrDictSample[metric]
+                else:
+                    metrDict[metric] = torch.cat((metrDict[metric],metrDictSample[metric]),dim=0)
+
+    return metrDict
+
+def binaryToMetrics(output,target,transition_matrix,regression,uncertainty):
     ''' Computes metrics over a batch of targets and predictions
 
     Args:
@@ -112,7 +135,13 @@ def binaryToMetrics(output,target,transition_matrix,regression):
         #Accuracy with viterbi
         pred = []
         for outSeq in output:
-            outSeq = torch.nn.functional.softmax(outSeq, dim=-1)
+
+            if uncertainty:
+                outSeq = F.softplus(outSeq)+1
+                outSeq = outSeq/outSeq.sum(dim=-1,keepdim=True)
+            else:
+                outSeq = torch.nn.functional.softmax(outSeq, dim=-1)
+
             predSeqs,_ = viterbi_decode(torch.log(outSeq),torch.log(transition_matrix),top_k=1)
 
             pred.append(torch.tensor(predSeqs[0]).unsqueeze(0))
@@ -124,4 +153,17 @@ def binaryToMetrics(output,target,transition_matrix,regression):
         accViterb = 0
 
     metDict = {"Accuracy":acc,'Accuracy (Viterbi)':accViterb}
+
+    if uncertainty:
+
+        #output,target = output.view(output.size(0)*output.size(1),-1),target.view(-1)
+
+        probs = output/output.sum(dim=-1,keepdim=True)
+        classNb = probs.size(-1)
+        entropies = -(probs*torch.log(probs)).sum(dim=-1)
+        entropies_norm = entropies/math.log(classNb)
+
+        metDict["Entropy (Correct)"] = entropies_norm[pred == target]
+        metDict["Entropy (Incorrect)"] = entropies_norm[pred != target]
+
     return metDict

@@ -30,6 +30,7 @@ import utils
 import update
 import warnings
 
+from attack import FGSM
 warnings.simplefilter('error', UserWarning)
 
 def epochSeqTr(model,optim,log_interval,loader, epoch, args,writer,**kwargs):
@@ -51,7 +52,7 @@ def epochSeqTr(model,optim,log_interval,loader, epoch, args,writer,**kwargs):
 
     print("Epoch",epoch," : train")
 
-    metrDict = {"Loss":0,"Accuracy":0,"Accuracy (Viterbi)":0}
+    metrDict = metrics.emptyMetrDict(args.uncertainty)
 
     validBatch = 0
 
@@ -78,6 +79,8 @@ def epochSeqTr(model,optim,log_interval,loader, epoch, args,writer,**kwargs):
             #Converting the output of the sigmoid between 0 and 1 to a scale between -0.5 and class_nb+0.5
             output = (torch.sigmoid(output)*(args.class_nb+1)-0.5)
             loss = F.mse_loss(output.view(-1),target.view(-1).float())
+        elif args.uncertainty:
+            loss = uncertaintyLoss(F.softplus(output)+1,target,model,data,args.uncer_loss_type,args.uncer_exact_inf_div,args.uncert_inf_div_weight,args.uncer_ll_ratio_weight,args.uncer_max_adv_entr_weight,args.class_nb)
         else:
             loss = F.cross_entropy(output.view(output.size(0)*output.size(1),-1), target.view(-1))
 
@@ -86,10 +89,13 @@ def epochSeqTr(model,optim,log_interval,loader, epoch, args,writer,**kwargs):
         optim.zero_grad()
 
         #Metrics
-        metDictSample = metrics.binaryToMetrics(output,target,model.transMat,args.regression)
-        for key in metDictSample.keys():
-            metrDict[key] += metDictSample[key]
-        metrDict["Loss"] += loss.detach().data.item()
+        metDictSample = metrics.binaryToMetrics(output,target,model.transMat,args.regression,args.uncertainty)
+        #for key in metDictSample.keys():
+        #    metrDict[key] += metDictSample[key]
+        metDictSample["Loss"] = loss.detach().data.item()
+
+        metrDict = metrics.updateMetrDict(metrDict,metDictSample)
+
         validBatch += 1
 
         if validBatch > 3 and args.debug:
@@ -99,6 +105,65 @@ def epochSeqTr(model,optim,log_interval,loader, epoch, args,writer,**kwargs):
     if validBatch > 0:
         torch.save(model.state_dict(), "../models/{}/model{}_epoch{}".format(args.exp_id,args.model_id, epoch))
         writeSummaries(metrDict,validBatch,writer,epoch,"train",args.model_id,args.exp_id)
+
+def logBeta(alpha):
+    alpha_0 = alpha.sum(-1)
+    return torch.lgamma(alpha).sum(-1) - torch.lgamma(alpha_0)
+
+def uncertaintyLoss(alpha,target,model,data,lossType,exactInfDiv,infDivWeight,llRatioWeight,maxAdvEntrWeight,classNb):
+
+    meanDistr = alpha/alpha.sum(dim=-1,keepdim=True)
+
+    target = target.view(-1)
+    # One hot encoding buffer that you create out of the loop and just keep reusing
+    target_one_hot = torch.FloatTensor(target.size(0), classNb).to(target.device)
+
+    # In your for loop
+    #target.to("cpu")
+    target_one_hot.zero_()
+    target_one_hot.scatter_(1, target.view(-1,1), 1)
+
+    if lossType == "MSE":
+        loss = F.mse_loss(meanDistr.view(meanDistr.size(0)*meanDistr.size(1),-1),target_one_hot.float())
+    elif lossType == "CE":
+        loss = F.cross_entropy(meanDistr.view(meanDistr.size(0)*meanDistr.size(1),-1), target.view(-1))
+    else:
+        raise ValueError("Unknown loss type : ",lossType)
+
+    assert 0<llRatioWeight and llRatioWeight<=1
+
+    ############# Information divergence term #############
+
+    alpha = alpha.view(alpha.size(0)*alpha.size(1),-1)
+
+    alpha_prime = (1-target_one_hot)+target_one_hot*alpha
+
+    if exactInfDiv:
+
+        if llRatioWeight == 1:
+            distr_alpha = torch.distributions.dirichlet.Dirichlet(alpha)
+            distr_alpha_prime = torch.distributions.dirichlet.Dirichlet(alpha_prime)
+
+            infDivTerm = torch.distributions.kl.kl_divergence(distr_alpha, distr_alpha_prime)
+        else:
+            infDivTerm = logBeta(alpha_prime)-logBeta(alpha)+1/(llRatioWeight-1)*(logBeta(llRatioWeight*alpha+(1-llRatioWeight)*alpha_prime)-logBeta(alpha))
+    else:
+        raise NotImplementedError
+        #infDivTerm = (llRatioWeight/2)*((target_one_hot*torch.pow(alpha-1,2)*polyg(alpha)).sum(dim=-1)-(target_one_hot*torch.pow(alpha-1,2)).sum(dim=-1)*polyg(alpha.sum(dim=-1)))
+
+    ############ Maximum adversarial entropy term #############
+
+    pgd_attack = FGSM(model)
+    data_adv = pgd_attack(data, target.view(data.size(0),data.size(1))).to(data.device)
+    alpha_adv = model(data_adv)
+
+    alpha_adv_0 = alpha_adv.sum(dim=-1)
+    maxAdvEntrTerm = logBeta(alpha_adv)+(alpha_adv_0-classNb)*torch.digamma(alpha_adv_0)-((alpha_adv-1)*torch.digamma(alpha_adv)).sum(dim=-1)
+    maxAdvEntrTerm = torch.clamp(maxAdvEntrTerm,-300,300)
+
+    loss += infDivWeight*infDivTerm.mean()-maxAdvEntrWeight*maxAdvEntrTerm.mean()
+
+    return loss
 
 def computeTransMat(dataset,transMat,priors,propStart,propEnd):
 
@@ -142,7 +207,7 @@ def epochSeqVal(model,log_interval,loader, epoch, args,writer):
 
     print("Epoch",epoch," : val")
 
-    metrDict = {"Loss":0,"Accuracy":0,"Accuracy (Viterbi)":0}
+    metrDict = metrics.emptyMetrDict(args.uncertainty)
 
     nbVideos = 0
 
@@ -168,7 +233,7 @@ def epochSeqVal(model,log_interval,loader, epoch, args,writer):
         update.updateFrameDict(frameIndDict,frameInds,vidName)
 
         if newVideo and not videoBegining:
-            allOutput,nbVideos = update.updateMetrics(args,model,allFeat,allTarget,precVidName,nbVideos,metrDict,outDict,targDict,args.regression)
+            allOutput,nbVideos = update.updateMetrics(args,model,allFeat,allTarget,precVidName,nbVideos,metrDict,outDict,targDict)
         if newVideo:
             allTarget = target
             allFeat = feat.unsqueeze(0)
@@ -183,7 +248,7 @@ def epochSeqVal(model,log_interval,loader, epoch, args,writer):
             break
 
     if not args.debug:
-        allOutput,nbVideos = update.updateMetrics(args,model,allFeat,allTarget,precVidName,nbVideos,metrDict,outDict,targDict,args.regression)
+        allOutput,nbVideos = update.updateMetrics(args,model,allFeat,allTarget,precVidName,nbVideos,metrDict,outDict,targDict)
 
     for key in outDict.keys():
         fullArr = torch.cat((frameIndDict[key].float(),outDict[key].squeeze(0).squeeze(1)),dim=1)
@@ -215,7 +280,10 @@ def writeSummaries(metrDict,batchNb,writer,epoch,mode,model_id,exp_id,nbVideos=N
 
     for metric in metrDict.keys():
 
-        metrDict[metric] /= sampleNb
+        if metric.find("Entropy") == -1:
+            metrDict[metric] /= sampleNb
+        else:
+            metrDict[metric] = torch.median(metrDict[metric])
 
     for metric in metrDict:
         writer.add_scalars(metric,{model_id+"_"+mode:metrDict[metric]},epoch)
@@ -381,6 +449,24 @@ def addValArgs(argreader):
                     help='If false, the metrics will not be computed during validation, but the scores produced by the models will still be saved')
 
     return argreader
+def addLossTermArgs(argreader):
+
+    argreader.parser.add_argument('--uncer_max_adv_entr_weight', type=float,metavar='FLOAT',
+                    help='The weight of the maximum divergence entropy term (only used when uncertainty is True)')
+
+    argreader.parser.add_argument('--uncert_inf_div_weight', type=float,metavar='FLOAT',
+                    help='The weight of the information divergence term (only used when uncertainty is True)')
+
+    argreader.parser.add_argument('--uncer_loss_type', type=str,metavar='FLOAT',
+                    help='The loss to use for the computation of uncertainty loss. Can be "MSE" or "CE".')
+
+    argreader.parser.add_argument('--uncer_exact_inf_div', type=args.str2bool,metavar='FLOAT',
+                    help='Set to True for exact computation of the information divergence term of the uncertainty loss.')
+
+    argreader.parser.add_argument('--uncer_ll_ratio_weight', type=float,metavar='FLOAT',
+                    help='The ratio between the likelihood in the information divergence term of the uncertainty loss. It should be between 0 (excluded) and 1 (included).')
+
+    return argreader
 
 def main(argv=None):
 
@@ -400,6 +486,7 @@ def main(argv=None):
     argreader = addInitArgs(argreader)
     argreader = addOptimArgs(argreader)
     argreader = addValArgs(argreader)
+    argreader = addLossTermArgs(argreader)
 
     argreader = modelBuilder.addArgs(argreader)
     argreader = load_data.addArgs(argreader)

@@ -282,6 +282,9 @@ def addArgs(argreader):
     argreader.parser.add_argument('--regression', type=args.str2bool,metavar='D',
                         help='Set to True to train a regression model instead of a discriminator')
 
+    argreader.parser.add_argument('--uncertainty', type=args.str2bool,metavar='D',
+                        help='Set to True to also model prediction uncertainty and data uncertainty')
+
     argreader.parser.add_argument('--temp_mod', type=str,metavar='MOD',
                         help='The temporal model. Can be "linear", "lstm" or "score_conv".')
 
