@@ -153,7 +153,7 @@ class LSTMTempModel(TempModel):
         # N x T x D
         x,_ = self.lstmTempMod(x)
         # N x T x H
-        x = x.view(-1,x.size(-1))
+        x = x.contiguous().view(-1,x.size(-1))
         # NT x H
         x = self.linTempMod(x,batchSize)
         # N x T x classNb (or N x T in case of regression)
