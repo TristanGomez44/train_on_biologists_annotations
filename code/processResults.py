@@ -29,9 +29,11 @@ import formatData
 
 import sys
 
+import configparser
+
 import matplotlib.patheffects as path_effects
 
-def evalModel(dataset,partBeg,partEnd,exp_id,model_id,model_name,epoch,regression,nbClass):
+def evalModel(dataset,partBeg,partEnd,exp_id,model_id,epoch,regression,uncertainty,nbClass):
     '''
     Evaluate a model. It requires the scores for each video to have been computed already with the trainVal.py script. Check readme to
     see how to compute the scores for each video.
@@ -46,7 +48,6 @@ def evalModel(dataset,partBeg,partEnd,exp_id,model_id,model_name,epoch,regressio
     Args:
     - exp_id (str): the name of the experience
     - model_id (str): the id of the model to evaluate. Eg : "res50_res50_youtLarg"
-    - model_name (str): the label of the model. It will be used to identify the model in the result table. Eg. : 'Res50-Res50 (Youtube-large)'
     - epoch (int): the epoch at which to evaluate
 
     '''
@@ -54,13 +55,20 @@ def evalModel(dataset,partBeg,partEnd,exp_id,model_id,model_name,epoch,regressio
     resFilePaths = np.array(sorted(glob.glob("../results/{}/{}_epoch{}_*.csv".format(exp_id,model_id,epoch)),key=utils.findNumbers))
     videoNameDict = buildVideoNameDict(dataset,partBeg,partEnd,resFilePaths)
     resFilePaths = np.array(list(filter(lambda x:x in videoNameDict.keys(),resFilePaths)))
-    print("../results/{}/{}_epoch{}_*.csv".format(exp_id,model_id,epoch))
+
     #Store the value of the f-score of for video and for each threshold
     metTun = {}
-    metEval = {"Accuracy":    np.zeros(len(resFilePaths))}
+
+    metricNameList = metrics.emptyMetrDict().keys()
+    metEval={}
+    for metricName in metricNameList:
+        if metricName.find("Accuracy") != -1:
+            metEval[metricName] = np.zeros(len(resFilePaths))
 
     transMat,priors = torch.zeros((nbClass,nbClass)).float(),torch.zeros((nbClass)).float()
     transMat,_ = trainVal.computeTransMat(dataset,transMat,priors,partBeg,partEnd)
+
+    totalFrameNb = 0
 
     for j,path in enumerate(resFilePaths):
 
@@ -68,20 +76,23 @@ def evalModel(dataset,partBeg,partEnd,exp_id,model_id,model_name,epoch,regressio
         videoName = videoNameDict[path]
 
         #Compute the metrics with the default threshold (0.5) and with a threshold tuned on each video with a leave-one out method
-        metEval["Accuracy"][j] = computeMetrics(path,dataset,videoName,resFilePaths,videoNameDict,metTun,"Accuracy",transMat,regression)
+        metEval["Accuracy"][j],frameNb = computeMetrics(path,dataset,videoName,resFilePaths,videoNameDict,metTun,"Accuracy",transMat,regression,uncertainty)
+        metEval["Accuracy (Viterbi)"][j],_ = computeMetrics(path,dataset,videoName,resFilePaths,videoNameDict,metTun,"Accuracy (Viterbi)",transMat,regression,uncertainty)
+
+        metEval["Accuracy"][j] *= frameNb
+        metEval["Accuracy (Viterbi)"][j] *= frameNb
+
+        totalFrameNb += frameNb
 
     #Writing the latex table
-    printHeader = not os.path.exists("../results/metrics.csv")
-    with open("../results/metrics.csv","a") as text_file:
+    printHeader = not os.path.exists("../results/{}/metrics.csv".format(exp_id))
+    with open("../results/{}/metrics.csv".format(exp_id),"a") as text_file:
         if printHeader:
-            print("Model,Accuracy",file=text_file)
+            print("Model,Accuracy,Accuracy (Viterbi)",file=text_file)
 
-        print("\multirow{2}{*}{"+model_name+"}"+"&"+formatMetr(metEval["Accuracy"])+"\\\\",file=text_file)
-        print("\hline",file=text_file)
+        print(model_id+","+str(metEval["Accuracy"].sum()/totalFrameNb)+","+str(metEval["Accuracy (Viterbi)"].sum()/totalFrameNb),file=text_file)
 
-    print("Accuracy : ",str(round(metEval["Accuracy"].mean(),2)))
-
-def computeMetrics(path,dataset,videoName,resFilePaths,videoNameDict,metTun,metric,transMat,regression):
+def computeMetrics(path,dataset,videoName,resFilePaths,videoNameDict,metTun,metric,transMat,regression,uncertainty):
     '''
     Evaluate a model on a video by using the default threshold and a threshold tuned on all the other video
 
@@ -98,16 +109,16 @@ def computeMetrics(path,dataset,videoName,resFilePaths,videoNameDict,metTun,metr
     - def_metr_dict[metric]: the metric using default threshold
 
     '''
-    print(path)
+
     gt = load_data.getGT(videoName,dataset).astype(int)
     scores = np.genfromtxt(path,delimiter=" ")[:,1:]
 
-    metr_dict = metrics.binaryToMetrics(torch.tensor(scores[np.newaxis,:]).float(),torch.tensor(gt[np.newaxis,:]),transMat,regression)
+    metr_dict = metrics.binaryToMetrics(torch.tensor(scores[np.newaxis,:]).float(),torch.tensor(gt[np.newaxis,:]),transMat,regression,uncertainty)
 
-    return metr_dict[metric]
+    return metr_dict[metric],len(scores)
 
-def formatMetr(metricValuesArr):
-    return "$"+str(round(metricValuesArr.mean(),2))+" \pm "+str(round(metricValuesArr.std(),2))+"$"
+def formatMetr(mean,std):
+    return "$"+str(round(mean,2))+" \pm "+str(round(std,2))+"$"
 
 def plotScore(dataset,exp_id,model_id,epoch,trainPartBeg,trainPartEnd,scoreAxNb=4):
     ''' This function plots the scores given by a model to seral videos.
@@ -222,13 +233,14 @@ def buildVideoNameDict(dataset,test_part_beg,test_part_end,resFilePaths):
     videoPaths = load_data.findVideos(dataset,test_part_beg,test_part_end)
     videoNames = list(map(lambda x:os.path.basename(os.path.splitext(x)[0]),videoPaths))
     videoNameDict = {}
-    print(videoNames)
+
     for path in resFilePaths:
         for videoName in videoNames:
             if "_"+videoName.replace("__","_")+".csv" in path.replace("__","_"):
                 videoNameDict[path] = videoName
-        if path not in videoNameDict.keys():
-            raise ValueError("The path "+" "+path+" "+"doesnt have a video name")
+
+    #if len(videoNameDict.keys()) < len(videoNames):
+    #    raise ValueError("Some result file could not get their video identified. Files identified :",videoNameDict.keys())
 
     return videoNameDict
 
@@ -265,23 +277,94 @@ def plotData(nbClass,dataset):
     plt.tight_layout()
     plt.savefig("../vis/prior.png")
 
+def agregatePerfs(exp_id,paramAgr,keysRef,namesRef):
+
+    csv = np.genfromtxt("../results/{}/metrics.csv".format(exp_id),delimiter=",",dtype="str")
+
+    keyToNameDict = {key:name for key,name in zip(keysRef,namesRef)}
+    nameToKeyDict = {name:key for key,name in zip(keysRef,namesRef)}
+
+    groupedLines = {}
+    metricNames = csv[0,1:]
+    for line in csv[1:]:
+
+        key = readConfFile("../models/{}/{}.ini".format(exp_id,line[0]),paramAgr)
+
+        if key in groupedLines.keys():
+            groupedLines[key].append(line)
+        else:
+            groupedLines[key] = [line]
+
+    csvStr = "Model&"+"&".join(metricNames)+"\\\\ \n \hline \n"
+    mean = np.zeros((len(groupedLines.keys()),csv.shape[1]-1))
+    std =  np.zeros((len(groupedLines.keys()),csv.shape[1]-1))
+
+    keys = groupedLines.keys()
+
+    #Reordering the keys
+    orderedKeys = []
+    for name in nameToKeyDict.keys():
+        orderedKeys.append(nameToKeyDict[name])
+    keys = orderedKeys
+
+    for i,key in enumerate(keys):
+        groupedLines[key] = np.array(groupedLines[key])[:,1:].astype(float)
+
+        mean[i] =  groupedLines[key].mean(axis=0)
+        std[i] = groupedLines[key].std(axis=0)
+
+        csvStr += keyToNameDict[key]
+        for j in range(len(mean[0])):
+            csvStr += "&"+formatMetr(mean[i,j],std[i,j])
+
+        csvStr += "\\\\ \n"
+
+    with open("../results/{}/metrics_agr.csv".format(exp_id),"w") as text_file:
+        print(csvStr,file=text_file)
+
+
+def readConfFile(path,keyList):
+    ''' Read a config file and get the value of desired argument
+
+    Args:
+        path (str): the path to the config file
+        keyList (list): the list of argument to read name)
+    Returns:
+        the argument value, in the same order as in keyList
+    '''
+
+    conf = configparser.ConfigParser()
+    conf.read(path)
+    conf = conf["default"]
+    resList = []
+    for key in keyList:
+        resList.append(conf[key])
+
+    return ",".join(resList)
+
 def main(argv=None):
 
     #Getting arguments from config file and command line
     #Building the arg reader
     argreader = ArgReader(argv)
 
+    argreader.parser.add_argument('--epoch_to_process',type=int,metavar="N",help='The epoch to process. This argument should be set using the --plot_score or the --eval_model arguments.')
+
     ########### PLOT SCORE EVOLUTION ALONG VIDEO ##################
     argreader.parser.add_argument('--plot_score',action="store_true",help='To plot the probabilities produced by a model for all the videos processed by this model during validation for some epoch.\
-                                                                            The --model_id argument must be set, along with the --exp_id, --dataset_test, --epoch_to_plot, --train_part_beg, --train_part_end (for \
+                                                                            The --model_id argument must be set, along with the --exp_id, --dataset_test, --epoch_to_process, --train_part_beg, --train_part_end (for \
                                                                             computing the state transition matrix.)')
-    argreader.parser.add_argument('--epoch_to_plot',type=int,metavar="N",help='The epoch at which to plot the predictions when using the --plot_score argument')
 
     ########## COMPUTE METRICS AND PUT THEM IN AN LATEX TABLE #############
-    argreader.parser.add_argument('--eval_model',type=int,help='Evaluate a model using the csv files containing the scores. The value of this arg is the epoch at which to evaluate the model \
-                                                                            The --model_id argument must be set, along with the --model_name, --exp_id, --test_part_beg, --test_part_end and \
-                                                                            --dataset_test, --regression and --class_nb arguments.')
-    argreader.parser.add_argument('--model_name',type=str,metavar="NAME",help='The name of the model as will appear in the latex table produced by the --eval_model argument.')
+    argreader.parser.add_argument('--eval_model',action="store_true",help='Evaluate a model using the csv files containing the scores. The value of this arg is the epoch at which to evaluate the model \
+                                                                            The --exp_id argument must be set, along with the --test_part_beg, --test_part_end and \
+                                                                            --dataset_test, --regression, --class_nb and --epoch_to_process arguments. The arguments --param_agr, --keys, and --names \
+                                                                            arguments can also be set.')
+
+    argreader.parser.add_argument('--param_agr',type=str,nargs="*",metavar="PARAM",help='A list of meta-parameter to use to agregate the performance of several models.')
+    argreader.parser.add_argument('--keys',type=str,nargs="*",metavar="KEY",help='The list of key that will appear during aggregation. In the final csv file, each key value will be replaced by a string of the list --names.\
+                                                                                  to make it easier to read.')
+    argreader.parser.add_argument('--names',type=str,nargs="*",metavar="NAME",help='The list of string to replace each key by during agregation.')
 
     ######################## Database plot #################################
 
@@ -297,9 +380,18 @@ def main(argv=None):
     args = argreader.args
 
     if args.plot_score:
-        plotScore(args.dataset_test,args.exp_id,args.model_id,args.epoch_to_plot,args.train_part_beg,args.train_part_end)
+        plotScore(args.dataset_test,args.exp_id,args.model_id,args.epoch_to_process,args.train_part_beg,args.train_part_end)
     if not args.eval_model is None:
-        evalModel(args.dataset_test,args.test_part_beg,args.test_part_end,args.exp_id,args.model_id,args.model_name,epoch=args.eval_model,regression=args.regression,nbClass=args.class_nb)
+
+        if os.path.exists("../results/{}/metrics.csv".format(args.exp_id)):
+            os.remove("../results/{}/metrics.csv".format(args.exp_id))
+
+        model_ids = list(map(lambda x:os.path.splitext(os.path.basename(x))[0],sorted(glob.glob("../models/{}/*.ini".format(args.exp_id)))))
+        for model_id in model_ids:
+            evalModel(args.dataset_test,args.test_part_beg,args.test_part_end,args.exp_id,model_id,epoch=args.epoch_to_process,\
+                        regression=args.regression,uncertainty=args.uncertainty,nbClass=args.class_nb)
+        if len(args.param_agr) > 0:
+            agregatePerfs(args.exp_id,args.param_agr,args.keys,args.names)
     if not args.plot_data is None:
         plotData(args.plot_data,args.dataset_test)
 
