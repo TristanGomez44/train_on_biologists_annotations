@@ -373,6 +373,14 @@ def initialize_Net_And_EpochNumber(net,exp_id,model_id,cuda,start_mode,init_path
         for key in keysToRemove:
             params.pop(key)
 
+        def checkAndReplace(key):
+            if key.find("tempModel.linLay") != -1:
+                key = key.replace("tempModel.linLay","tempModel.linTempMod.linLay")
+
+            return key
+
+        params = {checkAndReplace(k):params[k] for k in params.keys()}
+
         missingKeys,unExpectedKeys = net.load_state_dict(params,strict)
         print("missing keys",missingKeys)
         print("unexpected keys",unExpectedKeys)
