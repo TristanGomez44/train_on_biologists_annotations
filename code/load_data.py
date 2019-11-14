@@ -72,12 +72,12 @@ class SeqTrDataset(torch.utils.data.Dataset):
     - exp_id (str): the name of the experience
     '''
 
-    def __init__(self,dataset,propStart,propEnd,trLen,imgSize,origImgSize,resizeImage,exp_id,augmentData,maskTime):
+    def __init__(self,dataset,propStart,propEnd,propSetIntFormat,trLen,imgSize,origImgSize,resizeImage,exp_id,augmentData,maskTime):
 
         super(SeqTrDataset, self).__init__()
 
         self.dataset = dataset
-        self.videoPaths = findVideos(dataset,propStart,propEnd)
+        self.videoPaths = findVideos(dataset,propStart,propEnd,propSetIntFormat)
 
         print("Number of training videos : ",len(self.videoPaths))
         self.imgSize = imgSize
@@ -189,10 +189,10 @@ class TestLoader():
     - exp_id (str): the name of the experience
     '''
 
-    def __init__(self,dataset,evalL,propStart,propEnd,imgSize,origImgSize,resizeImage,exp_id,maskTime):
+    def __init__(self,dataset,evalL,propStart,propEnd,propSetIntFormat,imgSize,origImgSize,resizeImage,exp_id,maskTime):
         self.dataset = dataset
         self.evalL = evalL
-        self.videoPaths = findVideos(dataset,propStart,propEnd)
+        self.videoPaths = findVideos(dataset,propStart,propEnd,propSetIntFormat)
         self.exp_id = exp_id
         print("Number of eval videos",len(self.videoPaths))
         normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
@@ -264,7 +264,7 @@ def computeMask(maskTime,imgSize):
 
 def buildSeqTrainLoader(args):
 
-    train_dataset = SeqTrDataset(args.dataset_train,args.train_part_beg,args.train_part_end,args.tr_len,\
+    train_dataset = SeqTrDataset(args.dataset_train,args.train_part_beg,args.train_part_end,args.prop_set_int_fmt,args.tr_len,\
                                         args.img_size,args.orig_img_size,args.resize_image,args.exp_id,args.augment_data,args.mask_time)
     sampler = Sampler(len(train_dataset.videoPaths),train_dataset.nbImages,args.tr_len)
     trainLoader = torch.utils.data.DataLoader(dataset=train_dataset,batch_size=args.batch_size,sampler=sampler, collate_fn=collateSeq, # use custom collate function here
@@ -272,17 +272,19 @@ def buildSeqTrainLoader(args):
 
     return trainLoader,train_dataset
 
-def findVideos(dataset,propStart,propEnd):
+def findVideos(dataset,propStart,propEnd,propSetIntFormat=False):
 
     allVideoPaths = sorted(glob.glob("../data/{}/*.avi".format(dataset)))
+
+    if propSetIntFormat:
+        propStart /= 100
+        propEnd /= 100
 
     if propStart < propEnd:
         videoPaths = np.array(allVideoPaths)[int(propStart*len(allVideoPaths)):int(propEnd*len(allVideoPaths))]
     else:
         videoPaths = allVideoPaths[int(propStart*len(allVideoPaths)):]
-        print(videoPaths)
         videoPaths += allVideoPaths[:int(propEnd*len(allVideoPaths))]
-        print(videoPaths)
         videoPaths = np.array(videoPaths)
 
     return videoPaths
@@ -335,17 +337,22 @@ def addArgs(argreader):
                         help='The size of each edge of the images before preprocessing.')
 
     argreader.parser.add_argument('--train_part_beg', type=float,metavar='START',
-                        help='The (normalized) start position of the dataset to use for training')
+                        help='The start position of the train set. If --prop_set_int_fmt is True, it should be int between 0 and 100, else it is a float between 0 and 1.')
     argreader.parser.add_argument('--train_part_end', type=float,metavar='END',
-                        help='The (normalized) end position of the dataset to use for training')
+                        help='The end position of the train set. If --prop_set_int_fmt is True, it should be int between 0 and 100, else it is a float between 0 and 1.')
     argreader.parser.add_argument('--val_part_beg', type=float,metavar='START',
-                        help='The (normalized) start position of the dataset to use for validation')
+                        help='The start position of the validation set. If --prop_set_int_fmt is True, it should be int between 0 and 100, else it is a float between 0 and 1.')
     argreader.parser.add_argument('--val_part_end', type=float,metavar='END',
-                        help='The (normalized) end position of the dataset to use for validation')
+                        help='The end position of the validation set. If --prop_set_int_fmt is True, it should be int between 0 and 100, else it is a float between 0 and 1.')
     argreader.parser.add_argument('--test_part_beg', type=float,metavar='START',
-                        help='The (normalized) start position of the dataset to use for testing')
+                        help='The start position of the test set. If --prop_set_int_fmt is True, it should be int between 0 and 100, else it is a float between 0 and 1.')
     argreader.parser.add_argument('--test_part_end', type=float,metavar='END',
-                        help='The (normalized) end position of the dataset to use for testing')
+                        help='The end position of the test set. If --prop_set_int_fmt is True, it should be int between 0 and 100, else it is a float between 0 and 1.')
+
+    argreader.parser.add_argument('--prop_set_int_fmt', type=args.str2bool,metavar='BOOL',
+                        help='Set to True to set the sets (train, validation and test) proportions\
+                            using int between 0 and 100 instead of float between 0 and 1.')
+
 
     argreader.parser.add_argument('--dataset_train', type=str,metavar='DATASET',
                         help='The dataset for training. Can be "big" or "small"')

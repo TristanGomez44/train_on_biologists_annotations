@@ -520,7 +520,7 @@ def main(argv=None):
 
     if args.comp_feat:
 
-        testLoader = load_data.TestLoader(args.val_l,args.dataset_test,args.test_part_beg,args.test_part_end,args.img_size,args.orig_img_size,\
+        testLoader = load_data.TestLoader(args.val_l,args.dataset_test,args.test_part_beg,args.test_part_end,args.prop_set_int_fmt,args.img_size,args.orig_img_size,\
                                           args.resize_image,args.exp_id,args.mask_time)
 
         if args.feat != "None":
@@ -554,7 +554,7 @@ def main(argv=None):
 
         trainLoader,trainDataset = load_data.buildSeqTrainLoader(args)
 
-        valLoader = load_data.TestLoader(args.dataset_val,args.val_l,args.val_part_beg,args.val_part_end,\
+        valLoader = load_data.TestLoader(args.dataset_val,args.val_l,args.val_part_beg,args.val_part_end,args.prop_set_int_fmt,\
                                             args.img_size,args.orig_img_size,args.resize_image,\
                                             args.exp_id,args.mask_time)
 
@@ -640,7 +640,6 @@ def main(argv=None):
             targDictEpochs[epoch] = targDict
 
             if isBetter(metricVal,bestMetricVal):
-                print("Better !")
                 if os.path.exists("../models/{}/model{}_best_epoch{}".format(args.exp_id,args.model_id,bestEpoch)):
                     os.remove("../models/{}/model{}_best_epoch{}".format(args.exp_id,args.model_id,bestEpoch))
 
@@ -649,9 +648,7 @@ def main(argv=None):
                 bestMetricVal = metricVal
                 worseEpochNb = 0
             else:
-                print("Not better since ",worseEpochNb,"epochs")
                 worseEpochNb += 1
-
 
             epoch += 1
         if args.run_test:
@@ -659,7 +656,7 @@ def main(argv=None):
             kwargsTest = kwargsVal
             kwargsTest["mode"] = "test"
 
-            testLoader = load_data.TestLoader(args.dataset_test,args.val_l,args.test_part_beg,args.test_part_end,\
+            testLoader = load_data.TestLoader(args.dataset_test,args.val_l,args.test_part_beg,args.test_part_end,args.prop_set_int_fmt,\
                                                 args.img_size,args.orig_img_size,args.resize_image,\
                                                 args.exp_id,args.mask_time)
 
