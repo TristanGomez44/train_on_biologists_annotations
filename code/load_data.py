@@ -274,8 +274,16 @@ def buildSeqTrainLoader(args):
 
 def findVideos(dataset,propStart,propEnd):
 
-    videoPaths = sorted(glob.glob("../data/{}/*.avi".format(dataset)))
-    videoPaths = np.array(videoPaths)[int(propStart*len(videoPaths)):int(propEnd*len(videoPaths))]
+    allVideoPaths = sorted(glob.glob("../data/{}/*.avi".format(dataset)))
+
+    if propStart < propEnd:
+        videoPaths = np.array(allVideoPaths)[int(propStart*len(allVideoPaths)):int(propEnd*len(allVideoPaths))]
+    else:
+        videoPaths = allVideoPaths[int(propStart*len(allVideoPaths)):]
+        print(videoPaths)
+        videoPaths += allVideoPaths[:int(propEnd*len(allVideoPaths))]
+        print(videoPaths)
+        videoPaths = np.array(videoPaths)
 
     return videoPaths
 
