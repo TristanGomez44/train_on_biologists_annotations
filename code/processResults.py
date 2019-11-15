@@ -348,12 +348,12 @@ def main(argv=None):
     #Building the arg reader
     argreader = ArgReader(argv)
 
-    argreader.parser.add_argument('--epoch_to_process',type=int,metavar="N",help='The epoch to process. This argument should be set using the --plot_score or the --eval_model arguments.')
 
     ########### PLOT SCORE EVOLUTION ALONG VIDEO ##################
     argreader.parser.add_argument('--plot_score',action="store_true",help='To plot the probabilities produced by a model for all the videos processed by this model during validation for some epoch.\
                                                                             The --model_id argument must be set, along with the --exp_id, --dataset_test, --epoch_to_process, --train_part_beg, --train_part_end (for \
                                                                             computing the state transition matrix.)')
+    argreader.parser.add_argument('--epoch_to_process',type=int,metavar="N",help='The epoch to process. This argument should be set when using the --plot_score argument.')
 
     ########## COMPUTE METRICS AND PUT THEM IN AN LATEX TABLE #############
     argreader.parser.add_argument('--eval_model',action="store_true",help='Evaluate a model using the csv files containing the scores. The value of this arg is the epoch at which to evaluate the model \
@@ -365,6 +365,7 @@ def main(argv=None):
     argreader.parser.add_argument('--keys',type=str,nargs="*",metavar="KEY",help='The list of key that will appear during aggregation. In the final csv file, each key value will be replaced by a string of the list --names.\
                                                                                   to make it easier to read.')
     argreader.parser.add_argument('--names',type=str,nargs="*",metavar="NAME",help='The list of string to replace each key by during agregation.')
+    argreader.parser.add_argument('--epochs_to_process',nargs="*",type=int,metavar="N",help='The list of epoch at which to evaluate each model. This argument should be set when using the --eval_model argument.')
 
     ######################## Database plot #################################
 
@@ -387,8 +388,8 @@ def main(argv=None):
             os.remove("../results/{}/metrics.csv".format(args.exp_id))
 
         model_ids = list(map(lambda x:os.path.splitext(os.path.basename(x))[0],sorted(glob.glob("../models/{}/*.ini".format(args.exp_id)))))
-        for model_id in model_ids:
-            evalModel(args.dataset_test,args.test_part_beg,args.test_part_end,args.exp_id,model_id,epoch=args.epoch_to_process,\
+        for i,model_id in enumerate(model_ids):
+            evalModel(args.dataset_test,args.test_part_beg,args.test_part_end,args.exp_id,model_id,epoch=args.epochs_to_process[i],\
                         regression=args.regression,uncertainty=args.uncertainty,nbClass=args.class_nb)
         if len(args.param_agr) > 0:
             agregatePerfs(args.exp_id,args.param_agr,args.keys,args.names)
