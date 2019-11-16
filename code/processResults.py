@@ -1,6 +1,6 @@
 
 from args import ArgReader
-
+from args import str2bool
 import os
 import glob
 
@@ -26,14 +26,14 @@ import utils
 import formatData
 import trainVal
 import formatData
-
+import scipy
 import sys
 
 import configparser
 
 import matplotlib.patheffects as path_effects
 
-def evalModel(dataset,partBeg,partEnd,exp_id,model_id,epoch,regression,uncertainty,nbClass):
+def evalModel(dataset,partBeg,partEnd,propSetIntFormat,exp_id,model_id,epoch,regression,uncertainty,nbClass):
     '''
     Evaluate a model. It requires the scores for each video to have been computed already with the trainVal.py script. Check readme to
     see how to compute the scores for each video.
@@ -53,7 +53,7 @@ def evalModel(dataset,partBeg,partEnd,exp_id,model_id,epoch,regression,uncertain
     '''
 
     resFilePaths = np.array(sorted(glob.glob("../results/{}/{}_epoch{}_*.csv".format(exp_id,model_id,epoch)),key=utils.findNumbers))
-    videoNameDict = buildVideoNameDict(dataset,partBeg,partEnd,resFilePaths)
+    videoNameDict = buildVideoNameDict(dataset,partBeg,partEnd,propSetIntFormat,resFilePaths)
     resFilePaths = np.array(list(filter(lambda x:x in videoNameDict.keys(),resFilePaths)))
 
     #Store the value of the f-score of for video and for each threshold
@@ -166,24 +166,20 @@ def plotScore(dataset,exp_id,model_id,epoch,trainPartBeg,trainPartEnd,scoreAxNb=
 
             legHandles = []
 
-            #Plot the ground truth phases
-            gt = np.genfromtxt("../data/"+dataset+"/annotations/"+videoName+"_phases.csv",dtype=str,delimiter=",")
-            legHandles = plotPhases(gt,legHandles,labDict,cmap,axList[0],nbFrames,"GT")
-
             #Plot the scores
             expVal = np.exp(scores)
             scores = expVal/expVal.sum(axis=-1,keepdims=True)
 
             axList[1].set_ylabel("Scores",rotation="horizontal",fontsize=20,horizontalalignment="right",position=(0,-2.5))
             for i in range(scores.shape[1]):
-                ax = axList[i%((scores.shape[1]+1)//scoreAxNb)+1]
+                ax = axList[i%((scores.shape[1]+1)//scoreAxNb)]
                 ax.set_xlim(0,nbFrames)
                 fill = ax.fill_between(np.arange(len(scores[:,i])), 0, scores[:,i],label=revLabelDict[i],color=cmap[i])
 
             #Plot the prediction only considering the scores and not the state transition matrix
             predSeq = scores.argmax(axis=-1)
             predSeq = labelIndList2FrameInd(predSeq,reverLabDict)
-            legHandles = plotPhases(predSeq,legHandles,labDict,cmap,axList[-2],nbFrames,"Prediction")
+            legHandles = plotPhases(predSeq,legHandles,labDict,cmap,axList[-3],nbFrames,"Prediction")
 
             #Plot the prediction with viterbi decoding
             transMat = torch.zeros((scores.shape[1],scores.shape[1]))
@@ -191,14 +187,18 @@ def plotScore(dataset,exp_id,model_id,epoch,trainPartBeg,trainPartEnd,scoreAxNb=
             transMat,_ = trainVal.computeTransMat(dataset,transMat,priors,trainPartBeg,trainPartEnd)
             predSeqs,_ = metrics.viterbi_decode(torch.log(torch.tensor(scores).float()),torch.log(transMat),top_k=1)
             predSeq = labelIndList2FrameInd(predSeqs[0],reverLabDict)
-            legHandles = plotPhases(predSeq,legHandles,labDict,cmap,axList[-1],nbFrames,"Prediction (Viterbi)")
+            legHandles = plotPhases(predSeq,legHandles,labDict,cmap,axList[-2],nbFrames,"Prediction (Viterbi)")
+
+            #Plot the ground truth phases
+            gt = np.genfromtxt("../data/"+dataset+"/annotations/"+videoName+"_phases.csv",dtype=str,delimiter=",")
+            legHandles = plotPhases(gt,legHandles,labDict,cmap,axList[-1],nbFrames,"GT")
 
             plt.xlabel("Time (frame index)")
             ax1.legend(bbox_to_anchor=(1.1, 1.05),prop={'size': 15})
             plt.subplots_adjust(hspace=0.6)
             plt.savefig("../vis/{}/{}_epoch{}_video{}_scores.png".format(exp_id,model_id,epoch,fileName))
             plt.close()
-            sys.exit(0)
+
         else:
             raise ValueError("Unkown video : ",path)
 
@@ -226,11 +226,11 @@ def labelIndList2FrameInd(labelList,reverLabDict):
     phases.append((reverLabDict[currLabel],currStartFrame,i))
     return phases
 
-def buildVideoNameDict(dataset,test_part_beg,test_part_end,resFilePaths):
+def buildVideoNameDict(dataset,test_part_beg,test_part_end,propSetIntFormat,resFilePaths):
 
     ''' Build a dictionnary associating a path to a video name (it can be the path to any file than contain the name of a video in its file name) '''
 
-    videoPaths = load_data.findVideos(dataset,test_part_beg,test_part_end)
+    videoPaths = load_data.findVideos(dataset,test_part_beg,test_part_end,propSetIntFormat)
     videoNames = list(map(lambda x:os.path.basename(os.path.splitext(x)[0]),videoPaths))
     videoNameDict = {}
 
@@ -305,9 +305,8 @@ def agregatePerfs(exp_id,paramAgr,keysRef,namesRef):
     orderedKeys = []
     for name in nameToKeyDict.keys():
         orderedKeys.append(nameToKeyDict[name])
-    keys = orderedKeys
 
-    for i,key in enumerate(keys):
+    for i,key in enumerate(orderedKeys):
         groupedLines[key] = np.array(groupedLines[key])[:,1:].astype(float)
 
         mean[i] =  groupedLines[key].mean(axis=0)
@@ -321,6 +320,66 @@ def agregatePerfs(exp_id,paramAgr,keysRef,namesRef):
 
     with open("../results/{}/metrics_agr.csv".format(exp_id),"w") as text_file:
         print(csvStr,file=text_file)
+
+    metricNames = csv[0,1:]
+
+    #Ploting the performance
+    plotRes(mean,std,csv,orderedKeys,exp_id,metricNames,keyToNameDict)
+
+    #Computing the t-test
+    ttest_matrix(groupedLines,orderedKeys,exp_id,metricNames,keyToNameDict)
+
+def plotRes(mean,std,csv,keys,exp_id,metricNames,keyToNameDict):
+
+    csv = csv[1:]
+
+    #Plot the agregated results
+    fig = plt.figure()
+    plt.subplots_adjust(bottom=0.2)
+    #plt.tight_layout()
+    ax = fig.add_subplot(111)
+    box = ax.get_position()
+    ax.set_position([box.x0, box.y0, box.width * 0.8, box.height])
+
+    for i in range(len(mean)):
+        ax.bar(np.arange(csv.shape[1]-1)+0.1*i,mean[i],width=0.1,label=keyToNameDict[keys[i]],yerr=std[i])
+
+    fig.legend(loc='right')
+    plt.ylim(0,1)
+    plt.ylabel("Performance")
+    plt.gca().set_ylim(bottom=0)
+    plt.xticks(np.arange(csv.shape[1]-1),metricNames,rotation=35,horizontalalignment="right")
+    #plt.tight_layout()
+    plt.savefig("../vis/{}/performance.png".format(exp_id))
+
+def ttest_matrix(groupedLines,keys,exp_id,metricNames,keyToNameDict):
+    ''' Computes the two sample t-test over groud of models
+
+    Each combination of meta-parameters is put against every other by computing the p value of the two sample t-test.
+
+    Args:
+        groupedLines (dict): a dictionnary containing the error (or inclusion percentage) of several models having the same combination of varying parameters
+        exp_id (str): the experience name
+        metricNames (list): the names of the metrics
+
+    '''
+
+    mat = np.zeros((len(keys),len(keys),len(metricNames)))
+
+    for i in range(len(keys)):
+        for j in range(len(keys)):
+            for k in range(len(metricNames)):
+
+                _,mat[i,j,k] = scipy.stats.ttest_ind(groupedLines[keys[i]][:,k],groupedLines[keys[j]][:,k],equal_var=True)
+
+    mat = mat.astype(str)
+    for k in range(len(metricNames)):
+        csv = "\t"+"\t".join([keyToNameDict[key] for key in keys])+"\n"
+        for i in range(len(keys)):
+            csv += keyToNameDict[keys[i]]+"\t"+"\t".join(mat[i,:,k])+"\n"
+
+        with open("../results/{}/ttest_{}.csv".format(exp_id,metricNames[k]),"w") as text_file:
+            print(csv,file=text_file)
 
 
 def readConfFile(path,keyList):
@@ -356,16 +415,15 @@ def main(argv=None):
     argreader.parser.add_argument('--epoch_to_process',type=int,metavar="N",help='The epoch to process. This argument should be set when using the --plot_score argument.')
 
     ########## COMPUTE METRICS AND PUT THEM IN AN LATEX TABLE #############
-    argreader.parser.add_argument('--eval_model',action="store_true",help='Evaluate a model using the csv files containing the scores. The value of this arg is the epoch at which to evaluate the model \
-                                                                            The --exp_id argument must be set, along with the --test_part_beg, --test_part_end and \
-                                                                            --dataset_test, --regression, --class_nb and --epoch_to_process arguments. The arguments --param_agr, --keys, and --names \
-                                                                            arguments can also be set.')
+    argreader.parser.add_argument('--eval_model',action="store_true",help='Evaluate a model using the csv files containing the scores. The --exp_id argument must be set, \
+                                   along with the --epoch_to_process and the --model_ids arguments. The arguments --param_agr, --keys, and --names arguments can also be set.')
 
     argreader.parser.add_argument('--param_agr',type=str,nargs="*",metavar="PARAM",help='A list of meta-parameter to use to agregate the performance of several models.')
     argreader.parser.add_argument('--keys',type=str,nargs="*",metavar="KEY",help='The list of key that will appear during aggregation. In the final csv file, each key value will be replaced by a string of the list --names.\
                                                                                   to make it easier to read.')
     argreader.parser.add_argument('--names',type=str,nargs="*",metavar="NAME",help='The list of string to replace each key by during agregation.')
     argreader.parser.add_argument('--epochs_to_process',nargs="*",type=int,metavar="N",help='The list of epoch at which to evaluate each model. This argument should be set when using the --eval_model argument.')
+    argreader.parser.add_argument('--model_ids',type=str,nargs="*",metavar="NAME",help='The id of the models to process.')
 
     ######################## Database plot #################################
 
@@ -382,15 +440,19 @@ def main(argv=None):
 
     if args.plot_score:
         plotScore(args.dataset_test,args.exp_id,args.model_id,args.epoch_to_process,args.train_part_beg,args.train_part_end)
-    if not args.eval_model is None:
+    if args.eval_model:
 
         if os.path.exists("../results/{}/metrics.csv".format(args.exp_id)):
             os.remove("../results/{}/metrics.csv".format(args.exp_id))
 
-        model_ids = list(map(lambda x:os.path.splitext(os.path.basename(x))[0],sorted(glob.glob("../models/{}/*.ini".format(args.exp_id)))))
-        for i,model_id in enumerate(model_ids):
-            evalModel(args.dataset_test,args.test_part_beg,args.test_part_end,args.exp_id,model_id,epoch=args.epochs_to_process[i],\
-                        regression=args.regression,uncertainty=args.uncertainty,nbClass=args.class_nb)
+        for i,model_id in enumerate(args.model_ids):
+
+            conf = configparser.ConfigParser()
+            conf.read("../models/{}/{}.ini".format(args.exp_id,model_id))
+            conf = conf["default"]
+
+            evalModel(conf["dataset_test"],float(conf["test_part_beg"]),float(conf["test_part_end"]),conf["prop_set_int_fmt"],args.exp_id,model_id,epoch=args.epochs_to_process[i],\
+                        regression=str2bool(conf["regression"]),uncertainty=str2bool(conf["uncertainty"]),nbClass=int(conf["class_nb"]))
         if len(args.param_agr) > 0:
             agregatePerfs(args.exp_id,args.param_agr,args.keys,args.names)
     if not args.plot_data is None:
