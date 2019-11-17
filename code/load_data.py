@@ -17,6 +17,9 @@ import args
 import warnings
 warnings.filterwarnings('ignore',module=".*av.*")
 
+import logging
+logging.getLogger('libav').setLevel(logging.ERROR)
+
 import utils
 import formatData
 
@@ -25,6 +28,7 @@ from albumentations import Compose
 
 import digitExtractor
 import cv2
+
 
 class Sampler(torch.utils.data.sampler.Sampler):
     """ The sampler for the SeqTrDataset dataset
@@ -275,6 +279,30 @@ def buildSeqTrainLoader(args):
 def findVideos(dataset,propStart,propEnd,propSetIntFormat=False):
 
     allVideoPaths = sorted(glob.glob("../data/{}/*.avi".format(dataset)))
+
+    if dataset == "big":
+        print("All videos : ",len(allVideoPaths))
+
+        #Removing videos with bad format
+        vidsToRemove = []
+        for vidPath in allVideoPaths:
+            for vidName in digitExtractor.getVideosToRemove():
+                if os.path.splitext(os.path.basename(vidPath))[0] == vidName:
+                    vidsToRemove.append(vidPath)
+        for vidPath in vidsToRemove:
+            allVideoPaths.remove(vidPath)
+        print("Without bad format videos : ",len(allVideoPaths))
+
+        #Removing videos without annotation
+        vidsToRemove = []
+        for vidPath in allVideoPaths:
+            for vidName in digitExtractor.getNoAnnotVideos():
+                if os.path.splitext(os.path.basename(vidPath))[0] == vidName:
+                    vidsToRemove.append(vidPath)
+        for vidPath in vidsToRemove:
+            allVideoPaths.remove(vidPath)
+
+        print("Without no annotation videos : ",len(allVideoPaths))
 
     if propSetIntFormat:
         propStart /= 100
