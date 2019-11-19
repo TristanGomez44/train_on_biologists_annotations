@@ -6,89 +6,20 @@ import argparse
 from sklearn.cluster import KMeans
 import numpy as np
 import sys
+from scipy import ndimage
 
+imgHeigth = 500
 
-imgHeigth,imgWidth = 500,500
-
-heigth,width = 15,8
-
-#This dictionary indicates the position of all the digits visible in the videos :
-# - The digits indicating time (except the hundreds digit because it can only be one or not exist)
-# - The digits indicating the well index
-pos = {"digit1"  :      {"Y1":475,"Y2":475+heigth,"X1":472,"X2":472+width}, \
-	   "digit2" :       {"Y1":475,"Y2":475+heigth,"X1":462,"X2":462+width}, \
-	   "digit3" :       {"Y1":475,"Y2":475+heigth,"X1":456,"X2":456+width}, \
-	   "wellInd_dig1" : {"Y1":475,"Y2":475+heigth,"X1":37, "X2":37+width},  \
-	   "wellInd_dig2" : {"Y1":475,"Y2":475+heigth,"X1":44, "X2":44+width}}
-hundredsDigitPos =      {"Y1":475,"Y2":475+heigth,"X1":449,"X2":449+width}
-
-misplacedOrNoDigitNorm = 70000
-centeredDigitNorm = 35500
-
-videosToRemove = ["BE150-1.avi","MZ900-8.avi"]
-
-def getPos():
-	return pos
+def getNoAnnotVideos():
+	return np.genfromtxt("../data/noAnnot.csv",dtype=str,delimiter=",")
 
 def getVideosToRemove():
-	return videosToRemove
-
-def getDigitYPos():
-	return pos["digit1"]["Y1"],pos["digit1"]["Y2"]
-
-def writeWithCondition(condition,dataset,key,totalCountDict,countDict,digit):
-	if condition:
-		res = cv2.imwrite("../data/{}/timeImg/{}/{}.png".format(dataset,key,totalCountDict[key]),digit)
-		totalCountDict[key] += 1
-		countDict[key] += 1
-
-def computeCondAndWrite(digit,goodDigitCond,goodDigit,cond,countDict,totalCountDict,key,imgNb,dataset):
-	cond[key] = totalCountDict[key] < imgNb and goodDigitCond
-	writeWithCondition(cond[key],dataset,key,totalCountDict,countDict,digit)
-	if goodDigitCond:
-		goodDigit = True
-
-	return goodDigit
-
-def initBigDatasetVariables(pos):
-
-	origKeys = list(pos.keys())
-
-	for key in origKeys:
-		if key.find("digit") != -1:
-			if key.find("digit1") != -1:
-				pos[key+"_alt"] = {"Y1":pos[key]["Y1"]+6,"Y2":pos[key]["Y2"]+6, "X1":pos[key]["X1"]+2,"X2":pos[key]["X2"]+2}
-			else:
-				pos[key+"_alt"] = {"Y1":pos[key]["Y1"]+6,"Y2":pos[key]["Y2"]+6,"X1":pos[key]["X1"]+5,"X2":pos[key]["X2"]+5}
-		#else:
-		#	pos[key+"_alt"] = {"Y1":pos[key]["Y1"]+4,"Y2":pos[key]["Y2"]+4,"X1":pos[key]["X1"]+1,"X2":pos[key]["X2"]+1}
-
-	pos["digit1_alt2"] = {"Y1":pos["digit1_alt"]["Y1"],"Y2":pos["digit1_alt"]["Y2"],"X1":pos["digit1_alt"]["X1"]+7,"X2":pos["digit1_alt"]["X2"]+7}
-	pos["digit1_alt3"] = {"Y1":pos["digit1"]["Y1"]+5,  "Y2":pos["digit1"]["Y2"]+5,  "X1":pos["digit1"]["X1"]-3,    "X2":pos["digit1"]["X2"]-3}
-	pos["digit2_alt2"] = {"Y1":pos["digit2_alt"]["Y1"],"Y2":pos["digit2_alt"]["Y2"],"X1":pos["digit2_alt"]["X1"]+5,"X2":pos["digit2_alt"]["X1"]+10}
-	pos["digit2_alt3"] = {"Y1":pos["digit2_alt"]["Y1"],"Y2":pos["digit2_alt"]["Y2"],"X1":pos["digit2_alt"]["X1"]-8,"X2":pos["digit2_alt"]["X2"]-8}
-	pos["digit3_alt"] = {"Y1":pos["digit3_alt"]["Y1"],"Y2":pos["digit3_alt"]["Y2"],"X1":pos["digit3_alt"]["X1"]-2,"X2":pos["digit3_alt"]["X2"]-3}
-
-	pos["wellInd_dig2_alt"] = {"Y1":pos["wellInd_dig1"]["Y1"]+4,"Y2":pos["wellInd_dig1"]["Y2"]+4,"X1":pos["wellInd_dig1"]["X1"]+1,"X2":pos["wellInd_dig1"]["X2"]+1}
-	pos["wellInd_dig1_alt"] = {"Y1":pos["wellInd_dig2_alt"]["Y1"],"Y2":pos["wellInd_dig2_alt"]["Y2"],"X1":pos["wellInd_dig2_alt"]["X1"]-7,"X2":pos["wellInd_dig2_alt"]["X2"]-7}
-
-	#This is only useful for the dataset "big"
-	goodDigitCondFuncDict = {"digit1":     lambda digit:digit.sum() > misplacedOrNoDigitNorm,
-							 "digit1_alt": lambda digit:digit[-1,:,:].sum() < 3000 and digit[:,0,:].sum() > 9000  and digit[:,-1,:].sum() > 9500,
-							 "digit1_alt2":lambda digit:digit[-1,:,:].sum() < 3000 and digit[-3,:,:].sum() > 3000 and digit[:,-1,:].sum() > 8000,
-							 "digit2":     lambda digit:digit.sum() > misplacedOrNoDigitNorm,
-							 "digit2_alt" :lambda digit:digit[-1,:,:].sum() < 3000 and digit[-3,:,:].sum() > 3000 and digit[:,-1,:].sum() > 9000 and digit[:9,:2,:].sum() < 13000,
-							 "digit2_alt2":lambda digit:digit[:,-2:,:].sum() < 18000,
-							 "digit2_alt3":lambda digit:True,
-							 "digit3":     lambda digit:digit.sum() > misplacedOrNoDigitNorm,
-							 "digit3_alt":lambda digit:digit[-1,:,:].sum() < 3000 and digit[-3,:,:].sum() > 3000}
-
-	return pos,goodDigitCondFuncDict
+	return ["BE150-1","MZ900-8","NE051-1","ZVDPI098SLIDE2-3","MS288SLIDE1-1","FE14-010"]
 
 def clusterDigits(dataset,imgNb):
 	"""	Extract digits from embryo images in the ../data/ folder and cluster them using k-means
 
-	Once it is finished running, in ../data/ a folder "timeImg" is created and contains several folders : digit1, digit2, digit3, digit4, wellInd, etc.
+	Once it is finished running, in ../data/ a folder "timeImg" is created and contains several folders : digit1, digit2, digit3, wellInd, etc.
 	Each folder is dedicated to one digit visible in the image. It can be the well index (bottom left of the image), or one of the four digits
 	indicating the hour at which the image was taken (bottom right). In each of those 4 folder you will find 10 folders, each containing a cluster
 	of digits. You have to rename manually those folders with the correct class. E.g., the folder containing all the "1" should be renamed "1".
@@ -100,76 +31,84 @@ def clusterDigits(dataset,imgNb):
 	"""
 
 	if dataset == "big":
-		#Some video in the dataset "big" have a slightly different digit position
 
-		pos,goodDigitCondFuncDict = initBigDatasetVariables(getPos())
-
-		clustNb = {}
-		for key in pos.keys():
-			if key.find("wellInd_dig2") != -1:
-				clustNb[key] = 3
-			else:
-				clustNb[key] = 10
-
-		clustNb = {"digit1":10,"digit1_alt":10,"digit1_alt2":10,"digit1_alt3":10,
-				   "digit2":10,"digit2_alt":10,"digit2_alt2":10,"digit2_alt3":10,
-				   "digit3":10,"digit3_alt":10,
-				   "wellInd_dig1":9,"wellInd_dig1_alt":2,
-				   "wellInd_dig2":3,"wellInd_dig2_alt":10}
+		clustNb = {"digit1_14_3":1,"digit1_14_4":4 ,"digit1_14_5":3,"digit1_15_4":1,"digit1_15_5":5,
+				   "digit2_14_3":1,"digit2_14_4":8,"digit2_14_5":3,"digit2_15_4":1,"digit2_15_5":9,
+				   "digit3_14_3":1,"digit3_14_4":6,"digit3_14_5":3,"digit3_14_6":1,"digit3_15_4":1,"digit3_15_5":9,"digit3_15_6":1,
+				   "digit4_14_3":1,"digit4_15_4":1,
+				   "wellInd_dig1_14_3":1,"wellInd_dig1_14_4":6,"wellInd_dig1_14_5":3,"wellInd_dig1_15_4":1,"wellInd_dig1_15_5":9,
+				   "wellInd_dig2_14_3":1,"wellInd_dig2_14_4":1,"wellInd_dig2_15_4":1}
 
 		#This dict map cluster index to the real class (i.e. the digit)
-		clustInd2Digit = {"digit1":{0:5,1:1,2:3,3:7,4:9,5:2,6:4,7:8,8:0,9:6},
-						  "digit1_alt":{0:3,1:4,2:0,3:2,4:7,5:6,6:5,7:1,8:9,9:8},
-						  "digit1_alt2":{0:9,1:1,2:3,3:5,4:7,5:4,6:2,7:0,8:6,9:8},
-						  "digit1_alt3":{0:4,1:6,2:2,3:0,4:1,5:7,6:8,7:9,8:5,9:3},
-						  "digit2":{0:3,1:1,2:9,3:5,4:7,5:2,6:4,7:8,8:0,9:6},
-				  		  "digit2_alt":{0:6,1:1,2:2,3:7,4:4,5:9,6:0,7:3,8:5,9:8},
-				  		  "digit2_alt2":{0:7,1:3,2:1,3:4,4:0,5:2,6:6,7:9,8:5,9:8},
-				  		  "digit2_alt3":{0:6,1:1,2:2,3:7,4:4,5:9,6:3,7:5,8:8,9:0},
-						  "digit3":{0:0,1:1,2:2,3:3,4:7,5:4,6:5,7:8,8:6,9:9},
-						  "digit3_alt":{0:1,1:8,2:7,3:2,4:9,5:4,6:5,7:3,8:6,9:0},
-						  "wellInd_dig1":{0:2,1:1,2:6,3:3,4:4,5:7,6:5,7:9,8:8},
-						  "wellInd_dig2_alt":{0:6,1:4,2:2,3:7,4:1,5:3,6:9,7:0,8:5,9:8},
-						  "wellInd_dig2":{0:2,1:1,2:0},
-						  "wellInd_dig1_alt":{0:0,1:1}}
+		clustInd2Digit = {"digit1_14_3":{0:1},
+						  "digit1_14_4":{0:7,1:9,2:4,3:5},
+						  "digit1_14_5":{0:6,1:8,2:2},
+						  "digit1_15_4":{0:1},
+						  "digit1_15_5":{0:7,1:0,2:5,3:4,4:2},
+						  "digit2_14_3":{0:1},
+						  "digit2_14_4":{0:5,1:4,2:7,3:9,4:3,5:0,6:2,7:6},
+						  "digit2_14_5":{0:6,1:2,2:8},
+						  "digit2_15_4":{0:1},
+						  "digit2_15_5":{0:6,1:2,2:4,3:8,4:7,5:0,6:3,7:9,8:5},
+						  "digit3_14_3":{0:1},
+						  "digit3_14_4":{0:4,1:3,2:9,3:7,4:0,5:5},
+						  "digit3_14_5":{0:6,1:2,2:8},
+						  "digit3_14_6":{0:8},
+						  "digit3_15_4":{0:1},
+						  "digit3_15_5":{0:0,1:2,2:7,3:5,4:3,5:4,6:8,7:6,8:9},
+						  "digit3_15_6":{0:4},
+						  "digit4_14_3":{0:1},
+						  "digit4_15_4":{0:1},
+						  "wellInd_dig1_14_3":{0:1},
+						  "wellInd_dig1_14_4":{0:0,1:3,2:4,3:7,4:5,5:9},
+						  "wellInd_dig1_14_5":{0:8,1:6,2:2},
+						  "wellInd_dig1_15_4":{0:1},
+						  "wellInd_dig1_15_5":{0:2,1:8,2:4,3:3,4:5,5:7,6:6,7:9,8:0},
+						  "wellInd_dig2_14_3":{0:1},
+						  "wellInd_dig2_14_4":{0:0},
+						  "wellInd_dig2_15_4":{0:1}}
 
 	else:
 
-		clustNb = {"digit1":10,"digit2":10,"digit3":10,"wellInd_dig1":9,"wellInd_dig2":3}
+		clustNb = {"digit1_15_4":1,"digit1_15_5":9,
+				   "digit2_15_4":1,"digit2_15_5":9,
+				   "digit3_15_4":1,"digit3_15_5":9,"digit3_15_6":1,
+				   "digit4_15_4":1,
+				   "wellInd_dig1_15_4":1,"wellInd_dig1_15_5":9,
+				   "wellInd_dig2_15_4":1}
 
 		#This dict map cluster index to the real class (i.e. the digit)
-		clustInd2Digit = {"digit1":{0:9, 1:1, 2:7, 3:6, 4:8, 5:2, 6:4, 7:0, 8:5, 9:3},
-						  "digit2":{0:9, 1:4, 2:3, 3:5, 4:7, 5:1, 6:2, 7:8, 8:0, 9:6},
-						  "digit3":{0:4, 1:3, 2:5, 3:1, 4:7, 5:2, 6:0, 7:8, 8:9, 9:6},
-						  "wellInd_dig1":{0:8, 1:1, 2:2, 3:5, 4:7, 5:4, 6:9, 7:6, 8:3},
-						  "wellInd_dig2":{0:0, 1:1, 2:2}}
+		clustInd2Digit = {"digit1_15_4":{0:1},
+						  "digit1_15_5":{0:0,1:4,2:7,3:2,4:6,5:8,6:9,7:5,8:3},
+						  "digit2_15_4":{0:1},
+						  "digit2_15_5":{0:4,1:0,2:7,3:2,4:5,5:3,6:8,7:9,8:6},
+						  "digit3_15_4":{0:1},
+						  "digit3_15_5":{0:2,1:0,2:3,3:7,4:6,5:4,6:8,7:9,8:5},
+						  "digit3_15_6":{0:4},
+						  "digit4_15_4":{0:1},
+						  "wellInd_dig1_15_4":{0:1},
+						  "wellInd_dig1_15_5":{0:3,1:4,2:6,3:7,4:2,5:0,6:8,7:5,8:9},
+						  "wellInd_dig2_15_4":{0:1}}
+
+	vidPaths = glob.glob("../data/{}/*avi".format(dataset))
 
 	if not os.path.exists("../data/{}/timeImg/".format(dataset)):
 		print("Extracting digit from the images...")
 
-		#if not os.path.exists("../data/{}/timeImg/".format(dataset)):
-		vidPaths = glob.glob("../data/{}/*avi".format(dataset))
-
-		#Removing the videos with big problems
-		for vidName in videosToRemove:
-			vidPaths.remove("../data/{}/".format(dataset)+vidName)
+		if dataset == "big":
+			#Removing the videos with big problems
+			for vidName in getVideosToRemove():
+				vidPaths.remove("../data/{}/".format(dataset)+vidName+".avi")
 
 		vidInd = 0
 
 		#Store the total number of cropped images written for each digit
 		totalCountDict = {}
-		for key in pos.keys():
+		for key in getKeys(dataset):
 			totalCountDict[key] = 0
-
-		#Store the number of images written for each digit in the current video
-		countDict = {}
 
 		if not os.path.exists("../data/{}/timeImg/".format(dataset)):
 			os.makedirs("../data/{}/timeImg/".format(dataset))
-
-		for key in pos.keys():
-			if not os.path.exists("../data/{}/timeImg/{}/".format(dataset,key)):
-				os.makedirs("../data/{}/timeImg/{}/".format(dataset,key))
 
 		wellIndCropPerVid = 1 + imgNb//len(vidPaths)
 
@@ -179,102 +118,33 @@ def clusterDigits(dataset,imgNb):
 			print(vidInd,"/",len(vidPaths)," : ",vidPaths[vidInd])
 			cap = cv2.VideoCapture(vidPaths[vidInd])
 
-			for key in pos.keys():
-				countDict[key] = 0
-
 			ret, frame = cap.read()
 			frameInd = 0
 			enoughImgParsed = False
+
 			while ret and not enoughImgParsed:
 				frame = frame[frame.shape[0]-imgHeigth:,:]
 				frameInd += 1
 
-				goodDigit1,goodDigit2,goodDigit3 = False,False,False
-				cond = {}
+				if frameInd == 1:
+					processFrame(frame,dataset,totalCountDict,imgNb,extractWellId=True)
+				processFrame(frame,dataset,totalCountDict,imgNb,extractWellId=False)
 
-				for key in pos.keys():
-
-					digit = frame[pos[key]["Y1"]:pos[key]["Y2"],pos[key]["X1"]:pos[key]["X2"],:]
-
-					if dataset == "big":
-
-						if key == "digit1" or ((key == "digit1_alt" or key == "digit1_alt2") and (not goodDigit1)):
-							goodDigitCond = goodDigitCondFuncDict[key](digit)
-							goodDigit1 = computeCondAndWrite(digit,goodDigitCond,goodDigit1,cond,countDict,totalCountDict,key,imgNb,dataset)
-						if key == "digit1_alt3" and (not goodDigit1):
-							goodDigit1 = computeCondAndWrite(digit,True,goodDigit1,cond,countDict,totalCountDict,key,imgNb,dataset)
-
-						if key =="digit2" or (key == "digit2_alt" and (not goodDigit2)):
-							goodDigitCond = goodDigitCondFuncDict[key](digit)
-							goodDigit2 = computeCondAndWrite(digit,goodDigitCond,goodDigit2,cond,countDict,totalCountDict,key,imgNb,dataset)
-						if (key == "digit2_alt2" or key == "digit2_alt3") and (not goodDigit2):
-							goodDigitCond = goodDigitCondFuncDict[key](digit)
-							goodDigit2 = computeCondAndWrite(digit,goodDigitCond,goodDigit2,cond,countDict,totalCountDict,key,imgNb,dataset)
-						if key == "digit3" or (key == "digit3_alt" and (not goodDigit3)):
-							goodDigitCond = goodDigitCondFuncDict[key](digit)
-							goodDigit3 = computeCondAndWrite(digit,goodDigitCond,goodDigit3,cond,countDict,totalCountDict,key,imgNb,dataset)
-
-						if key.find("wellInd_dig") != -1:
-							goodDigit = digit.sum() > misplacedOrNoDigitNorm and countDict[key] < wellIndCropPerVid
-							cond[key] = totalCountDict[key] < imgNb and goodDigit
-							writeWithCondition(cond[key],dataset,key,totalCountDict,countDict,digit)
-
-					else:
-
-						if (key == "digit3" or key == "wellInd_dig2"):
-							goodDigit = digit.sum() > blankDigitNorm
-						if key != "digit3" and key != "wellInd_dig2":
-							goodDigit = True
-
-						cond[key] = totalCountDict[key] < imgNb and goodDigit
-						writeWithCondition(cond[key],dataset,key,totalCountDict,countDict,digit)
-
-				if dataset == "big":
-					if (not goodDigit1):
-						cv2.imwrite("../data/big/timeImg/vid{}_dig1.png".format(vidInd),frame)
-						for key in pos.keys():
-							if key.find("digit1") != -1:
-								digit = frame[pos[key]["Y1"]:pos[key]["Y2"],pos[key]["X1"]:pos[key]["X2"],:]
-								print(key,digit[-1,:,:].sum() < 3000,digit[-3,:,:].sum() > 3000)
-								cv2.imwrite("../data/big/timeImg/vid{}_{}.png".format(vidInd,key),digit)
-						sys.exit(0)
-
-					if (not goodDigit2):
-						cv2.imwrite("../data/big/timeImg/vid{}_dig2.png".format(vidInd),frame)
-						for key in pos.keys():
-							if key.find("digit2") != -1:
-								digit = frame[pos[key]["Y1"]:pos[key]["Y2"],pos[key]["X1"]:pos[key]["X2"],:]
-								cv2.imwrite("../data/big/timeImg/vid{}_{}.png".format(vidInd,key),digit)
-						sys.exit(0)
-
-					if (not goodDigit3) and frameInd>100:
-						cv2.imwrite("../data/big/timeImg/vid{}_dig3.png".format(vidInd),frame)
-						for key in pos.keys():
-							if key.find("digit3") != -1:
-								digit = frame[pos[key]["Y1"]:pos[key]["Y2"],pos[key]["X1"]:pos[key]["X2"],:]
-								cv2.imwrite("../data/big/timeImg/vid{}_{}.png".format(vidInd,key),digit)
-						sys.exit(0)
-
-					#if sum([cond[key] for key in cond.keys() if key.find("digit") != -1]) == 0 and frameInd == 10:
-					#	enoughImgParsed = True
-					writtenDigit1 = sum([cond[key] for key in cond.keys() if key.find("digit1") != -1]) > 0
-					writtenDigit2 = sum([cond[key] for key in cond.keys() if key.find("digit2") != -1]) > 0
-					writtenDigit3 = sum([cond[key] for key in cond.keys() if key.find("digit3") != -1]) > 0
-
-					if (not writtenDigit1) and (not writtenDigit2) and (not writtenDigit3) and frameInd > 10:
-						enoughImgParsed = True
+				enoughImgParsed = sum([totalCountDict[digitName]==imgNb for digitName in totalCountDict.keys() if digitName.find("digit") != -1]) == len([digitName for digitName in totalCountDict.keys() if digitName.find("digit") != -1])
 
 				ret, frame = cap.read()
 
 			vidInd += 1
 
 	print("Clustering the digits ... ")
-	for key in pos.keys():
-		imgPaths = glob.glob("../data/{}/timeImg/{}/*.png".format(dataset,key))
+	for key in getKeys(dataset):
+
+		imgPaths = sorted(glob.glob("../data/{}/timeImg/{}/*.png".format(dataset,key)))
 		data = []
 
 		for path in imgPaths:
 			img = cv2.imread(path)
+
 			data.append(img.reshape((-1))[np.newaxis])
 
 		if len(data) > 0:
@@ -288,9 +158,8 @@ def clusterDigits(dataset,imgNb):
 				fileName = os.path.basename(imgPath)
 				os.rename(imgPath,"../data/{}/timeImg/{}/{}/{}".format(dataset,key,kmeans.labels_[i],fileName))
 
-	#sys.exit(0)
 	print("Renaming the folder according to the digits they contain")
-	for key in pos.keys():
+	for key in getKeys(dataset):
 
 		#Renaming the folders and adding a "_" not there is no name conflict
 		folders = sorted(glob.glob("../data/{}/timeImg/{}/*/".format(dataset,key)))
@@ -309,6 +178,167 @@ def clusterDigits(dataset,imgNb):
 
 	print("Done ! Don't forget to quickly check if the croped digits in timeImg correspond to the name of the folder they are in. Eg. : the digits in the folder '1' should all be 1s.")
 
+def getKeys(dataset,wellId=None,cannonical=False):
+
+	if not cannonical:
+		allKeys = list(map(lambda x:x.split("/")[-2],sorted(glob.glob("../data/{}/timeImg/*/".format(dataset)))))
+
+		if wellId is None:
+			return allKeys
+		elif wellId == True:
+			return [key for key in allKeys if key.find("wellId") != -1]
+		else:
+			return [key for key in allKeys if key.find("wellId") == -1]
+	else:
+
+		if wellId is None:
+			return ["digit1","digit2","digit3","digit4","wellInd_dig1","wellInd_dig2"]
+		elif wellId == True:
+			return ["wellInd_dig1","wellInd_dig2"]
+		else:
+			return ["digit1","digit2","digit3","digit4"]
+
+def computeGradMag(img):
+	img = img.astype('int32')
+	dx = ndimage.sobel(img, 0)  # horizontal derivative
+	dy = ndimage.sobel(img, 1)  # vertical derivative
+	mag = np.hypot(dx, dy)  # magnitude
+	#mag = dx.astype("float64")
+	mag *= 255.0 / np.max(mag)  # normalize (Q&D)
+	mag= mag.astype("uint8")
+	return mag
+
+def processFrame(img,dataset,totalCountDict=None,requiredImgNb=None,extractWellId=False,write=True):
+
+	if not extractWellId:
+		img = (img[-50:,-50:].mean(axis=-1)).astype("uint8")
+	else:
+		img = (img[-50:,:70].mean(axis=-1)).astype("uint8")
+
+	imgBin = img>128
+
+	rightleft = imgBin.sum(axis=1)>2
+	topbottom = imgBin.sum(axis=0)>2
+	x,y = rightleft.argmax(),topbottom.argmax()
+	width,heigth = rightleft.sum(),topbottom.sum()
+
+	if width > 20:
+		gradMag = computeGradMag(img)
+		cv2.imwrite("../data/big/timeImg/preGrad.png",img)
+
+		img[(gradMag<100)*(img<180)] = 0
+
+		cv2.imwrite("../data/big/timeImg/postGrad.png",img)
+		cv2.imwrite("../data/big/timeImg/grad.png",gradMag)
+		imgBin = img>128
+		rightleft = imgBin.sum(axis=1)>2
+		topbottom = imgBin.sum(axis=0)>2
+		x,y = rightleft.argmax(),topbottom.argmax()
+		width,heigth = rightleft.sum(),topbottom.sum()
+
+	img = img[x:width+x,y:y+heigth]
+	cv2.imwrite("../data/big/timeImg/crop.png",img)
+	projX = (img<128).sum(axis=0)
+
+	offSet = 0
+	endReached = False
+	digitList = []
+	while not endReached:
+
+		start = (projX[offSet:] != 0).argmax()+offSet
+		length = min((projX[start:] != 0).argmin(),6)
+
+		end = start+length
+
+		if start==end:
+			endReached=True
+		else:
+			digitList.append(img[:,start:end])
+			offSet = end
+
+	if not extractWellId:
+		#Removing the character 'h' and the comma
+		digitList.pop(-1)
+		digitList.pop(-2)
+	else:
+		#Removing the characters of the word "Well"
+		digitList = digitList[4:]
+
+	resDict = {}
+
+	for i,dig in enumerate(digitList):
+
+		if dig.shape[1] > 1:
+
+			if not extractWellId:
+				digitName = "digit"+str(len(digitList)-i)+"_"+str(dig.shape[0])+"_"+str(dig.shape[1])
+			else:
+				digitName = "wellInd_dig"+str(len(digitList)-i)+"_"+str(dig.shape[0])+"_"+str(dig.shape[1])
+
+			if write:
+				if digitName in totalCountDict.keys():
+					if totalCountDict[digitName]<requiredImgNb:
+						cv2.imwrite("../data/{}/timeImg/{}/{}.png".format(dataset,digitName,totalCountDict[digitName]),dig)
+						totalCountDict[digitName] += 1
+				else:
+					totalCountDict[digitName] = 1
+					os.makedirs("../data/{}/timeImg/{}/".format(dataset,digitName))
+					cv2.imwrite("../data/{}/timeImg/{}/{}.png".format(dataset,digitName,totalCountDict[digitName]),dig)
+
+			resDict[digitName] = dig
+
+	return resDict
+
+def computeRealFrameRate(vidPaths,dataset,neigbhorsNb):
+
+	digitIdentif = DigitIdentifier(dataset,neigbhorsNb)
+
+	realFrameRateCsv = 'video_name,real_frame_rate\n'
+
+	for vidInd in range(len(vidPaths)):
+
+		if vidInd%10==0:
+			print(vidPaths[vidInd])
+
+		cap = cv2.VideoCapture(vidPaths[vidInd])
+		ret, frame = cap.read()
+		frameInd = 0
+
+		resDict = digitIdentif.findDigits(frame)
+		lastTime = resDict["time"]
+		lastTimeFrameInd = 0
+		startTime = resDict["time"]
+
+		enoughImgParsed	= False
+
+		while ret and not enoughImgParsed:
+
+			#If the current time is now inferior to the preceding one, it means it has got above 99,
+			#(as we only check the three first digits) so we should stop
+			if resDict["time"] < lastTime:
+				enoughImgParsed = True
+			else:
+				resDict = digitIdentif.findDigits(frame)
+				lastTime = resDict["time"]
+				lastTimeFrameInd = frameInd
+				print(lastTime,frameInd)
+			#Fast forward in the video
+			for _ in range(10):
+				if ret:
+					frameInd += 1
+					ret, frame = cap.read()
+
+		endTime = lastTime
+
+		realFrameRate = (endTime - startTime)/(frameInd+1)
+
+		realFrameRateCsv += os.path.splitext(os.path.basename(vidPaths[vidInd]))[0]+","+str(realFrameRate)+"\n"
+
+		sys.exit(0)
+
+	with open("../data/{}/annotations/realFrameRate.csv".format(dataset),"w") as text_file:
+		print(realFrameRateCsv,file=text_file)
+
 class DigitIdentifier:
 	""" This class extracts the digits of an image
 
@@ -317,7 +347,7 @@ class DigitIdentifier:
 
 	Args:
 	- neigbhorsNb (int): the number of neigbhors to compare with
-
+	- dataset (str): the dataset to process
 	"""
 
 	def __init__(self,dataset,neigbhorsNb=10):
@@ -327,17 +357,23 @@ class DigitIdentifier:
 
 		self.refDict = {}
 		self.dataset = dataset
-		self.pos,self.goodDigitCondFuncDict = initBigDatasetVariables(pos)
 
-		for digName in self.pos.keys():
+		for digName in getKeys(self.dataset):
 
 			self.refDict[digName] = {}
 
 			minSize = np.inf
 			for label in sorted(glob.glob("../data/{}/timeImg/{}/*/".format(dataset,digName))):
 				#This is a 2D matrix where each row is one example of the class
-				imgList = np.concatenate(list(map(lambda x:cv2.imread(x).reshape((-1))[np.newaxis],sorted(glob.glob(label+"/*.png".format(digName)))[:neigbhorsNb])),axis=0)
-				self.refDict[digName][label] = imgList
+				imgList = list(map(lambda x:cv2.imread(x),sorted(glob.glob(label+"/*.png".format(digName)))))
+
+				data = []
+
+				for img in imgList:
+
+					data.append(img.reshape((-1))[np.newaxis])
+
+				self.refDict[digName][label] =  np.concatenate(data,axis=0)
 
 				#There are some labels for which there is fewer examples than other labels
 				#It is necessary to select x examples for each labels, where x is the minimum number of examples for any label
@@ -346,9 +382,7 @@ class DigitIdentifier:
 			for label in sorted(glob.glob("../data/{}/timeImg/{}/*/".format(dataset,digName))):
 				self.refDict[digName][label] = self.refDict[digName][label][:minSize]
 
-		self.lastTime = None
-
-	def findDigits(self,img,newVid=False,printDict=False):
+	def findDigits(self,img,newVid=False,debug=False,extractWellId=False):
 		''' Crop the digits on an image and identify them with KNN algorithm
 
 		The image contains two information  :
@@ -372,105 +406,73 @@ class DigitIdentifier:
 		cond = {}
 		goodDigit1,goodDigit2,goodDigit3 = False,False,False
 
-		for digName in self.pos.keys():
-			digit = img[self.pos[digName]["Y1"]:self.pos[digName]["Y2"],self.pos[digName]["X1"]:self.pos[digName]["X2"],:]
+		timeRawResDict = processFrame(img,self.dataset,None,None,extractWellId=False,write=False)
+		timeRawResDict = processDict(timeRawResDict,self.dataset,self.refDict)
+		timeRawResDict = mergeDict(timeRawResDict,self.dataset,extractWellId=False)
 
-			if self.dataset == "big":
-
-				if digName == "digit1" or ((digName == "digit1_alt" or digName == "digit1_alt2") and (not goodDigit1)):
-					goodDigitCond = self.goodDigitCondFuncDict[digName](digit)
-				if digName == "digit1_alt3" and (not goodDigit1):
-					goodDigitCond = True
-				if digName.find("digit1") != -1 and goodDigitCond:
-					goodDigit1 = True
-
-				if digName =="digit2" or (digName == "digit2_alt" and (not goodDigit2)):
-					goodDigitCond = self.goodDigitCondFuncDict[digName](digit)
-				if (digName == "digit2_alt2" or digName == "digit2_alt3") and (not goodDigit2):
-					goodDigitCond = self.goodDigitCondFuncDict[digName](digit)
-				if digName.find("digit2") != -1 and goodDigitCond:
-					goodDigit2 = True
-
-				if digName == "digit3" or (digName == "digit3_alt" and (not goodDigit3)):
-					goodDigitCond = self.goodDigitCondFuncDict[digName](digit)
-				if digName.find("digit3") != -1 and goodDigitCond:
-					goodDigit3 = True
-
-				if digName.find("wellInd_dig") != -1:
-					goodDigitCond = digit.sum() > misplacedOrNoDigitNorm
-
-			else:
-
-				if (digName == "digit3" or digName == "wellInd_dig2"):
-					goodDigitCond = digit.sum() > blankDigitNorm
-				if digName != "digit3" and digName != "wellInd_dig2":
-					goodDigitCond = True
-
-			if goodDigitCond:
-
-				flatDigit = digit.reshape((-1))
-
-				#This 3D tensor contains all the examples for all the class
-				#for label in self.refDict[digName].keys():
-				#	print(label,self.refDict[digName][label].shape)
-
-				refTens = np.concatenate([self.refDict[digName][label][np.newaxis] for label in self.refDict[digName].keys()],axis=0)
-
-				#Computing the average distance of the digits with examples of each class
-				meanDist = np.sqrt(np.power(flatDigit-refTens,2).sum(axis=-1)).mean(axis=-1)
-				ind = np.argmin(meanDist)
-
-				label = sorted(glob.glob("../data/{}/timeImg/{}/*/".format(self.dataset,digName)))[ind].split("/")[-2]
-
-				rawResDict[digName] = int(label)
-
-			else:
-
-				rawResDict[digName] = None
-
-		mergedResDict = {}
-		if self.dataset == "big":
-			#Merging all the key,value pairs corresponding to the same digit (i.e. mergin digit1 with digit1_alt and digit1_alt2)
-			for dig in list(["digit1","digit2","digit3","wellInd_dig1","wellInd_dig2"]):
-
-				digNames = sorted([digName for digName in pos.keys() if digName.find(dig) != -1])
-				digFound = False
-				i=0
-				while i<len(digNames) and not digFound:
-					if not rawResDict[digNames[i]] is None:
-						digFound = True
-						mergedResDict[dig] = rawResDict[digNames[i]]
-					i+=1
-				if not digFound:
-					mergedResDict[dig] = None
-			rawResDict = mergedResDict
+		if extractWellId:
+			wellIndrawResDict = processFrame(img,self.dataset,None,None,extractWellId=True,write=False)
+			wellIndrawResDict = processDict(wellIndrawResDict,self.dataset,self.refDict)
+			wellIndrawResDict = mergeDict(wellIndrawResDict,self.dataset,extractWellId=True)
 
 		resDict = {}
 
 		#Now we have all the digits, let's merge them
+		if extractWellId:
+			#If the well index is inferior to 10, the second digit will be blank
+			resDict["wellInd"] = wellIndrawResDict["wellInd_dig1"]
 
-		#If the well index is inferior to 10, the second digit will be blank
-		if rawResDict["wellInd_dig2"] is None:
-			resDict["wellInd"] = rawResDict["wellInd_dig1"]
-		else:
-			resDict["wellInd"] =  10*rawResDict["wellInd_dig1"]+rawResDict["wellInd_dig2"]
+			if "wellInd_dig2" in list(wellIndrawResDict.keys()):
+				resDict["wellInd"] +=  10*wellIndrawResDict["wellInd_dig2"]
 
-		#If the time is inferior to 10, the third digit will be blank
-		if rawResDict["digit3"] is None:
-			resDict["time"] = rawResDict["digit2"]+0.1*rawResDict["digit1"]
-		else:
-			resDict["time"] = 10*rawResDict["digit3"]+rawResDict["digit2"]+0.1*rawResDict["digit1"]
+		resDict["time"] = timeRawResDict["digit2"]+0.1*timeRawResDict["digit1"]
 
-		if not newVid:
-			#To detect indirectly if there is a fourth digit (which is always equal to one),
-			#we check if the current time is inferior to the last time.
-			#As the clock cannot go back in time, current time < last time imply a fourth digit has appeared (which is alwayd a '1')
-			if resDict["time"] < self.lastTime:
-				resDict["time"] += 100
+		if "digit3" in list(timeRawResDict.keys()):
+			resDict["time"] += 10*timeRawResDict["digit3"]
 
-		self.lastTime = resDict["time"]
+		if "digit4" in list(timeRawResDict.keys()):
+			resDict["time"] +=  100*timeRawResDict["digit4"]
 
 		return resDict
+
+def mergeDict(rawResDict,dataset,extractWellId):
+	mergedResDict = {}
+	#Merging all the key,value pairs corresponding to the same digit (i.e. mergin digit1 with digit1_alt and digit1_alt2)
+	for dig in getKeys(dataset,extractWellId,cannonical=True):
+
+		digNames = sorted([digName for digName in rawResDict.keys() if digName.find(dig) != -1])
+		digFound = False
+		i=0
+		while i<len(digNames) and not digFound:
+			if not rawResDict[digNames[i]] is None:
+				digFound = True
+				mergedResDict[dig] = rawResDict[digNames[i]]
+			i+=1
+
+	return mergedResDict
+
+def processDict(rawResDict,dataset,refDict):
+
+	for digName in rawResDict.keys():
+
+		img = rawResDict[digName]
+
+		img = img[:,:,np.newaxis].repeat(3,axis=-1)
+
+		flatDigit = img.reshape((-1))
+
+		#This 3D tensor contains all the examples for all the class
+		refTens = np.concatenate([refDict[digName][label][np.newaxis] for label in refDict[digName].keys()],axis=0)
+
+		#Computing the average distance of the digits with examples of each class
+		meanDist = np.sqrt(np.power(flatDigit-refTens,2).sum(axis=-1)).mean(axis=-1)
+		ind = np.argmin(meanDist)
+
+		label = sorted(glob.glob("../data/{}/timeImg/{}/*/".format(dataset,digName)))[ind].split("/")[-2]
+
+		rawResDict[digName] = int(label)
+
+	return rawResDict
 
 if __name__ == "__main__":
 

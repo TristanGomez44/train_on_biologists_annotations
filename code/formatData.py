@@ -66,8 +66,10 @@ def formatDataSmall(dataset,pathToZip,img_for_crop_nb):
             #Reading the video
             cap = cv2.VideoCapture(vidPath)
             ret, frame = cap.read()
-            resDict = digExt.findDigits(frame)
+            resDict = digExt.findDigits(frame,extractWellId=True)
             wellInd = resDict["wellInd"]
+
+            lastTiming = resDict["time"]
 
             while ret:
 
@@ -83,7 +85,12 @@ def formatDataSmall(dataset,pathToZip,img_for_crop_nb):
                 row = row.transpose()
 
                 #Getting the true label of the image
-                label = row.columns[max((resDict["time"] > row).sum(axis=1).item()-1,0)]
+                label = row.columns[max((resDict["time"] > row).sum(axis=1).iloc[0]-1,0)]
+
+                if resDict["time"]<lastTiming:
+                    raise ValueError("Vid {} frame {} last time {} current time {}".format(vidPath,imgCount,lastTime,resDict["time"]))
+                else:
+                    lastTime = resDict["time"]
 
                 #Initialise currentLabel with the first label
                 if currentLabel is None:
@@ -98,7 +105,7 @@ def formatDataSmall(dataset,pathToZip,img_for_crop_nb):
 
                 ret, frame = cap.read()
                 if not frame is None:
-                    resDict = digExt.findDigits(frame)
+                    resDict = digExt.findDigits(frame,extractWellId=False)
 
                 imgCount +=1
 
@@ -191,7 +198,7 @@ def processVideos(videoPaths,dataset,digitExt,labelDict,dfDict,noAnnot,multipleA
             cap = cv2.VideoCapture(vidPath)
             ret, frame = cap.read()
 
-            resDict = digitExt.findDigits(frame,newVid=True)
+            resDict = digitExt.findDigits(frame,extractWellId=True)
             wellInd = resDict["wellInd"]
 
             rowList = []
@@ -268,7 +275,7 @@ def processVideos(videoPaths,dataset,digitExt,labelDict,dfDict,noAnnot,multipleA
 
                     ret, frame = cap.read()
                     if not frame is None:
-                        resDict = digExt.findDigits(frame)
+                        resDict = digExt.findDigits(frame,extractWellId=False)
 
                     imgCount +=1
 
