@@ -14,7 +14,7 @@ def getNoAnnotVideos():
 	return np.genfromtxt("../data/noAnnot.csv",dtype=str,delimiter=",")
 
 def getVideosToRemove():
-	return ["BE150-1","MZ900-8","NE051-1","ZVDPI098SLIDE2-3","MS288SLIDE1-1","FE14-010"]
+	return ["BE150-1","MZ900-8","NE051-1","ZVDPI098SLIDE2-3","MS288SLIDE1-1","FE14-010","RA444-5"]
 
 def clusterDigits(dataset,imgNb):
 	"""	Extract digits from embryo images in the ../data/ folder and cluster them using k-means
@@ -32,7 +32,7 @@ def clusterDigits(dataset,imgNb):
 
 	if dataset == "big":
 
-		clustNb = {"digit1_14_3":1,"digit1_14_4":4 ,"digit1_14_5":3,"digit1_15_4":1,"digit1_15_5":5,
+		clustNb = {"digit1_14_3":1,"digit1_14_4":6 ,"digit1_14_5":3,"digit1_15_4":1,"digit1_15_5":9,
 				   "digit2_14_3":1,"digit2_14_4":8,"digit2_14_5":3,"digit2_15_4":1,"digit2_15_5":9,
 				   "digit3_14_3":1,"digit3_14_4":6,"digit3_14_5":3,"digit3_14_6":1,"digit3_15_4":1,"digit3_15_5":9,"digit3_15_6":1,
 				   "digit4_14_3":1,"digit4_15_4":1,
@@ -41,10 +41,10 @@ def clusterDigits(dataset,imgNb):
 
 		#This dict map cluster index to the real class (i.e. the digit)
 		clustInd2Digit = {"digit1_14_3":{0:1},
-						  "digit1_14_4":{0:7,1:9,2:4,3:5},
+						  "digit1_14_4":{0:7,1:0,2:4,3:5,4:3,5:9},
 						  "digit1_14_5":{0:6,1:8,2:2},
 						  "digit1_15_4":{0:1},
-						  "digit1_15_5":{0:7,1:0,2:5,3:4,4:2},
+						  "digit1_15_5":{0:7,1:0,2:5,3:4,4:2,5:3,6:8,7:6,8:9},
 						  "digit2_14_3":{0:1},
 						  "digit2_14_4":{0:5,1:4,2:7,3:9,4:3,5:0,6:2,7:6},
 						  "digit2_14_5":{0:6,1:2,2:8},
@@ -408,6 +408,7 @@ class DigitIdentifier:
 
 		timeRawResDict = processFrame(img,self.dataset,None,None,extractWellId=False,write=False)
 		timeRawResDict = processDict(timeRawResDict,self.dataset,self.refDict)
+		#print(timeRawResDict)
 		timeRawResDict = mergeDict(timeRawResDict,self.dataset,extractWellId=False)
 
 		if extractWellId:
@@ -419,6 +420,7 @@ class DigitIdentifier:
 
 		#Now we have all the digits, let's merge them
 		if extractWellId:
+
 			#If the well index is inferior to 10, the second digit will be blank
 			resDict["wellInd"] = wellIndrawResDict["wellInd_dig1"]
 

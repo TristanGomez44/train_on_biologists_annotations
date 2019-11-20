@@ -88,9 +88,9 @@ def formatDataSmall(dataset,pathToZip,img_for_crop_nb):
                 label = row.columns[max((resDict["time"] > row).sum(axis=1).iloc[0]-1,0)]
 
                 if resDict["time"]<lastTiming:
-                    raise ValueError("Vid {} frame {} last time {} current time {}".format(vidPath,imgCount,lastTime,resDict["time"]))
+                    raise ValueError("Vid {} frame {} last time {} current time {}".format(vidPath,imgCount,lastTiming,resDict["time"]))
                 else:
-                    lastTime = resDict["time"]
+                    lastTiming = resDict["time"]
 
                 #Initialise currentLabel with the first label
                 if currentLabel is None:
@@ -123,23 +123,23 @@ def formatDataBig(dataset,pathToFold,img_for_crop_nb):
     if not os.path.exists("../data/{}/".format(dataset)):
         os.makedirs("../data/{}/".format(dataset))
 
-    #Moving the videos
-    for videoPath in sorted(glob.glob(pathToFold+"/DATA/*avi")):
-        os.rename(videoPath,"../data/{}/".format(dataset)+os.path.basename(videoPath))
+        #Moving the videos
+        for videoPath in sorted(glob.glob(pathToFold+"/DATA/*avi")):
+            os.rename(videoPath,"../data/{}/".format(dataset)+os.path.basename(videoPath))
 
-    #Moving the excel files
-    for excelPath in sorted(glob.glob(pathToFold+"/*.xls*")):
-        os.rename(excelPath,"../data/{}/".format(dataset)+os.path.basename(excelPath))
+        #Moving the excel files
+        for excelPath in sorted(glob.glob(pathToFold+"/*.xls*")):
+            os.rename(excelPath,"../data/{}/".format(dataset)+os.path.basename(excelPath))
 
-    #Moving the csv file
-    copyfile(pathToFold+"/AnnotationManuelle2017.csv","../data/{}".format(dataset)+"/AnnotationManuelle2017.csv")
+        #Moving the csv file
+        copyfile(pathToFold+"/AnnotationManuelle2017.csv","../data/{}".format(dataset)+"/AnnotationManuelle2017.csv")
 
-    #Adding an underscore between the name of the video and the "EXPORT.xls" in the name of the excel files
-    for xlsPath in glob.glob("../data/{}/*.xls".format(dataset)):
+        #Adding an underscore between the name of the video and the "EXPORT.xls" in the name of the excel files
+        for xlsPath in glob.glob("../data/{}/*.xls".format(dataset)):
 
-        dirName = os.path.dirname(xlsPath)
-        newFileName = os.path.basename(xlsPath).replace(" ","_")
-        os.rename(xlsPath,dirName+"/"+newFileName)
+            dirName = os.path.dirname(xlsPath)
+            newFileName = os.path.basename(xlsPath).replace(" ","_")
+            os.rename(xlsPath,dirName+"/"+newFileName)
 
     #Convert the xls files into csv files if it is not already done
     if (len(glob.glob("../data/{}/*.csv".format(dataset))) - 1) < len(glob.glob("../data/{}/*.xls*".format(dataset))):
@@ -162,7 +162,7 @@ def formatDataBig(dataset,pathToFold,img_for_crop_nb):
     #Removing the videos with big problems
     videosToRemove = digitExtractor.getVideosToRemove()
     for vidName in videosToRemove:
-        videoPaths.remove("../data/{}/".format(dataset)+vidName)
+        videoPaths.remove("../data/{}/".format(dataset)+vidName+".avi")
 
     noAnnot = 'video_name\n'
     multipleAnnot = 'video_name,annot1,annot2,annot3\n'
@@ -178,7 +178,7 @@ def formatDataBig(dataset,pathToFold,img_for_crop_nb):
     with open("../data/noAnnot.csv","w") as text_file:
         print(noAnnot,file=text_file)
 
-def processVideos(videoPaths,dataset,digitExt,labelDict,dfDict,noAnnot,multipleAnnot):
+def processVideos(videoPaths,dataset,digExt,labelDict,dfDict,noAnnot,multipleAnnot):
 
     for i,vidPath in enumerate(videoPaths):
         if i%10 == 0:
@@ -198,9 +198,10 @@ def processVideos(videoPaths,dataset,digitExt,labelDict,dfDict,noAnnot,multipleA
             cap = cv2.VideoCapture(vidPath)
             ret, frame = cap.read()
 
-            resDict = digitExt.findDigits(frame,extractWellId=True)
+            resDict = digExt.findDigits(frame,extractWellId=True)
             wellInd = resDict["wellInd"]
 
+            lastTiming = resDict["time"]
             rowList = []
 
             matchingCSVPaths = []
@@ -209,7 +210,8 @@ def processVideos(videoPaths,dataset,digitExt,labelDict,dfDict,noAnnot,multipleA
                 rowLocBoolArray = (dfDict[csvPath]["Name"] == patientName.replace("-",""))
 
                 #Some videos have their real name written in another column : "Well Description"
-                rowLocBoolArray +=  (dfDict[csvPath]["Well Description"] == vidName)
+                rowLocBoolArray = np.logical_or(rowLocBoolArray,dfDict[csvPath]["Well Description"] == vidName)
+
                 rowLocBoolArray = (rowLocBoolArray>0)
 
                 if rowLocBoolArray.sum() > 0:
@@ -239,17 +241,16 @@ def processVideos(videoPaths,dataset,digitExt,labelDict,dfDict,noAnnot,multipleA
                     line += "\n"
                     multipleAnnot += line
 
-                rows = pd.concat(rowList)
+                rows = pd.concat(rowList,sort=False)
 
                 #Looking for the annotation with the least number of NaN in it
-                leatNaNRowInd = np.isnan(rows.drop(labels=["Name","Well"],axis=1).values.astype(float)).sum(axis=1).argmin()
+                leastNaNRowInd = np.isnan(rows.drop(labels=["Name","Well"],axis=1).values.astype(float)).sum(axis=1).argmin()
 
                 #Using the first annotation found
-                row = rows.iloc[leatNaNRowInd].to_frame().transpose()
+                row = rows.iloc[leastNaNRowInd].to_frame().transpose()
 
                 while ret:
 
-                    #Select only the label columns of the desired well
                     row = row[list(labelDict.keys())]
                     for col in list(row.columns):
                         row[col] = row[col].apply(lambda x:x.replace(",",".") if type(x) == str else x).astype(float)
@@ -260,7 +261,13 @@ def processVideos(videoPaths,dataset,digitExt,labelDict,dfDict,noAnnot,multipleA
                     row = row.transpose()
 
                     #Getting the true label of the image
-                    label = row.columns[max((resDict["time"] > row).sum(axis=1).item()-1,0)]
+                    label = row.columns[max((resDict["time"] > row).sum(axis=1).iloc[0]-1,0)]
+
+                    if resDict["time"]<lastTiming:
+                        if vidPath != "../data/big/CN917-11.avi" and imgCount != 235:
+                            raise ValueError("Vid {} frame {} last time {} current time {}".format(vidPath,imgCount,lastTiming,resDict["time"]))
+                    else:
+                        lastTiming = resDict["time"]
 
                     #Initialise currentLabel with the first label
                     if currentLabel is None:
