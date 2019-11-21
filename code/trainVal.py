@@ -564,7 +564,7 @@ def main(argv=None):
 
         valLoader = load_data.TestLoader(args.dataset_val,args.val_l,args.val_part_beg,args.val_part_end,args.prop_set_int_fmt,\
                                             args.img_size,args.orig_img_size,args.resize_image,\
-                                            args.exp_id,args.mask_time)
+                                            args.exp_id,args.mask_time,args.min_phase_nb)
 
         #Building the net
         net = modelBuilder.netBuilder(args)
