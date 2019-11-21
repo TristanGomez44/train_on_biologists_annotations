@@ -529,7 +529,7 @@ def main(argv=None):
     if args.comp_feat:
 
         testLoader = load_data.TestLoader(args.val_l,args.dataset_test,args.test_part_beg,args.test_part_end,args.prop_set_int_fmt,args.img_size,args.orig_img_size,\
-                                          args.resize_image,args.exp_id,args.mask_time)
+                                          args.resize_image,args.exp_id,args.mask_time,args.min_phase_nb)
 
         if args.feat != "None":
             featModel = modelBuilder.buildFeatModel(args.feat,args.pretrain_dataset,args.lay_feat_cut)
