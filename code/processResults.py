@@ -262,7 +262,7 @@ def plotData(nbClass,dataset):
     cb = plt.colorbar(image,ticks=ticks)
     cb.ax.set_yticklabels([round(i*i,2) for i in ticks])
     plt.tight_layout()
-    plt.savefig("../vis/transMat.png")
+    plt.savefig("../vis/transMat_{}.png".format(dataset))
 
     videoPaths = load_data.findVideos(dataset,0,1)
     nbImages=0
@@ -275,7 +275,7 @@ def plotData(nbClass,dataset):
     plt.xlabel("Developpement phases")
     plt.ylabel("Number of image")
     plt.tight_layout()
-    plt.savefig("../vis/prior.png")
+    plt.savefig("../vis/prior_{}.png".format(dataset))
 
 def agregatePerfs(exp_id,paramAgr,keysRef,namesRef):
 

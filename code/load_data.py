@@ -147,13 +147,18 @@ class SeqTrDataset(torch.utils.data.Dataset):
 
         video = pims.Video(self.videoPaths[vidInd])
 
+
         def preproc(x):
 
             x = video[x]
             if self.maskTime:
                 x = x*self.mask[:,:,np.newaxis]
 
+            #Removing the top part where the name of the video is written
+            x = x[x.shape[0]-self.imgSize:,:]
+
             if self.resizeImage:
+                bef = x.shape
                 x = np.asarray(self.reSizeFunc(x))
 
             return x[np.newaxis,:,:,0]
@@ -196,6 +201,7 @@ class TestLoader():
     def __init__(self,dataset,evalL,propStart,propEnd,propSetIntFormat,imgSize,origImgSize,resizeImage,exp_id,maskTime):
         self.dataset = dataset
         self.evalL = evalL
+
         self.videoPaths = findVideos(dataset,propStart,propEnd,propSetIntFormat)
         self.exp_id = exp_id
         print("Number of eval videos",len(self.videoPaths))
@@ -276,33 +282,32 @@ def buildSeqTrainLoader(args):
 
     return trainLoader,train_dataset
 
+def removeVid(videoPaths,videoToRemovePaths):
+    #Removing videos with bad format
+    vidsToRemove = []
+    for vidPath in videoPaths:
+        for vidName in videoToRemovePaths:
+            if os.path.splitext(os.path.basename(vidPath))[0] == vidName:
+                vidsToRemove.append(vidPath)
+    for vidPath in vidsToRemove:
+        videoPaths.remove(vidPath)
+
+    return videoPaths
+
 def findVideos(dataset,propStart,propEnd,propSetIntFormat=False):
 
-    allVideoPaths = sorted(glob.glob("../data/{}/*.avi".format(dataset)))
+    #By setting dataset to "small+big", one can combine the two datasets
+    datasetList = dataset.split("+")
 
-    if dataset == "big":
-        print("All videos : ",len(allVideoPaths))
+    allVideoPaths = []
+    for dataset in datasetList:
+        allVideoPaths += sorted(glob.glob("../data/{}/*.avi".format(dataset)))
 
-        #Removing videos with bad format
-        vidsToRemove = []
-        for vidPath in allVideoPaths:
-            for vidName in digitExtractor.getVideosToRemove():
-                if os.path.splitext(os.path.basename(vidPath))[0] == vidName:
-                    vidsToRemove.append(vidPath)
-        for vidPath in vidsToRemove:
-            allVideoPaths.remove(vidPath)
-        print("Without bad format videos : ",len(allVideoPaths))
+        if dataset == "big":
 
-        #Removing videos without annotation
-        vidsToRemove = []
-        for vidPath in allVideoPaths:
-            for vidName in digitExtractor.getNoAnnotVideos():
-                if os.path.splitext(os.path.basename(vidPath))[0] == vidName:
-                    vidsToRemove.append(vidPath)
-        for vidPath in vidsToRemove:
-            allVideoPaths.remove(vidPath)
-
-        print("Without no annotation videos : ",len(allVideoPaths))
+            allVideoPaths = removeVid(allVideoPaths,digitExtractor.getVideosToRemove())
+            allVideoPaths = removeVid(allVideoPaths,formatData.getNoAnnotVideos())
+            allVideoPaths = removeVid(allVideoPaths,formatData.getTooFewPhaseVideos())
 
     if propSetIntFormat:
         propStart /= 100
@@ -327,10 +332,15 @@ def getGT(vidName,dataset):
 
     '''
 
-    if not os.path.exists("../data/{}/annotations/{}_targ.csv".format(dataset,vidName)):
+    datasetList = dataset.split("+")
 
-        phases = np.genfromtxt("../data/{}/annotations/{}_phases.csv".format(dataset,vidName),dtype=str,delimiter=",")
+    for dataset in datasetList:
+        if os.path.exists("../data/{}/annotations/{}_phases.csv".format(dataset,vidName)):
+            datasetOfTheVideo = dataset
 
+    if not os.path.exists("../data/{}/annotations/{}_targ.csv".format(datasetOfTheVideo,vidName)):
+
+        phases = np.genfromtxt("../data/{}/annotations/{}_phases.csv".format(datasetOfTheVideo,vidName),dtype=str,delimiter=",")
         gt = np.zeros((int(phases[-1,-1])+1))
 
         for phase in phases:
@@ -338,9 +348,9 @@ def getGT(vidName,dataset):
 
             gt[int(phase[1]):int(phase[2])+1] = formatData.getLabels()[phase[0]]
 
-        np.savetxt("../data/{}/annotations/{}_targ.csv".format(dataset,vidName),gt)
+        np.savetxt("../data/{}/annotations/{}_targ.csv".format(datasetOfTheVideo,vidName),gt)
     else:
-        gt = np.genfromtxt("../data/{}/annotations/{}_targ.csv".format(dataset,vidName))
+        gt = np.genfromtxt("../data/{}/annotations/{}_targ.csv".format(datasetOfTheVideo,vidName))
 
     return gt.astype(int)
 
