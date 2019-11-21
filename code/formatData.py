@@ -19,11 +19,16 @@ def getTooFewPhaseVideos(nbMinimumPhases):
 
 	tooFewPhaseVids = []
 
-	for vidPath in sorted(glob.glob("../data/*/annotations/*_phases.csv")):
-		csv = np.genfromtxt(vidPath,delimiter=",")
+	for vidPath in sorted(glob.glob("../data/*/*.avi")):
 
-		if len(csv.shape) < 2 or len(csv) < nbMinimumPhases:
-			tooFewPhaseVids.append(os.path.splitext(os.path.basename(vidPath))[0])
+		vidName = os.path.splitext(os.path.basename(vidPath))[0]
+		annotPath = os.path.join(os.path.dirname(vidPath),"annotations","{}_phases.csv".format(vidName))
+
+		if os.path.exists(annotPath):
+			csv = np.genfromtxt(annotPath,delimiter=",")
+
+			if len(csv.shape) < 2 or len(csv) < nbMinimumPhases:
+				tooFewPhaseVids.append(vidName)
 
 	return tooFewPhaseVids
 
