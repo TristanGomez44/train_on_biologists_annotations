@@ -13,6 +13,20 @@ from shutil import copyfile
 
 labelDict = {"tPB2":0,"tPNa":1,"tPNf":2,"t2":3,"t3":4,"t4":5,"t5":6,"t6":7,"t7":8,"t8":9,"t9+":10,"tM":11,"tSB":12,"tB":13,"tEB":14,"tHB":15}
 
+def getNoAnnotVideos():
+	return np.genfromtxt("../data/noAnnot.csv",dtype=str,delimiter=",")
+def getTooFewPhaseVideos(nbMinimumPhases):
+
+	tooFewPhaseVids = []
+
+	for vidPath in sorted(glob.glob("../data/*/annotations/*_phases.csv")):
+		csv = np.genfromtxt(vidPath,delimiter=",")
+
+		if len(csv.shape) < 2 or len(csv) < nbMinimumPhases:
+			tooFewPhaseVids.append(os.path.splitext(os.path.basename(vidPath))[0])
+
+	return tooFewPhaseVids
+
 def formatDataSmall(dataset,pathToZip,img_for_crop_nb):
 
     #Unziping and renaming the folder
@@ -118,7 +132,7 @@ def formatDataSmall(dataset,pathToZip,img_for_crop_nb):
                     if label in phaseDict.keys():
                         print(label+","+str(phaseDict[label][0])+","+str(phaseDict[label][1]),file=text_file)
 
-def formatDataBig(dataset,pathToFold,img_for_crop_nb):
+def formatDataBig(dataset,pathToFold,img_for_crop_nb,minPhaseNb):
 
     if not os.path.exists("../data/{}/".format(dataset)):
         os.makedirs("../data/{}/".format(dataset))
@@ -168,17 +182,19 @@ def formatDataBig(dataset,pathToFold,img_for_crop_nb):
     multipleAnnot = 'video_name,annot1,annot2,annot3\n'
 
     #Read each video, and write its annotation in the annotations folder
-    noAnnot,multipleAnnot = processVideos(videoPaths,dataset,digExt,labelDict,dfDict,noAnnot,multipleAnnot)
+    noAnnot,multipleAnnot,tooFewPhases = processVideos(videoPaths,dataset,digExt,labelDict,dfDict,noAnnot,multipleAnnot,tooFewPhases,minPhaseNb)
 
-    with open("../data/tooManyAnnot.csv","w") as text_file:
-        print(multipleAnnot,file=text_file)
+    if not os.path.exists("../data/tooManyAnnot.csv"):
+        with open("../data/tooManyAnnot.csv","w") as text_file:
+            print(multipleAnnot,file=text_file)
 
-    print("Missing annot : ",len(noAnnot.split("\n")))
+        print("Missing annot : ",len(noAnnot.split("\n")))
 
-    with open("../data/noAnnot.csv","w") as text_file:
-        print(noAnnot,file=text_file)
+    if not os.path.exists("../data/noAnnot.csv"):
+        with open("../data/noAnnot.csv","w") as text_file:
+            print(noAnnot,file=text_file)
 
-def processVideos(videoPaths,dataset,digExt,labelDict,dfDict,noAnnot,multipleAnnot):
+def processVideos(videoPaths,dataset,digExt,labelDict,dfDict,noAnnot,multipleAnnot,tooFewPhases,minPhaseNb):
 
     for i,vidPath in enumerate(videoPaths):
         if i%10 == 0:
@@ -289,13 +305,14 @@ def processVideos(videoPaths,dataset,digExt,labelDict,dfDict,noAnnot,multipleAnn
                 #Adding the last phase
                 phaseDict[currentLabel] = (startOfCurrentPhase,imgCount-1)
 
-                #Writing the start and end frames of each phase in a csv file
-                with open("../data/{}/annotations/{}_phases.csv".format(dataset,vidName),"w") as text_file:
-                    for label in labelDict.keys():
-                        if label in phaseDict.keys():
-                            print(label+","+str(phaseDict[label][0])+","+str(phaseDict[label][1]),file=text_file)
+                if len(phaseDict.keys())>=minPhaseNb:
+                    #Writing the start and end frames of each phase in a csv file
+                    with open("../data/{}/annotations/{}_phases.csv".format(dataset,vidName),"w") as text_file:
+                        for label in labelDict.keys():
+                            if label in phaseDict.keys():
+                                print(label+","+str(phaseDict[label][0])+","+str(phaseDict[label][1]),file=text_file)
 
-    return noAnnot,multipleAnnot
+    return noAnnot,multipleAnnot,tooFewPhases
 
 def collectAndFormatCSVs(dataset,labelDict):
 
@@ -379,6 +396,7 @@ def main(argv=None):
                                      being formated.',default="")
 
     argreader.parser.add_argument('--img_for_crop_nb',type=int,metavar="NB",help='The number of images from which to extract digits',default=2000)
+    argreader.parser.add_argument('--minimum_phase_nb',type=int,metavar="NB",help='The minimum number of phases a video should have annotated to be taken into account.',default=6)
 
     #Reading the comand row arg
     argreader.getRemainingArgs()
@@ -391,7 +409,7 @@ def main(argv=None):
     if args.dataset == "small":
         formatDataSmall(args.dataset,args.path_to_zip,args.img_for_crop_nb)
     elif args.dataset == "big":
-        formatDataBig(args.dataset,args.path_to_folder,args.img_for_crop_nb)
+        formatDataBig(args.dataset,args.path_to_folder,args.img_for_crop_nb,args.minimum_phase_nb)
 
 if __name__ == "__main__":
     main()

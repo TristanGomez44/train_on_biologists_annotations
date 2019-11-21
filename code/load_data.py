@@ -76,12 +76,12 @@ class SeqTrDataset(torch.utils.data.Dataset):
     - exp_id (str): the name of the experience
     '''
 
-    def __init__(self,dataset,propStart,propEnd,propSetIntFormat,trLen,imgSize,origImgSize,resizeImage,exp_id,augmentData,maskTime):
+    def __init__(self,dataset,propStart,propEnd,propSetIntFormat,trLen,imgSize,origImgSize,resizeImage,exp_id,augmentData,maskTime,minPhaseNb):
 
         super(SeqTrDataset, self).__init__()
 
         self.dataset = dataset
-        self.videoPaths = findVideos(dataset,propStart,propEnd,propSetIntFormat)
+        self.videoPaths = findVideos(dataset,propStart,propEnd,propSetIntFormat,minPhaseNb)
 
         print("Number of training videos : ",len(self.videoPaths))
         self.imgSize = imgSize
@@ -198,11 +198,11 @@ class TestLoader():
     - exp_id (str): the name of the experience
     '''
 
-    def __init__(self,dataset,evalL,propStart,propEnd,propSetIntFormat,imgSize,origImgSize,resizeImage,exp_id,maskTime):
+    def __init__(self,dataset,evalL,propStart,propEnd,propSetIntFormat,imgSize,origImgSize,resizeImage,exp_id,maskTime,minPhaseNb):
         self.dataset = dataset
         self.evalL = evalL
 
-        self.videoPaths = findVideos(dataset,propStart,propEnd,propSetIntFormat)
+        self.videoPaths = findVideos(dataset,propStart,propEnd,propSetIntFormat,minPhaseNb)
         self.exp_id = exp_id
         print("Number of eval videos",len(self.videoPaths))
         normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
@@ -275,7 +275,7 @@ def computeMask(maskTime,imgSize):
 def buildSeqTrainLoader(args):
 
     train_dataset = SeqTrDataset(args.dataset_train,args.train_part_beg,args.train_part_end,args.prop_set_int_fmt,args.tr_len,\
-                                        args.img_size,args.orig_img_size,args.resize_image,args.exp_id,args.augment_data,args.mask_time)
+                                        args.img_size,args.orig_img_size,args.resize_image,args.exp_id,args.augment_data,args.mask_time,args.min_phase_nb)
     sampler = Sampler(len(train_dataset.videoPaths),train_dataset.nbImages,args.tr_len)
     trainLoader = torch.utils.data.DataLoader(dataset=train_dataset,batch_size=args.batch_size,sampler=sampler, collate_fn=collateSeq, # use custom collate function here
                       pin_memory=False,num_workers=args.num_workers)
@@ -294,7 +294,7 @@ def removeVid(videoPaths,videoToRemovePaths):
 
     return videoPaths
 
-def findVideos(dataset,propStart,propEnd,propSetIntFormat=False):
+def findVideos(dataset,propStart,propEnd,propSetIntFormat=False,minimumPhaseNb=6):
 
     #By setting dataset to "small+big", one can combine the two datasets
     datasetList = dataset.split("+")
@@ -307,7 +307,7 @@ def findVideos(dataset,propStart,propEnd,propSetIntFormat=False):
 
             allVideoPaths = removeVid(allVideoPaths,digitExtractor.getVideosToRemove())
             allVideoPaths = removeVid(allVideoPaths,formatData.getNoAnnotVideos())
-            allVideoPaths = removeVid(allVideoPaths,formatData.getTooFewPhaseVideos())
+            allVideoPaths = removeVid(allVideoPaths,formatData.getTooFewPhaseVideos(minimumPhaseNb))
 
     if propSetIntFormat:
         propStart /= 100
@@ -411,6 +411,9 @@ def addArgs(argreader):
     argreader.parser.add_argument('--mask_time', type=args.str2bool, metavar='S',
                         help='To mask the time displayed on the images')
 
+    argreader.parser.add_argument('--min_phase_nb', type=int, metavar='S',
+                        help='The minimum number of phases a video must have to be included in the dataset')
+
     return argreader
 
 if __name__ == "__main__":
@@ -433,9 +436,10 @@ if __name__ == "__main__":
     num_workers = 1
     augmentData = True
     maskTime = True
+    minPhaseNb = 6
 
     train_dataset = SeqTrDataset(dataset_train,train_part_beg,train_part_end,tr_len,\
-                                        img_size,orig_img_size,resize_image,exp_id,augmentData,maskTime)
+                                        img_size,orig_img_size,resize_image,exp_id,augmentData,maskTime,minPhaseNb)
     sampler = Sampler(len(train_dataset.videoPaths),train_dataset.nbImages,tr_len)
     trainLoader = torch.utils.data.DataLoader(dataset=train_dataset,batch_size=batch_size,sampler=sampler, collate_fn=collateSeq, # use custom collate function here
                       pin_memory=False,num_workers=num_workers)
