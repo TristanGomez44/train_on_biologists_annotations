@@ -10,9 +10,6 @@ from scipy import ndimage
 
 imgHeigth = 500
 
-def getNoAnnotVideos():
-	return np.genfromtxt("../data/noAnnot.csv",dtype=str,delimiter=",")
-
 def getVideosToRemove():
 	return ["BE150-1","MZ900-8","NE051-1","ZVDPI098SLIDE2-3","MS288SLIDE1-1","FE14-010","RA444-5"]
 
