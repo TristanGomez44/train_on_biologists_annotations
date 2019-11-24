@@ -59,7 +59,7 @@ def epochSeqTr(model,optim,log_interval,loader, epoch, args,writer,**kwargs):
     allOut = None
     allGT = None
 
-    for batch_idx,(data,target,_,_) in enumerate(loader):
+    for batch_idx,(data,target,_,_,timeElapsedTensor) in enumerate(loader):
 
         if (batch_idx % log_interval == 0):
             print("\t",batch_idx*len(data)*len(data[0]),"/",len(loader.dataset))
@@ -67,9 +67,11 @@ def epochSeqTr(model,optim,log_interval,loader, epoch, args,writer,**kwargs):
         #Puting tensors on cuda
         if args.cuda:
             data, target = data.cuda(), target.cuda()
+            if torch.is_tensor(timeElapsedTensor):
+                timeElapsedTensor = timeElapsedTensor.cuda()
 
         #Computing predictions
-        output = model(data)
+        output = model(data,timeElapsedTensor)
 
         #Computing loss
         output = output[:,args.train_step_to_ignore:output.size(1)-args.train_step_to_ignore]
@@ -219,7 +221,7 @@ def epochSeqVal(model,log_interval,loader, epoch, args,writer,metricEarlyStop,mo
     validBatch = 0
     nbVideos = 0
 
-    for batch_idx, (data,target,vidName,frameInds) in enumerate(loader):
+    for batch_idx, (data,target,vidName,frameInds,timeElapsedTensor) in enumerate(loader):
 
         newVideo = (vidName != precVidName) or videoBegining
 
@@ -228,19 +230,26 @@ def epochSeqVal(model,log_interval,loader, epoch, args,writer,metricEarlyStop,mo
 
         if args.cuda:
             data, target,frameInds = data.cuda(), target.cuda(),frameInds.cuda()
+            if torch.is_tensor(timeElapsedTensor):
+                timeElapsedTensor = timeElapsedTensor.cuda()
 
         feat = model.visualModel(data).data
         update.updateFrameDict(frameIndDict,frameInds,vidName)
 
         if newVideo and not videoBegining:
-            allOutput,nbVideos = update.updateMetrics(args,model,allFeat,allTarget,precVidName,nbVideos,metrDict,outDict,targDict)
+            allOutput,nbVideos = update.updateMetrics(args,model,allFeat,allTimeElapsedTensor,allTarget,precVidName,nbVideos,metrDict,outDict,targDict)
         if newVideo:
             allTarget = target
             allFeat = feat.unsqueeze(0)
+            allTimeElapsedTensor = timeElapsedTensor
+
             videoBegining = False
         else:
             allTarget = torch.cat((allTarget,target),dim=1)
             allFeat = torch.cat((allFeat,feat.unsqueeze(0)),dim=1)
+
+            if torch.is_tensor(allTimeElapsedTensor):
+                allTimeElapsedTensor = torch.cat((allTimeElapsedTensor,timeElapsedTensor),dim=1)
 
         precVidName = vidName
 
@@ -248,7 +257,7 @@ def epochSeqVal(model,log_interval,loader, epoch, args,writer,metricEarlyStop,mo
             break
 
     if not args.debug:
-        allOutput,nbVideos = update.updateMetrics(args,model,allFeat,allTarget,precVidName,nbVideos,metrDict,outDict,targDict)
+        allOutput,nbVideos = update.updateMetrics(args,model,allFeat,allTimeElapsedTensor,allTarget,precVidName,nbVideos,metrDict,outDict,targDict)
 
     for key in outDict.keys():
         fullArr = torch.cat((frameIndDict[key].float(),outDict[key].squeeze(0).squeeze(1)),dim=1)
@@ -529,7 +538,7 @@ def main(argv=None):
     if args.comp_feat:
 
         testLoader = load_data.TestLoader(args.val_l,args.dataset_test,args.test_part_beg,args.test_part_end,args.prop_set_int_fmt,args.img_size,args.orig_img_size,\
-                                          args.resize_image,args.exp_id,args.mask_time,args.min_phase_nb)
+                                          args.resize_image,args.exp_id,args.mask_time_on_image,args.use_time,args.min_phase_nb)
 
         if args.feat != "None":
             featModel = modelBuilder.buildFeatModel(args.feat,args.pretrain_dataset,args.lay_feat_cut)
@@ -564,7 +573,7 @@ def main(argv=None):
 
         valLoader = load_data.TestLoader(args.dataset_val,args.val_l,args.val_part_beg,args.val_part_end,args.prop_set_int_fmt,\
                                             args.img_size,args.orig_img_size,args.resize_image,\
-                                            args.exp_id,args.mask_time,args.min_phase_nb)
+                                            args.exp_id,args.mask_time_on_image,args.use_time,args.min_phase_nb)
 
         #Building the net
         net = modelBuilder.netBuilder(args)
@@ -666,7 +675,7 @@ def main(argv=None):
 
             testLoader = load_data.TestLoader(args.dataset_test,args.val_l,args.test_part_beg,args.test_part_end,args.prop_set_int_fmt,\
                                                 args.img_size,args.orig_img_size,args.resize_image,\
-                                                args.exp_id,args.mask_time)
+                                                args.exp_id,args.mask_time_on_image,args.use_time,args.min_phase_nb)
 
             kwargsTest['loader'] = testLoader
 

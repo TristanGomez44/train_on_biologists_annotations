@@ -10,7 +10,7 @@ plt.switch_backend('agg')
 from sklearn.metrics import roc_auc_score
 import utils
 
-def computeScore(model,allFeats,allTarget,valLTemp,vidName):
+def computeScore(model,allFeats,timeElapsed,allTarget,valLTemp,vidName):
 
     allOutput = None
     splitSizes = [valLTemp for _ in range(allFeats.size(1)//valLTemp)]
@@ -20,11 +20,16 @@ def computeScore(model,allFeats,allTarget,valLTemp,vidName):
 
     chunkList = torch.split(allFeats,split_size_or_sections=splitSizes,dim=1)
 
+    if torch.is_tensor(timeElapsed):
+        timeElapsedChunkList = torch.split(timeElapsed,split_size_or_sections=splitSizes,dim=1)
+    else:
+        timeElapsedChunkList = [None for _ in range(len(chunkList))]
+
     sumSize = 0
 
     for i in range(len(chunkList)):
 
-        output = model.tempModel(chunkList[i],batchSize=1)
+        output = model.tempModel(chunkList[i].squeeze(0),batchSize=1,timeTensor=timeElapsedChunkList[i])
 
         if allOutput is None:
             allOutput = output
@@ -35,9 +40,9 @@ def computeScore(model,allFeats,allTarget,valLTemp,vidName):
 
     return allOutput
 
-def updateMetrics(args,model,allFeat,allTarget,precVidName,nbVideos,metrDict,outDict,targDict):
+def updateMetrics(args,model,allFeat,timeElapsed,allTarget,precVidName,nbVideos,metrDict,outDict,targDict):
 
-    allOutput = computeScore(model,allFeat,allTarget,args.val_l_temp,precVidName)
+    allOutput = computeScore(model,allFeat,timeElapsed,allTarget,args.val_l_temp,precVidName)
 
     if args.compute_metrics_during_eval:
         if args.regression:

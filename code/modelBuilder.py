@@ -50,9 +50,9 @@ class Model(nn.Module):
         self.transMat = torch.zeros((self.tempModel.nbClass,self.tempModel.nbClass))
         self.priors = torch.zeros((self.tempModel.nbClass))
 
-    def forward(self,x):
+    def forward(self,x,otherFeat={}):
         x = self.visualModel(x)
-        x = self.tempModel(x,self.visualModel.batchSize)
+        x = self.tempModel(x,self.visualModel.batchSize,otherFeat)
         return x
 
     def setTransMat(self,transMat):
@@ -108,17 +108,27 @@ class CNN3D(VisualModel):
 
 class TempModel(nn.Module):
 
-    def __init__(self,nbFeat,nbClass,regression):
+    def __init__(self,nbFeat,nbClass,regression,useTime):
         super(TempModel,self).__init__()
         self.nbFeat,self.nbClass,self.regression = nbFeat,nbClass,regression
+        self.useTime = useTime
+
+        if useTime:
+            self.nbFeat += 1
 
     def forward(self,x):
         raise NotImplementedError
 
+    def catWithTimeFeat(self,x,timeTensor):
+        if self.useTime:
+            timeTensor = timeTensor.view(-1).unsqueeze(1)
+            x = torch.cat((x,timeTensor),dim=-1)
+        return x
+
 class LinearTempModel(TempModel):
 
-    def __init__(self,nbFeat,nbClass,regression,dropout):
-        super(LinearTempModel,self).__init__(nbFeat,nbClass,regression)
+    def __init__(self,nbFeat,nbClass,regression,useTime,dropout):
+        super(LinearTempModel,self).__init__(nbFeat,nbClass,regression,useTime)
 
         self.dropout = nn.Dropout(p=dropout)
         if regression:
@@ -126,7 +136,9 @@ class LinearTempModel(TempModel):
         else:
             self.linLay = nn.Linear(self.nbFeat,self.nbClass)
 
-    def forward(self,x,batchSize):
+    def forward(self,x,batchSize,timeTensor=None):
+        x = self.catWithTimeFeat(x,timeTensor)
+
         # NT x D
         x = self.dropout(x)
         x = self.linLay(x)
@@ -141,13 +153,15 @@ class LinearTempModel(TempModel):
 
 class LSTMTempModel(TempModel):
 
-    def __init__(self,nbFeat,nbClass,regression,dropout,nbLayers,nbHidden):
-        super(LSTMTempModel,self).__init__(nbFeat,nbClass,regression)
+    def __init__(self,nbFeat,nbClass,regression,useTime,dropout,nbLayers,nbHidden):
+        super(LSTMTempModel,self).__init__(nbFeat,nbClass,regression,useTime)
 
         self.lstmTempMod = nn.LSTM(input_size=self.nbFeat,hidden_size=nbHidden,num_layers=nbLayers,batch_first=True,dropout=dropout,bidirectional=True)
-        self.linTempMod = LinearTempModel(nbFeat=nbHidden*2,nbClass=self.nbClass,regression=regression,dropout=dropout)
+        self.linTempMod = LinearTempModel(nbFeat=nbHidden*2,nbClass=self.nbClass,regression=regression,useTime=False,dropout=dropout)
 
-    def forward(self,x,batchSize):
+    def forward(self,x,batchSize,timeTensor):
+        x = self.catWithTimeFeat(x,timeTensor)
+
         # NT x D
         x = x.view(batchSize,-1,x.size(-1))
         # N x T x D
@@ -161,14 +175,16 @@ class LSTMTempModel(TempModel):
 
 class ScoreConvTempModel(TempModel):
 
-    def __init__(self,nbFeat,nbClass,regression,dropout,kerSize,chan,biLay,attention):
+    def __init__(self,nbFeat,nbClass,regression,useTime,dropout,kerSize,chan,biLay,attention):
 
-        super(ScoreConvTempModel,self).__init__(nbFeat,nbClass,regression)
+        super(ScoreConvTempModel,self).__init__(nbFeat,nbClass,regression,useTime)
 
-        self.linTempMod = LinearTempModel(nbFeat=nbFeat,nbClass=self.nbClass,dropout=dropout,regression=regression)
+        self.linTempMod = LinearTempModel(nbFeat=self.nbFeat,nbClass=self.nbClass,regression=regression,useTime=False,dropout=dropout)
         self.scoreConv = ScoreConv(kerSize,chan,biLay,attention,regression)
 
-    def forward(self,x,batchSize):
+    def forward(self,x,batchSize,timeTensor):
+        x = self.catWithTimeFeat(x,timeTensor)
+
         # NT x D
         x = self.linTempMod(x,batchSize)
         # N x T x classNb (or N x T in case of regression)
@@ -255,11 +271,11 @@ def netBuilder(args):
 
     ############### Temporal Model #######################
     if args.temp_mod == "lstm":
-        tempModel = LSTMTempModel(nbFeat,args.class_nb,args.regression,args.dropout,args.lstm_lay,args.lstm_hid_size)
+        tempModel = LSTMTempModel(nbFeat,args.class_nb,args.regression,args.use_time,args.dropout,args.lstm_lay,args.lstm_hid_size)
     elif args.temp_mod == "linear":
-        tempModel = LinearTempModel(nbFeat,args.class_nb,args.regression,args.dropout)
+        tempModel = LinearTempModel(nbFeat,args.class_nb,args.regression,args.use_time,args.dropout)
     elif args.temp_mod == "score_conv":
-        tempModel = ScoreConvTempModel(nbFeat,args.class_nb,args.regression,args.dropout,args.score_conv_ker_size,args.score_conv_chan,args.score_conv_bilay,args.score_conv_attention)
+        tempModel = ScoreConvTempModel(nbFeat,args.class_nb,args.regression,args.use_time,args.dropout,args.score_conv_ker_size,args.score_conv_chan,args.score_conv_bilay,args.score_conv_attention)
     else:
         raise ValueError("Unknown temporal model type : ",args.temp_mod)
 
@@ -308,5 +324,8 @@ def addArgs(argreader):
 
     argreader.parser.add_argument('--freeze_visual', type=args.str2bool, metavar='BOOL',
                         help='To freeze the weights of the visual model during training.')
+
+    argreader.parser.add_argument('--use_time', type=args.str2bool, metavar='BOOL',
+                        help='To use the time elapsed of each image as a feature')
 
     return argreader
