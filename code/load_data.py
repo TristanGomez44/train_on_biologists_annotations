@@ -29,6 +29,7 @@ from albumentations import Compose
 import digitExtractor
 import cv2
 
+maxTime = 200
 
 class Sampler(torch.utils.data.sampler.Sampler):
     """ The sampler for the SeqTrDataset dataset
@@ -54,10 +55,18 @@ def collateSeq(batch):
 
     res[0] = torch.cat(res[0],dim=0)
     if not res[1][0] is None:
-        res[1] = torch.cat(res[1],dim=0)
+        try:
+            res[1] = torch.cat(res[1],dim=0)
+        except RuntimeError:
+            print(res[1])
+            print(res[2])
+            sys.exit(0)
 
     if torch.is_tensor(res[2][0]):
         res[2] = torch.cat(res[2],dim=0)
+
+    if torch.is_tensor(res[-1][0]):
+        res[-1] = torch.cat(res[-1],dim=0)
 
     return res
 
@@ -76,7 +85,7 @@ class SeqTrDataset(torch.utils.data.Dataset):
     - exp_id (str): the name of the experience
     '''
 
-    def __init__(self,dataset,propStart,propEnd,propSetIntFormat,trLen,imgSize,origImgSize,resizeImage,exp_id,augmentData,maskTime,minPhaseNb):
+    def __init__(self,dataset,propStart,propEnd,propSetIntFormat,trLen,imgSize,origImgSize,resizeImage,exp_id,augmentData,maskTimeOnImage,useTime,minPhaseNb):
 
         super(SeqTrDataset, self).__init__()
 
@@ -88,20 +97,19 @@ class SeqTrDataset(torch.utils.data.Dataset):
         self.trLen = trLen
         self.nbImages = 0
         self.exp_id = exp_id
+        self.origImgSize = origImgSize
 
         if propStart != propEnd:
             for videoPath in self.videoPaths:
                 fps = utils.getVideoFPS(videoPath)
                 self.nbImages += utils.getVideoFrameNb(videoPath)
 
-        self.normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
-        self.toTensor = torchvision.transforms.ToTensor()
         self.resizeImage = resizeImage
 
         if self.resizeImage:
-            self.reSizeFunc = torchvision.transforms.Compose([torchvision.transforms.ToPILImage(),torchvision.transforms.Resize(imgSize)])
+            self.reSizeTorchFunc = torchvision.transforms.Compose([torchvision.transforms.ToPILImage(),torchvision.transforms.Resize(imgSize)])
         else:
-            self.reSizeFunc = None
+            self.reSizeTorchFunc = None
 
         self.FPSDict = {}
 
@@ -119,8 +127,12 @@ class SeqTrDataset(torch.utils.data.Dataset):
         else:
             self.transf = None
 
-        self.maskTime = maskTime
-        self.mask = computeMask(maskTime,origImgSize)
+        self.maskTimeOnImage = maskTimeOnImage
+        self.mask = computeMask(maskTimeOnImage,origImgSize)
+
+        self.digitExt = digitExtractor.DigitIdentifier(self.dataset)
+
+        self.preproc = PreProcess(useTime,self.maskTimeOnImage,self.mask,self.origImgSize,self.resizeImage,self.reSizeTorchFunc,self.digitExt,augmentData=augmentData,augmentationFunc=self.transf)
 
     def __len__(self):
         return self.nbImages
@@ -145,43 +157,49 @@ class SeqTrDataset(torch.utils.data.Dataset):
         startFrame = torch.randint(0,frameNb-self.trLen,size=(1,))
         frameInds,gt = frameInds[startFrame:startFrame+self.trLen],gt[startFrame:startFrame+self.trLen]
 
+        if len(gt) == 0:
+            print(startFrame,startFrame+self.trLen)
+            print(len(getGT(vidName,self.dataset)))
+            sys.exit(0)
+
         video = pims.Video(self.videoPaths[vidInd])
 
+        return loadFrames_and_process(frameInds,gt,vidName,video,self.preproc)
 
-        def preproc(x):
+class PreProcess():
 
-            x = video[x]
-            if self.maskTime:
-                x = x*self.mask[:,:,np.newaxis]
+    def __init__(self,useTime,maskTimeOnImage,mask,origImgSize,resizeImage,resizeTorchFunc,digitExtr,augmentData=False,augmentationFunc=None):
 
-            #Removing the top part where the name of the video is written
-            x = x[x.shape[0]-self.imgSize:,:]
+        self.useTime = useTime
+        self.maskTimeOnImage = maskTimeOnImage
+        self.origImgSize = origImgSize
+        self.resizeImage = resizeImage
+        self.resizeTorchFunc = resizeTorchFunc
+        self.digitExtr = digitExtr
+        self.transfFunc = augmentationFunc
+        self.augmentData = augmentData
+        self.toTensorFunc = torchvision.transforms.ToTensor()
+        self.normalizeFunc = transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+        self.mask = mask
 
-            if self.resizeImage:
-                bef = x.shape
-                x = np.asarray(self.reSizeFunc(x))
+    def maskTimeOnImageFunc(self,x):
+        if self.maskTimeOnImage:
+            x = x*self.mask[:,:,np.newaxis]
+        return x
 
-            return x[np.newaxis,:,:,0]
+    def removeTopFunc(self,x):
+        #Removing the top part where the name of the video is written
+        x = x[:,x.shape[1]-self.origImgSize:,:]
+        return x
 
-        #Building the frame sequence
-        #The videos are in black and white but there as still encoded using 3 channels
-        #Therefore, the three channels carry the same values
-        frameSeq = np.concatenate(list(map(preproc,np.array(frameInds))),axis=0)
-        # Shape of tensor : T x H x W
-        frameSeq = frameSeq.transpose((1,2,0))
-        # H x W x T
-        if self.augmentData:
-            frameSeq = self.transf(image=frameSeq)["image"]
-        # H x W x T
-        frameSeq = self.toTensor(frameSeq)
-        # T x H x W
-        frameSeq = frameSeq.unsqueeze(1)
-        # T x 1 x H x W
-        frameSeq = frameSeq.expand(frameSeq.size(0),3,frameSeq.size(2),frameSeq.size(3))
-        # T x 3 x H x W
-        frameSeq = torch.cat(list(map(lambda x:self.normalize(x).unsqueeze(0),frameSeq.float())),dim=0)
+    def resizeFunc(self,x):
+        if self.resizeImage:
+            x = np.asarray(self.resizeTorchFunc(x.astype("uint8")))
+        return x[np.newaxis,:,:,0]
 
-        return frameSeq.unsqueeze(0),torch.tensor(gt).unsqueeze(0),vidName,torch.tensor(frameInds).int()
+    def readTimeFunc(self,x):
+        return self.digitExtr.findDigits(x)["time"]
+
 
 class TestLoader():
     '''
@@ -198,34 +216,33 @@ class TestLoader():
     - exp_id (str): the name of the experience
     '''
 
-    def __init__(self,dataset,evalL,propStart,propEnd,propSetIntFormat,imgSize,origImgSize,resizeImage,exp_id,maskTime,minPhaseNb):
+    def __init__(self,dataset,evalL,propStart,propEnd,propSetIntFormat,imgSize,origImgSize,resizeImage,exp_id,maskTimeOnImage,useTime,minPhaseNb):
         self.dataset = dataset
         self.evalL = evalL
 
         self.videoPaths = findVideos(dataset,propStart,propEnd,propSetIntFormat,minPhaseNb)
         self.exp_id = exp_id
         print("Number of eval videos",len(self.videoPaths))
-        normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
 
-        transfList = []
+        self.maskTimeOnImage = maskTimeOnImage
+        self.mask = computeMask(maskTimeOnImage,origImgSize)
 
-        self.maskTime = maskTime
-        self.mask = computeMask(maskTime,origImgSize)
-
-        if maskTime:
-            maskTrans = torchvision.transforms.Lambda(lambda x : x*self.mask[:,:,np.newaxis])
-            transfList.append(maskTrans)
-
-        if resizeImage:
-            resizeTransf = transforms.Compose([torchvision.transforms.ToPILImage(),torchvision.transforms.Resize(imgSize)])
-            transfList.append(resizeTransf)
-
-        self.preproc = transforms.Compose(transfList+[transforms.ToTensor(),normalize])
-
+        self.origImgSize = origImgSize
+        self.imgSize = imgSize
+        self.resizeImage = resizeImage
         self.nbImages = 0
         for videoPath in self.videoPaths:
             fps = utils.getVideoFPS(videoPath)
             self.nbImages += utils.getVideoFrameNb(videoPath)
+
+        self.digitExt = digitExtractor.DigitIdentifier(self.dataset)
+
+        if self.resizeImage:
+            self.reSizeTorchFunc = torchvision.transforms.Compose([torchvision.transforms.ToPILImage(),torchvision.transforms.Resize(imgSize)])
+        else:
+            self.reSizeTorchFunc = None
+
+        self.preproc = PreProcess(useTime,self.maskTimeOnImage,self.mask,self.origImgSize,self.resizeImage,self.reSizeTorchFunc,self.digitExt)
 
     def __iter__(self):
         self.videoInd = 0
@@ -251,8 +268,6 @@ class TestLoader():
 
         frameInds = np.arange(self.currFrameInd,min(self.currFrameInd+L,frameNb))
 
-        frameSeq = torch.cat(list(map(lambda x:self.preproc(video[x][:,:,0:1].repeat(repeats=3,axis=-1)).unsqueeze(0),np.array(frameInds))),dim=0)
-
         gt = getGT(vidName,self.dataset)[self.currFrameInd:min(self.currFrameInd+L,frameNb)]
 
         if frameInds[-1] + 1 == frameNb:
@@ -261,13 +276,47 @@ class TestLoader():
         else:
             self.currFrameInd += L
 
-        return frameSeq.unsqueeze(0),torch.tensor(gt).unsqueeze(0),vidName,torch.tensor(frameInds).int()
+        return loadFrames_and_process(frameInds,gt,vidName,video,self.preproc)
 
-def computeMask(maskTime,imgSize):
-    if maskTime:
+def loadFrames_and_process(frameInds,gt,vidName,video,preproc):
+
+    #removeTopFunc,readTimeFunc,maskTimeOnImageFunc,resizeFunc,toTensorFunc,normalizeFunc,augmentData=False,transfFunc=None
+
+    #Building the frame sequence, remove the top of the video (if required)
+    frameSeq = np.concatenate(list(map(preproc.removeTopFunc,map(lambda x:video[x][np.newaxis],np.array(frameInds)))),axis=0)
+
+    if preproc.useTime:
+        #The time elapsed since begining of the developpement for each image
+        timeElapsed = list(map(preproc.readTimeFunc,frameSeq))
+        timeElapsed = torch.tensor(timeElapsed).unsqueeze(0)/maxTime
+    else:
+        timeElapsed = None
+
+    #Resize the images (if required) and mask the time (if required)
+    frameSeq = np.concatenate(list(map(preproc.resizeFunc,map(preproc.maskTimeOnImageFunc,frameSeq))),axis=0)
+
+    #Those few lines of code convert the numpy array into a torch tensor and normalize them
+    # Shape of tensor : T x H x W
+    frameSeq = frameSeq.transpose((1,2,0))
+    # H x W x T
+    if preproc.augmentData:
+        frameSeq = preproc.transfFunc(image=frameSeq)["image"]
+    # H x W x T
+    frameSeq = preproc.toTensorFunc(frameSeq)
+    # T x H x W
+    frameSeq = frameSeq.unsqueeze(1)
+    # T x 1 x H x W
+    frameSeq = frameSeq.expand(frameSeq.size(0),3,frameSeq.size(2),frameSeq.size(3))
+    # T x 3 x H x W
+    frameSeq = torch.cat(list(map(lambda x:preproc.normalizeFunc(x).unsqueeze(0),frameSeq.float())),dim=0)
+
+    return frameSeq.unsqueeze(0),torch.tensor(gt).unsqueeze(0),vidName,torch.tensor(frameInds).int(),timeElapsed
+
+def computeMask(maskTimeOnImage,imgSize):
+    if maskTimeOnImage:
         mask = np.ones((imgSize,imgSize)).astype("uint8")
-        Y1,Y2 = digitExtractor.getDigitYPos()
-        mask[Y1-12:Y2+12] = 0
+        Y1,Y2 = digitExtractor.getTimeBoxPos()
+        mask[Y1:Y2:] = 0
     else:
         mask = None
     return mask
@@ -275,7 +324,7 @@ def computeMask(maskTime,imgSize):
 def buildSeqTrainLoader(args):
 
     train_dataset = SeqTrDataset(args.dataset_train,args.train_part_beg,args.train_part_end,args.prop_set_int_fmt,args.tr_len,\
-                                        args.img_size,args.orig_img_size,args.resize_image,args.exp_id,args.augment_data,args.mask_time,args.min_phase_nb)
+                                        args.img_size,args.orig_img_size,args.resize_image,args.exp_id,args.augment_data,args.mask_time_on_image,args.use_time,args.min_phase_nb)
     sampler = Sampler(len(train_dataset.videoPaths),train_dataset.nbImages,args.tr_len)
     trainLoader = torch.utils.data.DataLoader(dataset=train_dataset,batch_size=args.batch_size,sampler=sampler, collate_fn=collateSeq, # use custom collate function here
                       pin_memory=False,num_workers=args.num_workers)
@@ -303,11 +352,9 @@ def findVideos(dataset,propStart,propEnd,propSetIntFormat=False,minimumPhaseNb=6
     for dataset in datasetList:
         allVideoPaths += sorted(glob.glob("../data/{}/*.avi".format(dataset)))
 
-        if dataset == "big":
-
-            allVideoPaths = removeVid(allVideoPaths,digitExtractor.getVideosToRemove())
-            allVideoPaths = removeVid(allVideoPaths,formatData.getNoAnnotVideos())
-            allVideoPaths = removeVid(allVideoPaths,formatData.getTooFewPhaseVideos(minimumPhaseNb))
+    allVideoPaths = removeVid(allVideoPaths,digitExtractor.getVideosToRemove())
+    allVideoPaths = removeVid(allVideoPaths,formatData.getNoAnnotVideos())
+    allVideoPaths = removeVid(allVideoPaths,formatData.getTooFewPhaseVideos(minimumPhaseNb))
 
     if propSetIntFormat:
         propStart /= 100
@@ -341,6 +388,7 @@ def getGT(vidName,dataset):
     if not os.path.exists("../data/{}/annotations/{}_targ.csv".format(datasetOfTheVideo,vidName)):
 
         phases = np.genfromtxt("../data/{}/annotations/{}_phases.csv".format(datasetOfTheVideo,vidName),dtype=str,delimiter=",")
+
         gt = np.zeros((int(phases[-1,-1])+1))
 
         for phase in phases:
@@ -408,7 +456,7 @@ def addArgs(argreader):
     argreader.parser.add_argument('--augment_data', type=args.str2bool, metavar='S',
                         help='Set to True to augment the training data with transformations')
 
-    argreader.parser.add_argument('--mask_time', type=args.str2bool, metavar='S',
+    argreader.parser.add_argument('--mask_time_on_image', type=args.str2bool, metavar='S',
                         help='To mask the time displayed on the images')
 
     argreader.parser.add_argument('--min_phase_nb', type=int, metavar='S',
@@ -419,10 +467,10 @@ def addArgs(argreader):
 if __name__ == "__main__":
 
     train_part_beg = 0
-    train_part_end = 0.5
+    train_part_end = 1
     val_part_beg = 0.5
     val_part_end = 1
-    dataset_train = "small"
+    dataset_train = "big"
     dataset_val = "small"
 
     tr_len = 5
@@ -435,22 +483,24 @@ if __name__ == "__main__":
     batch_size = 5
     num_workers = 1
     augmentData = True
-    maskTime = True
+    maskTimeOnImage = True
     minPhaseNb = 6
+    propSetIntFormat = False
+    useTime = True
 
-    train_dataset = SeqTrDataset(dataset_train,train_part_beg,train_part_end,tr_len,\
-                                        img_size,orig_img_size,resize_image,exp_id,augmentData,maskTime,minPhaseNb)
+    train_dataset = SeqTrDataset(dataset_train,train_part_beg,train_part_end,propSetIntFormat,tr_len,\
+                                        img_size,orig_img_size,resize_image,exp_id,augmentData,maskTimeOnImage,useTime,minPhaseNb)
     sampler = Sampler(len(train_dataset.videoPaths),train_dataset.nbImages,tr_len)
     trainLoader = torch.utils.data.DataLoader(dataset=train_dataset,batch_size=batch_size,sampler=sampler, collate_fn=collateSeq, # use custom collate function here
                       pin_memory=False,num_workers=num_workers)
 
     for batch in trainLoader:
-        print(batch[0].shape,batch[1].shape,batch[2])
+        print(batch[0].shape,batch[1].shape,batch[2],batch[-1])
         break
 
-    valLoader = TestLoader(dataset_val,val_l,val_part_beg,val_part_end,\
+    valLoader = TestLoader(dataset_val,val_l,val_part_beg,val_part_end,propSetIntFormat,\
                                         img_size,orig_img_size,resize_image,\
-                                        exp_id,maskTime)
+                                        exp_id,maskTimeOnImage,useTime,minPhaseNb)
 
     for batch in valLoader:
         print(batch[0].shape,batch[1].shape,batch[2],batch[3])
