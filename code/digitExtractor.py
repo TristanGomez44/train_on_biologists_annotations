@@ -13,6 +13,9 @@ imgHeigth = 500
 def getVideosToRemove():
 	return ["BE150-1","MZ900-8","NE051-1","ZVDPI098SLIDE2-3","MS288SLIDE1-1","FE14-010","RA444-5"]
 
+def getTimeBoxPos():
+	return -50,-50
+
 def clusterDigits(dataset,imgNb):
 	"""	Extract digits from embryo images in the ../data/ folder and cluster them using k-means
 
@@ -208,7 +211,9 @@ def computeGradMag(img):
 def processFrame(img,dataset,totalCountDict=None,requiredImgNb=None,extractWellId=False,write=True):
 
 	if not extractWellId:
-		img = (img[-50:,-50:].mean(axis=-1)).astype("uint8")
+
+		timePosX,timePosY = getTimeBoxPos()
+		img = (img[timePosX:,timePosY:].mean(axis=-1)).astype("uint8")
 	else:
 		img = (img[-50:,:70].mean(axis=-1)).astype("uint8")
 
@@ -285,56 +290,6 @@ def processFrame(img,dataset,totalCountDict=None,requiredImgNb=None,extractWellI
 			resDict[digitName] = dig
 
 	return resDict
-
-def computeRealFrameRate(vidPaths,dataset,neigbhorsNb):
-
-	digitIdentif = DigitIdentifier(dataset,neigbhorsNb)
-
-	realFrameRateCsv = 'video_name,real_frame_rate\n'
-
-	for vidInd in range(len(vidPaths)):
-
-		if vidInd%10==0:
-			print(vidPaths[vidInd])
-
-		cap = cv2.VideoCapture(vidPaths[vidInd])
-		ret, frame = cap.read()
-		frameInd = 0
-
-		resDict = digitIdentif.findDigits(frame)
-		lastTime = resDict["time"]
-		lastTimeFrameInd = 0
-		startTime = resDict["time"]
-
-		enoughImgParsed	= False
-
-		while ret and not enoughImgParsed:
-
-			#If the current time is now inferior to the preceding one, it means it has got above 99,
-			#(as we only check the three first digits) so we should stop
-			if resDict["time"] < lastTime:
-				enoughImgParsed = True
-			else:
-				resDict = digitIdentif.findDigits(frame)
-				lastTime = resDict["time"]
-				lastTimeFrameInd = frameInd
-				print(lastTime,frameInd)
-			#Fast forward in the video
-			for _ in range(10):
-				if ret:
-					frameInd += 1
-					ret, frame = cap.read()
-
-		endTime = lastTime
-
-		realFrameRate = (endTime - startTime)/(frameInd+1)
-
-		realFrameRateCsv += os.path.splitext(os.path.basename(vidPaths[vidInd]))[0]+","+str(realFrameRate)+"\n"
-
-		sys.exit(0)
-
-	with open("../data/{}/annotations/realFrameRate.csv".format(dataset),"w") as text_file:
-		print(realFrameRateCsv,file=text_file)
 
 class DigitIdentifier:
 	""" This class extracts the digits of an image
