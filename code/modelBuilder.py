@@ -8,7 +8,7 @@ import vgg
 import args
 import sys
 
-def buildFeatModel(featModelName):
+def buildFeatModel(featModelName,featMap=False,bigMaps=False):
     ''' Build a visual feature model
 
     Args:
@@ -18,11 +18,11 @@ def buildFeatModel(featModelName):
 
     '''
     if featModelName.find("resnet") != -1:
-        featModel = getattr(resnet,featModelName)(pretrained=True)
+        featModel = getattr(resnet,featModelName)(pretrained=True,featMap=featMap,bigMaps=bigMaps)
     elif featModelName == "r2plus1d_18":
-        featModel = getattr(resnet3D,featModelName)(pretrained=True)
+        featModel = getattr(resnet3D,featModelName)(pretrained=True,featMap=featMap,bigMaps=bigMaps)
     elif featModelName.find("vgg") != -1:
-        featModel = getattr(vgg,featModelName)(pretrained=True)
+        featModel = getattr(vgg,featModelName)(pretrained=True,featMap=featMap,bigMaps=bigMaps)
     else:
         raise ValueError("Unknown model type : ",featModelName)
 
@@ -50,9 +50,9 @@ class Model(nn.Module):
         self.transMat = torch.zeros((self.tempModel.nbClass,self.tempModel.nbClass))
         self.priors = torch.zeros((self.tempModel.nbClass))
 
-    def forward(self,x,otherFeat={}):
+    def forward(self,x,timeElapsed=None):
         x = self.visualModel(x)
-        x = self.tempModel(x,self.visualModel.batchSize,otherFeat)
+        x = self.tempModel(x,self.visualModel.batchSize,timeElapsed)
         return x
 
     def setTransMat(self,transMat):
@@ -64,18 +64,19 @@ class Model(nn.Module):
 
 class VisualModel(nn.Module):
 
-    def __init__(self,featModelName):
+    def __init__(self,featModelName,featMap=False,bigMaps=False):
         super(VisualModel,self).__init__()
 
-        self.featMod = buildFeatModel(featModelName)
-
+        self.featMod = buildFeatModel(featModelName,featMap,bigMaps)
+        self.featMap = featMap
+        self.bigMaps = bigMaps
     def forward(self,x):
         raise NotImplementedError
 
 class CNN2D(VisualModel):
 
-    def __init__(self,featModelName):
-        super(CNN2D,self).__init__(featModelName)
+    def __init__(self,featModelName,featMap=False,bigMaps=False):
+        super(CNN2D,self).__init__(featModelName,featMap,bigMaps)
 
     def forward(self,x):
         # N x T x C x H x L
@@ -88,20 +89,29 @@ class CNN2D(VisualModel):
 
 class CNN3D(VisualModel):
 
-    def __init__(self,featModelName):
-        super(CNN3D,self).__init__(featModelName)
+    def __init__(self,featModelName,featMap=False,bigMaps=False):
+        super(CNN3D,self).__init__(featModelName,featMap,bigMaps)
 
     def forward(self,x):
         # N x T x C x H x L
         self.batchSize = x.size(0)
         x = x.permute(0,2,1,3,4)
         # N x C x T x H x L
+
         x = self.featMod(x)
-        # N x D x T
-        x = x.permute(0,2,1)
-        # N x T x D
-        x = x.contiguous().view(x.size(0)*x.size(1),-1)
-        # NT x D
+
+        if self.featMap:
+            # N x D x T x H x L
+            x = x.permute(0,2,1,3,4)
+            # N x T x D x H x L
+            x = x.contiguous().view(x.size(0)*x.size(1),x.size(2),x.size(3),x.size(4))
+            # NT x D x H x L
+        else:
+            # N x D x T
+            x = x.permute(0,2,1)
+            # N x T x D
+            x = x.contiguous().view(x.size(0)*x.size(1),-1)
+            # NT x D
         return x
 
 ################################ Temporal Model ########################""
@@ -149,7 +159,8 @@ class LinearTempModel(TempModel):
         else:
             #N x T x classNb
             x = x.view(batchSize,-1,self.nbClass)
-        return x
+
+        return {"pred":x}
 
 class LSTMTempModel(TempModel):
 
@@ -171,7 +182,7 @@ class LSTMTempModel(TempModel):
         # NT x H
         x = self.linTempMod(x,batchSize)
         # N x T x classNb (or N x T in case of regression)
-        return x
+        return {"pred":x}
 
 class ScoreConvTempModel(TempModel):
 
@@ -202,7 +213,7 @@ class ScoreConvTempModel(TempModel):
             x = x.squeeze(2)
             #N x T
 
-        return x
+        return {"pred":x}
 
 class ScoreConv(nn.Module):
     ''' This is a module that reads the classes scores just before they are passed to the softmax by
@@ -247,6 +258,27 @@ class ScoreConv(nn.Module):
             weights = self.layers(x)
             return weights*x
 
+class Attention(TempModel):
+
+    def __init__(self,nbFeat,nbClass,attKerSize):
+        super(Attention,self).__init__(nbFeat,nbClass,False,False)
+
+        self.classConv = nn.Conv2d(nbFeat,nbClass,1)
+        self.attention = nn.Conv2d(nbClass,nbClass,attKerSize,padding=attKerSize//2,groups=nbClass)
+        self.nbClass = nbClass
+
+    def forward(self,x,batchSize,timeTensor):
+
+        x = self.classConv(x)
+        attWeight = torch.sigmoid(self.attention(x))
+        x = x*attWeight
+        x = x.sum(dim=-1).sum(dim=-1)
+
+        x = x.view(batchSize,-1,self.nbClass)
+        attWeight = attWeight.view(batchSize,-1,self.nbClass,attWeight.size(-2),attWeight.size(-1))
+
+        return {"pred":x,"attention":attWeight}
+
 def netBuilder(args):
 
     ############### Visual Model #######################
@@ -255,13 +287,13 @@ def netBuilder(args):
             nbFeat = 256*2**(4-1)
         else:
             nbFeat = 64*2**(4-1)
-        visualModel = CNN2D(args.feat)
+        visualModel = CNN2D(args.feat,featMap=args.temp_mod == "feat_attention",bigMaps=args.temp_mod == "feat_attention")
     elif args.feat.find("vgg") != -1:
         nbFeat = 4096
-        visualModel = CNN2D(args.feat)
+        visualModel = CNN2D(args.feat,featMap=args.temp_mod == "feat_attention",bigMaps=args.temp_mod == "feat_attention")
     elif args.feat == "r2plus1d_18":
         nbFeat = 512
-        visualModel = CNN3D(args.feat)
+        visualModel = CNN3D(args.feat,featMap=args.temp_mod == "feat_attention",bigMaps=args.temp_mod == "feat_attention")
     else:
         raise ValueError("Unknown visual model type : ",args.feat)
 
@@ -276,10 +308,13 @@ def netBuilder(args):
         tempModel = LinearTempModel(nbFeat,args.class_nb,args.regression,args.use_time,args.dropout)
     elif args.temp_mod == "score_conv":
         tempModel = ScoreConvTempModel(nbFeat,args.class_nb,args.regression,args.use_time,args.dropout,args.score_conv_ker_size,args.score_conv_chan,args.score_conv_bilay,args.score_conv_attention)
+    elif args.temp_mod == "feat_attention":
+        tempModel = Attention(nbFeat,args.class_nb,args.feat_attention_ker_size)
     else:
         raise ValueError("Unknown temporal model type : ",args.temp_mod)
 
     ############### Whole Model ##########################
+
     net = Model(visualModel,tempModel)
 
     if args.multi_gpu:
@@ -327,5 +362,8 @@ def addArgs(argreader):
 
     argreader.parser.add_argument('--use_time', type=args.str2bool, metavar='BOOL',
                         help='To use the time elapsed of each image as a feature')
+
+    argreader.parser.add_argument('--feat_attention_ker_size', type=int, metavar='BOOL',
+                        help='The kernel size of the feature attention.')
 
     return argreader

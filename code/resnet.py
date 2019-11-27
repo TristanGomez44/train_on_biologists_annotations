@@ -118,7 +118,7 @@ class Bottleneck(nn.Module):
 
 class ResNet(nn.Module):
 
-    def __init__(self, block, layers, num_classes=1000, zero_init_residual=False, norm_layer=None,maxPoolKer=(3,3),maxPoolPad=(1,1),stride=(2,2),featMap=False,chan=64,inChan=3,dilation=1):
+    def __init__(self, block, layers, num_classes=1000, zero_init_residual=False, norm_layer=None,maxPoolKer=(3,3),maxPoolPad=(1,1),stride=(2,2),featMap=False,chan=64,inChan=3,dilation=1,bigMaps=False):
         super(ResNet, self).__init__()
         if norm_layer is None:
             norm_layer = nn.BatchNorm2d
@@ -128,9 +128,9 @@ class ResNet(nn.Module):
         self.relu = nn.ReLU(inplace=True)
         self.maxpool = nn.MaxPool2d(kernel_size=maxPoolKer, stride=stride, padding=maxPoolPad)
         self.layer1 = self._make_layer(block, chan*1, layers[0], stride=1,      norm_layer=norm_layer,feat=False)
-        self.layer2 = self._make_layer(block, chan*2, layers[1], stride=stride, norm_layer=norm_layer,feat=False,dilation=dilation)
-        self.layer3 = self._make_layer(block, chan*4, layers[2], stride=stride, norm_layer=norm_layer,feat=False,dilation=dilation)
-        self.layer4 = self._make_layer(block, chan*8, layers[3], stride=stride, norm_layer=norm_layer,feat=True,dilation=dilation)
+        self.layer2 = self._make_layer(block, chan*2, layers[1], stride=1 if bigMaps else stride, norm_layer=norm_layer,feat=False,dilation=dilation)
+        self.layer3 = self._make_layer(block, chan*4, layers[2], stride=1 if bigMaps else stride, norm_layer=norm_layer,feat=False,dilation=dilation)
+        self.layer4 = self._make_layer(block, chan*8, layers[3], stride=1 if bigMaps else stride, norm_layer=norm_layer,feat=True,dilation=dilation)
         self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
         self.fc = nn.Linear(chan*8 * block.expansion, num_classes)
 

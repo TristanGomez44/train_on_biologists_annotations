@@ -23,10 +23,11 @@ model_urls = {
 
 class VGG(nn.Module):
 
-    def __init__(self, features, num_classes=1000, init_weights=True):
+    def __init__(self, features, num_classes=1000, init_weights=True,featMap=False,bigMaps=False):
         super(VGG, self).__init__()
         self.features = features
         self.avgpool = nn.AdaptiveAvgPool2d((7, 7))
+        self.bigMaps = bigMaps
         self.classifier = nn.Sequential(
             nn.Linear(512 * 7 * 7, 4096),
             nn.ReLU(True),
@@ -39,17 +40,34 @@ class VGG(nn.Module):
         if init_weights:
             self._initialize_weights()
 
-    def forward(self, x):
-        x = self.features(x)
-        x = self.avgpool(x)
-        x = torch.flatten(x, 1)
+        self.featMap = featMap
 
-        #Not applying the last softmax layer
-        i=0
-        while i < 4:
-            x = self.classifier[i](x)
-            i += 1
-        return x
+    def forward(self, x):
+
+        if not self.bigMaps:
+            x = self.features(x)
+        else:
+            maxPlCount = 0
+            for layer in self.features:
+                if self.bigMaps and type(layer) is nn.MaxPool2d:
+                    if maxPlCount < 2:
+                        x = layer(x)
+                        maxPlCount += 1
+                else:
+                    x = layer(x)
+
+        if not self.featMap:
+            x = self.avgpool(x)
+            x = torch.flatten(x, 1)
+
+            #Not applying the last softmax layer
+            i=0
+            while i < 4:
+                x = self.classifier[i](x)
+                i += 1
+            return x
+        else:
+            return x
 
     def _initialize_weights(self):
         for m in self.modules():
@@ -78,6 +96,7 @@ def make_layers(cfg, batch_norm=False):
             else:
                 layers += [conv2d, nn.ReLU(inplace=True)]
             in_channels = v
+    print(len(layers))
     return nn.Sequential(*layers)
 
 
@@ -89,7 +108,7 @@ cfgs = {
 }
 
 
-def _vgg(arch, cfg, batch_norm, pretrained, progress, **kwargs):
+def _vgg(arch, cfg, batch_norm, pretrained, progress,**kwargs):
     if pretrained:
         kwargs['init_weights'] = False
     model = VGG(make_layers(cfgs[cfg], batch_norm=batch_norm), **kwargs)
@@ -138,25 +157,24 @@ def vgg13_bn(pretrained=False, progress=True, **kwargs):
     return _vgg('vgg13_bn', 'B', True, pretrained, progress, **kwargs)
 
 
-def vgg16(pretrained=False, progress=True, **kwargs):
+def vgg16(pretrained=False, progress=True,**kwargs):
     r"""VGG 16-layer model (configuration "D")
     `"Very Deep Convolutional Networks For Large-Scale Image Recognition" <https://arxiv.org/pdf/1409.1556.pdf>`_
     Args:
         pretrained (bool): If True, returns a model pre-trained on ImageNet
         progress (bool): If True, displays a progress bar of the download to stderr
     """
-    return _vgg('vgg16', 'D', False, pretrained, progress, **kwargs)
+    return _vgg('vgg16', 'D', False, pretrained, progress,**kwargs)
 
 
-def vgg16_bn(pretrained=False, progress=True, **kwargs):
+def vgg16_bn(pretrained=False, progress=True,**kwargs):
     r"""VGG 16-layer model (configuration "D") with batch normalization
     `"Very Deep Convolutional Networks For Large-Scale Image Recognition" <https://arxiv.org/pdf/1409.1556.pdf>`_
     Args:
         pretrained (bool): If True, returns a model pre-trained on ImageNet
         progress (bool): If True, displays a progress bar of the download to stderr
     """
-    return _vgg('vgg16_bn', 'D', True, pretrained, progress, **kwargs)
-
+    return _vgg('vgg16_bn', 'D', True, pretrained, progress,**kwargs)
 
 def vgg19(pretrained=False, progress=True, **kwargs):
     r"""VGG 19-layer model (configuration "E")

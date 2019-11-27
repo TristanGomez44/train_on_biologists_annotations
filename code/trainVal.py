@@ -66,12 +66,12 @@ def epochSeqTr(model,optim,log_interval,loader, epoch, args,writer,**kwargs):
 
         #Puting tensors on cuda
         if args.cuda:
-            data, target = data.cuda(), target.cuda()
-            if torch.is_tensor(timeElapsedTensor):
-                timeElapsedTensor = timeElapsedTensor.cuda()
+            data, target,timeElapsedTensor = data.cuda(), target.cuda(),timeElapsedTensor.cuda()
 
         #Computing predictions
-        output = model(data,timeElapsedTensor)
+        outputDict = model(data,timeElapsedTensor)
+
+        output = outputDict["pred"]
 
         #Computing loss
         output = output[:,args.train_step_to_ignore:output.size(1)-args.train_step_to_ignore]
@@ -213,8 +213,13 @@ def epochSeqVal(model,log_interval,loader, epoch, args,writer,metricEarlyStop,mo
 
     nbVideos = 0
 
-    outDict = {}
-    targDict = {}
+    outDict,targDict = {},{}
+
+    if args.temp_mod == "feat_attention":
+        attMapDict = {}
+    else:
+        attMapDict = None
+
     frameIndDict = {}
     precVidName = "None"
     videoBegining = True
@@ -229,15 +234,13 @@ def epochSeqVal(model,log_interval,loader, epoch, args,writer,metricEarlyStop,mo
             print("\t",loader.sumL+1,"/",loader.nbImages)
 
         if args.cuda:
-            data, target,frameInds = data.cuda(), target.cuda(),frameInds.cuda()
-            if torch.is_tensor(timeElapsedTensor):
-                timeElapsedTensor = timeElapsedTensor.cuda()
+            data, target,frameInds,timeElapsedTensor = data.cuda(), target.cuda(),frameInds.cuda(),timeElapsedTensor.cuda()
 
         feat = model.visualModel(data).data
         update.updateFrameDict(frameIndDict,frameInds,vidName)
 
         if newVideo and not videoBegining:
-            allOutput,nbVideos = update.updateMetrics(args,model,allFeat,allTimeElapsedTensor,allTarget,precVidName,nbVideos,metrDict,outDict,targDict)
+            allOutput,nbVideos = update.updateMetrics(args,model,allFeat,allTimeElapsedTensor,allTarget,precVidName,nbVideos,metrDict,outDict,targDict,attMapDict)
         if newVideo:
             allTarget = target
             allFeat = feat.unsqueeze(0)
@@ -257,7 +260,7 @@ def epochSeqVal(model,log_interval,loader, epoch, args,writer,metricEarlyStop,mo
             break
 
     if not args.debug:
-        allOutput,nbVideos = update.updateMetrics(args,model,allFeat,allTimeElapsedTensor,allTarget,precVidName,nbVideos,metrDict,outDict,targDict)
+        allOutput,nbVideos = update.updateMetrics(args,model,allFeat,allTimeElapsedTensor,allTarget,precVidName,nbVideos,metrDict,outDict,targDict,attMapDict)
 
     for key in outDict.keys():
         fullArr = torch.cat((frameIndDict[key].float(),outDict[key].squeeze(0).squeeze(1)),dim=1)
@@ -265,7 +268,7 @@ def epochSeqVal(model,log_interval,loader, epoch, args,writer,metricEarlyStop,mo
 
     writeSummaries(metrDict,validBatch,writer,epoch,mode,args.model_id,args.exp_id,nbVideos=nbVideos)
 
-    return outDict,targDict,metrDict[metricEarlyStop]
+    return outDict,targDict,attMapDict,metrDict[metricEarlyStop]
 
 def writeSummaries(metrDict,batchNb,writer,epoch,mode,model_id,exp_id,nbVideos=None):
     ''' Write the metric computed during an evaluation in a tf writer and in a csv file
@@ -382,13 +385,15 @@ def initialize_Net_And_EpochNumber(net,exp_id,model_id,cuda,start_mode,init_path
         for key in keysToRemove:
             params.pop(key)
 
-        def checkAndReplace(key):
-            if key.find("tempModel.linLay") != -1:
-                key = key.replace("tempModel.linLay","tempModel.linTempMod.linLay")
 
-            return key
+        if hasattr(net,"tempModel"):
+            if not hasattr(net.tempModel,"linLay"):
+                def checkAndReplace(key):
+                    if key.find("tempModel.linLay") != -1:
+                        key = key.replace("tempModel.linLay","tempModel.linTempMod.linLay")
+                    return key
 
-        params = {checkAndReplace(k):params[k] for k in params.keys()}
+                params = {checkAndReplace(k):params[k] for k in params.keys()}
 
         missingKeys,unExpectedKeys = net.load_state_dict(params,strict)
         print("missing keys",missingKeys)
@@ -433,6 +438,10 @@ def evalAllImages(exp_id,model_id,model,testLoader,cuda,log_interval):
             if not os.path.exists("../results/{}/{}/{}_{}.csv".format(exp_id,vidName,imageName,model_id)):
 
                 np.savetxt("../results/{}/{}/{}_{}.csv".format(exp_id,vidName,imageName,model_id),feat.detach().cpu().numpy())
+
+def saveAttMaps(attMapDict,exp_id,model_id,epoch):
+    for videoName in attMapDict.keys():
+        torch.save(attMapDict[videoName].squeeze(0),"../results/{}/{}_{}_epoch{}.pth".format(exp_id,model_id,videoName,epoch))
 
 def addInitArgs(argreader):
     argreader.parser.add_argument('--start_mode', type=str,metavar='SM',
@@ -538,7 +547,7 @@ def main(argv=None):
     if args.comp_feat:
 
         testLoader = load_data.TestLoader(args.val_l,args.dataset_test,args.test_part_beg,args.test_part_end,args.prop_set_int_fmt,args.img_size,args.orig_img_size,\
-                                          args.resize_image,args.exp_id,args.mask_time_on_image,args.use_time,args.min_phase_nb)
+                                          args.resize_image,args.exp_id,args.mask_time_on_image,args.min_phase_nb)
 
         if args.feat != "None":
             featModel = modelBuilder.buildFeatModel(args.feat,args.pretrain_dataset,args.lay_feat_cut)
@@ -573,7 +582,7 @@ def main(argv=None):
 
         valLoader = load_data.TestLoader(args.dataset_val,args.val_l,args.val_part_beg,args.val_part_end,args.prop_set_int_fmt,\
                                             args.img_size,args.orig_img_size,args.resize_image,\
-                                            args.exp_id,args.mask_time_on_image,args.use_time,args.min_phase_nb)
+                                            args.exp_id,args.mask_time_on_image,args.min_phase_nb)
 
         #Building the net
         net = modelBuilder.netBuilder(args)
@@ -607,9 +616,6 @@ def main(argv=None):
             args.lr = [args.lr]
 
         lrCounter = 0
-
-        outDictEpochs = {}
-        targDictEpochs = {}
 
         transMat,priors = computeTransMat(args.dataset_train,net.transMat,net.priors,args.train_part_beg,args.train_part_end)
         net.setTransMat(transMat)
@@ -652,9 +658,10 @@ def main(argv=None):
                 net.load_state_dict(torch.load("../models/{}/model{}_epoch{}".format(args.no_train[0],args.no_train[1],epoch)))
 
             with torch.no_grad():
-                outDict,targDict,metricVal = valFunc(**kwargsVal)
-            outDictEpochs[epoch] = outDict
-            targDictEpochs[epoch] = targDict
+                _,_,attMapDict,metricVal = valFunc(**kwargsVal)
+
+            if not attMapDict is None:
+                saveAttMaps(attMapDict,args.exp_id,args.model_id,epoch)
 
             if isBetter(metricVal,bestMetricVal):
                 if os.path.exists("../models/{}/model{}_best_epoch{}".format(args.exp_id,args.model_id,bestEpoch)):
@@ -675,7 +682,7 @@ def main(argv=None):
 
             testLoader = load_data.TestLoader(args.dataset_test,args.val_l,args.test_part_beg,args.test_part_end,args.prop_set_int_fmt,\
                                                 args.img_size,args.orig_img_size,args.resize_image,\
-                                                args.exp_id,args.mask_time_on_image,args.use_time,args.min_phase_nb)
+                                                args.exp_id,args.mask_time_on_image,args.min_phase_nb)
 
             kwargsTest['loader'] = testLoader
 
@@ -683,7 +690,10 @@ def main(argv=None):
             kwargsTest["model"] = net
 
             with torch.no_grad():
-                outDict,targDict,_ = valFunc(**kwargsTest)
+                _,_,attMapDict,_ = valFunc(**kwargsTest)
+
+            if not attMapDict is None:
+                saveAttMaps(attMapDict,args.exp_id,args.model_id,epoch)
 
 if __name__ == "__main__":
     main()

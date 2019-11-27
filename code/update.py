@@ -9,10 +9,11 @@ import matplotlib.pyplot as plt
 plt.switch_backend('agg')
 from sklearn.metrics import roc_auc_score
 import utils
+import sys
 
 def computeScore(model,allFeats,timeElapsed,allTarget,valLTemp,vidName):
 
-    allOutput = None
+    allOutput = {"allPred":None}
     splitSizes = [valLTemp for _ in range(allFeats.size(1)//valLTemp)]
 
     if allFeats.size(1)%valLTemp > 0:
@@ -20,10 +21,7 @@ def computeScore(model,allFeats,timeElapsed,allTarget,valLTemp,vidName):
 
     chunkList = torch.split(allFeats,split_size_or_sections=splitSizes,dim=1)
 
-    if torch.is_tensor(timeElapsed):
-        timeElapsedChunkList = torch.split(timeElapsed,split_size_or_sections=splitSizes,dim=1)
-    else:
-        timeElapsedChunkList = [None for _ in range(len(chunkList))]
+    timeElapsedChunkList = torch.split(timeElapsed,split_size_or_sections=splitSizes,dim=1)
 
     sumSize = 0
 
@@ -31,18 +29,21 @@ def computeScore(model,allFeats,timeElapsed,allTarget,valLTemp,vidName):
 
         output = model.tempModel(chunkList[i].squeeze(0),batchSize=1,timeTensor=timeElapsedChunkList[i])
 
-        if allOutput is None:
-            allOutput = output
-        else:
-            allOutput = torch.cat((allOutput,output),dim=1)
+        for tensorName in output.keys():
+            if not tensorName in allOutput.keys():
+                allOutput[tensorName] = output[tensorName]
+            else:
+                allOutput[tensorName] = torch.cat((allOutput[tensorName],output[tensorName]),dim=1)
 
         sumSize += len(chunkList[i])
 
     return allOutput
 
-def updateMetrics(args,model,allFeat,timeElapsed,allTarget,precVidName,nbVideos,metrDict,outDict,targDict):
+def updateMetrics(args,model,allFeat,timeElapsed,allTarget,precVidName,nbVideos,metrDict,outDict,targDict,attMapDict=None):
 
-    allOutput = computeScore(model,allFeat,timeElapsed,allTarget,args.val_l_temp,precVidName)
+    allOutputDict = computeScore(model,allFeat,timeElapsed,allTarget,args.val_l_temp,precVidName)
+
+    allOutput = allOutputDict["pred"]
 
     if args.compute_metrics_during_eval:
         if args.regression:
@@ -63,9 +64,13 @@ def updateMetrics(args,model,allFeat,timeElapsed,allTarget,precVidName,nbVideos,
     outDict[precVidName] = allOutput
     targDict[precVidName] = allTarget
 
+    if not attMapDict is None:
+        attMapDict[precVidName] = allOutputDict["attention"]
+
     nbVideos += 1
 
     return allOutput,nbVideos
+
 def updateFrameDict(frameIndDict,frameInds,vidName):
     ''' Store the prediction of a model in a dictionnary with one entry per movie
 
