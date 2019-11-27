@@ -129,6 +129,7 @@ class SeqTrDataset(torch.utils.data.Dataset):
 
         self.maskTimeOnImage = maskTimeOnImage
         self.mask = computeMask(maskTimeOnImage,origImgSize)
+        self.useTime = useTime
 
         self.digitExt = digitExtractor.DigitIdentifier(self.dataset)
 
@@ -140,7 +141,6 @@ class SeqTrDataset(torch.utils.data.Dataset):
     def __getitem__(self,vidInd):
 
         targ = torch.zeros(self.trLen)
-        vidNames = []
 
         vidName = os.path.basename(os.path.splitext(self.videoPaths[vidInd])[0])
 
@@ -157,14 +157,15 @@ class SeqTrDataset(torch.utils.data.Dataset):
         startFrame = torch.randint(0,frameNb-self.trLen,size=(1,))
         frameInds,gt = frameInds[startFrame:startFrame+self.trLen],gt[startFrame:startFrame+self.trLen]
 
-        if len(gt) == 0:
-            print(startFrame,startFrame+self.trLen)
-            print(len(getGT(vidName,self.dataset)))
-            sys.exit(0)
+        if self.useTime:
+            #The time elapsed since begining of the developpement for each image
+            timeElapsed = np.genfromtxt("../data/{}/annotations/{}_timeElapsed.csv".format(self.dataset,vidName),delimiter=",")[1:][startFrame:startFrame+self.trLen,1]
+        else:
+            timeElapsed = None
 
         video = pims.Video(self.videoPaths[vidInd])
 
-        return loadFrames_and_process(frameInds,gt,vidName,video,self.preproc)
+        return loadFrames_and_process(frameInds,gt,timeElapsed,vidName,video,self.preproc)
 
 class PreProcess():
 
@@ -242,6 +243,7 @@ class TestLoader():
         else:
             self.reSizeTorchFunc = None
 
+        self.useTime = useTime
         self.preproc = PreProcess(useTime,self.maskTimeOnImage,self.mask,self.origImgSize,self.resizeImage,self.reSizeTorchFunc,self.digitExt)
 
     def __iter__(self):
@@ -270,27 +272,26 @@ class TestLoader():
 
         gt = getGT(vidName,self.dataset)[self.currFrameInd:min(self.currFrameInd+L,frameNb)]
 
+        if self.useTime:
+            #The time elapsed since begining of the developpement for each image
+            timeElapsed = np.genfromtxt("../data/{}/annotations/{}_timeElapsed.csv".format(self.dataset,vidName),delimiter=",")[1:][self.currFrameInd:min(self.currFrameInd+L,frameNb),1]
+        else:
+            timeElapsed = None
+
         if frameInds[-1] + 1 == frameNb:
             self.currFrameInd = 0
             self.videoInd += 1
         else:
             self.currFrameInd += L
 
-        return loadFrames_and_process(frameInds,gt,vidName,video,self.preproc)
+        return loadFrames_and_process(frameInds,gt,timeElapsed,vidName,video,self.preproc)
 
-def loadFrames_and_process(frameInds,gt,vidName,video,preproc):
+def loadFrames_and_process(frameInds,gt,timeElapsed,vidName,video,preproc):
 
     #removeTopFunc,readTimeFunc,maskTimeOnImageFunc,resizeFunc,toTensorFunc,normalizeFunc,augmentData=False,transfFunc=None
 
     #Building the frame sequence, remove the top of the video (if required)
     frameSeq = np.concatenate(list(map(preproc.removeTopFunc,map(lambda x:video[x][np.newaxis],np.array(frameInds)))),axis=0)
-
-    if preproc.useTime:
-        #The time elapsed since begining of the developpement for each image
-        timeElapsed = list(map(preproc.readTimeFunc,frameSeq))
-        timeElapsed = torch.tensor(timeElapsed).unsqueeze(0)/maxTime
-    else:
-        timeElapsed = None
 
     #Resize the images (if required) and mask the time (if required)
     frameSeq = np.concatenate(list(map(preproc.resizeFunc,map(preproc.maskTimeOnImageFunc,frameSeq))),axis=0)
@@ -310,7 +311,7 @@ def loadFrames_and_process(frameInds,gt,vidName,video,preproc):
     # T x 3 x H x W
     frameSeq = torch.cat(list(map(lambda x:preproc.normalizeFunc(x).unsqueeze(0),frameSeq.float())),dim=0)
 
-    return frameSeq.unsqueeze(0),torch.tensor(gt).unsqueeze(0),vidName,torch.tensor(frameInds).int(),timeElapsed
+    return frameSeq.unsqueeze(0),torch.tensor(gt).unsqueeze(0),vidName,torch.tensor(frameInds).int(),torch.tensor(timeElapsed).float().unsqueeze(0)
 
 def computeMask(maskTimeOnImage,imgSize):
     if maskTimeOnImage:
