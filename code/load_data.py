@@ -85,7 +85,7 @@ class SeqTrDataset(torch.utils.data.Dataset):
     - exp_id (str): the name of the experience
     '''
 
-    def __init__(self,dataset,propStart,propEnd,propSetIntFormat,trLen,imgSize,origImgSize,resizeImage,exp_id,augmentData,maskTimeOnImage,useTime,minPhaseNb):
+    def __init__(self,dataset,propStart,propEnd,propSetIntFormat,trLen,imgSize,origImgSize,resizeImage,exp_id,augmentData,maskTimeOnImage,minPhaseNb):
 
         super(SeqTrDataset, self).__init__()
 
@@ -129,11 +129,10 @@ class SeqTrDataset(torch.utils.data.Dataset):
 
         self.maskTimeOnImage = maskTimeOnImage
         self.mask = computeMask(maskTimeOnImage,origImgSize)
-        self.useTime = useTime
 
         self.digitExt = digitExtractor.DigitIdentifier(self.dataset)
 
-        self.preproc = PreProcess(useTime,self.maskTimeOnImage,self.mask,self.origImgSize,self.resizeImage,self.reSizeTorchFunc,self.digitExt,augmentData=augmentData,augmentationFunc=self.transf)
+        self.preproc = PreProcess(self.maskTimeOnImage,self.mask,self.origImgSize,self.resizeImage,self.reSizeTorchFunc,self.digitExt,augmentData=augmentData,augmentationFunc=self.transf)
 
     def __len__(self):
         return self.nbImages
@@ -157,11 +156,7 @@ class SeqTrDataset(torch.utils.data.Dataset):
         startFrame = torch.randint(0,frameNb-self.trLen,size=(1,))
         frameInds,gt = frameInds[startFrame:startFrame+self.trLen],gt[startFrame:startFrame+self.trLen]
 
-        if self.useTime:
-            #The time elapsed since begining of the developpement for each image
-            timeElapsed = np.genfromtxt("../data/{}/annotations/{}_timeElapsed.csv".format(self.dataset,vidName),delimiter=",")[1:][startFrame:startFrame+self.trLen,1]
-        else:
-            timeElapsed = None
+        timeElapsed = np.genfromtxt("../data/{}/annotations/{}_timeElapsed.csv".format(self.dataset,vidName),delimiter=",")[1:][startFrame:startFrame+self.trLen,1]
 
         video = pims.Video(self.videoPaths[vidInd])
 
@@ -169,9 +164,8 @@ class SeqTrDataset(torch.utils.data.Dataset):
 
 class PreProcess():
 
-    def __init__(self,useTime,maskTimeOnImage,mask,origImgSize,resizeImage,resizeTorchFunc,digitExtr,augmentData=False,augmentationFunc=None):
+    def __init__(self,maskTimeOnImage,mask,origImgSize,resizeImage,resizeTorchFunc,digitExtr,augmentData=False,augmentationFunc=None):
 
-        self.useTime = useTime
         self.maskTimeOnImage = maskTimeOnImage
         self.origImgSize = origImgSize
         self.resizeImage = resizeImage
@@ -217,7 +211,7 @@ class TestLoader():
     - exp_id (str): the name of the experience
     '''
 
-    def __init__(self,dataset,evalL,propStart,propEnd,propSetIntFormat,imgSize,origImgSize,resizeImage,exp_id,maskTimeOnImage,useTime,minPhaseNb):
+    def __init__(self,dataset,evalL,propStart,propEnd,propSetIntFormat,imgSize,origImgSize,resizeImage,exp_id,maskTimeOnImage,minPhaseNb):
         self.dataset = dataset
         self.evalL = evalL
 
@@ -243,8 +237,7 @@ class TestLoader():
         else:
             self.reSizeTorchFunc = None
 
-        self.useTime = useTime
-        self.preproc = PreProcess(useTime,self.maskTimeOnImage,self.mask,self.origImgSize,self.resizeImage,self.reSizeTorchFunc,self.digitExt)
+        self.preproc = PreProcess(self.maskTimeOnImage,self.mask,self.origImgSize,self.resizeImage,self.reSizeTorchFunc,self.digitExt)
 
     def __iter__(self):
         self.videoInd = 0
@@ -272,11 +265,7 @@ class TestLoader():
 
         gt = getGT(vidName,self.dataset)[self.currFrameInd:min(self.currFrameInd+L,frameNb)]
 
-        if self.useTime:
-            #The time elapsed since begining of the developpement for each image
-            timeElapsed = np.genfromtxt("../data/{}/annotations/{}_timeElapsed.csv".format(self.dataset,vidName),delimiter=",")[1:][self.currFrameInd:min(self.currFrameInd+L,frameNb),1]
-        else:
-            timeElapsed = None
+        timeElapsed = np.genfromtxt("../data/{}/annotations/{}_timeElapsed.csv".format(self.dataset,vidName),delimiter=",")[1:][self.currFrameInd:min(self.currFrameInd+L,frameNb),1]
 
         if frameInds[-1] + 1 == frameNb:
             self.currFrameInd = 0
@@ -325,7 +314,7 @@ def computeMask(maskTimeOnImage,imgSize):
 def buildSeqTrainLoader(args):
 
     train_dataset = SeqTrDataset(args.dataset_train,args.train_part_beg,args.train_part_end,args.prop_set_int_fmt,args.tr_len,\
-                                        args.img_size,args.orig_img_size,args.resize_image,args.exp_id,args.augment_data,args.mask_time_on_image,args.use_time,args.min_phase_nb)
+                                        args.img_size,args.orig_img_size,args.resize_image,args.exp_id,args.augment_data,args.mask_time_on_image,args.min_phase_nb)
     sampler = Sampler(len(train_dataset.videoPaths),train_dataset.nbImages,args.tr_len)
     trainLoader = torch.utils.data.DataLoader(dataset=train_dataset,batch_size=args.batch_size,sampler=sampler, collate_fn=collateSeq, # use custom collate function here
                       pin_memory=False,num_workers=args.num_workers)
@@ -487,10 +476,9 @@ if __name__ == "__main__":
     maskTimeOnImage = True
     minPhaseNb = 6
     propSetIntFormat = False
-    useTime = True
 
     train_dataset = SeqTrDataset(dataset_train,train_part_beg,train_part_end,propSetIntFormat,tr_len,\
-                                        img_size,orig_img_size,resize_image,exp_id,augmentData,maskTimeOnImage,useTime,minPhaseNb)
+                                        img_size,orig_img_size,resize_image,exp_id,augmentData,maskTimeOnImage,minPhaseNb)
     sampler = Sampler(len(train_dataset.videoPaths),train_dataset.nbImages,tr_len)
     trainLoader = torch.utils.data.DataLoader(dataset=train_dataset,batch_size=batch_size,sampler=sampler, collate_fn=collateSeq, # use custom collate function here
                       pin_memory=False,num_workers=num_workers)
@@ -501,7 +489,7 @@ if __name__ == "__main__":
 
     valLoader = TestLoader(dataset_val,val_l,val_part_beg,val_part_end,propSetIntFormat,\
                                         img_size,orig_img_size,resize_image,\
-                                        exp_id,maskTimeOnImage,useTime,minPhaseNb)
+                                        exp_id,maskTimeOnImage,minPhaseNb)
 
     for batch in valLoader:
         print(batch[0].shape,batch[1].shape,batch[2],batch[3])
