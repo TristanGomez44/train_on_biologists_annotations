@@ -39,7 +39,7 @@ def computeScore(model,allFeats,timeElapsed,allTarget,valLTemp,vidName):
 
     return allOutput
 
-def updateMetrics(args,model,allFeat,timeElapsed,allTarget,precVidName,nbVideos,metrDict,outDict,targDict,attMapDict=None):
+def updateMetrics(args,model,allFeat,timeElapsed,allTarget,precVidName,nbVideos,metrDict,outDict,targDict):
 
     allOutputDict = computeScore(model,allFeat,timeElapsed,allTarget,args.val_l_temp,precVidName)
 
@@ -63,9 +63,6 @@ def updateMetrics(args,model,allFeat,timeElapsed,allTarget,precVidName,nbVideos,
 
     outDict[precVidName] = allOutput
     targDict[precVidName] = allTarget
-
-    if not attMapDict is None:
-        attMapDict[precVidName] = allOutputDict["attention"]
 
     nbVideos += 1
 
