@@ -29,9 +29,16 @@ import metrics
 import utils
 import update
 import warnings
-
+import formatData
 from attack import FGSM
-warnings.simplefilter('error', UserWarning)
+import imageio
+
+from skimage import transform,io
+from skimage import img_as_ubyte
+
+import cv2
+
+#warnings.simplefilter('error', UserWarning)
 
 def epochSeqTr(model,optim,log_interval,loader, epoch, args,writer,**kwargs):
     ''' Train a model during one epoch
@@ -69,9 +76,8 @@ def epochSeqTr(model,optim,log_interval,loader, epoch, args,writer,**kwargs):
             data, target,timeElapsedTensor = data.cuda(), target.cuda(),timeElapsedTensor.cuda()
 
         #Computing predictions
-        outputDict = model(data,timeElapsedTensor)
+        output = model(data,timeElapsedTensor)["pred"]
 
-        output = outputDict["pred"]
 
         #Computing loss
         output = output[:,args.train_step_to_ignore:output.size(1)-args.train_step_to_ignore]
@@ -215,12 +221,11 @@ def epochSeqVal(model,log_interval,loader, epoch, args,writer,metricEarlyStop,mo
 
     outDict,targDict = {},{}
 
-    if args.temp_mod == "feat_attention":
-        attMapDict = {}
-    else:
-        attMapDict = None
-
     frameIndDict = {}
+
+    #The writer dict for the attention maps. The will be one writer per class
+    attMapWriterDict = {}
+    revLabelDict = formatData.getReversedLabels()
     precVidName = "None"
     videoBegining = True
     validBatch = 0
@@ -236,11 +241,16 @@ def epochSeqVal(model,log_interval,loader, epoch, args,writer,metricEarlyStop,mo
         if args.cuda:
             data, target,frameInds,timeElapsedTensor = data.cuda(), target.cuda(),frameInds.cuda(),timeElapsedTensor.cuda()
 
-        feat = model.visualModel(data).data
+        visualDict = model.visualModel(data)
+        feat = visualDict["x"].data
+
+        if "attention" in visualDict.keys():
+            addAttFrame(args.exp_id,args.model_id,attMapWriterDict,visualDict["attention"],vidName,precVidName,revLabelDict)
+
         update.updateFrameDict(frameIndDict,frameInds,vidName)
 
         if newVideo and not videoBegining:
-            allOutput,nbVideos = update.updateMetrics(args,model,allFeat,allTimeElapsedTensor,allTarget,precVidName,nbVideos,metrDict,outDict,targDict,attMapDict)
+            allOutput,nbVideos = update.updateMetrics(args,model,allFeat,allTimeElapsedTensor,allTarget,precVidName,nbVideos,metrDict,outDict,targDict,epoch)
         if newVideo:
             allTarget = target
             allFeat = feat.unsqueeze(0)
@@ -260,7 +270,7 @@ def epochSeqVal(model,log_interval,loader, epoch, args,writer,metricEarlyStop,mo
             break
 
     if not args.debug:
-        allOutput,nbVideos = update.updateMetrics(args,model,allFeat,allTimeElapsedTensor,allTarget,precVidName,nbVideos,metrDict,outDict,targDict,attMapDict)
+        allOutput,nbVideos = update.updateMetrics(args,model,allFeat,allTimeElapsedTensor,allTarget,precVidName,nbVideos,metrDict,outDict,targDict,epoch)
 
     for key in outDict.keys():
         fullArr = torch.cat((frameIndDict[key].float(),outDict[key].squeeze(0).squeeze(1)),dim=1)
@@ -268,7 +278,37 @@ def epochSeqVal(model,log_interval,loader, epoch, args,writer,metricEarlyStop,mo
 
     writeSummaries(metrDict,validBatch,writer,epoch,mode,args.model_id,args.exp_id,nbVideos=nbVideos)
 
-    return outDict,targDict,attMapDict,metrDict[metricEarlyStop]
+    return outDict,targDict,metrDict[metricEarlyStop]
+
+def addAttFrame(exp_id,model_id,attMapWriterDict,attMaps,vidName,precVidName,revLabelDict):
+
+    if precVidName != vidName or len(attMapWriterDict.keys()) ==  0:
+        for labelInd in revLabelDict.keys():
+            attMapWriterDict[revLabelDict[labelInd]] = imageio.get_writer('../vis/{}/attMaps_{}_{}_{}.gif'.format(exp_id,model_id,vidName,revLabelDict[labelInd]),
+                                                                            mode='I',duration=1/20,subrectangles=True,palettesize=128)
+
+    attMaps = attMaps.squeeze(0).cpu().numpy()
+
+    lowerInt = attMaps.shape[-1]//16
+    upperInt = (lowerInt+1)*16
+
+    if np.abs(lowerInt-attMaps.shape[-1]) < np.abs(upperInt-attMaps.shape[-1]) and lowerInt != 0:
+        size = lowerInt
+    else:
+        size = upperInt
+
+    for i in range(attMaps.shape[0]):
+        for j in range(attMaps.shape[1]):
+
+            attMap = attMaps[i,j]*255
+            paddedAttMap = np.zeros((size,size))
+            paddedAttMap[:attMap.shape[0],:attMap.shape[1]] = attMap
+
+            paddedAttMap = paddedAttMap.astype("uint8")
+            #attMap = transform.resize((attMaps[i,j]*255).astype("uint8"), (size,size),anti_aliasing=True,mode="constant")
+
+            cv2.imwrite('../vis/{}/attMaps_{}_{}_{}_{}.png'.format(exp_id,model_id,vidName,revLabelDict[j],i),img_as_ubyte(paddedAttMap))
+            attMapWriterDict[revLabelDict[j]].append_data(img_as_ubyte(paddedAttMap))
 
 def writeSummaries(metrDict,batchNb,writer,epoch,mode,model_id,exp_id,nbVideos=None):
     ''' Write the metric computed during an evaluation in a tf writer and in a csv file
@@ -438,10 +478,6 @@ def evalAllImages(exp_id,model_id,model,testLoader,cuda,log_interval):
             if not os.path.exists("../results/{}/{}/{}_{}.csv".format(exp_id,vidName,imageName,model_id)):
 
                 np.savetxt("../results/{}/{}/{}_{}.csv".format(exp_id,vidName,imageName,model_id),feat.detach().cpu().numpy())
-
-def saveAttMaps(attMapDict,exp_id,model_id,epoch):
-    for videoName in attMapDict.keys():
-        torch.save(attMapDict[videoName].squeeze(0),"../results/{}/{}_{}_epoch{}.pth".format(exp_id,model_id,videoName,epoch))
 
 def addInitArgs(argreader):
     argreader.parser.add_argument('--start_mode', type=str,metavar='SM',
@@ -658,10 +694,7 @@ def main(argv=None):
                 net.load_state_dict(torch.load("../models/{}/model{}_epoch{}".format(args.no_train[0],args.no_train[1],epoch)))
 
             with torch.no_grad():
-                _,_,attMapDict,metricVal = valFunc(**kwargsVal)
-
-            if not attMapDict is None:
-                saveAttMaps(attMapDict,args.exp_id,args.model_id,epoch)
+                _,_,metricVal = valFunc(**kwargsVal)
 
             if isBetter(metricVal,bestMetricVal):
                 if os.path.exists("../models/{}/model{}_best_epoch{}".format(args.exp_id,args.model_id,bestEpoch)):
@@ -690,10 +723,7 @@ def main(argv=None):
             kwargsTest["model"] = net
 
             with torch.no_grad():
-                _,_,attMapDict,_ = valFunc(**kwargsTest)
-
-            if not attMapDict is None:
-                saveAttMaps(attMapDict,args.exp_id,args.model_id,epoch)
+                valFunc(**kwargsTest)
 
 if __name__ == "__main__":
     main()
