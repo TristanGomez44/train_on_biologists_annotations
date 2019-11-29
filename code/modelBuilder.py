@@ -51,7 +51,7 @@ class Model(nn.Module):
         self.priors = torch.zeros((self.tempModel.nbClass))
 
     def forward(self,x,timeElapsed=None):
-        x = self.visualModel(x)
+        x = self.visualModel(x)["x"]
         x = self.tempModel(x,self.visualModel.batchSize,timeElapsed)
         return x
 
@@ -85,7 +85,7 @@ class CNN2D(VisualModel):
         # NT x C x H x L
         x = self.featMod(x)
         # NT x D
-        return x
+        return {'x':x}
 
 class CNN3D(VisualModel):
 
@@ -112,7 +112,32 @@ class CNN3D(VisualModel):
             # N x T x D
             x = x.contiguous().view(x.size(0)*x.size(1),-1)
             # NT x D
-        return x
+        return {'x':x}
+
+class Attention(VisualModel):
+
+    def __init__(self,featModelName,bigMaps,attKerSize,nbFeat,nbClass):
+        super(Attention,self).__init__(featModelName,True,bigMaps)
+
+        self.classConv = nn.Conv2d(nbFeat,nbClass,1)
+        self.attention = nn.Conv2d(nbClass,nbClass,attKerSize,padding=attKerSize//2,groups=nbClass)
+        self.nbClass = nbClass
+
+    def forward(self,x):
+
+        self.batchSize = x.size(0)
+        x = x.view(x.size(0)*x.size(1),x.size(2),x.size(3),x.size(4))
+        x = self.featMod(x)
+        x = self.classConv(x)
+        attWeight = torch.sigmoid(self.attention(x))
+        x = x*attWeight
+        x = x.sum(dim=-1).sum(dim=-1)
+
+        #x = x.view(batchSize,-1,self.nbClass)
+        #attWeight = attWeight.view(batchSize,-1,self.nbClass,attWeight.size(-2),attWeight.size(-1))
+
+        return {"x":x,"attention":attWeight}
+
 
 ################################ Temporal Model ########################""
 
@@ -258,26 +283,17 @@ class ScoreConv(nn.Module):
             weights = self.layers(x)
             return weights*x
 
-class Attention(TempModel):
+class Identity(TempModel):
 
-    def __init__(self,nbFeat,nbClass,attKerSize):
-        super(Attention,self).__init__(nbFeat,nbClass,False,False)
+    def __init__(self,nbFeat,nbClass,regression,useTime):
 
-        self.classConv = nn.Conv2d(nbFeat,nbClass,1)
-        self.attention = nn.Conv2d(nbClass,nbClass,attKerSize,padding=attKerSize//2,groups=nbClass)
-        self.nbClass = nbClass
+        super(Identity,self).__init__(nbFeat,nbClass,regression,useTime)
 
     def forward(self,x,batchSize,timeTensor):
 
-        x = self.classConv(x)
-        attWeight = torch.sigmoid(self.attention(x))
-        x = x*attWeight
-        x = x.sum(dim=-1).sum(dim=-1)
-
         x = x.view(batchSize,-1,self.nbClass)
-        attWeight = attWeight.view(batchSize,-1,self.nbClass,attWeight.size(-2),attWeight.size(-1))
 
-        return {"pred":x,"attention":attWeight}
+        return {"pred":x}
 
 def netBuilder(args):
 
@@ -287,13 +303,13 @@ def netBuilder(args):
             nbFeat = 256*2**(4-1)
         else:
             nbFeat = 64*2**(4-1)
-        visualModel = CNN2D(args.feat,featMap=args.temp_mod == "feat_attention",bigMaps=args.temp_mod == "feat_attention")
+        visualModel = CNN2D(args.feat,featMap=args.temp_mod == "feat_attention",bigMaps=args.feat_attention_big_maps and args.temp_mod == "feat_attention")
     elif args.feat.find("vgg") != -1:
         nbFeat = 4096
-        visualModel = CNN2D(args.feat,featMap=args.temp_mod == "feat_attention",bigMaps=args.temp_mod == "feat_attention")
+        visualModel = CNN2D(args.feat,featMap=args.temp_mod == "feat_attention",bigMaps=args.feat_attention_big_maps and args.temp_mod == "feat_attention")
     elif args.feat == "r2plus1d_18":
         nbFeat = 512
-        visualModel = CNN3D(args.feat,featMap=args.temp_mod == "feat_attention",bigMaps=args.temp_mod == "feat_attention")
+        visualModel = CNN3D(args.feat,featMap=args.temp_mod == "feat_attention",bigMaps=args.feat_attention_big_maps and args.temp_mod == "feat_attention")
     else:
         raise ValueError("Unknown visual model type : ",args.feat)
 
@@ -309,7 +325,8 @@ def netBuilder(args):
     elif args.temp_mod == "score_conv":
         tempModel = ScoreConvTempModel(nbFeat,args.class_nb,args.regression,args.use_time,args.dropout,args.score_conv_ker_size,args.score_conv_chan,args.score_conv_bilay,args.score_conv_attention)
     elif args.temp_mod == "feat_attention":
-        tempModel = Attention(nbFeat,args.class_nb,args.feat_attention_ker_size)
+        visualModel = Attention(args.feat,args.feat_attention_big_maps,args.feat_attention_ker_size,nbFeat,args.class_nb)
+        tempModel = Identity(nbFeat,args.class_nb,False,False)
     else:
         raise ValueError("Unknown temporal model type : ",args.temp_mod)
 
@@ -365,5 +382,8 @@ def addArgs(argreader):
 
     argreader.parser.add_argument('--feat_attention_ker_size', type=int, metavar='BOOL',
                         help='The kernel size of the feature attention.')
+
+    argreader.parser.add_argument('--feat_attention_big_maps', type=args.str2bool, metavar='BOOL',
+                        help='To make the feature and the attention maps bigger.')
 
     return argreader
