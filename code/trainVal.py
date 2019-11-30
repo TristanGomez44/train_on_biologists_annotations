@@ -224,7 +224,7 @@ def epochSeqVal(model,log_interval,loader, epoch, args,writer,metricEarlyStop,mo
     frameIndDict = {}
 
     #The writer dict for the attention maps. The will be one writer per class
-    attMapWriterDict = {}
+    fullAttMapSeq = None
     revLabelDict = formatData.getReversedLabels()
     precVidName = "None"
     videoBegining = True
@@ -244,13 +244,14 @@ def epochSeqVal(model,log_interval,loader, epoch, args,writer,metricEarlyStop,mo
         visualDict = model.visualModel(data)
         feat = visualDict["x"].data
 
-        if "attention" in visualDict.keys():
-            addAttFrame(args.exp_id,args.model_id,attMapWriterDict,visualDict["attention"],vidName,precVidName,revLabelDict)
+        fullAttMapSeq = catAttMap(visualDict,fullAttMapSeq)
 
         update.updateFrameDict(frameIndDict,frameInds,vidName)
 
         if newVideo and not videoBegining:
-            allOutput,nbVideos = update.updateMetrics(args,model,allFeat,allTimeElapsedTensor,allTarget,precVidName,nbVideos,metrDict,outDict,targDict,epoch)
+            allOutput,nbVideos = update.updateMetrics(args,model,allFeat,allTimeElapsedTensor,allTarget,precVidName,nbVideos,metrDict,outDict,targDict)
+            fullAttMapSeq = saveAttMap(fullAttMapSeq,args.exp_id,args.model_id,epoch,precVidName)
+
         if newVideo:
             allTarget = target
             allFeat = feat.unsqueeze(0)
@@ -270,7 +271,8 @@ def epochSeqVal(model,log_interval,loader, epoch, args,writer,metricEarlyStop,mo
             break
 
     if not args.debug:
-        allOutput,nbVideos = update.updateMetrics(args,model,allFeat,allTimeElapsedTensor,allTarget,precVidName,nbVideos,metrDict,outDict,targDict,epoch)
+        allOutput,nbVideos = update.updateMetrics(args,model,allFeat,allTimeElapsedTensor,allTarget,precVidName,nbVideos,metrDict,outDict,targDict)
+        fullAttMapSeq = saveAttMap(fullAttMapSeq,args.exp_id,args.model_id,epoch,precVidName)
 
     for key in outDict.keys():
         fullArr = torch.cat((frameIndDict[key].float(),outDict[key].squeeze(0).squeeze(1)),dim=1)
@@ -280,35 +282,20 @@ def epochSeqVal(model,log_interval,loader, epoch, args,writer,metricEarlyStop,mo
 
     return outDict,targDict,metrDict[metricEarlyStop]
 
-def addAttFrame(exp_id,model_id,attMapWriterDict,attMaps,vidName,precVidName,revLabelDict):
+def catAttMap(visualDict,fullAttMapSeq):
+    if "attention" in visualDict.keys():
+        if fullAttMapSeq is None:
+            fullAttMapSeq = (visualDict["attention"].cpu().squeeze(0)*255).byte()
+        else:
+            fullAttMapSeq = torch.cat((fullAttMapSeq,(visualDict["attention"].cpu().squeeze(0)*255).byte()),dim=0)
 
-    if precVidName != vidName or len(attMapWriterDict.keys()) ==  0:
-        for labelInd in revLabelDict.keys():
-            attMapWriterDict[revLabelDict[labelInd]] = imageio.get_writer('../vis/{}/attMaps_{}_{}_{}.gif'.format(exp_id,model_id,vidName,revLabelDict[labelInd]),
-                                                                            mode='I',duration=1/20,subrectangles=True,palettesize=128)
+    return fullAttMapSeq
 
-    attMaps = attMaps.squeeze(0).cpu().numpy()
-
-    lowerInt = attMaps.shape[-1]//16
-    upperInt = (lowerInt+1)*16
-
-    if np.abs(lowerInt-attMaps.shape[-1]) < np.abs(upperInt-attMaps.shape[-1]) and lowerInt != 0:
-        size = lowerInt
-    else:
-        size = upperInt
-
-    for i in range(attMaps.shape[0]):
-        for j in range(attMaps.shape[1]):
-
-            attMap = attMaps[i,j]*255
-            paddedAttMap = np.zeros((size,size))
-            paddedAttMap[:attMap.shape[0],:attMap.shape[1]] = attMap
-
-            paddedAttMap = paddedAttMap.astype("uint8")
-            #attMap = transform.resize((attMaps[i,j]*255).astype("uint8"), (size,size),anti_aliasing=True,mode="constant")
-
-            cv2.imwrite('../vis/{}/attMaps_{}_{}_{}_{}.png'.format(exp_id,model_id,vidName,revLabelDict[j],i),img_as_ubyte(paddedAttMap))
-            attMapWriterDict[revLabelDict[j]].append_data(img_as_ubyte(paddedAttMap))
+def saveAttMap(fullAttMapSeq,exp_id,model_id,epoch,precVidName):
+    if not fullAttMapSeq is None:
+        np.save("../results/{}/attMaps_{}_epoch{}_{}.npy".format(exp_id,model_id,epoch,precVidName),fullAttMapSeq.numpy())
+        fullAttMapSeq = None
+    return fullAttMapSeq
 
 def writeSummaries(metrDict,batchNb,writer,epoch,mode,model_id,exp_id,nbVideos=None):
     ''' Write the metric computed during an evaluation in a tf writer and in a csv file
@@ -425,19 +412,21 @@ def initialize_Net_And_EpochNumber(net,exp_id,model_id,cuda,start_mode,init_path
         for key in keysToRemove:
             params.pop(key)
 
-
         if hasattr(net,"tempModel"):
             if not hasattr(net.tempModel,"linLay"):
                 def checkAndReplace(key):
                     if key.find("tempModel.linLay") != -1:
                         key = key.replace("tempModel.linLay","tempModel.linTempMod.linLay")
                     return key
-
                 params = {checkAndReplace(k):params[k] for k in params.keys()}
 
-        missingKeys,unExpectedKeys = net.load_state_dict(params,strict)
-        print("missing keys",missingKeys)
-        print("unexpected keys",unExpectedKeys)
+        res = net.load_state_dict(params,strict)
+
+        #Depending on the pytorch version the load_state_dict() method can return the list of missing and unexpected parameters keys or nothing
+        if not res is None:
+            missingKeys,unexpectedKeys = res
+            print("missing keys",missingKeys)
+            print("unexpected keys",unexpectedKeys)
 
         #Start epoch is 1 if strict if false because strict=False means that it is another model which is being trained
         if strict:
