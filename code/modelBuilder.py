@@ -301,6 +301,8 @@ def netBuilder(args):
     if args.feat.find("resnet") != -1:
         if args.feat=="resnet50" or args.feat=="resnet101" or args.feat=="resnet151":
             nbFeat = 256*2**(4-1)
+        elif args.feat == "resnet9":
+            nbFeat = 8*2**(2-1)
         else:
             nbFeat = 64*2**(4-1)
         visualModel = CNN2D(args.feat,args.pretrained_visual)

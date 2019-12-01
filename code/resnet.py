@@ -127,12 +127,26 @@ class ResNet(nn.Module):
         self.bn1 = norm_layer(chan)
         self.relu = nn.ReLU(inplace=True)
         self.maxpool = nn.MaxPool2d(kernel_size=maxPoolKer, stride=stride, padding=maxPoolPad)
+
+        self.nbLayers = len(layers)
+
         self.layer1 = self._make_layer(block, chan*1, layers[0], stride=1,      norm_layer=norm_layer,feat=False)
         self.layer2 = self._make_layer(block, chan*2, layers[1], stride=1 if bigMaps else stride, norm_layer=norm_layer,feat=False,dilation=dilation)
-        self.layer3 = self._make_layer(block, chan*4, layers[2], stride=1 if bigMaps else stride, norm_layer=norm_layer,feat=False,dilation=dilation)
-        self.layer4 = self._make_layer(block, chan*8, layers[3], stride=1 if bigMaps else stride, norm_layer=norm_layer,feat=True,dilation=dilation)
+
+        self.layers = [self.layer1,self.layer2]
+
+        if self.nbLayers == 4:
+            self.layer3 = self._make_layer(block, chan*4, layers[2], stride=1 if bigMaps else stride, norm_layer=norm_layer,feat=False,dilation=dilation)
+            self.layer4 = self._make_layer(block, chan*8, layers[3], stride=1 if bigMaps else stride, norm_layer=norm_layer,feat=True,dilation=dilation)
+
+            self.fc = nn.Linear(chan*8 * block.expansion, num_classes)
+
+            self.layers += [self.layer3,self.layer4]
+        else:
+            self.fc = nn.Linear(chan*2 * block.expansion, num_classes)
+
         self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
-        self.fc = nn.Linear(chan*8 * block.expansion, num_classes)
+
 
         for m in self.modules():
             if isinstance(m, nn.Conv2d):
@@ -153,7 +167,6 @@ class ResNet(nn.Module):
 
         self.featMap = featMap
 
-        self.layers = [self.layer1,self.layer2,self.layer3,self.layer4]
 
     def _make_layer(self, block, planes, blocks, stride=1, norm_layer=None,feat=False,dilation=1):
         if norm_layer is None:
@@ -187,14 +200,24 @@ class ResNet(nn.Module):
 
         x = self.layer1(x)
         x = self.layer2(x)
-        x = self.layer3(x)
-        x = self.layer4(x)
+
+        if self.nbLayers == 4:
+            x = self.layer3(x)
+            x = self.layer4(x)
 
         if not self.featMap:
             x = self.avgpool(x)
             x = x.view(x.size(0), -1)
 
         return x
+
+def resnet9(pretrained=False, **kwargs):
+    model = ResNet(BasicBlock, [2, 2], chan=8,**kwargs)
+
+    if pretrained:
+        raise ValueError("ResNet9 does not have pretrained weights on ImageNet.")
+
+    return model
 
 def resnet18(pretrained=False, **kwargs):
     """Constructs a ResNet-18 model.
