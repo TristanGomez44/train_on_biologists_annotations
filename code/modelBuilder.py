@@ -8,7 +8,7 @@ import vgg
 import args
 import sys
 
-def buildFeatModel(featModelName,featMap=False,bigMaps=False):
+def buildFeatModel(featModelName,pretrainedFeatMod,featMap=False,bigMaps=False):
     ''' Build a visual feature model
 
     Args:
@@ -18,11 +18,11 @@ def buildFeatModel(featModelName,featMap=False,bigMaps=False):
 
     '''
     if featModelName.find("resnet") != -1:
-        featModel = getattr(resnet,featModelName)(pretrained=True,featMap=featMap,bigMaps=bigMaps)
+        featModel = getattr(resnet,featModelName)(pretrained=pretrainedFeatMod,featMap=featMap,bigMaps=bigMaps)
     elif featModelName == "r2plus1d_18":
-        featModel = getattr(resnet3D,featModelName)(pretrained=True,featMap=featMap,bigMaps=bigMaps)
+        featModel = getattr(resnet3D,featModelName)(pretrained=pretrainedFeatMod,featMap=featMap,bigMaps=bigMaps)
     elif featModelName.find("vgg") != -1:
-        featModel = getattr(vgg,featModelName)(pretrained=True,featMap=featMap,bigMaps=bigMaps)
+        featModel = getattr(vgg,featModelName)(pretrained=pretrainedFeatMod,featMap=featMap,bigMaps=bigMaps)
     else:
         raise ValueError("Unknown model type : ",featModelName)
 
@@ -64,10 +64,10 @@ class Model(nn.Module):
 
 class VisualModel(nn.Module):
 
-    def __init__(self,featModelName,featMap=False,bigMaps=False):
+    def __init__(self,featModelName,pretrainedFeatMod=True,featMap=False,bigMaps=False):
         super(VisualModel,self).__init__()
 
-        self.featMod = buildFeatModel(featModelName,featMap,bigMaps)
+        self.featMod = buildFeatModel(featModelName,pretrainedFeatMod,featMap,bigMaps)
         self.featMap = featMap
         self.bigMaps = bigMaps
     def forward(self,x):
@@ -75,8 +75,8 @@ class VisualModel(nn.Module):
 
 class CNN2D(VisualModel):
 
-    def __init__(self,featModelName,featMap=False,bigMaps=False):
-        super(CNN2D,self).__init__(featModelName,featMap,bigMaps)
+    def __init__(self,featModelName,pretrainedFeatMod=True,featMap=False,bigMaps=False):
+        super(CNN2D,self).__init__(featModelName,pretrainedFeatMod,featMap,bigMaps)
 
     def forward(self,x):
         # N x T x C x H x L
@@ -89,14 +89,14 @@ class CNN2D(VisualModel):
 
 class CNN3D(VisualModel):
 
-    def __init__(self,featModelName,featMap=False,bigMaps=False):
-        super(CNN3D,self).__init__(featModelName,featMap,bigMaps)
+    def __init__(self,featModelName,pretrainedFeatMod=True,featMap=False,bigMaps=False):
+        super(CNN3D,self).__init__(featModelName,pretrainedFeatMod,featMap,bigMaps)
 
     def forward(self,x):
         # N x T x C x H x L
         self.batchSize = x.size(0)
         x = x.permute(0,2,1,3,4)
-        # N x C x T x H x L
+        # N x C x T x H x LpretrainedFeatModpretrainedFeatMod
 
         x = self.featMod(x)
 
@@ -116,8 +116,8 @@ class CNN3D(VisualModel):
 
 class Attention(VisualModel):
 
-    def __init__(self,featModelName,bigMaps,attKerSize,nbFeat,nbClass):
-        super(Attention,self).__init__(featModelName,True,bigMaps)
+    def __init__(self,featModelName,pretrainedFeatMod,bigMaps,attKerSize,nbFeat,nbClass):
+        super(Attention,self).__init__(featModelName,pretrainedFeatMod,True,bigMaps)
 
         self.classConv = nn.Conv2d(nbFeat,nbClass,1)
         self.attention = nn.Conv2d(nbClass,nbClass,attKerSize,padding=attKerSize//2,groups=nbClass)
@@ -303,13 +303,13 @@ def netBuilder(args):
             nbFeat = 256*2**(4-1)
         else:
             nbFeat = 64*2**(4-1)
-        visualModel = CNN2D(args.feat,featMap=args.temp_mod == "feat_attention",bigMaps=args.feat_attention_big_maps and args.temp_mod == "feat_attention")
+        visualModel = CNN2D(args.feat,args.pretrained_visual)
     elif args.feat.find("vgg") != -1:
         nbFeat = 4096
-        visualModel = CNN2D(args.feat,featMap=args.temp_mod == "feat_attention",bigMaps=args.feat_attention_big_maps and args.temp_mod == "feat_attention")
+        visualModel = CNN2D(args.feat,args.pretrained_visual)
     elif args.feat == "r2plus1d_18":
         nbFeat = 512
-        visualModel = CNN3D(args.feat,featMap=args.temp_mod == "feat_attention",bigMaps=args.feat_attention_big_maps and args.temp_mod == "feat_attention")
+        visualModel = CNN3D(args.feat,args.pretrained_visual)
     else:
         raise ValueError("Unknown visual model type : ",args.feat)
 
@@ -325,7 +325,7 @@ def netBuilder(args):
     elif args.temp_mod == "score_conv":
         tempModel = ScoreConvTempModel(nbFeat,args.class_nb,args.regression,args.use_time,args.dropout,args.score_conv_ker_size,args.score_conv_chan,args.score_conv_bilay,args.score_conv_attention)
     elif args.temp_mod == "feat_attention":
-        visualModel = Attention(args.feat,args.feat_attention_big_maps,args.feat_attention_ker_size,nbFeat,args.class_nb)
+        visualModel = Attention(args.feat,args.pretrained_visual,args.feat_attention_big_maps,args.feat_attention_ker_size,nbFeat,args.class_nb)
         tempModel = Identity(nbFeat,args.class_nb,False,False)
     else:
         raise ValueError("Unknown temporal model type : ",args.temp_mod)
@@ -385,5 +385,8 @@ def addArgs(argreader):
 
     argreader.parser.add_argument('--feat_attention_big_maps', type=args.str2bool, metavar='BOOL',
                         help='To make the feature and the attention maps bigger.')
+
+    argreader.parser.add_argument('--pretrained_visual', type=args.str2bool, metavar='BOOL',
+                        help='To have a visual feature extractor pretrained on ImageNet.')
 
     return argreader
