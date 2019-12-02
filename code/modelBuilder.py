@@ -96,7 +96,7 @@ class CNN3D(VisualModel):
         # N x T x C x H x L
         self.batchSize = x.size(0)
         x = x.permute(0,2,1,3,4)
-        # N x C x T x H x LpretrainedFeatModpretrainedFeatMod
+        # N x C x T x H x L
 
         x = self.featMod(x)
 
@@ -133,11 +133,42 @@ class Attention(VisualModel):
         x = x*attWeight
         x = x.sum(dim=-1).sum(dim=-1)
 
-        #x = x.view(batchSize,-1,self.nbClass)
-        #attWeight = attWeight.view(batchSize,-1,self.nbClass,attWeight.size(-2),attWeight.size(-1))
-
         return {"x":x,"attention":attWeight}
 
+class AttentionFull(VisualModel):
+
+    def __init__(self,featModelName,pretrainedFeatMod,bigMaps,attKerSize,nbFeat,nbClass):
+        super(AttentionFull,self).__init__(featModelName,pretrainedFeatMod,True,bigMaps)
+
+        self.attention = nn.Conv2d(nbFeat,nbClass,attKerSize,padding=attKerSize//2)
+        self.lin = nn.Linear(nbFeat*nbClass,nbClass)
+        self.nbClass = nbClass
+
+    def forward(self,x):
+
+        self.batchSize = x.size(0)
+        x = x.view(x.size(0)*x.size(1),x.size(2),x.size(3),x.size(4))
+        x = self.featMod(x)
+        # N*T x D x H x W
+
+        attWeight = torch.sigmoid(self.attention(x))
+
+        x = x.unsqueeze(2).expand(x.size(0),x.size(1),self.nbClass,x.size(2),x.size(3))
+        # N*T x D x class nb x H x W
+
+        attWeight = attWeight.unsqueeze(1).expand(attWeight.size(0),x.size(1),attWeight.size(1),attWeight.size(2),attWeight.size(3))
+
+        x = x*attWeight
+        x = x.sum(dim=-1).sum(dim=-1)
+        # N*T x D x class nb
+        x = x.permute(0,2,1)
+        # N*T x class nb x D
+        x = x.contiguous().view(x.size(0),-1)
+        # N*T x (class nb*D)
+        x = self.lin(x)
+        # N*T x class_nb
+
+        return {"x":x,"attention":attWeight}
 
 ################################ Temporal Model ########################""
 
@@ -328,6 +359,9 @@ def netBuilder(args):
         tempModel = ScoreConvTempModel(nbFeat,args.class_nb,args.regression,args.use_time,args.dropout,args.score_conv_ker_size,args.score_conv_chan,args.score_conv_bilay,args.score_conv_attention)
     elif args.temp_mod == "feat_attention":
         visualModel = Attention(args.feat,args.pretrained_visual,args.feat_attention_big_maps,args.feat_attention_ker_size,nbFeat,args.class_nb)
+        tempModel = Identity(nbFeat,args.class_nb,False,False)
+    elif args.temp_mod == "feat_attention_full":
+        visualModel = AttentionFull(args.feat,args.pretrained_visual,args.feat_attention_big_maps,args.feat_attention_ker_size,nbFeat,args.class_nb)
         tempModel = Identity(nbFeat,args.class_nb,False,False)
     else:
         raise ValueError("Unknown temporal model type : ",args.temp_mod)
