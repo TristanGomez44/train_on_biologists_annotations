@@ -128,10 +128,13 @@ class Attention(VisualModel):
         self.batchSize = x.size(0)
         x = x.view(x.size(0)*x.size(1),x.size(2),x.size(3),x.size(4))
         x = self.featMod(x)
+
         x = self.classConv(x)
+
         attWeight = torch.sigmoid(self.attention(x))
         x = x*attWeight
-        x = x.sum(dim=-1).sum(dim=-1)
+
+        x = x.mean(dim=-1).mean(dim=-1)
 
         return {"x":x,"attention":attWeight}
 
@@ -159,7 +162,7 @@ class AttentionFull(VisualModel):
         attWeight = attWeight.unsqueeze(1).expand(attWeight.size(0),x.size(1),attWeight.size(1),attWeight.size(2),attWeight.size(3))
 
         x = x*attWeight
-        x = x.sum(dim=-1).sum(dim=-1)
+        x = x.mean(dim=-1).mean(dim=-1)
         # N*T x D x class nb
         x = x.permute(0,2,1)
         # N*T x class nb x D
