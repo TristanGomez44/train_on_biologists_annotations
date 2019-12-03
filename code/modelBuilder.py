@@ -239,7 +239,7 @@ class LSTMTempModel(TempModel):
         # N x T x H
         x = x.contiguous().view(-1,x.size(-1))
         # NT x H
-        x = self.linTempMod(x,batchSize)
+        x = self.linTempMod(x,batchSize)["pred"]
         # N x T x classNb (or N x T in case of regression)
         return {"pred":x}
 
@@ -256,7 +256,7 @@ class ScoreConvTempModel(TempModel):
         x = self.catWithTimeFeat(x,timeTensor)
 
         # NT x D
-        x = self.linTempMod(x,batchSize)
+        x = self.linTempMod(x,batchSize)["pred"]
         # N x T x classNb (or N x T in case of regression)
         x = x.unsqueeze(1)
         # N x 1 x T x classNb (or N x 1 x T in case of regression)
