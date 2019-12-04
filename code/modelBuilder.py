@@ -121,31 +121,19 @@ class ClassBias(nn.Module):
 
         super(ClassBias,self).__init__()
 
-
-        self.size = 7
-        self.postConv1x1ChanNb = 16
-
-        self.hidFeat = 512
+        self.hidFeat = 128
         self.inFeat = nbFeat
         self.nbClass = nbClass
 
-        self.conv1x1 = nn.Conv2d(self.inFeat,self.postConv1x1ChanNb,1)
-
-        self.mlp = nn.Sequential(nn.Linear(self.postConv1x1ChanNb*self.size*self.size,self.hidFeat),nn.ReLU(),
-                    nn.Linear(self.hidFeat,self.hidFeat),nn.ReLU(),
+        self.mlp = nn.Sequential(nn.Linear(self.inFeat,self.hidFeat),nn.ReLU(),
                     nn.Linear(self.hidFeat,self.hidFeat))
 
         self.classFeat = nn.Parameter(torch.zeros((self.hidFeat,self.nbClass)).uniform_(-1/self.hidFeat,1/self.hidFeat))
 
     def forward(self,x):
 
-        #Changing spatial size
-        x = torch.nn.functional.interpolate(x,size=(self.size,self.size),mode='bilinear',align_corners=False)
-        #Reducing channel number
-        x = self.conv1x1(x)
-        #N x self.postConv1x1ChanNb x self.size x self.size
-        x = x.view(x.size(0),-1)
-        #N x self.postConv1x1ChanNb*self.size*self.size
+        x = x.mean(dim=-1).mean(dim=-1)
+
         #Computing context vector
         x = self.mlp(x)
         #N x 512
