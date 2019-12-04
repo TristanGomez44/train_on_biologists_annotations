@@ -114,25 +114,77 @@ class CNN3D(VisualModel):
             # NT x D
         return {'x':x}
 
+
+class ClassBias(nn.Module):
+
+    def __init__(self,nbFeat,nbClass):
+
+        super(ClassBias,self).__init__()
+
+
+        self.size = 7
+        self.postConv1x1ChanNb = 16
+
+        self.hidFeat = 512
+        self.inFeat = nbFeat
+        self.nbClass = nbClass
+
+        self.conv1x1 = nn.Conv2d(self.inFeat,self.postConv1x1ChanNb,1)
+
+        self.mlp = nn.Sequential(nn.Linear(self.postConv1x1ChanNb*self.size*self.size,self.hidFeat),nn.ReLU(),
+                    nn.Linear(self.hidFeat,self.hidFeat),nn.ReLU(),
+                    nn.Linear(self.hidFeat,self.hidFeat))
+
+        self.classFeat = nn.Parameter(torch.zeros((self.hidFeat,self.nbClass)).uniform_(-1/self.hidFeat,1/self.hidFeat))
+
+    def forward(self,x):
+
+        #Changing spatial size
+        x = torch.nn.functional.interpolate(x,size=(self.size,self.size),mode='bilinear',align_corners=False)
+        #Reducing channel number
+        x = self.conv1x1(x)
+        #N x self.postConv1x1ChanNb x self.size x self.size
+        x = x.view(x.size(0),-1)
+        #N x self.postConv1x1ChanNb*self.size*self.size
+        #Computing context vector
+        x = self.mlp(x)
+        #N x 512
+        x = x.unsqueeze(2).expand(x.size(0),x.size(1),self.nbClass)
+        #N x 512 x class_nb
+        x = (self.classFeat.unsqueeze(0)*x).sum(dim=1)
+        #N x class_nb
+        x = x.unsqueeze(-1).unsqueeze(-1)
+        #N x class_nb x 1 x 1
+
+        return x
+
 class Attention(VisualModel):
 
-    def __init__(self,featModelName,pretrainedFeatMod,bigMaps,attKerSize,nbFeat,nbClass):
+    def __init__(self,featModelName,pretrainedFeatMod,bigMaps,attKerSize,nbFeat,nbClass,classBiasMod=None):
         super(Attention,self).__init__(featModelName,pretrainedFeatMod,True,bigMaps)
 
         self.classConv = nn.Conv2d(nbFeat,nbClass,1)
         self.attention = nn.Conv2d(nbClass,nbClass,attKerSize,padding=attKerSize//2,groups=nbClass)
         self.nbClass = nbClass
+        self.classBiasMod = classBiasMod
 
     def forward(self,x):
 
         self.batchSize = x.size(0)
         x = x.view(x.size(0)*x.size(1),x.size(2),x.size(3),x.size(4))
-        x = self.featMod(x)
+        featureVolume = self.featMod(x)
 
-        x = self.classConv(x)
+        x = self.classConv(featureVolume)
 
-        attWeight = torch.sigmoid(self.attention(x))
+        attWeight = self.attention(x)
+
+        if self.classBiasMod:
+            attWeight += self.classBiasMod(featureVolume)
+
+        attWeight = torch.sigmoid(attWeight)
+
         x = x*attWeight
+        # N x class_nb x 7 x 7
 
         x = x.mean(dim=-1).mean(dim=-1)
 
@@ -140,12 +192,13 @@ class Attention(VisualModel):
 
 class AttentionFull(VisualModel):
 
-    def __init__(self,featModelName,pretrainedFeatMod,bigMaps,attKerSize,nbFeat,nbClass):
+    def __init__(self,featModelName,pretrainedFeatMod,bigMaps,attKerSize,nbFeat,nbClass,classBiasMod=None):
         super(AttentionFull,self).__init__(featModelName,pretrainedFeatMod,True,bigMaps)
 
         self.attention = nn.Conv2d(nbFeat,nbClass,attKerSize,padding=attKerSize//2)
         self.lin = nn.Linear(nbFeat*nbClass,nbClass)
         self.nbClass = nbClass
+        self.classBiasMod = classBiasMod
 
     def forward(self,x):
 
@@ -154,7 +207,12 @@ class AttentionFull(VisualModel):
         x = self.featMod(x)
         # N*T x D x H x W
 
-        attWeight = torch.sigmoid(self.attention(x))
+        attWeight = self.attention(x)
+
+        if self.classBiasMod:
+            attWeight += self.classBiasMod(x)
+
+        attWeight = torch.sigmoid(attWeight)
 
         x = x.unsqueeze(2).expand(x.size(0),x.size(1),self.nbClass,x.size(2),x.size(3))
         # N*T x D x class nb x H x W
@@ -360,12 +418,18 @@ def netBuilder(args):
         tempModel = LinearTempModel(nbFeat,args.class_nb,args.regression,args.use_time,args.dropout)
     elif args.temp_mod == "score_conv":
         tempModel = ScoreConvTempModel(nbFeat,args.class_nb,args.regression,args.use_time,args.dropout,args.score_conv_ker_size,args.score_conv_chan,args.score_conv_bilay,args.score_conv_attention)
-    elif args.temp_mod == "feat_attention":
-        visualModel = Attention(args.feat,args.pretrained_visual,args.feat_attention_big_maps,args.feat_attention_ker_size,nbFeat,args.class_nb)
-        tempModel = Identity(nbFeat,args.class_nb,False,False)
-    elif args.temp_mod == "feat_attention_full":
-        visualModel = AttentionFull(args.feat,args.pretrained_visual,args.feat_attention_big_maps,args.feat_attention_ker_size,nbFeat,args.class_nb)
-        tempModel = Identity(nbFeat,args.class_nb,False,False)
+    elif args.temp_mod == "feat_attention" or args.temp_mod == "feat_attention_full":
+
+        classBiasMod = ClassBias(nbFeat,args.class_nb) if args.class_bias_model else None
+
+        if args.temp_mod == "feat_attention":
+            visualModel = Attention(args.feat,args.pretrained_visual,args.feat_attention_big_maps,args.feat_attention_ker_size,nbFeat,args.class_nb,classBiasMod)
+            tempModel = Identity(nbFeat,args.class_nb,False,False)
+
+        elif args.temp_mod == "feat_attention_full":
+            visualModel = AttentionFull(args.feat,args.pretrained_visual,args.feat_attention_big_maps,args.feat_attention_ker_size,nbFeat,args.class_nb,classBiasMod)
+            tempModel = Identity(nbFeat,args.class_nb,False,False)
+
     else:
         raise ValueError("Unknown temporal model type : ",args.temp_mod)
 
@@ -427,5 +491,8 @@ def addArgs(argreader):
 
     argreader.parser.add_argument('--pretrained_visual', type=args.str2bool, metavar='BOOL',
                         help='To have a visual feature extractor pretrained on ImageNet.')
+
+    argreader.parser.add_argument('--class_bias_model', type=args.str2bool, metavar='BOOL',
+                        help='To have a global feature model (ignored when not using a feature attention model.)')
 
     return argreader
