@@ -55,12 +55,7 @@ def collateSeq(batch):
 
     res[0] = torch.cat(res[0],dim=0)
     if not res[1][0] is None:
-        try:
-            res[1] = torch.cat(res[1],dim=0)
-        except RuntimeError:
-            print(res[1])
-            print(res[2])
-            sys.exit(0)
+        res[1] = torch.cat(res[1],dim=0)
 
     if torch.is_tensor(res[2][0]):
         res[2] = torch.cat(res[2],dim=0)
@@ -153,7 +148,9 @@ class SeqTrDataset(torch.utils.data.Dataset):
         frameInds = np.arange(frameNb)
 
         ################# Frame selection ##################
-        startFrame = torch.randint(0,frameNb-self.trLen,size=(1,))
+        #The video are not systematically annotated from the begining
+        frameStart = (gt == -1).sum()
+        startFrame = torch.randint(int(frameStart),frameNb-self.trLen,size=(1,))
         frameInds,gt = frameInds[startFrame:startFrame+self.trLen],gt[startFrame:startFrame+self.trLen]
 
         if os.path.exists("../data/{}/annotations/{}_timeElapsed.csv".format(self.dataset.split("+")[0],vidName)):
@@ -244,7 +241,7 @@ class TestLoader():
 
     def __iter__(self):
         self.videoInd = 0
-        self.currFrameInd = 0
+        self.currFrameInd = None
         self.sumL = 0
         return self
 
@@ -264,9 +261,16 @@ class TestLoader():
         fps = utils.getVideoFPS(videoPath)
         frameNb = utils.getVideoFrameNb(videoPath)
 
-        frameInds = np.arange(self.currFrameInd,min(self.currFrameInd+L,frameNb))
+        if self.currFrameInd is None:
+            #The video are not systematically annotated from the begining
+            gt = getGT(vidName,self.dataset)
+            frameStart = (gt == -1).sum()
+            self.currFrameInd = int(frameStart)
 
+        frameInds = np.arange(self.currFrameInd,min(self.currFrameInd+L,frameNb))
         gt = getGT(vidName,self.dataset)[self.currFrameInd:min(self.currFrameInd+L,frameNb)]
+
+        print(vidName,frameNb,len(getGT(vidName,self.dataset)))
 
         if os.path.exists("../data/{}/annotations/{}_timeElapsed.csv".format(self.dataset.split("+")[0],vidName)):
             timeElapsed = np.genfromtxt("../data/{}/annotations/{}_timeElapsed.csv".format(self.dataset.split("+")[0],vidName),delimiter=",")[1:][self.currFrameInd:min(self.currFrameInd+L,frameNb),1]
@@ -274,7 +278,7 @@ class TestLoader():
             timeElapsed = np.genfromtxt("../data/{}/annotations/{}_timeElapsed.csv".format(self.dataset.split("+")[1],vidName),delimiter=",")[1:][self.currFrameInd:min(self.currFrameInd+L,frameNb),1]
 
         if frameInds[-1] + 1 == frameNb:
-            self.currFrameInd = 0
+            self.currFrameInd = None
             self.videoInd += 1
         else:
             self.currFrameInd += L
@@ -327,11 +331,11 @@ def buildSeqTrainLoader(args):
 
     return trainLoader,train_dataset
 
-def removeVid(videoPaths,videoToRemovePaths):
+def removeVid(videoPaths,videoToRemoveNames):
     #Removing videos with bad format
     vidsToRemove = []
     for vidPath in videoPaths:
-        for vidName in videoToRemovePaths:
+        for vidName in videoToRemoveNames:
             if os.path.splitext(os.path.basename(vidPath))[0] == vidName:
                 vidsToRemove.append(vidPath)
     for vidPath in vidsToRemove:
@@ -350,6 +354,7 @@ def findVideos(dataset,propStart,propEnd,propSetIntFormat=False,minimumPhaseNb=6
 
     allVideoPaths = removeVid(allVideoPaths,digitExtractor.getVideosToRemove())
     allVideoPaths = removeVid(allVideoPaths,formatData.getNoAnnotVideos())
+    allVideoPaths = removeVid(allVideoPaths,formatData.getEmptyAnnotVideos())
     allVideoPaths = removeVid(allVideoPaths,formatData.getTooFewPhaseVideos(minimumPhaseNb))
 
     if propSetIntFormat:
@@ -385,7 +390,7 @@ def getGT(vidName,dataset):
 
         phases = np.genfromtxt("../data/{}/annotations/{}_phases.csv".format(datasetOfTheVideo,vidName),dtype=str,delimiter=",")
 
-        gt = np.zeros((int(phases[-1,-1])+1))
+        gt = np.zeros((int(phases[-1,-1])+1))-1
 
         for phase in phases:
             #The dictionary called here convert the label into a integer

@@ -10,6 +10,7 @@ import cv2
 import subprocess
 from args import ArgReader
 from shutil import copyfile
+import warnings
 
 labelDict = {"tPB2":0,"tPNa":1,"tPNf":2,"t2":3,"t3":4,"t4":5,"t5":6,"t6":7,"t7":8,"t8":9,"t9+":10,"tM":11,"tSB":12,"tB":13,"tEB":14,"tHB":15}
 
@@ -24,13 +25,29 @@ def getTooFewPhaseVideos(nbMinimumPhases):
 		vidName = os.path.splitext(os.path.basename(vidPath))[0]
 		annotPath = os.path.join(os.path.dirname(vidPath),"annotations","{}_phases.csv".format(vidName))
 
-		if os.path.exists(annotPath):
+		if os.path.exists(annotPath) and os.stat(annotPath).st_size > 0:
 			csv = np.genfromtxt(annotPath,delimiter=",")
 
 			if len(csv.shape) < 2 or len(csv) < nbMinimumPhases:
 				tooFewPhaseVids.append(vidName)
 
 	return tooFewPhaseVids
+
+def getEmptyAnnotVideos():
+
+	videoPaths = sorted(glob.glob("../data/*/*.avi"))
+	emptyAnnotVids = []
+
+	with warnings.catch_warnings():
+		warnings.filterwarnings('error')
+		for vidPath in videoPaths:
+			vidName = os.path.basename(os.path.splitext(vidPath)[0])
+			phasesPath = os.path.join(os.path.dirname(vidPath),"annotations",vidName+"_phases.csv")
+			if os.path.exists(phasesPath):
+				if os.stat(phasesPath).st_size == 0:
+					emptyAnnotVids.append(vidName)
+
+	return emptyAnnotVids
 
 def formatDataSmall(dataset,pathToZip,img_for_crop_nb):
 
@@ -94,37 +111,46 @@ def formatDataSmall(dataset,pathToZip,img_for_crop_nb):
 
 			timeCSV += "{},{}\n".format(imgCount,lastTiming)
 
+			#Select only the label columns of the well
+			row = df.loc[df['Well'] == wellInd][list(labelDict.keys())]
+
+			for col in row.columns:
+				row[col] = row[col].apply(lambda x:x.replace(",",".") if type(x) == str else x).astype(float)
+
+			#Removes label columns that do not appear in the video (i.e. those with NaN value)
+			colsToKeep = []
+			for col in row.columns:
+				if not np.isnan(row[col].values):
+					colsToKeep.append(col)
+			row = row[colsToKeep]
+
 			while ret:
 
-				#Select only the label columns of the well
-				row = df.loc[df['Well'] == wellInd][list(labelDict.keys())]
-
-				for col in row.columns:
-					row[col] = row[col].apply(lambda x:x.replace(",",".") if type(x) == str else x).astype(float)
-
-				#Removes label columns that do not appear in the video (i.e. those with NaN value)
-				row = row.transpose()
-				row = row[np.isnan(row) == 0]
-				row = row.transpose()
-
 				#Getting the true label of the image
-				label = row.columns[max((resDict["time"] > row).sum(axis=1).iloc[0]-1,0)]
+				labelInd = (resDict["time"] > row).sum(axis=1).iloc[0]-1
 
 				if resDict["time"]<lastTiming:
 					raise ValueError("Vid {} frame {} last time {} current time {}".format(vidPath,imgCount,lastTiming,resDict["time"]))
 				else:
 					lastTiming = resDict["time"]
 
-				#Initialise currentLabel with the first label
-				if currentLabel is None:
-					currentLabel = label
+				if labelInd != -1:
 
-				#If this condition is true, the current frame belongs to a new phase
-				if label != currentLabel:
-					#Adding the start and end frames of last phase in the dict
-					phaseDict[currentLabel] = (startOfCurrentPhase,imgCount-1)
-					startOfCurrentPhase = imgCount
-					currentLabel = label
+					label = row.columns[labelInd]
+
+					#Initialise currentLabel with the first label
+					if currentLabel is None:
+						currentLabel = label
+
+					#If this condition is true, the current frame belongs to a new phase
+					if label != currentLabel:
+						#Adding the start and end frames of last phase in the dict
+						phaseDict[currentLabel] = (startOfCurrentPhase,imgCount-1)
+						startOfCurrentPhase = imgCount
+						currentLabel = label
+
+				else:
+					startOfCurrentPhase += 1
 
 				ret, frame = cap.read()
 				if not frame is None:
@@ -134,7 +160,7 @@ def formatDataSmall(dataset,pathToZip,img_for_crop_nb):
 					timeCSV += "{},{}\n".format(imgCount,resDict["time"])
 
 			#Adding the last phase
-			phaseDict[currentLabel] = (startOfCurrentPhase,imgCount-1)
+			phaseDict[currentLabel] = (startOfCurrentPhase,imgCount)
 
 			#Writing the start and end frames of each phase in a csv file
 			with open("../data/{}/annotations/{}_phases.csv".format(dataset,vidName),"w") as text_file:
@@ -280,36 +306,41 @@ def processVideos(videoPaths,dataset,digExt,labelDict,dfDict,noAnnot,multipleAnn
 				#Using the first annotation found
 				row = rows.iloc[leastNaNRowInd].to_frame().transpose()
 
+				row = row[list(labelDict.keys())]
+				for col in list(row.columns):
+					row[col] = row[col].apply(lambda x:x.replace(",",".") if type(x) == str else x).astype(float)
+
+				#Removes label columns that do not appear in the video (i.e. those with NaN value)
+				colsToKeep = []
+				for col in row.columns:
+					if not np.isnan(row[col].values):
+						colsToKeep.append(col)
+				row = row[colsToKeep]
+
 				while ret:
-
-					row = row[list(labelDict.keys())]
-					for col in list(row.columns):
-						row[col] = row[col].apply(lambda x:x.replace(",",".") if type(x) == str else x).astype(float)
-
-					#Removes label columns that do not appear in the video (i.e. those with NaN value)
-					row = row.transpose()
-					row = row[np.isnan(row) == 0]
-					row = row.transpose()
-
 					#Getting the true label of the image
-					label = row.columns[max((resDict["time"] > row).sum(axis=1).iloc[0]-1,0)]
-
 					if resDict["time"]<lastTiming:
 					    if vidPath != "../data/big/CN917-11.avi" and imgCount != 235:
 					        raise ValueError("Vid {} frame {} last time {} current time {}".format(vidPath,imgCount,lastTiming,resDict["time"]))
 					else:
 					    lastTiming = resDict["time"]
 
-					#Initialise currentLabel with the first label
-					if currentLabel is None:
-					    currentLabel = label
+					labelInd = (resDict["time"] > row).sum(axis=1).iloc[0]-1
 
-					#If this condition is true, the current frame belongs to a new phase
-					if label != currentLabel:
-						#Adding the start and end frames of last phase in the dict
-						phaseDict[currentLabel] = (startOfCurrentPhase,imgCount-1)
-						startOfCurrentPhase = imgCount
-						currentLabel = label
+					if labelInd != -1:
+						label = row.columns[labelInd]
+
+						#Initialise currentLabel with the first label
+						if currentLabel is None:
+							currentLabel = label
+						#If this condition is true, the current frame belongs to a new phase
+						if label != currentLabel:
+							#Adding the start and end frames of last phase in the dict
+							phaseDict[currentLabel] = (startOfCurrentPhase,imgCount-1)
+							startOfCurrentPhase = imgCount
+							currentLabel = label
+					else:
+						startOfCurrentPhase += 1
 
 					ret, frame = cap.read()
 					if not frame is None:
@@ -320,7 +351,7 @@ def processVideos(videoPaths,dataset,digExt,labelDict,dfDict,noAnnot,multipleAnn
 					timeCSV += "{},{}\n".format(imgCount,resDict["time"])
 
 				#Adding the last phase
-				phaseDict[currentLabel] = (startOfCurrentPhase,imgCount-1)
+				phaseDict[currentLabel] = (startOfCurrentPhase,imgCount)
 
 				#Writing the start and end frames of each phase in a csv file
 				with open("../data/{}/annotations/{}_phases.csv".format(dataset,vidName),"w") as text_file:
