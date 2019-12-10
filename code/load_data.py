@@ -29,6 +29,9 @@ from albumentations import Compose
 import digitExtractor
 import cv2
 
+import torch.distributed as dist
+from random import Random
+
 maxTime = 200
 
 class Sampler(torch.utils.data.sampler.Sampler):
@@ -270,8 +273,6 @@ class TestLoader():
         frameInds = np.arange(self.currFrameInd,min(self.currFrameInd+L,frameNb))
         gt = getGT(vidName,self.dataset)[self.currFrameInd:min(self.currFrameInd+L,frameNb)]
 
-        print(vidName,frameNb,len(getGT(vidName,self.dataset)))
-
         if os.path.exists("../data/{}/annotations/{}_timeElapsed.csv".format(self.dataset.split("+")[0],vidName)):
             timeElapsed = np.genfromtxt("../data/{}/annotations/{}_timeElapsed.csv".format(self.dataset.split("+")[0],vidName),delimiter=",")[1:][self.currFrameInd:min(self.currFrameInd+L,frameNb),1]
         else:
@@ -321,12 +322,67 @@ def computeMask(maskTimeOnImage,imgSize):
         mask = None
     return mask
 
+class Partition(object):
+
+    def __init__(self, data, index):
+        self.data = data
+        self.index = index
+
+    def __len__(self):
+        return len(self.index)
+
+    def __getitem__(self, index):
+        data_idx = self.index[index]
+        return self.data[data_idx]
+
+
+class DataPartitioner(object):
+
+    def __init__(self, data, sizes=[0.7, 0.2, 0.1], seed=1234):
+        self.data = data
+        self.partitions = []
+        rng = Random()
+        rng.seed(seed)
+        data_len = len(data)
+        indexes = [x for x in range(0, data_len)]
+        rng.shuffle(indexes)
+
+        for frac in sizes:
+            part_len = int(frac * data_len)
+            self.partitions.append(indexes[0:part_len])
+            indexes = indexes[part_len:]
+
+    def use(self, partition):
+        return Partition(self.data, self.partitions[partition])
+
+def partition_dataset(dataset):
+
+    size = dist.get_world_size()
+    bsz = 128 / float(size)
+    partition_sizes = [1.0 / size for _ in range(size)]
+    partition = DataPartitioner(dataset, partition_sizes)
+    partition = partition.use(dist.get_rank())
+    train_set = torch.utils.data.DataLoader(partition,
+                                         batch_size=bsz,
+                                         shuffle=True)
+    return train_set, bsz
+
 def buildSeqTrainLoader(args):
 
     train_dataset = SeqTrDataset(args.dataset_train,args.train_part_beg,args.train_part_end,args.prop_set_int_fmt,args.tr_len,\
                                         args.img_size,args.orig_img_size,args.resize_image,args.exp_id,args.augment_data,args.mask_time_on_image,args.min_phase_nb)
     sampler = Sampler(len(train_dataset.videoPaths),train_dataset.nbImages,args.tr_len)
-    trainLoader = torch.utils.data.DataLoader(dataset=train_dataset,batch_size=args.batch_size,sampler=sampler, collate_fn=collateSeq, # use custom collate function here
+
+    if args.distributed:
+        size = dist.get_world_size()
+        bsz = int(args.batch_size / float(size))
+        partition_sizes = [1.0 / size for _ in range(size)]
+        partition = DataPartitioner(train_dataset, partition_sizes)
+        partition = partition.use(dist.get_rank())
+    else:
+        bsz = args.batch_size
+
+    trainLoader = torch.utils.data.DataLoader(dataset=train_dataset,batch_size=bsz,sampler=sampler, collate_fn=collateSeq, # use custom collate function here
                       pin_memory=False,num_workers=args.num_workers)
 
     return trainLoader,train_dataset
@@ -402,6 +458,27 @@ def getGT(vidName,dataset):
         gt = np.genfromtxt("../data/{}/annotations/{}_targ.csv".format(datasetOfTheVideo,vidName))
 
     return gt.astype(int)
+
+def getDataset(videoName):
+
+    videoDatasetPath = None
+
+    i=0
+    datasetPaths = sorted(glob.glob("../data/*/"))
+    datasetFound=False
+
+    while i < len(datasetPaths) and not datasetFound:
+        if os.path.exists(os.join(datasetPath,videoName+".avi")):
+            videoDatasetPath = datasetPath
+            datasetFound = True
+        i+=1
+
+    if videoDatasetPath is None:
+        raise ValueError("No dataset found for ",videoName)
+
+    datasetName = videoDatasetPath.split("/")[-2]
+
+    return datasetName
 
 def addArgs(argreader):
 
