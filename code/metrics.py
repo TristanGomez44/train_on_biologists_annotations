@@ -111,7 +111,7 @@ def updateMetrDict(metrDict,metrDictSample):
 
     return metrDict
 
-def binaryToMetrics(output,target,transition_matrix,regression,uncertainty):
+def binaryToMetrics(output,target,transition_matrix,regression,uncertainty,videoNames=None):
     ''' Computes metrics over a batch of targets and predictions
 
     Args:
@@ -166,4 +166,45 @@ def binaryToMetrics(output,target,transition_matrix,regression,uncertainty):
         metDict["Entropy (Correct)"] = entropies_norm[pred == target]
         metDict["Entropy (Incorrect)"] = entropies_norm[pred != target]
 
+    if not videoNames is None:
+        metDict["Correlation"] = correlation(output,target,videoNames)
+
     return metDict
+
+
+def correlation(output,target,videoNames):
+    ''' Computes the times at which the model predicts the developpement phase is changing and
+    compare it to the real times where the phase is changing. Computes a correlation between those
+    two list of numbers.
+
+    '''
+
+    for i,outSet in enumerate(output):
+
+        dataset = load_data.getDataset(videoNames[i])
+        timeElapsedTensor = np.genfromtxt("../data/{}/annotations/{}_timeElapsed.csv".format(dataset,videoNames[i]))
+
+        pred = output.argmax(dim=-1)
+        phasesPredDict = phaseToTime(pred,timeElapsedTensor)
+
+        phasesTargDict = phaseToTime(target,timeElapsedTensor)
+
+        commonPhases = list(set(list(phasesPredDict.keys())).intersection(set(list(phasesTargDict.keys()))))
+
+        timePairs = []
+        for phase in commonPhases:
+            timePairs.append((phasesPredDict[phase],phasesTargDict[phase]))
+
+        return timePairs
+
+def phaseToTime(phaseList,timeElapsedTensor):
+
+    changingPhaseFrame = np.cat(([1],(phaseList[1:]-phaseList[:-1]) == 1),axis=0)
+    phases = phaseList[changingPhaseFrame]
+
+    changingPhaseFrame = np.argwhere(changingPhaseFrame)[:,0]
+    changingPhaseTime = timeElapsedTensor[changingPhaseFrame]
+
+    phaseToFrameDict = {phases[i]:changingPhaseTime[i] for i in range(len(phases))}
+
+    return phaseToFrameDict
