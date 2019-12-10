@@ -42,25 +42,84 @@ class DataParallelModel(nn.DataParallel):
 
 class Model(nn.Module):
 
-    def __init__(self,visualModel,tempModel):
+    def __init__(self,visualModel,tempModel,spatTransf=None):
         super(Model,self).__init__()
         self.visualModel = visualModel
         self.tempModel = tempModel
+        self.spatTransf = spatTransf
 
         self.transMat = torch.zeros((self.tempModel.nbClass,self.tempModel.nbClass))
         self.priors = torch.zeros((self.tempModel.nbClass))
 
     def forward(self,x,timeElapsed=None):
+        if self.spatTransf:
+            x = self.spatTransf(x)["x"]
+
         x = self.visualModel(x)["x"]
-        x = self.tempModel(x,self.visualModel.batchSize,timeElapsed)
-        return x
+        resDict = self.tempModel(x,self.visualModel.batchSize,timeElapsed)
+
+        return resDict
+
+    #This method can not be used when running on several gpu
+    def computeVisual(self,x):
+        if self.spatTransf:
+            resDict = self.spatTransf(x)
+            x = resDict["x"]
+            theta = resDict["theta"]
+
+        resDict = self.visualModel(x)
+
+        if self.spatTransf:
+            resDict["theta"] = theta
+
+        return resDict
 
     def setTransMat(self,transMat):
         self.transMat = transMat
     def setPriors(self,priors):
         self.priors = priors
 
-################################# Visual Model ##########################""
+################################# Spatial Transformer #########################
+
+class SpatialTransformer(nn.Module):
+
+    def __init__(self,inSize,outSize):
+
+        super(SpatialTransformer,self).__init__()
+
+        self.outSize = outSize
+        postVisFeatSize = outSize//4
+
+        self.visFeat = buildFeatModel("resnet4",False,featMap=True,bigMaps=False)
+        self.conv1x1 = nn.Conv2d(8,1,1)
+        self.mlp = nn.Sequential(nn.Linear(postVisFeatSize*postVisFeatSize,512),nn.ReLU(True),\
+                                 nn.Linear(512,6))
+
+        #Initialising
+        self.mlp[2].weight.data.zero_()
+        self.mlp[2].bias.data.copy_(torch.tensor([outSize//inSize, 0, 0, 0, outSize//inSize, 0], dtype=torch.float))
+
+    def forward(self,inImage):
+
+        batchSize = inImage.size(0)
+
+        inImage = inImage.view(inImage.size(0)*inImage.size(1),inImage.size(2),inImage.size(3),inImage.size(4))
+
+        x = torch.nn.functional.interpolate(inImage, size=self.outSize,mode='bilinear', align_corners=False)
+        x = self.visFeat(x)
+        x = self.conv1x1(x)
+        x = x.view(x.size(0),-1)
+        x = self.mlp(x)
+        theta = x.view(x.size(0),2,3)
+        grid = F.affine_grid(theta, inImage.size())
+        x = F.grid_sample(inImage, grid)
+        x = torch.nn.functional.interpolate(x, size=self.outSize,mode='bilinear', align_corners=False)
+
+        x = x.view(batchSize,x.size(0)//batchSize,x.size(1),x.size(2),x.size(3))
+
+        return {"x":x,"theta":theta}
+
+################################# Visual Model ##########################
 
 class VisualModel(nn.Module):
 
@@ -205,9 +264,9 @@ class AttentionFull(VisualModel):
         x = x.unsqueeze(2).expand(x.size(0),x.size(1),self.nbClass,x.size(2),x.size(3))
         # N*T x D x class nb x H x W
 
-        attWeight = attWeight.unsqueeze(1).expand(attWeight.size(0),x.size(1),attWeight.size(1),attWeight.size(2),attWeight.size(3))
+        attWeightExp = attWeight.unsqueeze(1).expand(attWeight.size(0),x.size(1),attWeight.size(1),attWeight.size(2),attWeight.size(3))
 
-        x = x*attWeight
+        x = x*attWeightExp
         x = x.mean(dim=-1).mean(dim=-1)
         # N*T x D x class nb
         x = x.permute(0,2,1)
@@ -216,7 +275,7 @@ class AttentionFull(VisualModel):
         # N*T x (class nb*D)
         x = self.lin(x)
         # N*T x class_nb
-
+        print(x.size(),attWeight.size())
         return {"x":x,"attention":attWeight}
 
 ################################ Temporal Model ########################""
@@ -423,7 +482,12 @@ def netBuilder(args):
 
     ############### Whole Model ##########################
 
-    net = Model(visualModel,tempModel)
+    if args.spat_transf:
+        spatTransf = SpatialTransformer(args.img_size,args.spat_transf_img_size)
+    else:
+        spatTransf = None
+
+    net = Model(visualModel,tempModel,spatTransf=spatTransf)
 
     if args.multi_gpu:
         net = DataParallelModel(net)
@@ -482,5 +546,11 @@ def addArgs(argreader):
 
     argreader.parser.add_argument('--class_bias_model', type=args.str2bool, metavar='BOOL',
                         help='To have a global feature model (ignored when not using a feature attention model.)')
+
+    argreader.parser.add_argument('--spat_transf', type=args.str2bool, metavar='BOOL',
+                        help='To have a spatial transformer network (STN) before the visual model')
+
+    argreader.parser.add_argument('--spat_transf_img_size', type=int, metavar='BOOL',
+                        help='To size to which the image will be resized after the STN.')
 
     return argreader
