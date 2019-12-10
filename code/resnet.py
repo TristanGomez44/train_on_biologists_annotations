@@ -118,7 +118,9 @@ class Bottleneck(nn.Module):
 
 class ResNet(nn.Module):
 
-    def __init__(self, block, layers, num_classes=1000, zero_init_residual=False, norm_layer=None,maxPoolKer=(3,3),maxPoolPad=(1,1),stride=(2,2),featMap=False,chan=64,inChan=3,dilation=1,bigMaps=False):
+    def __init__(self, block, layers, num_classes=1000, zero_init_residual=False, norm_layer=None,maxPoolKer=(3,3),maxPoolPad=(1,1),stride=(2,2),\
+                    featMap=False,chan=64,inChan=3,dilation=1,bigMaps=False,layersNb=4):
+
         super(ResNet, self).__init__()
         if norm_layer is None:
             norm_layer = nn.BatchNorm2d
@@ -130,23 +132,20 @@ class ResNet(nn.Module):
 
         self.nbLayers = len(layers)
 
+        #All layers are built but they will not necessarily be used
         self.layer1 = self._make_layer(block, chan*1, layers[0], stride=1,      norm_layer=norm_layer,feat=False)
         self.layer2 = self._make_layer(block, chan*2, layers[1], stride=1 if bigMaps else stride, norm_layer=norm_layer,feat=False,dilation=dilation)
+        self.layer3 = self._make_layer(block, chan*4, layers[2], stride=1 if bigMaps else stride, norm_layer=norm_layer,feat=False,dilation=dilation)
+        self.layer4 = self._make_layer(block, chan*8, layers[3], stride=1 if bigMaps else stride, norm_layer=norm_layer,feat=True,dilation=dilation)
 
-        self.layers = [self.layer1,self.layer2]
+        if layersNb<1 or layersNb>4:
+            raise ValueError("Wrong number of layer : ",layersNb)
 
-        if self.nbLayers == 4:
-            self.layer3 = self._make_layer(block, chan*4, layers[2], stride=1 if bigMaps else stride, norm_layer=norm_layer,feat=False,dilation=dilation)
-            self.layer4 = self._make_layer(block, chan*8, layers[3], stride=1 if bigMaps else stride, norm_layer=norm_layer,feat=True,dilation=dilation)
+        self.layersNb = layersNb
 
-            self.fc = nn.Linear(chan*8 * block.expansion, num_classes)
-
-            self.layers += [self.layer3,self.layer4]
-        else:
-            self.fc = nn.Linear(chan*2 * block.expansion, num_classes)
+        self.fc = nn.Linear(chan*(2**(layersNb-1)) * block.expansion, num_classes)
 
         self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
-
 
         for m in self.modules():
             if isinstance(m, nn.Conv2d):
@@ -198,12 +197,8 @@ class ResNet(nn.Module):
         x = self.relu(x)
         x = self.maxpool(x)
 
-        x = self.layer1(x)
-        x = self.layer2(x)
-
-        if self.nbLayers == 4:
-            x = self.layer3(x)
-            x = self.layer4(x)
+        for i in range(1,self.layersNb+1):
+            x = getattr(self,"layer{}".format(i))(x)
 
         if not self.featMap:
             x = self.avgpool(x)
@@ -211,8 +206,16 @@ class ResNet(nn.Module):
 
         return x
 
+def resnet4(pretrained=False, **kwargs):
+    model = ResNet(BasicBlock, [2, 2, 2, 2], chan=8,layersNb=1,**kwargs)
+
+    if pretrained:
+        raise ValueError("ResNet4 does not have pretrained weights on ImageNet.")
+
+    return model
+
 def resnet9(pretrained=False, **kwargs):
-    model = ResNet(BasicBlock, [2, 2], chan=8,**kwargs)
+    model = ResNet(BasicBlock, [2, 2, 2, 2], chan=8,layersNb=2,**kwargs)
 
     if pretrained:
         raise ValueError("ResNet9 does not have pretrained weights on ImageNet.")
