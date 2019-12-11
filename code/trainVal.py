@@ -223,7 +223,7 @@ def epochSeqVal(model,log_interval,loader, epoch, args,writer,metricEarlyStop,mo
     frameIndDict = {}
 
     #The writer dict for the attention maps. The will be one writer per class
-    fullAttMapSeq = None
+    fullAttMapSeq,fullAffTransSeq = None,None
     revLabelDict = formatData.getReversedLabels()
     precVidName = "None"
     videoBegining = True
@@ -244,12 +244,14 @@ def epochSeqVal(model,log_interval,loader, epoch, args,writer,metricEarlyStop,mo
         feat = visualDict["x"].data
 
         fullAttMapSeq = catAttMap(visualDict,fullAttMapSeq)
+        fullAffTransSeq = catAffineTransf(visualDict,fullAffTransSeq)
 
         update.updateFrameDict(frameIndDict,frameInds,vidName)
 
         if newVideo and not videoBegining:
             allOutput,nbVideos = update.updateMetrics(args,model,allFeat,allTimeElapsedTensor,allTarget,precVidName,nbVideos,metrDict,outDict,targDict)
             fullAttMapSeq = saveAttMap(fullAttMapSeq,args.exp_id,args.model_id,epoch,precVidName)
+            fullAffTransSeq = saveAffineTransf(fullAffTransSeq,args.exp_id,args.model_id,epoch,precVidName)
 
         if newVideo:
             allTarget = target
@@ -272,6 +274,7 @@ def epochSeqVal(model,log_interval,loader, epoch, args,writer,metricEarlyStop,mo
     if not args.debug:
         allOutput,nbVideos = update.updateMetrics(args,model,allFeat,allTimeElapsedTensor,allTarget,precVidName,nbVideos,metrDict,outDict,targDict)
         fullAttMapSeq = saveAttMap(fullAttMapSeq,args.exp_id,args.model_id,epoch,precVidName)
+        fullAffTransSeq = saveAffineTransf(fullAffTransSeq,args.exp_id,args.model_id,epoch,precVidName)
 
     for key in outDict.keys():
         fullArr = torch.cat((frameIndDict[key].float(),outDict[key].squeeze(0).squeeze(1)),dim=1)
@@ -280,6 +283,22 @@ def epochSeqVal(model,log_interval,loader, epoch, args,writer,metricEarlyStop,mo
     writeSummaries(metrDict,validBatch,writer,epoch,mode,args.model_id,args.exp_id,nbVideos=nbVideos)
 
     return outDict,targDict,metrDict[metricEarlyStop]
+
+def catAffineTransf(visualDict,fullAffTransSeq):
+
+    if "theta" in visualDict.keys():
+        if fullAffTransSeq is None:
+            fullAffTransSeq = visualDict["theta"].cpu()
+        else:
+            fullAffTransSeq = torch.cat((fullAffTransSeq,visualDict["theta"].cpu()),dim=0)
+
+    return fullAffTransSeq
+
+def saveAffineTransf(fullAffTransSeq,exp_id,model_id,epoch,precVidName):
+    if not fullAffTransSeq is None:
+        np.save("../results/{}/affTransf_{}_epoch{}_{}.npy".format(exp_id,model_id,epoch,precVidName),fullAffTransSeq.numpy())
+        fullAffTransSeq = None
+    return fullAffTransSeq
 
 def catAttMap(visualDict,fullAttMapSeq):
     if "attention" in visualDict.keys():
