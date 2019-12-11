@@ -78,7 +78,6 @@ def epochSeqTr(model,optim,log_interval,loader, epoch, args,writer,**kwargs):
         #Computing predictions
         output = model(data,timeElapsedTensor)["pred"]
 
-
         #Computing loss
         output = output[:,args.train_step_to_ignore:output.size(1)-args.train_step_to_ignore]
         target = target[:,args.train_step_to_ignore:target.size(1)-args.train_step_to_ignore]
@@ -173,9 +172,9 @@ def uncertaintyLoss(alpha,target,model,data,lossType,exactInfDiv,infDivWeight,ll
 
     return loss
 
-def computeTransMat(dataset,transMat,priors,propStart,propEnd):
+def computeTransMat(dataset,transMat,priors,propStart,propEnd,propSetIntFormat):
 
-    videoPaths = load_data.findVideos(dataset,propStart,propEnd)
+    videoPaths = load_data.findVideos(dataset,propStart,propEnd,propSetIntFormat)
 
     for videoPath in videoPaths:
         videoName = os.path.splitext(os.path.basename(videoPath))[0]
@@ -534,9 +533,10 @@ def main(argv=None):
     argreader.parser.add_argument('--no_train',type=str2bool,help='To use to re-evaluate a model at each epoch after training. At each epoch, the model is not trained but \
                                                                             the weights of the corresponding epoch are loaded and then the model is evaluated.\
                                                                             The arguments --exp_id_no_train and the --model_id_no_train must be set')
-
     argreader.parser.add_argument('--exp_id_no_train',type=str,help="To use when --no_train is set to True. This is the exp_id of the model to get the weights from.")
     argreader.parser.add_argument('--model_id_no_train',type=str,help="To use when --no_train is set to True. This is the model_id of the model to get the weights from.")
+
+    argreader.parser.add_argument('--no_val',type=str2bool,help='To not compute the validation')
 
     argreader = addInitArgs(argreader)
     argreader = addOptimArgs(argreader)
@@ -642,7 +642,7 @@ def main(argv=None):
 
         lrCounter = 0
 
-        transMat,priors = computeTransMat(args.dataset_train,net.transMat,net.priors,args.train_part_beg,args.train_part_end)
+        transMat,priors = computeTransMat(args.dataset_train,net.transMat,net.priors,args.train_part_beg,args.train_part_end,args.prop_set_int_fmt)
         net.setTransMat(transMat)
         net.setPriors(priors)
 
@@ -682,19 +682,20 @@ def main(argv=None):
             else:
                 net.load_state_dict(torch.load("../models/{}/model{}_epoch{}".format(args.no_train[0],args.no_train[1],epoch)))
 
-            with torch.no_grad():
-                _,_,metricVal = valFunc(**kwargsVal)
+            if not args.no_val:
+                with torch.no_grad():
+                    _,_,metricVal = valFunc(**kwargsVal)
 
-            if isBetter(metricVal,bestMetricVal):
-                if os.path.exists("../models/{}/model{}_best_epoch{}".format(args.exp_id,args.model_id,bestEpoch)):
-                    os.remove("../models/{}/model{}_best_epoch{}".format(args.exp_id,args.model_id,bestEpoch))
+                if isBetter(metricVal,bestMetricVal):
+                    if os.path.exists("../models/{}/model{}_best_epoch{}".format(args.exp_id,args.model_id,bestEpoch)):
+                        os.remove("../models/{}/model{}_best_epoch{}".format(args.exp_id,args.model_id,bestEpoch))
 
-                torch.save(net.state_dict(), "../models/{}/model{}_best_epoch{}".format(args.exp_id,args.model_id, epoch))
-                bestEpoch = epoch
-                bestMetricVal = metricVal
-                worseEpochNb = 0
-            else:
-                worseEpochNb += 1
+                    torch.save(net.state_dict(), "../models/{}/model{}_best_epoch{}".format(args.exp_id,args.model_id, epoch))
+                    bestEpoch = epoch
+                    bestMetricVal = metricVal
+                    worseEpochNb = 0
+                else:
+                    worseEpochNb += 1
 
             epoch += 1
         if args.run_test:
