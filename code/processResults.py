@@ -32,6 +32,11 @@ import sys
 import configparser
 
 import matplotlib.patheffects as path_effects
+import imageio
+from skimage import img_as_ubyte
+
+from scipy import stats
+
 
 def evalModel(dataset,partBeg,partEnd,propSetIntFormat,exp_id,model_id,epoch,regression,uncertainty,nbClass):
     '''
@@ -56,6 +61,9 @@ def evalModel(dataset,partBeg,partEnd,propSetIntFormat,exp_id,model_id,epoch,reg
     videoNameDict = buildVideoNameDict(dataset,partBeg,partEnd,propSetIntFormat,resFilePaths)
     resFilePaths = np.array(list(filter(lambda x:x in videoNameDict.keys(),resFilePaths)))
 
+    print(model_id)
+    print("Epoch",epoch)
+
     #Store the value of the f-score of for video and for each threshold
     metTun = {}
 
@@ -64,9 +72,12 @@ def evalModel(dataset,partBeg,partEnd,propSetIntFormat,exp_id,model_id,epoch,reg
     for metricName in metricNameList:
         if metricName.find("Accuracy") != -1:
             metEval[metricName] = np.zeros(len(resFilePaths))
+        if metricName == "Correlation":
+            metEval[metricName] = []
+
 
     transMat,priors = torch.zeros((nbClass,nbClass)).float(),torch.zeros((nbClass)).float()
-    transMat,_ = trainVal.computeTransMat(dataset,transMat,priors,partBeg,partEnd)
+    transMat,_ = trainVal.computeTransMat(dataset,transMat,priors,partBeg,partEnd,propSetIntFormat)
 
     totalFrameNb = 0
 
@@ -76,23 +87,32 @@ def evalModel(dataset,partBeg,partEnd,propSetIntFormat,exp_id,model_id,epoch,reg
         videoName = videoNameDict[path]
 
         #Compute the metrics with the default threshold (0.5) and with a threshold tuned on each video with a leave-one out method
-        metEval["Accuracy"][j],frameNb = computeMetrics(path,dataset,videoName,resFilePaths,videoNameDict,metTun,"Accuracy",transMat,regression,uncertainty)
-        metEval["Accuracy (Viterbi)"][j],_ = computeMetrics(path,dataset,videoName,resFilePaths,videoNameDict,metTun,"Accuracy (Viterbi)",transMat,regression,uncertainty)
+        metrDict,frameNb = computeMetrics(path,dataset,videoName,resFilePaths,videoNameDict,metTun,transMat,regression,uncertainty)
 
-        metEval["Accuracy"][j] *= frameNb
-        metEval["Accuracy (Viterbi)"][j] *= frameNb
+        for metricName in metEval.keys():
+
+            if metricName.find("Accuracy") != -1:
+                metEval[metricName][j] = metrDict[metricName]
+                metEval[metricName][j] *= frameNb
+
+            if metricName == "Correlation":
+                metEval[metricName] += metrDict[metricName]
 
         totalFrameNb += frameNb
+
+    metEval["Correlation"] = np.array(metEval["Correlation"])
+    metEval["Correlation"] = np.corrcoef(metEval["Correlation"][:,0],metEval["Correlation"][:,1])
 
     #Writing the latex table
     printHeader = not os.path.exists("../results/{}/metrics.csv".format(exp_id))
     with open("../results/{}/metrics.csv".format(exp_id),"a") as text_file:
         if printHeader:
-            print("Model,Accuracy,Accuracy (Viterbi)",file=text_file)
+            print("Model,Accuracy,Accuracy (Viterbi),Correlation",file=text_file)
 
-        print(model_id+","+str(metEval["Accuracy"].sum()/totalFrameNb)+","+str(metEval["Accuracy (Viterbi)"].sum()/totalFrameNb),file=text_file)
+        print(model_id+","+str(metEval["Accuracy"].sum()/totalFrameNb)+","+str(metEval["Accuracy (Viterbi)"].sum()/totalFrameNb)+","\
+                           +str(metEval["Correlation"]),file=text_file)
 
-def computeMetrics(path,dataset,videoName,resFilePaths,videoNameDict,metTun,metric,transMat,regression,uncertainty):
+def computeMetrics(path,dataset,videoName,resFilePaths,videoNameDict,metTun,transMat,regression,uncertainty):
     '''
     Evaluate a model on a video by using the default threshold and a threshold tuned on all the other video
 
@@ -103,19 +123,22 @@ def computeMetrics(path,dataset,videoName,resFilePaths,videoNameDict,metTun,metr
     - videoNameDict (dict): a dictionnary mapping the score file paths to the video names
     - metTun (dict): a dictionnary containing the performance of the model for each threshold and each video. It allows to not repeat computation. \
                     this dictionnary is updated during the execution of this function.
-    - metric (str): the metric to evaluate.
     Returns:
-    - metr_dict[metric] (float): the value of the metric using the tuned threshold
-    - def_metr_dict[metric]: the metric using default threshold
+    - metr_dict (dict): the dict containing all metrics
 
     '''
 
     gt = load_data.getGT(videoName,dataset).astype(int)
+    frameStart = (gt == -1).sum()
+    gt = gt[frameStart:]
+
     scores = np.genfromtxt(path,delimiter=" ")[:,1:]
 
-    metr_dict = metrics.binaryToMetrics(torch.tensor(scores[np.newaxis,:]).float(),torch.tensor(gt[np.newaxis,:]),transMat,regression,uncertainty)
+    print(dataset,videoName,scores.shape,gt.shape)
 
-    return metr_dict[metric],len(scores)
+    metr_dict = metrics.binaryToMetrics(torch.tensor(scores[np.newaxis,:]).float(),torch.tensor(gt[np.newaxis,:]),transMat,regression,uncertainty,videoNames=[videoName])
+
+    return metr_dict,len(scores)
 
 def formatMetr(mean,std):
     return "$"+str(round(mean,2))+" \pm "+str(round(std,2))+"$"
@@ -232,15 +255,15 @@ def buildVideoNameDict(dataset,test_part_beg,test_part_end,propSetIntFormat,resF
 
     videoPaths = load_data.findVideos(dataset,test_part_beg,test_part_end,propSetIntFormat)
     videoNames = list(map(lambda x:os.path.basename(os.path.splitext(x)[0]),videoPaths))
-    videoNameDict = {}
 
+    videoNameDict = {}
     for path in resFilePaths:
         for videoName in videoNames:
-            if "_"+videoName.replace("__","_")+".csv" in path.replace("__","_"):
+            if videoName in path:
                 videoNameDict[path] = videoName
 
-    #if len(videoNameDict.keys()) < len(videoNames):
-    #    raise ValueError("Some result file could not get their video identified. Files identified :",videoNameDict.keys())
+    if len(videoNameDict.keys()) < len(resFilePaths):
+        raise ValueError("Some result file could not get their video identified. Files identified :",videoNameDict.keys())
 
     return videoNameDict
 
@@ -381,7 +404,6 @@ def ttest_matrix(groupedLines,keys,exp_id,metricNames,keyToNameDict):
         with open("../results/{}/ttest_{}.csv".format(exp_id,metricNames[k]),"w") as text_file:
             print(csv,file=text_file)
 
-
 def readConfFile(path,keyList):
     ''' Read a config file and get the value of desired argument
 
@@ -401,6 +423,85 @@ def readConfFile(path,keyList):
 
     return ",".join(resList)
 
+def plotAttentionMaps(dataset,exp_id,model_id):
+
+    featMapPaths = sorted(glob.glob("../results/{}/attMaps_{}_epoch*_*.npy".format(exp_id,model_id)))
+
+    videoNameDict = buildVideoNameDict(dataset,0,100,True,featMapPaths)
+
+    conf = configparser.ConfigParser()
+    conf.read("../models/{}/{}.ini".format(exp_id,model_id))
+    conf = conf["default"]
+    nbClass = int(conf["class_nb"])
+
+    cmap = cm.hsv(np.linspace(0, 1, nbClass))
+
+    for featMapPath in featMapPaths:
+
+        featMaps = np.load(featMapPath)
+        print(featMaps.shape)
+
+        videoName = videoNameDict[featMapPath]
+        video = pims.Video("../data/{}/{}.avi".format(dataset,videoName))
+
+        epoch = int(os.path.splitext(featMapPath.split("epoch")[1].split("_"+videoName)[0])[0])
+
+        predictions = np.genfromtxt("../results/{}/{}_epoch{}_{}.csv".format(exp_id,model_id,epoch,videoName))[:,1:].argmax(axis=1)
+
+        with imageio.get_writer('../vis/{}/featAtt_{}_{}.mp4'.format(exp_id,model_id,videoName), mode='I') as writer:
+
+            i=0
+
+            while i<len(featMaps) and i<20:
+
+                frame = video[i]
+                print(frame.shape)
+
+                featMaps[i,predictions[i]][4:-4,4:-4] = 255
+                #Getting the attention map corresponding to the class predicted at this frame
+                resizedAttFeatMap = resize(featMaps[i,predictions[i]], frame.shape,anti_aliasing=True,mode="constant",order=0)
+                #frame = frame*resizedAttFeatMap*cmap[predictions[i]][:-1][np.newaxis,np.newaxis,:]
+                frame = frame*resizedAttFeatMap
+                print(frame.shape)
+                cv2.imwrite("../vis/{}/featAtt_{}_{}_frame{}.png".format(exp_id,model_id,videoName,i),resizedAttFeatMap)
+                writer.append_data(img_as_ubyte(frame.astype("uint8")))
+                i+=1
+
+def phaseNbHist(datasets,density):
+
+    def countRows(x):
+        x = np.genfromtxt(x,delimiter=",")
+        return x.shape[0]
+
+    def computeLength(x):
+
+        times = np.genfromtxt(x,delimiter=",")[1:]
+
+        return times[-1,1]-times[0,1]
+
+    for dataset in datasets:
+
+        phases_nb_list = list(map(countRows,sorted(glob.glob("../data/{}/annotations/*phases.csv".format(dataset)))))
+
+        plt.figure(1)
+        plt.hist(phases_nb_list,label=dataset,alpha=0.5,density=density,bins=16,range=(0,16),edgecolor='black')
+
+        videoLengths = list(map(computeLength,sorted(glob.glob("../data/{}/annotations/*timeElapsed.csv".format(dataset)))))
+
+        plt.figure(2)
+        plt.hist(videoLengths,label=dataset,alpha=0.5,bins=20,range=(0,180),density=density,edgecolor='black')
+
+    plt.figure(1)
+    plt.xticks(np.arange(16)+0.5,np.arange(16))
+    plt.legend()
+    plt.savefig("../vis/nbScenes_{}_density{}.png".format("_".join(datasets),density))
+    plt.close()
+
+    plt.figure(2)
+    plt.legend()
+    plt.savefig("../vis/scenesLengths_{}_density{}.png".format("_".join(datasets),density))
+    plt.close()
+
 def main(argv=None):
 
     #Getting arguments from config file and command line
@@ -418,7 +519,7 @@ def main(argv=None):
     argreader.parser.add_argument('--eval_model',action="store_true",help='Evaluate a model using the csv files containing the scores. The --exp_id argument must be set, \
                                    along with the --epoch_to_process and the --model_ids arguments. The arguments --param_agr, --keys, and --names arguments can also be set.')
 
-    argreader.parser.add_argument('--param_agr',type=str,nargs="*",metavar="PARAM",help='A list of meta-parameter to use to agregate the performance of several models.')
+    argreader.parser.add_argument('--param_agr',type=str,nargs="*",metavar="PARAM",help='A list of hyper-parameter to use to agregate the performance of several models.')
     argreader.parser.add_argument('--keys',type=str,nargs="*",metavar="KEY",help='The list of key that will appear during aggregation. In the final csv file, each key value will be replaced by a string of the list --names.\
                                                                                   to make it easier to read.')
     argreader.parser.add_argument('--names',type=str,nargs="*",metavar="NAME",help='The list of string to replace each key by during agregation.')
@@ -428,6 +529,17 @@ def main(argv=None):
     ######################## Database plot #################################
 
     argreader.parser.add_argument('--plot_data',type=int,metavar="N",help='To plot the state transition matrix and the prior vector. The value is the number of classes. The --dataset_test must be set.')
+
+    ####################### Plot attention maps ###############################
+
+    argreader.parser.add_argument('--plot_attention_maps',action="store_true",help='To plot the attention map of a model')
+
+    ####################### Plot  phase number histogram #####################
+
+    argreader.parser.add_argument('--phase_nb_hist',type=str,nargs="*",metavar="DATASET",help='To plot the histogram of phase number of all video in several datasets, \
+                                    along with histograms showing the video length distribution. The value of this argument is the names of the datasets.')
+
+    argreader.parser.add_argument('--density',type=str2bool,metavar="BOOl",help='To plot the histogram on a density scale.')
 
     argreader = load_data.addArgs(argreader)
     argreader = modelBuilder.addArgs(argreader)
@@ -451,12 +563,18 @@ def main(argv=None):
             conf.read("../models/{}/{}.ini".format(args.exp_id,model_id))
             conf = conf["default"]
 
-            evalModel(conf["dataset_test"],float(conf["test_part_beg"]),float(conf["test_part_end"]),conf["prop_set_int_fmt"],args.exp_id,model_id,epoch=args.epochs_to_process[i],\
+
+            evalModel(conf["dataset_test"],float(conf["val_part_beg"]),float(conf["val_part_end"]),conf["prop_set_int_fmt"],args.exp_id,model_id,epoch=args.epochs_to_process[i],\
                         regression=str2bool(conf["regression"]),uncertainty=str2bool(conf["uncertainty"]),nbClass=int(conf["class_nb"]))
+
         if len(args.param_agr) > 0:
             agregatePerfs(args.exp_id,args.param_agr,args.keys,args.names)
     if not args.plot_data is None:
         plotData(args.plot_data,args.dataset_test)
+    if args.plot_attention_maps:
+        plotAttentionMaps(args.dataset_test,args.exp_id,args.model_id)
+    if args.phase_nb_hist:
+        phaseNbHist(args.phase_nb_hist,args.density)
 
 if __name__ == "__main__":
     main()

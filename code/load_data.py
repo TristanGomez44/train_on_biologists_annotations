@@ -268,9 +268,9 @@ class TestLoader():
             self.currFrameInd = int(frameStart)
 
         frameInds = np.arange(self.currFrameInd,min(self.currFrameInd+L,frameNb))
-        gt = getGT(vidName,self.dataset)[self.currFrameInd:min(self.currFrameInd+L,frameNb)]
+        print(frameInds.min(),frameInds.max())
 
-        print(vidName,frameNb,len(getGT(vidName,self.dataset)))
+        gt = getGT(vidName,self.dataset)[self.currFrameInd:min(self.currFrameInd+L,frameNb)]
 
         if os.path.exists("../data/{}/annotations/{}_timeElapsed.csv".format(self.dataset.split("+")[0],vidName)):
             timeElapsed = np.genfromtxt("../data/{}/annotations/{}_timeElapsed.csv".format(self.dataset.split("+")[0],vidName),delimiter=",")[1:][self.currFrameInd:min(self.currFrameInd+L,frameNb),1]
@@ -402,6 +402,27 @@ def getGT(vidName,dataset):
         gt = np.genfromtxt("../data/{}/annotations/{}_targ.csv".format(datasetOfTheVideo,vidName))
 
     return gt.astype(int)
+
+def getDataset(videoName):
+
+    videoDatasetPath = None
+
+    i=0
+    datasetPaths = sorted(glob.glob("../data/*/"))
+    datasetFound=False
+
+    while i < len(datasetPaths) and not datasetFound:
+        if os.path.exists(os.path.join(datasetPaths[i],videoName+".avi")):
+            videoDatasetPath = datasetPaths[i]
+            datasetFound = True
+        i+=1
+
+    if videoDatasetPath is None:
+        raise ValueError("No dataset found for ",videoName)
+
+    datasetName = videoDatasetPath.split("/")[-2]
+
+    return datasetName
 
 def addArgs(argreader):
 
