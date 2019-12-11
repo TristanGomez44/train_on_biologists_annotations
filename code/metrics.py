@@ -6,6 +6,10 @@ import torch
 import sys
 import torch.nn.functional as F
 import math
+
+
+import load_data
+
 # Code taken from https://gist.github.com/PetrochukM/afaa3613a99a8e7213d2efdd02ae4762#file-top_k_viterbi-py-L5
 # Credits to AllenNLP for the base implementation and base tests:
 # https://github.com/allenai/allennlp/blob/master/allennlp/nn/util.py#L174
@@ -92,9 +96,9 @@ def regressionPred2Confidence(regresPred,nbClass):
 
 def emptyMetrDict(uncertainty=False):
     if not uncertainty:
-        return {"Loss":0,"Accuracy":0,"Accuracy (Viterbi)":0}
+        return {"Loss":0,"Accuracy":0,"Accuracy (Viterbi)":0,"Correlation":0}
     else:
-        return {"Loss":0,"Accuracy":0,"Accuracy (Viterbi)":0,"Entropy (Correct)":None,"Entropy (Incorrect)":None}
+        return {"Loss":0,"Accuracy":0,"Accuracy (Viterbi)":0,"Correlation":0,"Entropy (Correct)":None,"Entropy (Incorrect)":None}
 
 def updateMetrDict(metrDict,metrDictSample):
 
@@ -111,7 +115,7 @@ def updateMetrDict(metrDict,metrDictSample):
 
     return metrDict
 
-def binaryToMetrics(output,target,transition_matrix,regression,uncertainty,videoNames=None):
+def binaryToMetrics(output,target,transition_matrix,regression,uncertainty,videoNames=None,onlyPairsCorrelation=True):
     ''' Computes metrics over a batch of targets and predictions
 
     Args:
@@ -147,6 +151,7 @@ def binaryToMetrics(output,target,transition_matrix,regression,uncertainty,video
             pred.append(torch.tensor(predSeqs[0]).unsqueeze(0))
 
         pred = torch.cat(pred,dim=0).to(target.device)
+
         accViterb = (pred == target).float().sum()/(pred.numel())
 
     else:
@@ -167,44 +172,44 @@ def binaryToMetrics(output,target,transition_matrix,regression,uncertainty,video
         metDict["Entropy (Incorrect)"] = entropies_norm[pred != target]
 
     if not videoNames is None:
-        metDict["Correlation"] = correlation(output,target,videoNames)
+        metDict["Correlation"] = correlation(pred,target,videoNames,onlyPairs=onlyPairsCorrelation)
 
     return metDict
 
 
-def correlation(output,target,videoNames):
+def correlation(predBatch,target,videoNames,onlyPairs=True):
     ''' Computes the times at which the model predicts the developpement phase is changing and
     compare it to the real times where the phase is changing. Computes a correlation between those
     two list of numbers.
 
     '''
 
-    for i,outSet in enumerate(output):
+    for i,pred in enumerate(predBatch):
 
         dataset = load_data.getDataset(videoNames[i])
-        timeElapsedTensor = np.genfromtxt("../data/{}/annotations/{}_timeElapsed.csv".format(dataset,videoNames[i]))
+        timeElapsedTensor = np.genfromtxt("../data/{}/annotations/{}_timeElapsed.csv".format(dataset,videoNames[i]),delimiter=",")[1:,1]
 
-        pred = output.argmax(dim=-1)
         phasesPredDict = phaseToTime(pred,timeElapsedTensor)
-
-        phasesTargDict = phaseToTime(target,timeElapsedTensor)
+        phasesTargDict = phaseToTime(target[0],timeElapsedTensor)
 
         commonPhases = list(set(list(phasesPredDict.keys())).intersection(set(list(phasesTargDict.keys()))))
-
         timePairs = []
         for phase in commonPhases:
             timePairs.append((phasesPredDict[phase],phasesTargDict[phase]))
 
-        return timePairs
+        if onlyPairs:
+            return timePairs
+        else:
+            timePairs = np.array(timePairs)
+            return np.corrcoef(timePairs[:,0],timePairs[:,1])[0,1]
 
 def phaseToTime(phaseList,timeElapsedTensor):
-
-    changingPhaseFrame = np.cat(([1],(phaseList[1:]-phaseList[:-1]) == 1),axis=0)
-    phases = phaseList[changingPhaseFrame]
+    changingPhaseFrame = np.concatenate(([1],(phaseList[1:]-phaseList[:-1]) > 0),axis=0)
+    phases = phaseList[np.argwhere(changingPhaseFrame)[:,0]]
 
     changingPhaseFrame = np.argwhere(changingPhaseFrame)[:,0]
     changingPhaseTime = timeElapsedTensor[changingPhaseFrame]
 
-    phaseToFrameDict = {phases[i]:changingPhaseTime[i] for i in range(len(phases))}
+    phaseToFrameDict = {phases[i].item():changingPhaseTime[i] for i in range(len(phases))}
 
     return phaseToFrameDict
