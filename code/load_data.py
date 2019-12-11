@@ -310,7 +310,7 @@ def loadFrames_and_process(frameInds,gt,timeElapsed,vidName,video,preproc):
     # T x 3 x H x W
     frameSeq = torch.cat(list(map(lambda x:preproc.normalizeFunc(x).unsqueeze(0),frameSeq.float())),dim=0)
 
-    return frameSeq.unsqueeze(0),torch.tensor(gt).unsqueeze(0),vidName,torch.tensor(frameInds).int(),torch.tensor(timeElapsed).float().unsqueeze(0)
+    return frameSeq.unsqueeze(0),torch.tensor(gt).unsqueeze(0),vidName,torch.tensor(frameInds).int(),torch.tensor(timeElapsed).float().unsqueeze(0)/maxTime
 
 def computeMask(maskTimeOnImage,imgSize):
     if maskTimeOnImage:
