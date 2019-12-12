@@ -57,12 +57,15 @@ def evalModel(dataset,partBeg,partEnd,propSetIntFormat,exp_id,model_id,epoch,reg
 
     '''
 
-    resFilePaths = np.array(sorted(glob.glob("../results/{}/{}_epoch{}_*.csv".format(exp_id,model_id,epoch)),key=utils.findNumbers))
-    videoNameDict = buildVideoNameDict(dataset,partBeg,partEnd,propSetIntFormat,resFilePaths)
-    resFilePaths = np.array(list(filter(lambda x:x in videoNameDict.keys(),resFilePaths)))
+    try:
+        resFilePaths = np.array(sorted(glob.glob("../results/{}/{}_epoch{}_*.csv".format(exp_id,model_id,epoch)),key=utils.findNumbers))
+        videoNameDict = buildVideoNameDict(dataset,partBeg,partEnd,propSetIntFormat,resFilePaths)
+    except ValueError:
+        testEpoch = len(glob.glob("../models/{}/model{}_epoch*".format(exp_id,model_id)))
+        resFilePaths = np.array(sorted(glob.glob("../results/{}/{}_epoch{}_*.csv".format(exp_id,model_id,testEpoch)),key=utils.findNumbers))
+        videoNameDict = buildVideoNameDict(dataset,partBeg,partEnd,propSetIntFormat,resFilePaths)
 
-    print(model_id)
-    print("Epoch",epoch)
+    resFilePaths = np.array(list(filter(lambda x:x in videoNameDict.keys(),resFilePaths)))
 
     #Store the value of the f-score of for video and for each threshold
     metTun = {}
@@ -101,7 +104,7 @@ def evalModel(dataset,partBeg,partEnd,propSetIntFormat,exp_id,model_id,epoch,reg
         totalFrameNb += frameNb
 
     metEval["Correlation"] = np.array(metEval["Correlation"])
-    metEval["Correlation"] = np.corrcoef(metEval["Correlation"][:,0],metEval["Correlation"][:,1])
+    metEval["Correlation"] = np.corrcoef(metEval["Correlation"][:,0],metEval["Correlation"][:,1])[0,1]
 
     #Writing the latex table
     printHeader = not os.path.exists("../results/{}/metrics.csv".format(exp_id))
@@ -134,7 +137,9 @@ def computeMetrics(path,dataset,videoName,resFilePaths,videoNameDict,metTun,tran
 
     scores = np.genfromtxt(path,delimiter=" ")[:,1:]
 
-    print(dataset,videoName,scores.shape,gt.shape)
+    #print(dataset,videoName,scores.shape,gt.shape)
+
+    gt = gt[:len(scores)]
 
     metr_dict = metrics.binaryToMetrics(torch.tensor(scores[np.newaxis,:]).float(),torch.tensor(gt[np.newaxis,:]),transMat,regression,uncertainty,videoNames=[videoName])
 
@@ -262,8 +267,8 @@ def buildVideoNameDict(dataset,test_part_beg,test_part_end,propSetIntFormat,resF
             if videoName in path:
                 videoNameDict[path] = videoName
 
-    if len(videoNameDict.keys()) < len(resFilePaths):
-        raise ValueError("Some result file could not get their video identified. Files identified :",videoNameDict.keys())
+    if len(videoNameDict.keys()) < len(videoNames):
+        raise ValueError("Could not find result files corresponding to some videos. Files identified :",sorted(list(videoNameDict.keys())))
 
     return videoNameDict
 
@@ -436,34 +441,57 @@ def plotAttentionMaps(dataset,exp_id,model_id):
 
     cmap = cm.hsv(np.linspace(0, 1, nbClass))
 
-    for featMapPath in featMapPaths:
+    endImages = None
 
+    for vidInd,featMapPath in enumerate(featMapPaths):
         featMaps = np.load(featMapPath)
-        print(featMaps.shape)
-
         videoName = videoNameDict[featMapPath]
-        video = pims.Video("../data/{}/{}.avi".format(dataset,videoName))
 
+        dataset_of_the_video = load_data.getDataset(videoName)
+        video = pims.Video("../data/{}/{}.avi".format(dataset_of_the_video,videoName))
         epoch = int(os.path.splitext(featMapPath.split("epoch")[1].split("_"+videoName)[0])[0])
 
         predictions = np.genfromtxt("../results/{}/{}_epoch{}_{}.csv".format(exp_id,model_id,epoch,videoName))[:,1:].argmax(axis=1)
+        gt = load_data.getGT(videoName,dataset_of_the_video).astype(int)
+        frameStart = (gt == -1).sum()
 
         with imageio.get_writer('../vis/{}/featAtt_{}_{}.mp4'.format(exp_id,model_id,videoName), mode='I') as writer:
 
-            i=0
+            i=frameStart
 
-            while i<len(featMaps) and i<20:
+            print(vidInd+1,"/",len(featMapPaths),videoName)
+
+            if not endImages is None:
+                featMaps = np.concatenate((endImages,featMaps),axis=0)
+
+            if featMaps.shape[0] != predictions.shape[0]:
+                endImages = featMaps[predictions.shape[0]:]
+                featMaps = featMaps[:predictions.shape[0]]
+
+            if featMaps.shape[0] != predictions.shape[0]:
+                raise ValueError("featMaps and predictions are not of the same length : ",featMaps.shape,predictions.shape)
+
+            frameNb = utils.getVideoFrameNb("../data/{}/{}.avi".format(dataset_of_the_video,videoName))
+
+            while i < frameNb:
 
                 frame = video[i]
-                print(frame.shape)
 
-                featMaps[i,predictions[i]][4:-4,4:-4] = 255
+                frame = frame[frame.shape[0]-frame.shape[1]:,:]
+
+                nearestLowerDiv = frame.shape[0]//16
+                nearestHigherDiv = (nearestLowerDiv+1)*16
+                frame = resize(frame, (nearestHigherDiv,nearestHigherDiv),anti_aliasing=True,mode="constant",order=0)*255
+
                 #Getting the attention map corresponding to the class predicted at this frame
-                resizedAttFeatMap = resize(featMaps[i,predictions[i]], frame.shape,anti_aliasing=True,mode="constant",order=0)
-                #frame = frame*resizedAttFeatMap*cmap[predictions[i]][:-1][np.newaxis,np.newaxis,:]
-                frame = frame*resizedAttFeatMap
-                print(frame.shape)
-                cv2.imwrite("../vis/{}/featAtt_{}_{}_frame{}.png".format(exp_id,model_id,videoName,i),resizedAttFeatMap)
+                resizedAttFeatMap = resize(featMaps[i-frameStart,predictions[i-frameStart]], (frame.shape[0],frame.shape[1]),anti_aliasing=True,mode="constant",order=0)
+                resizedAttFeatMap = resizedAttFeatMap[:,:,np.newaxis]/2+0.5
+
+                color = cmap[predictions[i-frameStart]]
+                color = color+(1-color)*0.75
+
+                frame = frame.astype("float")*resizedAttFeatMap*color[np.newaxis,np.newaxis,:-1]
+
                 writer.append_data(img_as_ubyte(frame.astype("uint8")))
                 i+=1
 
@@ -564,7 +592,7 @@ def main(argv=None):
             conf = conf["default"]
 
 
-            evalModel(conf["dataset_test"],float(conf["val_part_beg"]),float(conf["val_part_end"]),conf["prop_set_int_fmt"],args.exp_id,model_id,epoch=args.epochs_to_process[i],\
+            evalModel(conf["dataset_test"],float(conf["test_part_beg"]),float(conf["test_part_end"]),conf["prop_set_int_fmt"],args.exp_id,model_id,epoch=args.epochs_to_process[i],\
                         regression=str2bool(conf["regression"]),uncertainty=str2bool(conf["uncertainty"]),nbClass=int(conf["class_nb"]))
 
         if len(args.param_agr) > 0:
