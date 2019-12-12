@@ -243,15 +243,15 @@ def epochSeqVal(model,log_interval,loader, epoch, args,writer,metricEarlyStop,mo
         visualDict = model.visualModel(data)
         feat = visualDict["x"].data
 
-        fullAttMapSeq = catAttMap(visualDict,fullAttMapSeq)
-        fullAffTransSeq = catAffineTransf(visualDict,fullAffTransSeq)
-
         update.updateFrameDict(frameIndDict,frameInds,vidName)
 
         if newVideo and not videoBegining:
             allOutput,nbVideos = update.updateMetrics(args,model,allFeat,allTimeElapsedTensor,allTarget,precVidName,nbVideos,metrDict,outDict,targDict)
             fullAttMapSeq = saveAttMap(fullAttMapSeq,args.exp_id,args.model_id,epoch,precVidName)
             fullAffTransSeq = saveAffineTransf(fullAffTransSeq,args.exp_id,args.model_id,epoch,precVidName)
+
+        fullAttMapSeq = catAttMap(visualDict,fullAttMapSeq)
+        fullAffTransSeq = catAffineTransf(visualDict,fullAffTransSeq)
 
         if newVideo:
             allTarget = target
@@ -730,6 +730,7 @@ def main(argv=None):
 
             net.load_state_dict(torch.load("../models/{}/model{}_epoch{}".format(args.exp_id,args.model_id,bestEpoch)))
             kwargsTest["model"] = net
+            kwargsTest["epoch"] = bestEpoch
 
             with torch.no_grad():
                 valFunc(**kwargsTest)
