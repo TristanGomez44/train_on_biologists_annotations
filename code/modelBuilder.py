@@ -205,13 +205,38 @@ class ClassBias(nn.Module):
 
         return x
 
-class Attention(VisualModel):
+class Attention(nn.Module):
 
-    def __init__(self,featModelName,pretrainedFeatMod,bigMaps,attKerSize,nbFeat,nbClass,classBiasMod=None):
-        super(Attention,self).__init__(featModelName,pretrainedFeatMod,True,bigMaps)
+    def __init__(self,type,inFeat,nbClass,grouped=True):
+        super(Attention,self).__init__()
+
+        nbGroups = 1 if not grouped else nbClass
+        hidFeat = inFeat
+
+        if type == "shallow":
+            self.attention = nn.Conv2d(inFeat,nbClass,3,padding=1,groups=nbGroups)
+        elif type == "deep":
+
+            if hidFeat != nbClass:
+                downsample = nn.Sequential(resnet.conv1x1(hidFeat, nbClass),nn.BatchNorm2d(nbClass))
+            else:
+                downsample = None
+
+            self.attention = nn.Sequential(resnet.BasicBlock(hidFeat, hidFeat,groups=nbGroups),resnet.BasicBlock(hidFeat, nbClass,groups=nbGroups,downsample=downsample))
+        else:
+            raise ValueError("Unknown attention type :",type)
+
+    def forward(self,x):
+        return self.attention(x)
+
+class AttentionModel(VisualModel):
+
+    def __init__(self,featModelName,pretrainedFeatMod,bigMaps,nbFeat,nbClass,classBiasMod=None,attType="shallow",groupedAtt=True):
+        super(AttentionModel,self).__init__(featModelName,pretrainedFeatMod,True,bigMaps)
 
         self.classConv = nn.Conv2d(nbFeat,nbClass,1)
-        self.attention = nn.Conv2d(nbClass,nbClass,attKerSize,padding=attKerSize//2,groups=nbClass)
+        #self.attention = nn.Conv2d(nbClass,nbClass,attKerSize,padding=attKerSize//2,groups=nbClass)
+        self.attention = Attention(attType,nbClass,nbClass,groupedAtt)
         self.nbClass = nbClass
         self.classBiasMod = classBiasMod
 
@@ -237,12 +262,14 @@ class Attention(VisualModel):
 
         return {"x":x,"attention":attWeight}
 
-class AttentionFull(VisualModel):
+class AttentionFullModel(VisualModel):
 
-    def __init__(self,featModelName,pretrainedFeatMod,bigMaps,attKerSize,nbFeat,nbClass,classBiasMod=None):
-        super(AttentionFull,self).__init__(featModelName,pretrainedFeatMod,True,bigMaps)
+    def __init__(self,featModelName,pretrainedFeatMod,bigMaps,nbFeat,nbClass,classBiasMod=None,attType="shallow",groupedAtt=True):
+        super(AttentionFullModel,self).__init__(featModelName,pretrainedFeatMod,True,bigMaps)
 
-        self.attention = nn.Conv2d(nbFeat,nbClass,attKerSize,padding=attKerSize//2)
+        #self.attention = nn.Conv2d(nbFeat,nbClass,attKerSize,padding=attKerSize//2)
+        self.attention = Attention(attType,nbFeat,nbClass,groupedAtt)
+
         self.lin = nn.Linear(nbFeat*nbClass,nbClass)
         self.nbClass = nbClass
         self.classBiasMod = classBiasMod
@@ -275,7 +302,7 @@ class AttentionFull(VisualModel):
         # N*T x (class nb*D)
         x = self.lin(x)
         # N*T x class_nb
-        print(x.size(),attWeight.size())
+
         return {"x":x,"attention":attWeight}
 
 ################################ Temporal Model ########################""
@@ -470,11 +497,11 @@ def netBuilder(args):
         classBiasMod = ClassBias(nbFeat,args.class_nb) if args.class_bias_model else None
 
         if args.temp_mod == "feat_attention":
-            visualModel = Attention(args.feat,args.pretrained_visual,args.feat_attention_big_maps,args.feat_attention_ker_size,nbFeat,args.class_nb,classBiasMod)
+            visualModel = AttentionModel(args.feat,args.pretrained_visual,args.feat_attention_big_maps,nbFeat,args.class_nb,classBiasMod,args.feat_attention_att_type,args.feat_attention_grouped_att)
             tempModel = Identity(nbFeat,args.class_nb,False,False)
 
         elif args.temp_mod == "feat_attention_full":
-            visualModel = AttentionFull(args.feat,args.pretrained_visual,args.feat_attention_big_maps,args.feat_attention_ker_size,nbFeat,args.class_nb,classBiasMod)
+            visualModel = AttentionFullModel(args.feat,args.pretrained_visual,args.feat_attention_big_maps,nbFeat,args.class_nb,classBiasMod,args.feat_attention_att_type,args.feat_attention_grouped_att)
             tempModel = Identity(nbFeat,args.class_nb,False,False)
 
     else:
@@ -537,6 +564,12 @@ def addArgs(argreader):
 
     argreader.parser.add_argument('--feat_attention_ker_size', type=int, metavar='BOOL',
                         help='The kernel size of the feature attention.')
+
+    argreader.parser.add_argument('--feat_attention_att_type', type=str, metavar='TYPE',
+                        help="The attention type. Can be 'shallow' or 'deep'.")
+
+    argreader.parser.add_argument('--feat_attention_grouped_att', type=args.str2bool, metavar='BOOl',
+                        help="To use grouped convolution in the attention module.")
 
     argreader.parser.add_argument('--feat_attention_big_maps', type=args.str2bool, metavar='BOOL',
                         help='To make the feature and the attention maps bigger.')
