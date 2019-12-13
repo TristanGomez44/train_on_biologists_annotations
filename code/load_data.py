@@ -150,13 +150,13 @@ class SeqTrDataset(torch.utils.data.Dataset):
         ################# Frame selection ##################
         #The video are not systematically annotated from the begining
         frameStart = (gt == -1).sum()
-        startFrame = torch.randint(int(frameStart),frameNb-self.trLen,size=(1,))
-        frameInds,gt = frameInds[startFrame:startFrame+self.trLen],gt[startFrame:startFrame+self.trLen]
+        frameStart = torch.randint(int(frameStart),frameNb-self.trLen,size=(1,))
+        frameInds,gt = frameInds[frameStart:frameStart+self.trLen],gt[frameStart:frameStart+self.trLen]
 
         if os.path.exists("../data/{}/annotations/{}_timeElapsed.csv".format(self.dataset.split("+")[0],vidName)):
-            timeElapsed = np.genfromtxt("../data/{}/annotations/{}_timeElapsed.csv".format(self.dataset.split("+")[0],vidName),delimiter=",")[1:][startFrame:startFrame+self.trLen,1]
+            timeElapsed = np.genfromtxt("../data/{}/annotations/{}_timeElapsed.csv".format(self.dataset.split("+")[0],vidName),delimiter=",")[1:][frameStart:frameStart+self.trLen,1]
         else:
-            timeElapsed = np.genfromtxt("../data/{}/annotations/{}_timeElapsed.csv".format(self.dataset.split("+")[1],vidName),delimiter=",")[1:][startFrame:startFrame+self.trLen,1]
+            timeElapsed = np.genfromtxt("../data/{}/annotations/{}_timeElapsed.csv".format(self.dataset.split("+")[1],vidName),delimiter=",")[1:][frameStart:frameStart+self.trLen,1]
 
         video = pims.Video(self.videoPaths[vidInd])
 
@@ -268,7 +268,6 @@ class TestLoader():
             self.currFrameInd = int(frameStart)
 
         frameInds = np.arange(self.currFrameInd,min(self.currFrameInd+L,frameNb))
-        print(frameInds.min(),frameInds.max())
 
         gt = getGT(vidName,self.dataset)[self.currFrameInd:min(self.currFrameInd+L,frameNb)]
 
