@@ -97,7 +97,7 @@ class SpatialTransformer(nn.Module):
 
         #Initialising
         self.mlp[2].weight.data.zero_()
-        self.mlp[2].bias.data.copy_(torch.tensor([outSize//inSize, 0, 0, 0, outSize//inSize, 0], dtype=torch.float))
+        self.mlp[2].bias.data.copy_(torch.tensor([1, 0, 0, 0, 1, 0], dtype=torch.float))
 
     def forward(self,inImage):
 
