@@ -12,6 +12,7 @@ import matplotlib.pyplot as plt
 plt.switch_backend('agg')
 
 from sklearn.manifold import TSNE
+import sklearn
 import matplotlib.cm as cm
 import matplotlib.patches as patches
 import pims
@@ -530,6 +531,60 @@ def phaseNbHist(datasets,density):
     plt.savefig("../vis/scenesLengths_{}_density{}.png".format("_".join(datasets),density))
     plt.close()
 
+def plotConfusionMatrix(exp_id,model_id):
+
+    bestWeightPath = glob.glob("../models/{}/model{}_best_epoch*".format(exp_id,model_id))[0]
+    bestEpoch = bestWeightPath.split("epoch")[1]
+
+    resFilePaths = np.array(sorted(glob.glob("../results/{}/{}_epoch{}_*.csv".format(exp_id,model_id,bestEpoch)),key=utils.findNumbers))
+
+    conf = configparser.ConfigParser()
+    conf.read("../models/{}/{}.ini".format(exp_id,model_id))
+    conf = conf["default"]
+
+    videoDict = buildVideoNameDict(conf["dataset_val"],float(conf["val_part_beg"]),float(conf["val_part_end"]),str2bool(conf["prop_set_int_fmt"]),resFilePaths)
+
+    revDict = formatData.getReversedLabels()
+    labels = formatData.getLabels()
+    labelInds = list(revDict.keys())
+
+    for i,resFilePath in enumerate(resFilePaths):
+
+        if i%5==0:
+            print(i,"/",len(resFilePaths),resFilePath)
+
+        pred = np.genfromtxt(resFilePath)
+        pred = pred[:,1:].argmax(axis=-1)
+
+        gt = load_data.getGT(videoDict[resFilePath],conf["dataset_val"])
+
+        frameStart = (gt == -1).sum()
+
+        pred,gt = pred[frameStart:],gt[frameStart:]
+        gt = gt[:len(pred)]
+
+        confMat = sklearn.metrics.confusion_matrix(gt, pred, labels=labelInds).astype("float")
+        #confMat = confMat/confMat.sum(axis=1)
+
+        for i in range(len(confMat)):
+            if confMat[i].sum() > 0:
+                confMat[i] = confMat[i]/confMat[i].sum()
+
+        labelIndsPred,labelIndsGT = list(set(pred)),list(set(gt))
+        print(labelIndsPred,labelIndsGT)
+        labelsPred,labelsGT = [revDict[labelInd] for labelInd in labelIndsPred],[revDict[labelInd] for labelInd in labelIndsGT]
+
+        plt.figure()
+        img = plt.imshow(confMat)
+        plt.xlabel("Predictions")
+        plt.xticks(np.arange(len(labelInds)),labels,rotation=45)
+        plt.ylabel("Ground-truth")
+        plt.yticks(np.arange(len(labelInds)),labels)
+        plt.colorbar(img)
+        plt.tight_layout()
+        plt.savefig("../vis/{}/confMat_{}_epoch{}_{}.png".format(exp_id,model_id,bestEpoch,videoDict[resFilePath]))
+        plt.close()
+
 def main(argv=None):
 
     #Getting arguments from config file and command line
@@ -569,6 +624,11 @@ def main(argv=None):
 
     argreader.parser.add_argument('--density',type=str2bool,metavar="BOOl",help='To plot the histogram on a density scale.')
 
+    ####################### Plot confusion matrix #############################
+
+    argreader.parser.add_argument('--plot_confusion_matrix',action="store_true",help='To plot the confusion matrix of a model at its best validation epoch \
+                                        on the validation dataset. The --model_id and the --exp_id arguments must be set.')
+
     argreader = load_data.addArgs(argreader)
     argreader = modelBuilder.addArgs(argreader)
 
@@ -592,7 +652,7 @@ def main(argv=None):
             conf = conf["default"]
 
 
-            evalModel(conf["dataset_test"],float(conf["test_part_beg"]),float(conf["test_part_end"]),conf["prop_set_int_fmt"],args.exp_id,model_id,epoch=args.epochs_to_process[i],\
+            evalModel(conf["dataset_test"],float(conf["test_part_beg"]),float(conf["test_part_end"]),str2bool(conf["prop_set_int_fmt"]),args.exp_id,model_id,epoch=args.epochs_to_process[i],\
                         regression=str2bool(conf["regression"]),uncertainty=str2bool(conf["uncertainty"]),nbClass=int(conf["class_nb"]))
 
         if len(args.param_agr) > 0:
@@ -603,6 +663,8 @@ def main(argv=None):
         plotAttentionMaps(args.dataset_test,args.exp_id,args.model_id)
     if args.phase_nb_hist:
         phaseNbHist(args.phase_nb_hist,args.density)
+    if args.plot_confusion_matrix:
+        plotConfusionMatrix(args.exp_id,args.model_id)
 
 if __name__ == "__main__":
     main()
