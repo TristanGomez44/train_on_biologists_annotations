@@ -303,9 +303,9 @@ def saveAffineTransf(fullAffTransSeq,exp_id,model_id,epoch,precVidName):
 def catAttMap(visualDict,fullAttMapSeq):
     if "attention" in visualDict.keys():
         if fullAttMapSeq is None:
-            fullAttMapSeq = (visualDict["attention"].cpu().squeeze(0)*255).byte()
+            fullAttMapSeq = (visualDict["attention"].cpu()*255).byte()
         else:
-            fullAttMapSeq = torch.cat((fullAttMapSeq,(visualDict["attention"].cpu().squeeze(0)*255).byte()),dim=0)
+            fullAttMapSeq = torch.cat((fullAttMapSeq,(visualDict["attention"].cpu()*255).byte()),dim=0)
 
     return fullAttMapSeq
 
