@@ -214,7 +214,7 @@ class TestLoader():
     - exp_id (str): the name of the experience
     '''
 
-    def __init__(self,dataset,evalL,propStart,propEnd,propSetIntFormat,imgSize,origImgSize,resizeImage,exp_id,maskTimeOnImage,minPhaseNb):
+    def __init__(self,dataset,evalL,propStart,propEnd,propSetIntFormat,imgSize,origImgSize,resizeImage,exp_id,maskTimeOnImage,minPhaseNb,gridShuffle,gridShuffleSize):
         self.dataset = dataset
         self.evalL = evalL
 
@@ -240,7 +240,13 @@ class TestLoader():
         else:
             self.reSizeTorchFunc = None
 
-        self.preproc = PreProcess(self.maskTimeOnImage,self.mask,self.origImgSize,self.resizeImage,self.reSizeTorchFunc,self.digitExt)
+        if gridShuffle:
+            self.transf = albumentations.RandomGridShuffle(grid=(gridShuffleSize, gridShuffleSize), p=1.0)
+        else:
+            self.transf = None
+
+        self.preproc = PreProcess(self.maskTimeOnImage,self.mask,self.origImgSize,self.resizeImage,self.reSizeTorchFunc,self.digitExt,\
+                                    augmentData=False,gridShuffle=gridShuffle,transfFunc=self.transf)
 
     def __iter__(self):
         self.videoInd = 0
@@ -488,10 +494,17 @@ def addArgs(argreader):
                         help='The minimum number of phases a video must have to be included in the dataset')
 
     argreader.parser.add_argument('--grid_shuffle', type=args.str2bool, metavar='S',
-                        help='Apply a grid shuffle transformation from albumentation to the training image')
+                        help='Apply a grid shuffle transformation from albumentation to the training images')
 
     argreader.parser.add_argument('--grid_shuffle_size', type=int, metavar='S',
                         help='The grid size for grid shuffle.')
+
+
+    argreader.parser.add_argument('--grid_shuffle_test', type=args.str2bool, metavar='S',
+                        help='Apply a grid shuffle transformation from albumentation to the testing images')
+
+    argreader.parser.add_argument('--grid_shuffle_test_size', type=int, metavar='S',
+                        help='The grid size for grid shuffle for the test phase.')
 
     return argreader
 
@@ -521,6 +534,9 @@ if __name__ == "__main__":
     gridShuffle = True
     gridShuffleSize = 7
 
+    gridShuffleTest = True
+    gridShuffleSizeTest = 7
+
     train_dataset = SeqTrDataset(dataset_train,train_part_beg,train_part_end,propSetIntFormat,tr_len,\
                                         img_size,orig_img_size,resize_image,exp_id,augmentData,maskTimeOnImage,minPhaseNb,gridShuffle,gridShuffleSize)
     sampler = Sampler(len(train_dataset.videoPaths),train_dataset.nbImages,tr_len)
@@ -533,7 +549,7 @@ if __name__ == "__main__":
 
     valLoader = TestLoader(dataset_val,val_l,val_part_beg,val_part_end,propSetIntFormat,\
                                         img_size,orig_img_size,resize_image,\
-                                        exp_id,maskTimeOnImage,minPhaseNb)
+                                        exp_id,maskTimeOnImage,minPhaseNb,gridShuffleTest,gridShuffleSizeTest)
 
     for batch in valLoader:
         print(batch[0].shape,batch[1].shape,batch[2],batch[3])
