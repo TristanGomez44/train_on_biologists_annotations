@@ -95,12 +95,15 @@ def evalModel(dataset,partBeg,partEnd,propSetIntFormat,exp_id,model_id,epoch,reg
 
         for metricName in metEval.keys():
 
-            if metricName.find("Accuracy") != -1:
+            if metricName.find("Accuracy") != -1 and metricName.find("Temp") == -1:
                 metEval[metricName][j] = metrDict[metricName]
                 metEval[metricName][j] *= frameNb
 
             if metricName == "Correlation":
                 metEval[metricName] += metrDict[metricName]
+
+            if metricName == "Temp Accuracy":
+                metEval[metricName][j] = metrDict[metricName]
 
         totalFrameNb += frameNb
 
@@ -111,10 +114,10 @@ def evalModel(dataset,partBeg,partEnd,propSetIntFormat,exp_id,model_id,epoch,reg
     printHeader = not os.path.exists("../results/{}/metrics.csv".format(exp_id))
     with open("../results/{}/metrics.csv".format(exp_id),"a") as text_file:
         if printHeader:
-            print("Model,Accuracy,Accuracy (Viterbi),Correlation",file=text_file)
+            print("Model,Accuracy,Accuracy (Viterbi),Correlation,Temp Accuracy",file=text_file)
 
         print(model_id+","+str(metEval["Accuracy"].sum()/totalFrameNb)+","+str(metEval["Accuracy (Viterbi)"].sum()/totalFrameNb)+","\
-                           +str(metEval["Correlation"]),file=text_file)
+                           +str(metEval["Correlation"])+","+str(metEval["Temp Accuracy"].mean()),file=text_file)
 
 def computeMetrics(path,dataset,videoName,resFilePaths,videoNameDict,metTun,transMat,regression,uncertainty):
     '''
@@ -255,7 +258,7 @@ def labelIndList2FrameInd(labelList,reverLabDict):
     phases.append((reverLabDict[currLabel],currStartFrame,i))
     return phases
 
-def buildVideoNameDict(dataset,test_part_beg,test_part_end,propSetIntFormat,resFilePaths):
+def buildVideoNameDict(dataset,test_part_beg,test_part_end,propSetIntFormat,resFilePaths,raiseError=True):
 
     ''' Build a dictionnary associating a path to a video name (it can be the path to any file than contain the name of a video in its file name) '''
 
@@ -269,7 +272,8 @@ def buildVideoNameDict(dataset,test_part_beg,test_part_end,propSetIntFormat,resF
                 videoNameDict[path] = videoName
 
     if len(videoNameDict.keys()) < len(videoNames):
-        raise ValueError("Could not find result files corresponding to some videos. Files identified :",sorted(list(videoNameDict.keys())))
+        if raiseError:
+            raise ValueError("Could not find result files corresponding to some videos. Files identified :",sorted(list(videoNameDict.keys())))
 
     return videoNameDict
 
@@ -433,7 +437,7 @@ def plotAttentionMaps(dataset,exp_id,model_id):
 
     featMapPaths = sorted(glob.glob("../results/{}/attMaps_{}_epoch*_*.npy".format(exp_id,model_id)))
 
-    videoNameDict = buildVideoNameDict(dataset,0,100,True,featMapPaths)
+    videoNameDict = buildVideoNameDict(dataset,0,100,True,featMapPaths,raiseError=False)
 
     conf = configparser.ConfigParser()
     conf.read("../models/{}/{}.ini".format(exp_id,model_id))
@@ -486,7 +490,8 @@ def plotAttentionMaps(dataset,exp_id,model_id):
 
                 #Getting the attention map corresponding to the class predicted at this frame
                 resizedAttFeatMap = resize(featMaps[i-frameStart,predictions[i-frameStart]], (frame.shape[0],frame.shape[1]),anti_aliasing=True,mode="constant",order=0)
-                resizedAttFeatMap = resizedAttFeatMap[:,:,np.newaxis]/2+0.5
+
+                resizedAttFeatMap = resizedAttFeatMap[:,:,np.newaxis]*2/3+1/3
 
                 color = cmap[predictions[i-frameStart]]
                 color = color+(1-color)*0.75
@@ -585,6 +590,8 @@ def plotConfusionMatrix(exp_id,model_id):
         plt.savefig("../vis/{}/confMat_{}_epoch{}_{}.png".format(exp_id,model_id,bestEpoch,videoDict[resFilePath]))
         plt.close()
 
+
+
 def main(argv=None):
 
     #Getting arguments from config file and command line
@@ -615,7 +622,7 @@ def main(argv=None):
 
     ####################### Plot attention maps ###############################
 
-    argreader.parser.add_argument('--plot_attention_maps',action="store_true",help='To plot the attention map of a model')
+    argreader.parser.add_argument('--plot_attention_maps',action="store_true",help="To plot the attention map of a model. Requires the arguments 'dataset_test', 'exp_id', 'model_id' to be set.")
 
     ####################### Plot  phase number histogram #####################
 

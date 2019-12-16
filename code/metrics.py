@@ -96,9 +96,9 @@ def regressionPred2Confidence(regresPred,nbClass):
 
 def emptyMetrDict(uncertainty=False):
     if not uncertainty:
-        return {"Loss":0,"Accuracy":0,"Accuracy (Viterbi)":0,"Correlation":0}
+        return {"Loss":0,"Accuracy":0,"Accuracy (Viterbi)":0,"Correlation":0,"Temp Accuracy":0}
     else:
-        return {"Loss":0,"Accuracy":0,"Accuracy (Viterbi)":0,"Correlation":0,"Entropy (Correct)":None,"Entropy (Incorrect)":None}
+        return {"Loss":0,"Accuracy":0,"Accuracy (Viterbi)":0,"Correlation":0,"Entropy (Correct)":None,"Entropy (Incorrect)":None,"Temp Accuracy":0}
 
 def updateMetrDict(metrDict,metrDictSample):
 
@@ -172,7 +172,7 @@ def binaryToMetrics(output,target,transition_matrix,regression,uncertainty,video
         metDict["Entropy (Incorrect)"] = entropies_norm[pred != target]
 
     if not videoNames is None:
-        metDict["Correlation"] = correlation(pred,target,videoNames,onlyPairs=onlyPairsCorrelation)
+        metDict["Correlation"],metDict["Temp Accuracy"] = correlation(pred,target,videoNames,onlyPairs=onlyPairsCorrelation)
 
     return metDict
 
@@ -194,14 +194,18 @@ def correlation(predBatch,target,videoNames,onlyPairs=True):
 
         commonPhases = list(set(list(phasesPredDict.keys())).intersection(set(list(phasesTargDict.keys()))))
         timePairs = []
+        accuracy = 0
         for phase in commonPhases:
             timePairs.append((phasesPredDict[phase],phasesTargDict[phase]))
+            if np.abs(phasesPredDict[phase]-phasesTargDict[phase]) <= 1:
+                accuracy +=1
+        accuracy /= len(phasesTargDict.keys())
 
         if onlyPairs:
-            return timePairs
+            return timePairs,accuracy
         else:
             timePairs = np.array(timePairs)
-            return np.corrcoef(timePairs[:,0],timePairs[:,1])[0,1]
+            return np.corrcoef(timePairs[:,0],timePairs[:,1])[0,1],accuracy
 
 def phaseToTime(phaseList,timeElapsedTensor):
     changingPhaseFrame = np.concatenate(([1],(phaseList[1:]-phaseList[:-1]) > 0),axis=0)
