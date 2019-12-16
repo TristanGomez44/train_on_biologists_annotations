@@ -80,7 +80,8 @@ class SeqTrDataset(torch.utils.data.Dataset):
     - exp_id (str): the name of the experience
     '''
 
-    def __init__(self,dataset,propStart,propEnd,propSetIntFormat,trLen,imgSize,origImgSize,resizeImage,exp_id,augmentData,maskTimeOnImage,minPhaseNb):
+    def __init__(self,dataset,propStart,propEnd,propSetIntFormat,trLen,imgSize,origImgSize,resizeImage,exp_id,augmentData,maskTimeOnImage,minPhaseNb,\
+                        gridShuffle,gridShuffleSize):
 
         super(SeqTrDataset, self).__init__()
 
@@ -119,6 +120,8 @@ class SeqTrDataset(torch.utils.data.Dataset):
                     albumentations.RandomSizedCrop((int(0.736*imgSize),imgSize), imgSize, imgSize, p=0.5),
                     albumentations.RandomContrast(limit=0, p=0.5)
                 ], p=1)
+        elif gridShuffle:
+            self.transf = albumentations.RandomGridShuffle(grid=(gridShuffleSize, gridShuffleSize), p=1.0)
         else:
             self.transf = None
 
@@ -127,7 +130,7 @@ class SeqTrDataset(torch.utils.data.Dataset):
 
         self.digitExt = digitExtractor.DigitIdentifier(self.dataset)
 
-        self.preproc = PreProcess(self.maskTimeOnImage,self.mask,self.origImgSize,self.resizeImage,self.reSizeTorchFunc,self.digitExt,augmentData=augmentData,augmentationFunc=self.transf)
+        self.preproc = PreProcess(self.maskTimeOnImage,self.mask,self.origImgSize,self.resizeImage,self.reSizeTorchFunc,self.digitExt,augmentData=augmentData,gridShuffle=gridShuffle,transfFunc=self.transf)
 
     def __len__(self):
         return self.nbImages
@@ -164,15 +167,15 @@ class SeqTrDataset(torch.utils.data.Dataset):
 
 class PreProcess():
 
-    def __init__(self,maskTimeOnImage,mask,origImgSize,resizeImage,resizeTorchFunc,digitExtr,augmentData=False,augmentationFunc=None):
+    def __init__(self,maskTimeOnImage,mask,origImgSize,resizeImage,resizeTorchFunc,digitExtr,augmentData=False,gridShuffle=False,transfFunc=None):
 
         self.maskTimeOnImage = maskTimeOnImage
         self.origImgSize = origImgSize
         self.resizeImage = resizeImage
         self.resizeTorchFunc = resizeTorchFunc
         self.digitExtr = digitExtr
-        self.transfFunc = augmentationFunc
-        self.augmentData = augmentData
+        self.transfFunc = transfFunc
+        self.applyTransf = augmentData or gridShuffle
         self.toTensorFunc = torchvision.transforms.ToTensor()
         self.normalizeFunc = transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
         self.mask = mask
@@ -298,7 +301,7 @@ def loadFrames_and_process(frameInds,gt,timeElapsed,vidName,video,preproc):
     # Shape of tensor : T x H x W
     frameSeq = frameSeq.transpose((1,2,0))
     # H x W x T
-    if preproc.augmentData:
+    if preproc.applyTransf:
         frameSeq = preproc.transfFunc(image=frameSeq)["image"]
     # H x W x T
     frameSeq = preproc.toTensorFunc(frameSeq)
@@ -323,7 +326,8 @@ def computeMask(maskTimeOnImage,imgSize):
 def buildSeqTrainLoader(args):
 
     train_dataset = SeqTrDataset(args.dataset_train,args.train_part_beg,args.train_part_end,args.prop_set_int_fmt,args.tr_len,\
-                                        args.img_size,args.orig_img_size,args.resize_image,args.exp_id,args.augment_data,args.mask_time_on_image,args.min_phase_nb)
+                                        args.img_size,args.orig_img_size,args.resize_image,args.exp_id,args.augment_data,args.mask_time_on_image,\
+                                        args.min_phase_nb,args.grid_shuffle,args.grid_shuffle_size)
     sampler = Sampler(len(train_dataset.videoPaths),train_dataset.nbImages,args.tr_len)
     trainLoader = torch.utils.data.DataLoader(dataset=train_dataset,batch_size=args.batch_size,sampler=sampler, collate_fn=collateSeq, # use custom collate function here
                       pin_memory=False,num_workers=args.num_workers)
@@ -483,6 +487,12 @@ def addArgs(argreader):
     argreader.parser.add_argument('--min_phase_nb', type=int, metavar='S',
                         help='The minimum number of phases a video must have to be included in the dataset')
 
+    argreader.parser.add_argument('--grid_shuffle', type=args.str2bool, metavar='S',
+                        help='Apply a grid shuffle transformation from albumentation to the training image')
+
+    argreader.parser.add_argument('--grid_shuffle_size', type=int, metavar='S',
+                        help='The grid size for grid shuffle.')
+
     return argreader
 
 if __name__ == "__main__":
@@ -508,8 +518,11 @@ if __name__ == "__main__":
     minPhaseNb = 6
     propSetIntFormat = False
 
+    gridShuffle = True
+    gridShuffleSize = 7
+
     train_dataset = SeqTrDataset(dataset_train,train_part_beg,train_part_end,propSetIntFormat,tr_len,\
-                                        img_size,orig_img_size,resize_image,exp_id,augmentData,maskTimeOnImage,minPhaseNb)
+                                        img_size,orig_img_size,resize_image,exp_id,augmentData,maskTimeOnImage,minPhaseNb,gridShuffle,gridShuffleSize)
     sampler = Sampler(len(train_dataset.videoPaths),train_dataset.nbImages,tr_len)
     trainLoader = torch.utils.data.DataLoader(dataset=train_dataset,batch_size=batch_size,sampler=sampler, collate_fn=collateSeq, # use custom collate function here
                       pin_memory=False,num_workers=num_workers)
