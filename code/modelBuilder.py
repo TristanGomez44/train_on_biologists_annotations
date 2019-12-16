@@ -222,7 +222,7 @@ class Attention(nn.Module):
             else:
                 downsample = None
 
-            self.attention = nn.Sequential(resnet.BasicBlock(hidFeat, hidFeat,groups=nbGroups),resnet.BasicBlock(hidFeat, nbClass,groups=nbGroups,downsample=downsample))
+            self.attention = nn.Sequential(resnet.BasicBlock(hidFeat, hidFeat,groups=nbGroups),resnet.BasicBlock(hidFeat, nbClass,groups=nbGroups,downsample=downsample,feat=True))
         else:
             raise ValueError("Unknown attention type :",type)
 
@@ -254,6 +254,9 @@ class AttentionModel(VisualModel):
             attWeight += self.classBiasMod(featureVolume)
 
         attWeight = torch.sigmoid(attWeight)
+
+        attWeight = attWeight-attWeight.min(dim=1,keepdim=True)[0]
+        attWeight = attWeight/attWeight.max(dim=1,keepdim=True)[0]
 
         x = x*attWeight
         # N x class_nb x 7 x 7
@@ -587,3 +590,14 @@ def addArgs(argreader):
                         help='To size to which the image will be resized after the STN.')
 
     return argreader
+
+
+if __name__ == "__main__":
+
+    batch = torch.ones((1,512,128,128))
+
+    model = Attention("deep",512,16,grouped=False)
+
+    res = torch.sigmoid(model(batch))
+
+    print(res.min(),res.max())
