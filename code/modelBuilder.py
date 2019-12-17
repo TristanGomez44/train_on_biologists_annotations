@@ -246,24 +246,21 @@ class AttentionModel(VisualModel):
         x = x.view(x.size(0)*x.size(1),x.size(2),x.size(3),x.size(4))
         featureVolume = self.featMod(x)
 
-        x = self.classConv(featureVolume)
+        classFeatMaps = self.classConv(featureVolume)
 
-        attWeight = self.attention(x)
+        attWeight = self.attention(classFeatMaps)
 
         if self.classBiasMod:
             attWeight += self.classBiasMod(featureVolume)
 
         attWeight = torch.sigmoid(attWeight)
 
-        attWeight = attWeight-attWeight.min(dim=1,keepdim=True)[0]
-        attWeight = attWeight/attWeight.max(dim=1,keepdim=True)[0]
-
-        x = x*attWeight
+        x = classFeatMaps*attWeight
         # N x class_nb x 7 x 7
 
         x = x.mean(dim=-1).mean(dim=-1)
 
-        return {"x":x,"attention":attWeight}
+        return {"x":x,"attention":attWeight,"features":classFeatMaps}
 
 class AttentionFullModel(VisualModel):
 

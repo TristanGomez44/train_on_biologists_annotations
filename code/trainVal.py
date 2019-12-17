@@ -223,7 +223,7 @@ def epochSeqVal(model,log_interval,loader, epoch, args,writer,metricEarlyStop,mo
     frameIndDict = {}
 
     #The writer dict for the attention maps. The will be one writer per class
-    fullAttMapSeq,fullAffTransSeq = None,None
+    fullAttMapSeq,fullFeatMapSeq,fullAffTransSeq = None,None,None
     revLabelDict = formatData.getReversedLabels()
     precVidName = "None"
     videoBegining = True
@@ -247,10 +247,12 @@ def epochSeqVal(model,log_interval,loader, epoch, args,writer,metricEarlyStop,mo
 
         if newVideo and not videoBegining:
             allOutput,nbVideos = update.updateMetrics(args,model,allFeat,allTimeElapsedTensor,allTarget,precVidName,nbVideos,metrDict,outDict,targDict)
-            fullAttMapSeq = saveAttMap(fullAttMapSeq,args.exp_id,args.model_id,epoch,precVidName)
+            fullAttMapSeq = saveMap(fullAttMapSeq,args.exp_id,args.model_id,epoch,precVidName,key="attMaps")
+            fullFeatMapSeq = saveMap(fullFeatMapSeq,args.exp_id,args.model_id,epoch,precVidName,key="featMaps")
             fullAffTransSeq = saveAffineTransf(fullAffTransSeq,args.exp_id,args.model_id,epoch,precVidName)
 
-        fullAttMapSeq = catAttMap(visualDict,fullAttMapSeq)
+        fullAttMapSeq = catMap(visualDict,fullAttMapSeq,key="attention")
+        fullFeatMapSeq = catMap(visualDict,fullFeatMapSeq,key="features")
         fullAffTransSeq = catAffineTransf(visualDict,fullAffTransSeq)
 
         if newVideo:
@@ -273,7 +275,8 @@ def epochSeqVal(model,log_interval,loader, epoch, args,writer,metricEarlyStop,mo
 
     if not args.debug:
         allOutput,nbVideos = update.updateMetrics(args,model,allFeat,allTimeElapsedTensor,allTarget,precVidName,nbVideos,metrDict,outDict,targDict)
-        fullAttMapSeq = saveAttMap(fullAttMapSeq,args.exp_id,args.model_id,epoch,precVidName)
+        fullAttMapSeq = saveMap(fullAttMapSeq,args.exp_id,args.model_id,epoch,precVidName,key="attMaps")
+        fullFeatMapSeq = saveMap(fullFeatMapSeq,args.exp_id,args.model_id,epoch,precVidName,key="featMaps")
         fullAffTransSeq = saveAffineTransf(fullAffTransSeq,args.exp_id,args.model_id,epoch,precVidName)
 
     for key in outDict.keys():
@@ -300,20 +303,24 @@ def saveAffineTransf(fullAffTransSeq,exp_id,model_id,epoch,precVidName):
         fullAffTransSeq = None
     return fullAffTransSeq
 
-def catAttMap(visualDict,fullAttMapSeq):
-    if "attention" in visualDict.keys():
-        if fullAttMapSeq is None:
-            fullAttMapSeq = (visualDict["attention"].cpu()*255).byte()
+def catMap(visualDict,fullMapSeq,key="attention"):
+    if key in visualDict.keys():
+
+        if key == "features":
+            visualDict[key] = (visualDict[key]-visualDict[key].min())/(visualDict[key].max()-visualDict[key].min())
+
+        if fullMapSeq is None:
+            fullMapSeq = (visualDict[key].cpu()*255).byte()
         else:
-            fullAttMapSeq = torch.cat((fullAttMapSeq,(visualDict["attention"].cpu()*255).byte()),dim=0)
+            fullMapSeq = torch.cat((fullMapSeq,(visualDict[key].cpu()*255).byte()),dim=0)
+    return fullMapSeq
 
-    return fullAttMapSeq
-
-def saveAttMap(fullAttMapSeq,exp_id,model_id,epoch,precVidName):
-    if not fullAttMapSeq is None:
-        np.save("../results/{}/attMaps_{}_epoch{}_{}.npy".format(exp_id,model_id,epoch,precVidName),fullAttMapSeq.numpy())
-        fullAttMapSeq = None
-    return fullAttMapSeq
+def saveMap(fullMapSeq,exp_id,model_id,epoch,precVidName,key="attMaps"):
+    if not fullMapSeq is None:
+        print("Saving {}".format(key),fullMapSeq.min(),fullMapSeq.max())
+        np.save("../results/{}/{}_{}_epoch{}_{}.npy".format(exp_id,key,model_id,epoch,precVidName),fullMapSeq.numpy())
+        fullMapSeq = None
+    return fullMapSeq
 
 def writeSummaries(metrDict,batchNb,writer,epoch,mode,model_id,exp_id,nbVideos=None):
     ''' Write the metric computed during an evaluation in a tf writer and in a csv file
