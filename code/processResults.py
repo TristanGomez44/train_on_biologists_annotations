@@ -281,7 +281,7 @@ def plotData(nbClass,dataset):
 
     transMat = torch.zeros((nbClass,nbClass))
     priors = torch.zeros((nbClass,))
-    transMat,priors = trainVal.computeTransMat(dataset,transMat,priors,0,1)
+    transMat,priors = trainVal.computeTransMat(dataset,transMat,priors,0,1,False)
 
     labels = list(formatData.getLabels().keys())[:nbClass]
 
@@ -306,7 +306,8 @@ def plotData(nbClass,dataset):
     plt.bar(np.arange(nbClass),priors*nbImages)
     plt.xticks(np.arange(nbClass),labels,rotation=45)
     plt.xlabel("Developpement phases")
-    plt.ylabel("Number of image")
+    plt.ylabel("Number of images")
+    plt.title("Dataset : '{}'".format(dataset))
     plt.tight_layout()
     plt.savefig("../vis/prior_{}.png".format(dataset))
 
@@ -433,9 +434,12 @@ def readConfFile(path,keyList):
 
     return ",".join(resList)
 
-def plotAttentionMaps(dataset,exp_id,model_id):
+def plotAttentionMaps(dataset,exp_id,model_id,plotFeatMaps):
 
-    featMapPaths = sorted(glob.glob("../results/{}/attMaps_{}_epoch*_*.npy".format(exp_id,model_id)))
+    if plotFeatMaps:
+        featMapPaths = sorted(glob.glob("../results/{}/featMaps_{}_epoch*_*.npy".format(exp_id,model_id)))
+    else:
+        featMapPaths = sorted(glob.glob("../results/{}/attMaps_{}_epoch*_*.npy".format(exp_id,model_id)))
 
     videoNameDict = buildVideoNameDict(dataset,0,100,True,featMapPaths,raiseError=False)
 
@@ -460,7 +464,12 @@ def plotAttentionMaps(dataset,exp_id,model_id):
         gt = load_data.getGT(videoName,dataset_of_the_video).astype(int)
         frameStart = (gt == -1).sum()
 
-        with imageio.get_writer('../vis/{}/featAtt_{}_{}.mp4'.format(exp_id,model_id,videoName), mode='I') as writer:
+        if plotFeatMaps:
+            videoPath = '../vis/{}/featMaps_{}_{}.mp4'.format(exp_id,model_id,videoName)
+        else:
+            videoPath = '../vis/{}/attMaps_{}_{}.mp4'.format(exp_id,model_id,videoName)
+
+        with imageio.get_writer(videoPath, mode='I') as writer:
 
             i=frameStart
 
@@ -489,14 +498,15 @@ def plotAttentionMaps(dataset,exp_id,model_id):
                 frame = resize(frame, (nearestHigherDiv,nearestHigherDiv),anti_aliasing=True,mode="constant",order=0)*255
 
                 #Getting the attention map corresponding to the class predicted at this frame
-                resizedAttFeatMap = resize(featMaps[i-frameStart,predictions[i-frameStart]], (frame.shape[0],frame.shape[1]),anti_aliasing=True,mode="constant",order=0)
+                resizedAttFeatMap = resize(featMaps[i-frameStart,predictions[i-frameStart]], (frame.shape[0],frame.shape[1]),anti_aliasing=True,mode="constant",order=0)*255
 
                 resizedAttFeatMap = resizedAttFeatMap[:,:,np.newaxis]*2/3+1/3
 
                 color = cmap[predictions[i-frameStart]]
                 color = color+(1-color)*0.75
 
-                frame = frame.astype("float")*resizedAttFeatMap*color[np.newaxis,np.newaxis,:-1]
+                #frame = frame.astype("float")*resizedAttFeatMap*color[np.newaxis,np.newaxis,:-1]
+                frame = resizedAttFeatMap*color[np.newaxis,np.newaxis,:-1]
 
                 writer.append_data(img_as_ubyte(frame.astype("uint8")))
                 i+=1
@@ -527,6 +537,9 @@ def phaseNbHist(datasets,density):
 
     plt.figure(1)
     plt.xticks(np.arange(16)+0.5,np.arange(16))
+    plt.xlabel("Number of phases")
+    plt.ylabel("Density")
+    plt.title("Number of annotated phases in the dataset(s) : "+",".join(datasets))
     plt.legend()
     plt.savefig("../vis/nbScenes_{}_density{}.png".format("_".join(datasets),density))
     plt.close()
@@ -623,6 +636,8 @@ def main(argv=None):
     ####################### Plot attention maps ###############################
 
     argreader.parser.add_argument('--plot_attention_maps',action="store_true",help="To plot the attention map of a model. Requires the arguments 'dataset_test', 'exp_id', 'model_id' to be set.")
+    argreader.parser.add_argument('--feat_maps',action="store_true",help="To plot the feature maps instead of the attention maps.")
+
 
     ####################### Plot  phase number histogram #####################
 
@@ -667,7 +682,7 @@ def main(argv=None):
     if not args.plot_data is None:
         plotData(args.plot_data,args.dataset_test)
     if args.plot_attention_maps:
-        plotAttentionMaps(args.dataset_test,args.exp_id,args.model_id)
+        plotAttentionMaps(args.dataset_test,args.exp_id,args.model_id,args.feat_maps)
     if args.phase_nb_hist:
         phaseNbHist(args.phase_nb_hist,args.density)
     if args.plot_confusion_matrix:
