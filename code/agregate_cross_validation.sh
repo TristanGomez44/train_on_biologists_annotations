@@ -30,13 +30,15 @@ epochList=()
 
 for initFile in ../models/cross_val2/*.ini
 do
-  model_id=$(basename $initFile .ini)
-  bestPath=$(getBestPath $model_id)
-  epoch=$(extractEpoch $bestPath)
-  modelIdList+=($model_id)
-  epochList+=($epoch)
-
+  if [[ $initFile != *"r3D"* ]];then
+        model_id=$(basename $initFile .ini)
+        bestPath=$(getBestPath $model_id)
+        epoch=$(extractEpoch $bestPath)
+        modelIdList+=($model_id)
+        epochList+=($epoch)
+  fi
 done
+
 
 
 #python processResults.py --eval_model --exp_id cross_val2 --param_agr feat temp_mod score_conv_attention \
