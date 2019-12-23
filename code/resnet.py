@@ -143,7 +143,7 @@ class ResNet(nn.Module):
 
         self.layersNb = layersNb
 
-        self.fc = nn.Linear(chan*(2**(layersNb-1)) * block.expansion, num_classes)
+        self.fc = nn.Linear(chan*(2**(4-1)) * block.expansion, num_classes)
 
         self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
 
@@ -206,19 +206,23 @@ class ResNet(nn.Module):
 
         return x
 
-def resnet4(pretrained=False, **kwargs):
-    model = ResNet(BasicBlock, [2, 2, 2, 2], chan=8,layersNb=1,**kwargs)
+def resnet4(pretrained=False,chan=8, **kwargs):
+    model = ResNet(BasicBlock, [2, 2, 2, 2], chan=chan,layersNb=1,**kwargs)
 
+    if pretrained and chan != 64:
+        raise ValueError("ResNet4 with {} channel does not have pretrained weights on ImageNet.".format(chan))
     if pretrained:
-        raise ValueError("ResNet4 does not have pretrained weights on ImageNet.")
+        model.load_state_dict(model_zoo.load_url(model_urls['resnet18']))
 
     return model
 
-def resnet9(pretrained=False, **kwargs):
-    model = ResNet(BasicBlock, [2, 2, 2, 2], chan=8,layersNb=2,**kwargs)
+def resnet9(pretrained=False,chan=8, **kwargs):
+    model = ResNet(BasicBlock, [2, 2, 2, 2], chan=chan,layersNb=2,**kwargs)
 
+    if pretrained and chan != 64:
+        raise ValueError("ResNet9 with {} channel does not have pretrained weights on ImageNet.".format(chan))
     if pretrained:
-        raise ValueError("ResNet9 does not have pretrained weights on ImageNet.")
+        model.load_state_dict(model_zoo.load_url(model_urls['resnet18']))
 
     return model
 

@@ -7,7 +7,7 @@ import resnet3D
 import vgg
 import args
 import sys
-
+import pointnet2
 def buildFeatModel(featModelName,pretrainedFeatMod,featMap=False,bigMaps=False):
     ''' Build a visual feature model
 
@@ -173,7 +173,6 @@ class CNN3D(VisualModel):
             # NT x D
         return {'x':x}
 
-
 class ClassBias(nn.Module):
 
     def __init__(self,nbFeat,nbClass):
@@ -304,6 +303,34 @@ class AttentionFullModel(VisualModel):
         # N*T x class_nb
 
         return {"x":x,"attention":attWeight}
+
+class PointNet2(VisualModel):
+
+    def __init__(self,classNb,featModelName='resnet18',pretrainedFeatMod=True,featMap=False,bigMaps=False):
+
+        super(PointNet2,self).__init__(featModelName,pretrainedFeatMod,True,bigMaps)
+
+        self.feat = resnet.resnet4(pretrained=True,chan=64,featMap=True)
+
+        self.conv1x1 = nn.Conv2d(64, 32, kernel_size=1, stride=1)
+        self.size_red = nn.AdaptiveAvgPool2d((8, 8))
+        self.dense = nn.Linear(8*8*32,256*2)
+
+        self.pn2 = pointnet2.models.pointnet2_ssg_cls.Pointnet2SSG(num_classes=classNb,input_channels=0,use_xyz=True)
+
+    def forward(self,x):
+
+        self.batchSize = x.size(0)
+        x = x.view(x.size(0)*x.size(1),x.size(2),x.size(3),x.size(4))
+        x = self.feat(x)
+        x = self.conv1x1(x)
+        x = self.size_red(x)
+        x = x.view(x.size(0),-1)
+        x = self.dense(x)
+        points = x.view(x.size(0),x.size(1)//2,2)
+        points = torch.cat((points,torch.zeros(points.size(0),points.size(1),1).to(x.device)),dim=-1)
+        x = self.pn2(points)
+        return {"x":x,"points":points}
 
 ################################ Temporal Model ########################""
 
@@ -503,7 +530,9 @@ def netBuilder(args):
         elif args.temp_mod == "feat_attention_full":
             visualModel = AttentionFullModel(args.feat,args.pretrained_visual,args.feat_attention_big_maps,nbFeat,args.class_nb,classBiasMod,args.feat_attention_att_type,args.feat_attention_grouped_att)
             tempModel = Identity(nbFeat,args.class_nb,False,False)
-
+    elif args.temp_mod == "pointnet2":
+        visualModel = PointNet2(args.class_nb)
+        tempModel = Identity(nbFeat,args.class_nb,False,False)
     else:
         raise ValueError("Unknown temporal model type : ",args.temp_mod)
 
@@ -591,10 +620,11 @@ def addArgs(argreader):
 
 if __name__ == "__main__":
 
-    batch = torch.ones((1,512,128,128))
+    pnet = pointnet2.models.pointnet2_ssg_cls.Pointnet2SSG(num_classes=15,input_channels=0,use_xyz=True)
+    pnet = pnet.cuda()
 
-    model = Attention("deep",512,16,grouped=False)
+    input = torch.zeros((10,1024,3))
 
-    res = torch.sigmoid(model(batch))
+    res = pnet(input.cuda())
 
-    print(res.min(),res.max())
+    print(res.size())
