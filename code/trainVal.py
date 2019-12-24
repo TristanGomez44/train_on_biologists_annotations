@@ -223,7 +223,7 @@ def epochSeqVal(model,log_interval,loader, epoch, args,writer,metricEarlyStop,mo
     frameIndDict = {}
 
     #The writer dict for the attention maps. The will be one writer per class
-    fullAttMapSeq,fullFeatMapSeq,fullAffTransSeq = None,None,None
+    fullAttMapSeq,fullFeatMapSeq,fullAffTransSeq,fullPointsSeq = None,None,None,None
     revLabelDict = formatData.getReversedLabels()
     precVidName = "None"
     videoBegining = True
@@ -250,10 +250,12 @@ def epochSeqVal(model,log_interval,loader, epoch, args,writer,metricEarlyStop,mo
             fullAttMapSeq = saveMap(fullAttMapSeq,args.exp_id,args.model_id,epoch,precVidName,key="attMaps")
             fullFeatMapSeq = saveMap(fullFeatMapSeq,args.exp_id,args.model_id,epoch,precVidName,key="featMaps")
             fullAffTransSeq = saveAffineTransf(fullAffTransSeq,args.exp_id,args.model_id,epoch,precVidName)
+            fullPointsSeq =  savePointsSeq(fullPointsSeq,args.exp_id,args.model_id,epoch,precVidName)
 
         fullAttMapSeq = catMap(visualDict,fullAttMapSeq,key="attention")
         fullFeatMapSeq = catMap(visualDict,fullFeatMapSeq,key="features")
         fullAffTransSeq = catAffineTransf(visualDict,fullAffTransSeq)
+        fullPointsSeq = catPointsSeq(visualDict,fullAffTransSeq)
 
         if newVideo:
             allTarget = target
@@ -278,6 +280,7 @@ def epochSeqVal(model,log_interval,loader, epoch, args,writer,metricEarlyStop,mo
         fullAttMapSeq = saveMap(fullAttMapSeq,args.exp_id,args.model_id,epoch,precVidName,key="attMaps")
         fullFeatMapSeq = saveMap(fullFeatMapSeq,args.exp_id,args.model_id,epoch,precVidName,key="featMaps")
         fullAffTransSeq = saveAffineTransf(fullAffTransSeq,args.exp_id,args.model_id,epoch,precVidName)
+        fullPointsSeq =  savePointsSeq(fullPointsSeq,args.exp_id,args.model_id,epoch,precVidName)
 
     for key in outDict.keys():
         fullArr = torch.cat((frameIndDict[key].float(),outDict[key].squeeze(0).squeeze(1)),dim=1)
@@ -302,6 +305,22 @@ def saveAffineTransf(fullAffTransSeq,exp_id,model_id,epoch,precVidName):
         np.save("../results/{}/affTransf_{}_epoch{}_{}.npy".format(exp_id,model_id,epoch,precVidName),fullAffTransSeq.numpy())
         fullAffTransSeq = None
     return fullAffTransSeq
+
+def catPointsSeq(visualDict,fullPointsSeq):
+
+    if "points" in visualDict.keys():
+        if fullPointsSeq is None:
+            fullPointsSeq = visualDict["points"].cpu()
+        else:
+            fullPointsSeq = torch.cat((fullPointsSeq,visualDict["points"].cpu()),dim=0)
+
+    return fullPointsSeq
+
+def savePointsSeq(fullPointsSeq,exp_id,model_id,epoch,precVidName):
+    if not fullPointsSeq is None:
+        np.save("../results/{}/points_{}_epoch{}_{}.npy".format(exp_id,model_id,epoch,precVidName),fullPointsSeq.numpy())
+        fullPointsSeq = None
+    return fullPointsSeq
 
 def catMap(visualDict,fullMapSeq,key="attention"):
     if key in visualDict.keys():
