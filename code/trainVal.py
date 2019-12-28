@@ -37,7 +37,7 @@ from skimage import transform,io
 from skimage import img_as_ubyte
 
 import cv2
-
+import subprocess
 #warnings.simplefilter('error', UserWarning)
 
 def epochSeqTr(model,optim,log_interval,loader, epoch, args,writer,**kwargs):
@@ -93,6 +93,8 @@ def epochSeqTr(model,optim,log_interval,loader, epoch, args,writer,**kwargs):
 
         loss.backward()
         optim.step()
+        if validBatch <= 3 and args.debug:
+            updateOccupiedGPURamCSV(epoch,"train",args.exp_id,args.model_id)
         optim.zero_grad()
 
         #Metrics
@@ -112,6 +114,35 @@ def epochSeqTr(model,optim,log_interval,loader, epoch, args,writer,**kwargs):
     if validBatch > 0:
         torch.save(model.state_dict(), "../models/{}/model{}_epoch{}".format(args.exp_id,args.model_id, epoch))
         writeSummaries(metrDict,validBatch,writer,epoch,"train",args.model_id,args.exp_id)
+
+def get_gpu_memory_map():
+    """Get the current gpu usage.
+
+    Returns
+    -------
+    usage: dict
+        Keys are device ids as integers.
+        Values are memory usage as integers in MB.
+    """
+    result = subprocess.check_output(['nvidia-smi', '--query-gpu=memory.used','--format=csv,nounits,noheader'], encoding='utf-8')
+    # Convert lines into a dictionary
+    gpu_memory = [x for x in result.strip().split('\n')]
+    gpu_memory_map = dict(zip(range(len(gpu_memory)), gpu_memory))
+    return gpu_memory_map
+
+def updateOccupiedGPURamCSV(epoch,mode,exp_id,model_id):
+
+    occRamDict = get_gpu_memory_map()
+
+    csvPath = "../results/{}/{}_occRam_{}.csv".format(exp_id,model_id,mode)
+
+    if not os.path.exists(csvPath):
+        with open(csvPath,"w") as text_file:
+            print("epoch,"+",".join([str(device) for device in occRamDict.keys()]),file=text_file)
+            print(str(epoch)+","+",".join([occRamDict[device] for device in occRamDict.keys()]),file=text_file)
+    else:
+        with open(csvPath,"a") as text_file:
+            print(str(epoch)+","+",".join([occRamDict[device] for device in occRamDict.keys()]),file=text_file)
 
 def logBeta(alpha):
     alpha_0 = alpha.sum(-1)
@@ -251,6 +282,9 @@ def epochSeqVal(model,log_interval,loader, epoch, args,writer,metricEarlyStop,mo
             fullFeatMapSeq = saveMap(fullFeatMapSeq,args.exp_id,args.model_id,epoch,precVidName,key="featMaps")
             fullAffTransSeq = saveAffineTransf(fullAffTransSeq,args.exp_id,args.model_id,epoch,precVidName)
             fullPointsSeq =  savePointsSeq(fullPointsSeq,args.exp_id,args.model_id,epoch,precVidName)
+
+        if nbVideos<=1 and args.debug:
+            updateOccupiedGPURamCSV(epoch,mode,args.exp_id,args.model_id)
 
         fullAttMapSeq = catMap(visualDict,fullAttMapSeq,key="attention")
         fullFeatMapSeq = catMap(visualDict,fullFeatMapSeq,key="features")
@@ -656,9 +690,6 @@ def main(argv=None):
 
         #Building the net
         net = modelBuilder.netBuilder(args)
-
-        if args.cuda:
-            net = net.cuda()
 
         trainFunc = epochSeqTr
         valFunc = epochSeqVal
