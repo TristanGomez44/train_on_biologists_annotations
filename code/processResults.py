@@ -39,6 +39,7 @@ from skimage import img_as_ubyte
 from scipy import stats
 
 
+
 def evalModel(dataset,partBeg,partEnd,propSetIntFormat,exp_id,model_id,epoch,regression,uncertainty,nbClass):
     '''
     Evaluate a model. It requires the scores for each video to have been computed already with the trainVal.py script. Check readme to
@@ -603,7 +604,48 @@ def plotConfusionMatrix(exp_id,model_id):
         plt.savefig("../vis/{}/confMat_{}_epoch{}_{}.png".format(exp_id,model_id,bestEpoch,videoDict[resFilePath]))
         plt.close()
 
+def fig2data(fig):
+    """
+    @brief Convert a Matplotlib figure to a 4D numpy array with RGBA channels and return it
+    @param fig a matplotlib figure
+    @return a numpy 3D array of RGBA values
+    """
+    # draw the renderer
+    fig.canvas.draw()
 
+    # Get the RGBA buffer from the figure
+    w,h = fig.canvas.get_width_height()
+    buf = np.fromstring ( fig.canvas.tostring_argb(), dtype=np.uint8 )
+    buf.shape = ( h, w,4 )
+
+    # canvas.tostring_argb give pixmap in ARGB mode. Roll the ALPHA channel to have it in RGBA mode
+    buf = np.roll ( buf, 3, axis = 2 )
+    return buf
+
+def plotPoints(exp_id,model_id,epoch):
+
+    pointsPaths = sorted(glob.glob("../results/{}/points_{}_epoch{}_*.npy".format(exp_id,model_id,epoch)))
+    videoNameDict = buildVideoNameDict("small+big",0,1,False,pointsPaths,raiseError=False)
+
+    for pointPath in pointsPaths:
+        print(pointPath)
+        pointsSeq = np.load(pointPath)
+        videoName = videoNameDict[pointPath]
+
+        xMin,xMax = pointsSeq[:,:,0].min(),pointsSeq[:,:,0].max()
+        yMin,yMax = pointsSeq[:,:,1].min(),pointsSeq[:,:,1].max()
+
+        with imageio.get_writer("../vis/{}/points_{}_{}_{}.mp4".format(exp_id,model_id,epoch,videoName), mode='I') as writer:
+            for i,points in enumerate(pointsSeq):
+
+                fig = plt.figure()
+                plt.xlim(xMin,xMax)
+                plt.ylim(yMin,yMax)
+                plt.plot(points[:,0],points[:,1],"*")
+                plt.savefig("../vis/{}/points_{}_{}_{}_img{}.png".format(exp_id,model_id,epoch,videoName,i))
+                img = fig2data(fig)
+                plt.close()
+                writer.append_data(img_as_ubyte(img.astype("uint8")))
 
 def main(argv=None):
 
@@ -611,12 +653,12 @@ def main(argv=None):
     #Building the arg reader
     argreader = ArgReader(argv)
 
+    argreader.parser.add_argument('--epoch_to_process',type=int,metavar="N",help='The epoch to process. This argument should be set when using the --plot_score argument.')
 
     ########### PLOT SCORE EVOLUTION ALONG VIDEO ##################
     argreader.parser.add_argument('--plot_score',action="store_true",help='To plot the probabilities produced by a model for all the videos processed by this model during validation for some epoch.\
                                                                             The --model_id argument must be set, along with the --exp_id, --dataset_test, --epoch_to_process, --train_part_beg, --train_part_end (for \
                                                                             computing the state transition matrix.)')
-    argreader.parser.add_argument('--epoch_to_process',type=int,metavar="N",help='The epoch to process. This argument should be set when using the --plot_score argument.')
 
     ########## COMPUTE METRICS AND PUT THEM IN AN LATEX TABLE #############
     argreader.parser.add_argument('--eval_model',action="store_true",help='Evaluate a model using the csv files containing the scores. The --exp_id argument must be set, \
@@ -650,6 +692,11 @@ def main(argv=None):
 
     argreader.parser.add_argument('--plot_confusion_matrix',action="store_true",help='To plot the confusion matrix of a model at its best validation epoch \
                                         on the validation dataset. The --model_id and the --exp_id arguments must be set.')
+
+    ####################### Plot points computed for a point net model #############################
+
+    argreader.parser.add_argument('--plot_points',action="store_true",help='To plot the points computed by the visual module of a point net model.\
+                                    The exp_id, model_id and epoch_to_process arg must be set.')
 
     argreader = load_data.addArgs(argreader)
     argreader = modelBuilder.addArgs(argreader)
@@ -687,6 +734,8 @@ def main(argv=None):
         phaseNbHist(args.phase_nb_hist,args.density)
     if args.plot_confusion_matrix:
         plotConfusionMatrix(args.exp_id,args.model_id)
+    if args.plot_points:
+        plotPoints(args.exp_id,args.model_id,args.epoch_to_process)
 
 if __name__ == "__main__":
     main()
