@@ -97,8 +97,8 @@ class SeqTrDataset(torch.utils.data.Dataset):
 
         if propStart != propEnd:
             for videoPath in self.videoPaths:
-                fps = utils.getVideoFPS(videoPath)
-                self.nbImages += utils.getVideoFrameNb(videoPath)
+                nbImg = utils.getVideoFrameNb(videoPath)
+                self.nbImages += nbImg
 
         self.resizeImage = resizeImage
 
@@ -106,8 +106,6 @@ class SeqTrDataset(torch.utils.data.Dataset):
             self.reSizeTorchFunc = torchvision.transforms.Compose([torchvision.transforms.ToPILImage(),torchvision.transforms.Resize(imgSize)])
         else:
             self.reSizeTorchFunc = None
-
-        self.FPSDict = {}
 
         self.augmentData = augmentData
         if augmentData:
@@ -128,9 +126,7 @@ class SeqTrDataset(torch.utils.data.Dataset):
         self.maskTimeOnImage = maskTimeOnImage
         self.mask = computeMask(maskTimeOnImage,origImgSize)
 
-        self.digitExt = digitExtractor.DigitIdentifier(self.dataset)
-
-        self.preproc = PreProcess(self.maskTimeOnImage,self.mask,self.origImgSize,self.resizeImage,self.reSizeTorchFunc,self.digitExt,augmentData=augmentData,gridShuffle=gridShuffle,transfFunc=self.transf)
+        self.preproc = PreProcess(self.maskTimeOnImage,self.mask,self.origImgSize,self.resizeImage,self.reSizeTorchFunc,augmentData=augmentData,gridShuffle=gridShuffle,transfFunc=self.transf)
 
     def __len__(self):
         return self.nbImages
@@ -140,9 +136,6 @@ class SeqTrDataset(torch.utils.data.Dataset):
         targ = torch.zeros(self.trLen)
 
         vidName = os.path.basename(os.path.splitext(self.videoPaths[vidInd])[0])
-
-        if not self.videoPaths[vidInd] in self.FPSDict.keys():
-            self.FPSDict[self.videoPaths[vidInd]] = utils.getVideoFPS(self.videoPaths[vidInd])
 
         frameNb = utils.getVideoFrameNb(self.videoPaths[vidInd])
 
@@ -167,13 +160,12 @@ class SeqTrDataset(torch.utils.data.Dataset):
 
 class PreProcess():
 
-    def __init__(self,maskTimeOnImage,mask,origImgSize,resizeImage,resizeTorchFunc,digitExtr,augmentData=False,gridShuffle=False,transfFunc=None):
+    def __init__(self,maskTimeOnImage,mask,origImgSize,resizeImage,resizeTorchFunc,augmentData=False,gridShuffle=False,transfFunc=None):
 
         self.maskTimeOnImage = maskTimeOnImage
         self.origImgSize = origImgSize
         self.resizeImage = resizeImage
         self.resizeTorchFunc = resizeTorchFunc
-        self.digitExtr = digitExtr
         self.transfFunc = transfFunc
         self.applyTransf = augmentData or gridShuffle
         self.toTensorFunc = torchvision.transforms.ToTensor()
@@ -194,10 +186,6 @@ class PreProcess():
         if self.resizeImage:
             x = np.asarray(self.resizeTorchFunc(x.astype("uint8")))
         return x[np.newaxis,:,:,0]
-
-    def readTimeFunc(self,x):
-        return self.digitExtr.findDigits(x)["time"]
-
 
 class TestLoader():
     '''
@@ -230,10 +218,7 @@ class TestLoader():
         self.resizeImage = resizeImage
         self.nbImages = 0
         for videoPath in self.videoPaths:
-            fps = utils.getVideoFPS(videoPath)
             self.nbImages += utils.getVideoFrameNb(videoPath)
-
-        self.digitExt = digitExtractor.DigitIdentifier(self.dataset)
 
         if self.resizeImage:
             self.reSizeTorchFunc = torchvision.transforms.Compose([torchvision.transforms.ToPILImage(),torchvision.transforms.Resize(imgSize)])
@@ -245,7 +230,7 @@ class TestLoader():
         else:
             self.transf = None
 
-        self.preproc = PreProcess(self.maskTimeOnImage,self.mask,self.origImgSize,self.resizeImage,self.reSizeTorchFunc,self.digitExt,\
+        self.preproc = PreProcess(self.maskTimeOnImage,self.mask,self.origImgSize,self.resizeImage,self.reSizeTorchFunc,\
                                     augmentData=False,gridShuffle=gridShuffle,transfFunc=self.transf)
 
     def __iter__(self):
@@ -267,7 +252,6 @@ class TestLoader():
 
         vidName = os.path.basename(os.path.splitext(videoPath)[0])
 
-        fps = utils.getVideoFPS(videoPath)
         frameNb = utils.getVideoFrameNb(videoPath)
 
         if self.currFrameInd is None:
@@ -294,8 +278,6 @@ class TestLoader():
         return loadFrames_and_process(frameInds,gt,timeElapsed,vidName,video,self.preproc)
 
 def loadFrames_and_process(frameInds,gt,timeElapsed,vidName,video,preproc):
-
-    #removeTopFunc,readTimeFunc,maskTimeOnImageFunc,resizeFunc,toTensorFunc,normalizeFunc,augmentData=False,transfFunc=None
 
     #Building the frame sequence, remove the top of the video (if required)
     frameSeq = np.concatenate(list(map(preproc.removeTopFunc,map(lambda x:video[x][np.newaxis],np.array(frameInds)))),axis=0)
