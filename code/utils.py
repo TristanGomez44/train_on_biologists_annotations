@@ -6,7 +6,12 @@ import processResults
 import subprocess
 
 def getVideoFrameNb(videoPath):
-    if hasattr(pims.Video(videoPath),"_len"):
+
+    gtPath = os.path.join(os.path.dirname(videoPath),os.path.splitext(os.path.basename(videoPath))[0]+"_phases.csv")
+
+    if os.path.exists(gtPath):
+        frameNb = int(np.genfromtxt(gtPath,delimiter=",")[-1,-1])
+    elif hasattr(pims.Video(videoPath),"_len"):
         frameNb = pims.Video(videoPath)._len
     else:
         fps = getVideoFPS(videoPath)
@@ -18,7 +23,6 @@ def getVideoFPS(videoPath):
     ''' Get the number of frame per sencond of a video.'''
 
     pimsVid = pims.Video(videoPath)
-
     if hasattr(pimsVid,"_frame_rate"):
         return float(pims.Video(videoPath)._frame_rate)
     else:
