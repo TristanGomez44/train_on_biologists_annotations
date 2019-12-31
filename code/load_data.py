@@ -28,6 +28,7 @@ from albumentations import Compose
 
 import digitExtractor
 import cv2
+from scipy import ndimage
 
 maxTime = 200
 
@@ -81,7 +82,7 @@ class SeqTrDataset(torch.utils.data.Dataset):
     '''
 
     def __init__(self,dataset,propStart,propEnd,propSetIntFormat,trLen,imgSize,origImgSize,resizeImage,exp_id,augmentData,maskTimeOnImage,minPhaseNb,\
-                        gridShuffle,gridShuffleSize):
+                        gridShuffle,gridShuffleSize,sobel):
 
         super(SeqTrDataset, self).__init__()
 
@@ -126,7 +127,8 @@ class SeqTrDataset(torch.utils.data.Dataset):
         self.maskTimeOnImage = maskTimeOnImage
         self.mask = computeMask(maskTimeOnImage,origImgSize)
 
-        self.preproc = PreProcess(self.maskTimeOnImage,self.mask,self.origImgSize,self.resizeImage,self.reSizeTorchFunc,augmentData=augmentData,gridShuffle=gridShuffle,transfFunc=self.transf)
+        self.preproc = PreProcess(self.maskTimeOnImage,self.mask,self.origImgSize,self.resizeImage,self.reSizeTorchFunc,\
+                                    sobel=sobel,augmentData=augmentData,gridShuffle=gridShuffle,transfFunc=self.transf)
 
     def __len__(self):
         return self.nbImages
@@ -160,7 +162,7 @@ class SeqTrDataset(torch.utils.data.Dataset):
 
 class PreProcess():
 
-    def __init__(self,maskTimeOnImage,mask,origImgSize,resizeImage,resizeTorchFunc,augmentData=False,gridShuffle=False,transfFunc=None):
+    def __init__(self,maskTimeOnImage,mask,origImgSize,resizeImage,resizeTorchFunc,sobel=False,augmentData=False,gridShuffle=False,transfFunc=None):
 
         self.maskTimeOnImage = maskTimeOnImage
         self.origImgSize = origImgSize
@@ -171,6 +173,7 @@ class PreProcess():
         self.toTensorFunc = torchvision.transforms.ToTensor()
         self.normalizeFunc = transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
         self.mask = mask
+        self.sobel = sobel
 
     def maskTimeOnImageFunc(self,x):
         if self.maskTimeOnImage:
@@ -187,6 +190,15 @@ class PreProcess():
             x = np.asarray(self.resizeTorchFunc(x.astype("uint8")))
         return x[np.newaxis,:,:,0]
 
+    def sobelFunc(self,x):
+        img = np.array(x).astype('int32')
+        dx = ndimage.sobel(img, 0)  # horizontal derivative
+        dy = ndimage.sobel(img, 1)  # vertical derivative
+        mag = np.hypot(dx, dy)  # magnitude
+        mag *= 255.0 / np.max(mag)  # normalize (Q&D)
+        mag= mag.astype("uint8")
+        return mag[np.newaxis]
+
 class TestLoader():
     '''
     The dataset to sample sequence of frames from videos. As the video contains a great number of frame,
@@ -202,7 +214,7 @@ class TestLoader():
     - exp_id (str): the name of the experience
     '''
 
-    def __init__(self,dataset,evalL,propStart,propEnd,propSetIntFormat,imgSize,origImgSize,resizeImage,exp_id,maskTimeOnImage,minPhaseNb,gridShuffle,gridShuffleSize):
+    def __init__(self,dataset,evalL,propStart,propEnd,propSetIntFormat,imgSize,origImgSize,resizeImage,exp_id,maskTimeOnImage,minPhaseNb,gridShuffle,gridShuffleSize,sobel):
         self.dataset = dataset
         self.evalL = evalL
 
@@ -231,7 +243,7 @@ class TestLoader():
             self.transf = None
 
         self.preproc = PreProcess(self.maskTimeOnImage,self.mask,self.origImgSize,self.resizeImage,self.reSizeTorchFunc,\
-                                    augmentData=False,gridShuffle=gridShuffle,transfFunc=self.transf)
+                                    sobel=sobel,augmentData=False,gridShuffle=gridShuffle,transfFunc=self.transf)
 
     def __iter__(self):
         self.videoInd = 0
@@ -285,7 +297,10 @@ def loadFrames_and_process(frameInds,gt,timeElapsed,vidName,video,preproc):
     #Resize the images (if required) and mask the time (if required)
     frameSeq = np.concatenate(list(map(preproc.resizeFunc,map(preproc.maskTimeOnImageFunc,frameSeq))),axis=0)
 
-    #Those few lines of code convert the numpy array into a torch tensor and normalize them
+    if preproc.sobel:
+        frameSeq = np.concatenate(list(map(preproc.sobelFunc,frameSeq)),axis=0)
+
+    #Those few lines of code convert the numpy array into a torch tensor, normalize them and apply transformations
     # Shape of tensor : T x H x W
     frameSeq = frameSeq.transpose((1,2,0))
     # H x W x T
@@ -315,7 +330,7 @@ def buildSeqTrainLoader(args):
 
     train_dataset = SeqTrDataset(args.dataset_train,args.train_part_beg,args.train_part_end,args.prop_set_int_fmt,args.tr_len,\
                                         args.img_size,args.orig_img_size,args.resize_image,args.exp_id,args.augment_data,args.mask_time_on_image,\
-                                        args.min_phase_nb,args.grid_shuffle,args.grid_shuffle_size)
+                                        args.min_phase_nb,args.grid_shuffle,args.grid_shuffle_size,args.sobel)
     sampler = Sampler(len(train_dataset.videoPaths),train_dataset.nbImages,args.tr_len)
     trainLoader = torch.utils.data.DataLoader(dataset=train_dataset,batch_size=args.batch_size,sampler=sampler, collate_fn=collateSeq, # use custom collate function here
                       pin_memory=False,num_workers=args.num_workers)
@@ -488,6 +503,10 @@ def addArgs(argreader):
     argreader.parser.add_argument('--grid_shuffle_test_size', type=int, metavar='S',
                         help='The grid size for grid shuffle for the test phase.')
 
+    argreader.parser.add_argument('--sobel', type=args.str2bool, metavar='S',
+                        help='To apply sobel transform to each image')
+
+
     return argreader
 
 if __name__ == "__main__":
@@ -519,8 +538,10 @@ if __name__ == "__main__":
     gridShuffleTest = True
     gridShuffleSizeTest = 7
 
+    sobel = True
+
     train_dataset = SeqTrDataset(dataset_train,train_part_beg,train_part_end,propSetIntFormat,tr_len,\
-                                        img_size,orig_img_size,resize_image,exp_id,augmentData,maskTimeOnImage,minPhaseNb,gridShuffle,gridShuffleSize)
+                                        img_size,orig_img_size,resize_image,exp_id,augmentData,maskTimeOnImage,minPhaseNb,gridShuffle,gridShuffleSize,sobel)
     sampler = Sampler(len(train_dataset.videoPaths),train_dataset.nbImages,tr_len)
     trainLoader = torch.utils.data.DataLoader(dataset=train_dataset,batch_size=batch_size,sampler=sampler, collate_fn=collateSeq, # use custom collate function here
                       pin_memory=False,num_workers=num_workers)
@@ -531,7 +552,7 @@ if __name__ == "__main__":
 
     valLoader = TestLoader(dataset_val,val_l,val_part_beg,val_part_end,propSetIntFormat,\
                                         img_size,orig_img_size,resize_image,\
-                                        exp_id,maskTimeOnImage,minPhaseNb,gridShuffleTest,gridShuffleSizeTest)
+                                        exp_id,maskTimeOnImage,minPhaseNb,gridShuffleTest,gridShuffleSizeTest,sobel)
 
     for batch in valLoader:
         print(batch[0].shape,batch[1].shape,batch[2],batch[3])
