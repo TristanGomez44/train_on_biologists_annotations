@@ -140,7 +140,7 @@ class CNN2D(VisualModel):
     def forward(self,x):
         # N x T x C x H x L
         self.batchSize = x.size(0)
-        x = x.view(x.size(0)*x.size(1),x.size(2),x.size(3),x.size(4))
+        x = x.view(x.size(0)*x.size(1),x.size(2),x.size(3),x.size(4)).contiguous()
         # NT x C x H x L
         x = self.featMod(x)
         # NT x D
@@ -304,24 +304,16 @@ class AttentionFullModel(VisualModel):
 
         return {"x":x,"attention":attWeight}
 
-class PointNet2(VisualModel):
+class DirectPointExtractor(nn.Module):
 
-    def __init__(self,classNb,featModelName='resnet18',pretrainedFeatMod=True,featMap=False,bigMaps=False):
-
-        super(PointNet2,self).__init__(featModelName,pretrainedFeatMod,True,bigMaps)
-
+    def __init__(self):
+        super(DirectPointExtractor,self).__init__()
         self.feat = resnet.resnet4(pretrained=True,chan=64,featMap=True)
-
         self.conv1x1 = nn.Conv2d(64, 32, kernel_size=1, stride=1)
         self.size_red = nn.AdaptiveAvgPool2d((8, 8))
         self.dense = nn.Linear(8*8*32,256*2)
 
-        self.pn2 = pointnet2.models.pointnet2_ssg_cls.Pointnet2SSG(num_classes=classNb,input_channels=0,use_xyz=True)
-
     def forward(self,x):
-
-        self.batchSize = x.size(0)
-        x = x.view(x.size(0)*x.size(1),x.size(2),x.size(3),x.size(4))
         x = self.feat(x)
         x = self.conv1x1(x)
         x = self.size_red(x)
@@ -329,7 +321,57 @@ class PointNet2(VisualModel):
         x = self.dense(x)
         points = x.view(x.size(0),x.size(1)//2,2)
         points = torch.cat((points,torch.zeros(points.size(0),points.size(1),1).to(x.device)),dim=-1)
-        x = self.pn2(points)
+
+        return points
+
+class TopkPointExtractor(nn.Module):
+
+    def __init__(self,attention):
+        super(TopkPointExtractor,self).__init__()
+
+        self.feat = resnet.resnet4(pretrained=True,chan=64,featMap=True)
+        self.conv1x1 = nn.Conv2d(64, 1, kernel_size=1, stride=1)
+        self.attention = attention
+
+    def forward(self,img):
+        x = self.feat(img)
+        x = self.conv1x1(x)
+        x = torch.sigmoid(x)
+
+        if self.attention:
+            img = torch.nn.functional.adaptive_max_pool2d(img[:,0:1],(x.size(-2),x.size(-1)))
+            x = x*img
+
+        flatX = x.view(x.size(0),-1)
+        flatVals,flatInds = torch.topk(flatX, 256, dim=-1, largest=True)
+
+        abs,ord = (flatInds//x.shape[0],flatInds%x.shape[0])
+        abs,ord,flatVals = abs.unsqueeze(-1),ord.unsqueeze(-1),flatVals.unsqueeze(-1)
+        points = torch.cat((abs,ord),dim=-1).float()
+        points = torch.cat((points,torch.zeros(points.size(0),points.size(1),1).to(x.device)),dim=-1)
+        points = torch.cat((points,flatVals),dim=-1)
+        return points
+
+class PointNet2(VisualModel):
+
+    def __init__(self,classNb,featModelName='resnet18',pretrainedFeatMod=True,featMap=False,bigMaps=False,topk=False,topk_attention=False):
+
+        super(PointNet2,self).__init__(featModelName,pretrainedFeatMod,True,bigMaps)
+
+        if topk:
+            self.pointExtr = TopkPointExtractor(topk_attention)
+        else:
+            self.pointExtr = DirectPointExtractor()
+
+        self.pn2 = pointnet2.models.pointnet2_ssg_cls.Pointnet2SSG(num_classes=classNb,input_channels=topk,use_xyz=True)
+
+    def forward(self,x):
+
+        self.batchSize = x.size(0)
+        x = x.view(x.size(0)*x.size(1),x.size(2),x.size(3),x.size(4))
+        points = self.pointExtr(x)
+
+        x = self.pn2(points.float())
         return {"x":x,"points":points}
 
 ################################ Temporal Model ########################""
@@ -531,7 +573,7 @@ def netBuilder(args):
             visualModel = AttentionFullModel(args.feat,args.pretrained_visual,args.feat_attention_big_maps,nbFeat,args.class_nb,classBiasMod,args.feat_attention_att_type,args.feat_attention_grouped_att)
             tempModel = Identity(nbFeat,args.class_nb,False,False)
     elif args.temp_mod == "pointnet2":
-        visualModel = PointNet2(args.class_nb)
+        visualModel = PointNet2(args.class_nb,topk=args.pn_topk,topk_attention=args.pn_topk_attention)
         tempModel = Identity(nbFeat,args.class_nb,False,False)
     else:
         raise ValueError("Unknown temporal model type : ",args.temp_mod)
@@ -547,6 +589,12 @@ def netBuilder(args):
 
     if args.multi_gpu:
         net = DataParallelModel(net)
+
+    if args.temp_mod == "pointnet2":
+        net = net.float()
+
+    if args.cuda:
+        net = net.cuda()
 
     return net
 
@@ -614,6 +662,13 @@ def addArgs(argreader):
 
     argreader.parser.add_argument('--spat_transf_img_size', type=int, metavar='BOOL',
                         help='To size to which the image will be resized after the STN.')
+    argreader.parser.add_argument('--pn_topk', type=args.str2bool, metavar='BOOL',
+                        help='To feed the pointnet model with points extracted using torch.topk and not a direct coordinate predictor. Ignored if the model \
+                        doesn\'t use pointnet.')
+
+    argreader.parser.add_argument('--pn_topk_attention', type=args.str2bool, metavar='BOOL',
+                        help='For the topk point net model. The point extractor will be used as an attention module if True.')
+
 
     return argreader
 
