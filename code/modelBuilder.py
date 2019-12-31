@@ -8,6 +8,8 @@ import vgg
 import args
 import sys
 import pointnet2
+
+
 def buildFeatModel(featModelName,pretrainedFeatMod,featMap=False,bigMaps=False):
     ''' Build a visual feature model
 
@@ -345,12 +347,48 @@ class TopkPointExtractor(nn.Module):
         flatX = x.view(x.size(0),-1)
         flatVals,flatInds = torch.topk(flatX, 256, dim=-1, largest=True)
 
-        abs,ord = (flatInds//x.shape[0],flatInds%x.shape[0])
+        abs,ord = (flatInds%x.shape[1],flatInds//x.shape[1])
         abs,ord,flatVals = abs.unsqueeze(-1),ord.unsqueeze(-1),flatVals.unsqueeze(-1)
         points = torch.cat((abs,ord),dim=-1).float()
         points = torch.cat((points,torch.zeros(points.size(0),points.size(1),1).to(x.device)),dim=-1)
         points = torch.cat((points,flatVals),dim=-1)
         return points
+
+
+def softCoordRefiner(x,abs,ord,kerSize=60):
+
+    refAbsTens = torch.arange(x.size(-1)).unsqueeze(0).expand((x.size(-2),x.size(-1))).float()
+    refOrdTens = torch.arange(x.size(-2)).unsqueeze(1).expand((x.size(-2),x.size(-1))).float()
+
+    cv2.imwrite("refAbsTens.png",refAbsTens.squeeze().detach().numpy())
+    cv2.imwrite("refOrdTens.png",refOrdTens.squeeze().detach().numpy())
+
+    print(x.size(),refAbsTens.size(),refOrdTens.size())
+
+    for i in range(len(abs)):
+
+        absTens = abs[i].unsqueeze(0).unsqueeze(1).expand((x.size(-2),x.size(-1))).float()
+        ordTens = ord[i].unsqueeze(0).unsqueeze(1).expand((x.size(-2),x.size(-1))).float()
+
+        print(absTens,ordTens,absTens.size(),ordTens.size())
+
+        distTens = torch.abs(refAbsTens-absTens)+torch.abs(refOrdTens-ordTens)
+        print(distTens.min(),distTens.max())
+        print(distTens[:10,:10])
+        cv2.imwrite("distTens{}.png".format(i),distTens.squeeze().detach().numpy())
+
+        print(distTens.size())
+
+        weightTens = torch.relu(kerSize - distTens).float()*x[:,0:1]
+        print(weightTens.size())
+        cv2.imwrite("weightTens{}.png".format(i),weightTens.squeeze().detach().numpy())
+
+        print(weightTens.dtype,refAbsTens.dtype)
+
+        abs[i] = (weightTens*refAbsTens).sum()/weightTens.sum()
+        ord[i] = (weightTens*refOrdTens).sum()/weightTens.sum()
+
+    return abs,ord
 
 class PointNet2(VisualModel):
 
@@ -672,14 +710,33 @@ def addArgs(argreader):
 
     return argreader
 
-
 if __name__ == "__main__":
 
-    pnet = pointnet2.models.pointnet2_ssg_cls.Pointnet2SSG(num_classes=15,input_channels=0,use_xyz=True)
-    pnet = pnet.cuda()
+    import pims
+    import cv2
+    import numpy as np
+    from skimage.transform import resize
+    from scipy import ndimage
 
-    input = torch.zeros((10,1024,3))
+    def sobelFunc(x):
+        img = np.array(x).astype('int32')
+        dx = ndimage.sobel(img, 0)  # horizontal derivative
+        dy = ndimage.sobel(img, 1)  # vertical derivative
+        mag = np.hypot(dx, dy)  # magnitude
+        mag *= 255.0 / np.max(mag)  # normalize (Q&D)
+        mag= mag.astype("uint8")
+        return mag
 
-    res = pnet(input.cuda())
+    abs = torch.tensor([56,47])
+    ord = torch.tensor([77,10])
+    x = sobelFunc(resize(pims.Video("../data/big/AA83-7.avi")[0],(125,125))*255)
+    cv2.imwrite("in.png",x)
 
-    print(res.size())
+    x[ord[0],abs[0],0] = 255
+    x[ord[0],abs[0],1:] = 0
+    cv2.imwrite("in_masked.png",x)
+
+    x = torch.tensor(x).float().permute(2,0,1).unsqueeze(0)
+    abs,ord = softCoordRefiner(x,abs.float(),ord.float(),kerSize=20)
+
+    print(abs,ord)
