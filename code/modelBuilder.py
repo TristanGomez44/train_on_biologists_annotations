@@ -328,12 +328,14 @@ class DirectPointExtractor(nn.Module):
 
 class TopkPointExtractor(nn.Module):
 
-    def __init__(self,attention):
+    def __init__(self,attention,softCoord):
         super(TopkPointExtractor,self).__init__()
 
         self.feat = resnet.resnet4(pretrained=True,chan=64,featMap=True)
         self.conv1x1 = nn.Conv2d(64, 1, kernel_size=1, stride=1)
         self.attention = attention
+        self.softCoord = softCoord
+        self.softCoord_kerSize = 2
 
     def forward(self,img):
         x = self.feat(img)
@@ -345,9 +347,12 @@ class TopkPointExtractor(nn.Module):
             x = x*img
 
         flatX = x.view(x.size(0),-1)
-        flatVals,flatInds = torch.topk(flatX, 256, dim=-1, largest=True)
+        flatVals,flatInds = torch.topk(flatX, 64, dim=-1, largest=True)
+        abs,ord = (flatInds%x.shape[-1],flatInds//x.shape[-1])
 
-        abs,ord = (flatInds%x.shape[1],flatInds//x.shape[1])
+        if self.softCoord:
+            abs,ord,flatVals = softCoordRefiner(x,abs,ord,kerSize=self.softCoord_kerSize)
+
         abs,ord,flatVals = abs.unsqueeze(-1),ord.unsqueeze(-1),flatVals.unsqueeze(-1)
         points = torch.cat((abs,ord),dim=-1).float()
         points = torch.cat((points,torch.zeros(points.size(0),points.size(1),1).to(x.device)),dim=-1)
@@ -355,49 +360,48 @@ class TopkPointExtractor(nn.Module):
         return points
 
 
-def softCoordRefiner(x,abs,ord,kerSize=60):
+def softCoordRefiner(x,abs,ord,kerSize=6):
 
-    refAbsTens = torch.arange(x.size(-1)).unsqueeze(0).expand((x.size(-2),x.size(-1))).float()
-    refOrdTens = torch.arange(x.size(-2)).unsqueeze(1).expand((x.size(-2),x.size(-1))).float()
+    refAbsTens = torch.arange(x.size(-1)).unsqueeze(0).expand((x.size(-2),x.size(-1))).float().to(x.device)
+    refOrdTens = torch.arange(x.size(-2)).unsqueeze(1).expand((x.size(-2),x.size(-1))).float().to(x.device)
 
-    cv2.imwrite("refAbsTens.png",refAbsTens.squeeze().detach().numpy())
-    cv2.imwrite("refOrdTens.png",refOrdTens.squeeze().detach().numpy())
+    allValues,allSoftAbs,allSoftOrd = [],[],[]
 
-    print(x.size(),refAbsTens.size(),refOrdTens.size())
+    for batch_ind in range(x.size(0)):
 
-    for i in range(len(abs)):
+        values,softAbs,softOrd = [],[],[]
 
-        absTens = abs[i].unsqueeze(0).unsqueeze(1).expand((x.size(-2),x.size(-1))).float()
-        ordTens = ord[i].unsqueeze(0).unsqueeze(1).expand((x.size(-2),x.size(-1))).float()
+        for i in range(len(abs[0])):
 
-        print(absTens,ordTens,absTens.size(),ordTens.size())
+            absTens = abs[batch_ind,i].unsqueeze(0).unsqueeze(1).expand((x.size(-2),x.size(-1))).float()
+            ordTens = ord[batch_ind,i].unsqueeze(0).unsqueeze(1).expand((x.size(-2),x.size(-1))).float()
 
-        distTens = torch.abs(refAbsTens-absTens)+torch.abs(refOrdTens-ordTens)
-        print(distTens.min(),distTens.max())
-        print(distTens[:10,:10])
-        cv2.imwrite("distTens{}.png".format(i),distTens.squeeze().detach().numpy())
+            distTens = torch.abs(refAbsTens-absTens)+torch.abs(refOrdTens-ordTens)
 
-        print(distTens.size())
+            weightTens = torch.relu(kerSize - distTens).float()*x[:,0:1]
 
-        weightTens = torch.relu(kerSize - distTens).float()*x[:,0:1]
-        print(weightTens.size())
-        cv2.imwrite("weightTens{}.png".format(i),weightTens.squeeze().detach().numpy())
+            softAbs.append(((weightTens*refAbsTens).sum()/weightTens.sum()).unsqueeze(0))
+            softOrd.append(((weightTens*refOrdTens).sum()/weightTens.sum()).unsqueeze(0))
+            values.append(((weightTens*x[batch_ind]).sum()/weightTens.sum()).unsqueeze(0))
 
-        print(weightTens.dtype,refAbsTens.dtype)
+        softAbs,softOrd,values = torch.cat(softAbs,dim=0),torch.cat(softOrd,dim=0),torch.cat(values,dim=0)
 
-        abs[i] = (weightTens*refAbsTens).sum()/weightTens.sum()
-        ord[i] = (weightTens*refOrdTens).sum()/weightTens.sum()
+        allSoftAbs.append(softAbs.unsqueeze(0))
+        allSoftOrd.append(softOrd.unsqueeze(0))
+        allValues.append(values.unsqueeze(0))
 
-    return abs,ord
+    allSoftAbs,allSoftOrd,allValues = torch.cat(allSoftAbs,dim=0),torch.cat(allSoftOrd,dim=0),torch.cat(allValues,dim=0)
+
+    return allSoftAbs,allSoftOrd,allValues
 
 class PointNet2(VisualModel):
 
-    def __init__(self,classNb,featModelName='resnet18',pretrainedFeatMod=True,featMap=False,bigMaps=False,topk=False,topk_attention=False):
+    def __init__(self,classNb,featModelName='resnet18',pretrainedFeatMod=True,featMap=False,bigMaps=False,topk=False,topk_attention=False,topk_softcoord=False):
 
         super(PointNet2,self).__init__(featModelName,pretrainedFeatMod,True,bigMaps)
 
         if topk:
-            self.pointExtr = TopkPointExtractor(topk_attention)
+            self.pointExtr = TopkPointExtractor(topk_attention,topk_softcoord)
         else:
             self.pointExtr = DirectPointExtractor()
 
@@ -611,7 +615,7 @@ def netBuilder(args):
             visualModel = AttentionFullModel(args.feat,args.pretrained_visual,args.feat_attention_big_maps,nbFeat,args.class_nb,classBiasMod,args.feat_attention_att_type,args.feat_attention_grouped_att)
             tempModel = Identity(nbFeat,args.class_nb,False,False)
     elif args.temp_mod == "pointnet2":
-        visualModel = PointNet2(args.class_nb,topk=args.pn_topk,topk_attention=args.pn_topk_attention)
+        visualModel = PointNet2(args.class_nb,topk=args.pn_topk,topk_attention=args.pn_topk_attention,topk_softcoord=args.pn_topk_softcoord)
         tempModel = Identity(nbFeat,args.class_nb,False,False)
     else:
         raise ValueError("Unknown temporal model type : ",args.temp_mod)
@@ -706,7 +710,8 @@ def addArgs(argreader):
 
     argreader.parser.add_argument('--pn_topk_attention', type=args.str2bool, metavar='BOOL',
                         help='For the topk point net model. The point extractor will be used as an attention module if True.')
-
+    argreader.parser.add_argument('--pn_topk_softcoord', type=args.str2bool, metavar='BOOL',
+                        help='For the topk point net model. The point coordinate will be computed using soft argmax.')
 
     return argreader
 
@@ -737,6 +742,6 @@ if __name__ == "__main__":
     cv2.imwrite("in_masked.png",x)
 
     x = torch.tensor(x).float().permute(2,0,1).unsqueeze(0)
-    abs,ord = softCoordRefiner(x,abs.float(),ord.float(),kerSize=20)
+    abs,ord,values = softCoordRefiner(x,abs.float(),ord.float(),kerSize=10)
 
     print(abs,ord)
