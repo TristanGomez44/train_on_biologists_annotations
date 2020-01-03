@@ -8,7 +8,7 @@ import vgg
 import args
 import sys
 import pointnet2
-
+import cv2
 
 def buildFeatModel(featModelName,pretrainedFeatMod,featMap=False,bigMaps=False):
     ''' Build a visual feature model
@@ -333,21 +333,29 @@ class TopkPointExtractor(nn.Module):
 
         self.feat = resnet.resnet4(pretrained=True,chan=64,featMap=True)
         self.conv1x1 = nn.Conv2d(64, 1, kernel_size=1, stride=1)
+        self.point_extracted = 256
         self.attention = attention
         self.softCoord = softCoord
         self.softCoord_kerSize = 2
 
     def forward(self,img):
+
         x = self.feat(img)
         x = self.conv1x1(x)
         x = torch.sigmoid(x)
 
         if self.attention:
+            #Normalizing the attention weights
+            x = (x-x.min(dim=-1,keepdim=True)[0].min(dim=-1,keepdim=True)[0])/(x.max(dim=-1,keepdim=True)[0].max(dim=-1,keepdim=True)[0]-x.min(dim=-1,keepdim=True)[0].min(dim=-1,keepdim=True)[0])
+
             img = torch.nn.functional.adaptive_max_pool2d(img[:,0:1],(x.size(-2),x.size(-1)))
+            #Shifting the image minimum to 0 so the attention weights only reduce the values in the image
+            img = img-img.min(dim=-1,keepdim=True)[0].min(dim=-1,keepdim=True)[0]
+
             x = x*img
 
         flatX = x.view(x.size(0),-1)
-        flatVals,flatInds = torch.topk(flatX, 64, dim=-1, largest=True)
+        flatVals,flatInds = torch.topk(flatX, self.point_extracted, dim=-1, largest=True)
         abs,ord = (flatInds%x.shape[-1],flatInds//x.shape[-1])
 
         if self.softCoord:

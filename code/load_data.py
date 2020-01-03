@@ -191,12 +191,14 @@ class PreProcess():
         return x[np.newaxis,:,:,0]
 
     def sobelFunc(self,x):
+        x[-50:] = 0
         img = np.array(x).astype('int32')
         dx = ndimage.sobel(img, 0)  # horizontal derivative
         dy = ndimage.sobel(img, 1)  # vertical derivative
         mag = np.hypot(dx, dy)  # magnitude
         mag *= 255.0 / np.max(mag)  # normalize (Q&D)
         mag= mag.astype("uint8")
+        mag[-60:] = 0
         return mag[np.newaxis]
 
 class TestLoader():
