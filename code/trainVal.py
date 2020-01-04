@@ -37,11 +37,14 @@ from skimage import transform,io
 from skimage import img_as_ubyte
 
 import cv2
-
+import psutil
 #warnings.simplefilter('error', UserWarning)
 
 import torch.distributed as dist
 from torch.multiprocessing import Process
+
+import time
+
 
 def epochSeqTr(model,optim,log_interval,loader, epoch, args,writer,**kwargs):
     ''' Train a model during one epoch
@@ -57,6 +60,9 @@ def epochSeqTr(model,optim,log_interval,loader, epoch, args,writer,**kwargs):
     - width (int): the width of the triangular window (i.e. the number of steps over which the window is spreading)
 
     '''
+
+    if args.debug:
+        start_time = time.time()
 
     model.train()
 
@@ -98,7 +104,13 @@ def epochSeqTr(model,optim,log_interval,loader, epoch, args,writer,**kwargs):
         loss.backward()
         if args.distributed:
             average_gradients(model)
+
         optim.step()
+        if validBatch <= 10 and args.debug:
+            if args.cuda:
+                updateOccupiedGPURamCSV(epoch,"train",args.exp_id,args.model_id)
+            updateOccupiedRamCSV(epoch,"train",args.exp_id,args.model_id)
+            updateOccupiedCPUCSV(epoch,"train",args.exp_id,args.model_id)
         optim.zero_grad()
 
         #Metrics
@@ -119,12 +131,85 @@ def epochSeqTr(model,optim,log_interval,loader, epoch, args,writer,**kwargs):
         torch.save(model.state_dict(), "../models/{}/model{}_epoch{}".format(args.exp_id,args.model_id, epoch))
         writeSummaries(metrDict,validBatch,writer,epoch,"train",args.model_id,args.exp_id)
 
+    if args.debug:
+        totalTime = time.time() - start_time
+        updateTimeCSV(epoch,"train",args.exp_id,args.model_id,totalTime)
+
 def average_gradients(model):
     size = float(dist.get_world_size())
     for param in model.parameters():
         if not param.grad is None:
             dist.all_reduce(param.grad.data, op=dist.ReduceOp.SUM)
             param.grad.data /= size
+
+def get_gpu_memory_map():
+    """Get the current gpu usage.
+
+    Returns
+    -------
+    usage: dict
+        Keys are device ids as integers.
+        Values are memory usage as integers in MB.
+    """
+    result = subprocess.check_output(['nvidia-smi', '--query-gpu=memory.used','--format=csv,nounits,noheader'], encoding='utf-8')
+    # Convert lines into a dictionary
+    gpu_memory = [x for x in result.strip().split('\n')]
+    gpu_memory_map = dict(zip(range(len(gpu_memory)), gpu_memory))
+    return gpu_memory_map
+
+def updateOccupiedGPURamCSV(epoch,mode,exp_id,model_id):
+
+    occRamDict = get_gpu_memory_map()
+
+    csvPath = "../results/{}/{}_occRam_{}.csv".format(exp_id,model_id,mode)
+
+    if not os.path.exists(csvPath):
+        with open(csvPath,"w") as text_file:
+            print("epoch,"+",".join([str(device) for device in occRamDict.keys()]),file=text_file)
+            print(str(epoch)+","+",".join([occRamDict[device] for device in occRamDict.keys()]),file=text_file)
+    else:
+        with open(csvPath,"a") as text_file:
+            print(str(epoch)+","+",".join([occRamDict[device] for device in occRamDict.keys()]),file=text_file)
+
+def updateOccupiedCPUCSV(epoch,mode,exp_id,model_id):
+
+    cpuOccList = [x / psutil.cpu_count() * 100 for x in psutil.getloadavg()]
+
+    csvPath = "../results/{}/{}_cpuLoad_{}.csv".format(exp_id,model_id,mode)
+
+    if not os.path.exists(csvPath):
+        with open(csvPath,"w") as text_file:
+            print("epoch,"+",".join([str(i) in range(len(cpuOccList))]),file=text_file)
+            print(str(epoch)+","+",".join([cpuOcc for cpuOcc in cpuOccList]),file=text_file)
+    else:
+        with open(csvPath,"a") as text_file:
+            print(str(epoch)+","+",".join([cpuOcc for cpuOcc in cpuOccList]),file=text_file)
+
+def updateOccupiedRamCSV(epoch,mode,exp_id,model_id):
+
+    ramOcc = psutil.virtual_memory()._asdict()["percent"]
+
+    csvPath = "../results/{}/{}_occCPURam_{}.csv".format(exp_id,model_id,mode)
+
+    if not os.path.exists(csvPath):
+        with open(csvPath,"w") as text_file:
+            print("epoch,"+","+"percent",file=text_file)
+            print(str(epoch)+","+str(ramOcc),file=text_file)
+    else:
+        with open(csvPath,"a") as text_file:
+            print(str(epoch)+","+str(ramOcc),file=text_file)
+
+def updateTimeCSV(epoch,mode,exp_id,model_id,totalTime):
+
+    csvPath = "../results/{}/{}_time_{}.csv".format(exp_id,model_id,mode)
+
+    if not os.path.exists(csvPath):
+        with open(csvPath,"w") as text_file:
+            print("epoch,"+","+"time",file=text_file)
+            print(str(epoch)+","+str(totalTime),file=text_file)
+    else:
+        with open(csvPath,"a") as text_file:
+            print(str(epoch)+","+str(totalTime),file=text_file)
 
 def logBeta(alpha):
     alpha_0 = alpha.sum(-1)
@@ -223,6 +308,9 @@ def epochSeqVal(model,log_interval,loader, epoch, args,writer,metricEarlyStop,mo
      - maximiseMetric (bool): If true, the model maximising this metric will be kept.
     '''
 
+    if args.debug:
+        start_time = time.time()
+
     model.eval()
 
     print("Epoch",epoch," : ",mode)
@@ -266,6 +354,11 @@ def epochSeqVal(model,log_interval,loader, epoch, args,writer,metricEarlyStop,mo
             fullAttMapSeq = saveAttMap(fullAttMapSeq,args.exp_id,args.model_id,epoch,precVidName)
             fullAffTransSeq = saveAffineTransf(fullAffTransSeq,args.exp_id,args.model_id,epoch,precVidName)
 
+        if nbVideos<=5 and args.debug:
+            if args.cuda:
+                updateOccupiedGPURamCSV(epoch,mode,args.exp_id,args.model_id)
+            updateOccupiedRamCSV(epoch,mode,args.exp_id,args.model_id)
+            updateOccupiedCPUCSV(epoch,mode,args.exp_id,args.model_id)
         if newVideo:
             allTarget = target
             allFeat = feat.unsqueeze(0)
@@ -293,6 +386,10 @@ def epochSeqVal(model,log_interval,loader, epoch, args,writer,metricEarlyStop,mo
         np.savetxt("../results/{}/{}_epoch{}_{}.csv".format(args.exp_id,args.model_id,epoch,key),fullArr.cpu().detach().numpy())
 
     writeSummaries(metrDict,validBatch,writer,epoch,mode,args.model_id,args.exp_id,nbVideos=nbVideos)
+
+    if args.debug:
+        totalTime = time.time() - start_time
+        updateTimeCSV(epoch,mode,args.exp_id,args.model_id,totalTime)
 
     return outDict,targDict,metrDict[metricEarlyStop]
 
