@@ -26,7 +26,7 @@ model_urls = {
 def conv3x3(in_planes, out_planes, stride=1,dilation=1,groups=1):
     """3x3 convolution with padding"""
     return nn.Conv2d(in_planes, out_planes, kernel_size=3, stride=stride,
-                     padding=1+(dilation-1), bias=False,dilation=dilation,groups=groups)
+                     padding=1, bias=False,dilation=dilation,groups=groups)
 
 
 def conv1x1(in_planes, out_planes, stride=1):

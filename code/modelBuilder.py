@@ -10,7 +10,7 @@ import sys
 import pointnet2
 import cv2
 
-def buildFeatModel(featModelName,pretrainedFeatMod,featMap=False,bigMaps=False):
+def buildFeatModel(featModelName,pretrainedFeatMod,featMap=False,bigMaps=False,stride=2,dilation=1):
     ''' Build a visual feature model
 
     Args:
@@ -20,7 +20,7 @@ def buildFeatModel(featModelName,pretrainedFeatMod,featMap=False,bigMaps=False):
 
     '''
     if featModelName.find("resnet") != -1:
-        featModel = getattr(resnet,featModelName)(pretrained=pretrainedFeatMod,featMap=featMap,bigMaps=bigMaps)
+        featModel = getattr(resnet,featModelName)(pretrained=pretrainedFeatMod,featMap=featMap,bigMaps=bigMaps,chan=64,stride=2,dilation=1)
     elif featModelName == "r2plus1d_18":
         featModel = getattr(resnet3D,featModelName)(pretrained=pretrainedFeatMod,featMap=featMap,bigMaps=bigMaps)
     elif featModelName.find("vgg") != -1:
@@ -125,10 +125,10 @@ class SpatialTransformer(nn.Module):
 
 class VisualModel(nn.Module):
 
-    def __init__(self,featModelName,pretrainedFeatMod=True,featMap=False,bigMaps=False):
+    def __init__(self,featModelName,pretrainedFeatMod=True,featMap=False,bigMaps=False,**kwargs):
         super(VisualModel,self).__init__()
 
-        self.featMod = buildFeatModel(featModelName,pretrainedFeatMod,featMap,bigMaps)
+        self.featMod = buildFeatModel(featModelName,pretrainedFeatMod,featMap,bigMaps,**kwargs)
         self.featMap = featMap
         self.bigMaps = bigMaps
     def forward(self,x):
@@ -136,8 +136,8 @@ class VisualModel(nn.Module):
 
 class CNN2D(VisualModel):
 
-    def __init__(self,featModelName,pretrainedFeatMod=True,featMap=False,bigMaps=False):
-        super(CNN2D,self).__init__(featModelName,pretrainedFeatMod,featMap,bigMaps)
+    def __init__(self,featModelName,pretrainedFeatMod=True,featMap=False,bigMaps=False,**kwargs):
+        super(CNN2D,self).__init__(featModelName,pretrainedFeatMod,featMap,bigMaps,**kwargs)
 
     def forward(self,x):
         # N x T x C x H x L
@@ -590,7 +590,7 @@ def netBuilder(args):
             nbFeat = 8*2**(2-1)
         else:
             nbFeat = 64*2**(4-1)
-        visualModel = CNN2D(args.feat,args.pretrained_visual)
+        visualModel = CNN2D(args.feat,args.pretrained_visual,stride=args.resnet_stride,dilation=args.resnet_dilation)
     elif args.feat.find("vgg") != -1:
         nbFeat = 4096
         visualModel = CNN2D(args.feat,args.pretrained_visual)
@@ -720,6 +720,11 @@ def addArgs(argreader):
                         help='For the topk point net model. The point extractor will be used as an attention module if True.')
     argreader.parser.add_argument('--pn_topk_softcoord', type=args.str2bool, metavar='BOOL',
                         help='For the topk point net model. The point coordinate will be computed using soft argmax.')
+
+    argreader.parser.add_argument('--resnet_stride', type=int, metavar='INT',
+                        help='The stride for the visual model when resnet is used')
+    argreader.parser.add_argument('--resnet_dilation', type=int, metavar='INT',
+                        help='The dilation for the visual model when resnet is used')
 
     return argreader
 
