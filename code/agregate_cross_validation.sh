@@ -30,12 +30,13 @@ epochList=()
 
 for initFile in ../models/cross_val2/*.ini
 do
-  if [[ $initFile != *"r3D"* ]];then
+  if [[ $initFile != *"p5"* ]];then
         model_id=$(basename $initFile .ini)
         bestPath=$(getBestPath $model_id)
         epoch=$(extractEpoch $bestPath)
         modelIdList+=($model_id)
         epochList+=($epoch)
+        echo $model_id $epoch
   fi
 done
 
@@ -47,6 +48,6 @@ done
 #                         --epochs_to_process 1 1 1 1 1 1 1 1 1 1 --model_ids ${modelIdList[@]}
 
 python processResults.py --eval_model --exp_id cross_val2 --param_agr feat temp_mod score_conv_attention \
-                        --names ResNet ResNet-LSTM ResNet-SC ResNet-SA \
-                        --keys resnet18,linear,False resnet18,lstm,False resnet18,score_conv,False resnet18,score_conv,True \
+                        --names ResNet ResNet-3D ResNet-LSTM ResNet-SC ResNet-SA \
+                        --keys resnet18,linear,False r2plus1d_18,linear,False resnet18,lstm,False resnet18,score_conv,False resnet18,score_conv,True \
                         --epochs_to_process ${epochList[@]} --model_ids ${modelIdList[@]}
