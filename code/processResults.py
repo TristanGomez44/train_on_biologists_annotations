@@ -641,8 +641,8 @@ def plotPoints(exp_id,model_id,epoch):
                 fig = plt.figure()
                 plt.xlim(xMin,xMax)
                 plt.ylim(yMin,yMax)
+
                 plt.plot(points[:,0],points[:,1],"*")
-                plt.savefig("../vis/{}/points_{}_{}_{}_img{}.png".format(exp_id,model_id,epoch,videoName,i))
                 img = fig2data(fig)
                 plt.close()
                 writer.append_data(img_as_ubyte(img.astype("uint8")))
