@@ -2,7 +2,6 @@ import pims
 import numpy as np
 import xml.etree.ElementTree as ET
 import os
-import processResults
 import subprocess
 
 def getVideoFrameNb(videoPath):
