@@ -44,7 +44,7 @@ import torch.distributed as dist
 from torch.multiprocessing import Process
 
 import time
-
+import subprocess
 
 def epochSeqTr(model,optim,log_interval,loader, epoch, args,writer,**kwargs):
     ''' Train a model during one epoch
@@ -179,7 +179,7 @@ def updateOccupiedCPUCSV(epoch,mode,exp_id,model_id):
 
     if not os.path.exists(csvPath):
         with open(csvPath,"w") as text_file:
-            print("epoch,"+",".join([str(i) in range(len(cpuOccList))]),file=text_file)
+            print("epoch,"+",".join([str(i) for i in range(len(cpuOccList))]),file=text_file)
             print(str(epoch)+","+",".join([cpuOcc for cpuOcc in cpuOccList]),file=text_file)
     else:
         with open(csvPath,"a") as text_file:
