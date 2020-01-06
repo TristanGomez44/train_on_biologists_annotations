@@ -108,9 +108,9 @@ def epochSeqTr(model,optim,log_interval,loader, epoch, args,writer,**kwargs):
         optim.step()
         if validBatch <= 10 and args.debug:
             if args.cuda:
-                updateOccupiedGPURamCSV(epoch,"train",args.exp_id,args.model_id)
-            updateOccupiedRamCSV(epoch,"train",args.exp_id,args.model_id)
-            updateOccupiedCPUCSV(epoch,"train",args.exp_id,args.model_id)
+                updateOccupiedGPURamCSV(epoch,"train",args.exp_id,args.model_id,batch_idx)
+            updateOccupiedRamCSV(epoch,"train",args.exp_id,args.model_id,batch_idx)
+            updateOccupiedCPUCSV(epoch,"train",args.exp_id,args.model_id,batch_idx)
         optim.zero_grad()
 
         #Metrics
@@ -133,7 +133,7 @@ def epochSeqTr(model,optim,log_interval,loader, epoch, args,writer,**kwargs):
 
     if args.debug:
         totalTime = time.time() - start_time
-        updateTimeCSV(epoch,"train",args.exp_id,args.model_id,totalTime)
+        updateTimeCSV(epoch,"train",args.exp_id,args.model_id,totalTime,batch_idx)
 
 def average_gradients(model):
     size = float(dist.get_world_size())
@@ -157,13 +157,13 @@ def get_gpu_memory_map():
     gpu_memory_map = dict(zip(range(len(gpu_memory)), gpu_memory))
     return gpu_memory_map
 
-def updateOccupiedGPURamCSV(epoch,mode,exp_id,model_id):
+def updateOccupiedGPURamCSV(epoch,mode,exp_id,model_id,batch_idx):
 
     occRamDict = get_gpu_memory_map()
 
     csvPath = "../results/{}/{}_occRam_{}.csv".format(exp_id,model_id,mode)
 
-    if not os.path.exists(csvPath):
+    if epoch==1 and batch_idx==0:
         with open(csvPath,"w") as text_file:
             print("epoch,"+",".join([str(device) for device in occRamDict.keys()]),file=text_file)
             print(str(epoch)+","+",".join([occRamDict[device] for device in occRamDict.keys()]),file=text_file)
@@ -171,27 +171,27 @@ def updateOccupiedGPURamCSV(epoch,mode,exp_id,model_id):
         with open(csvPath,"a") as text_file:
             print(str(epoch)+","+",".join([occRamDict[device] for device in occRamDict.keys()]),file=text_file)
 
-def updateOccupiedCPUCSV(epoch,mode,exp_id,model_id):
+def updateOccupiedCPUCSV(epoch,mode,exp_id,model_id,batch_idx):
 
-    cpuOccList = [x / psutil.cpu_count() * 100 for x in psutil.getloadavg()]
+    cpuOccList = psutil.cpu_percent(percpu=True)
 
     csvPath = "../results/{}/{}_cpuLoad_{}.csv".format(exp_id,model_id,mode)
 
-    if not os.path.exists(csvPath):
+    if epoch==1 and batch_idx==0:
         with open(csvPath,"w") as text_file:
             print("epoch,"+",".join([str(i) for i in range(len(cpuOccList))]),file=text_file)
-            print(str(epoch)+","+",".join([cpuOcc for cpuOcc in cpuOccList]),file=text_file)
+            print(str(epoch)+","+",".join([str(cpuOcc) for cpuOcc in cpuOccList]),file=text_file)
     else:
         with open(csvPath,"a") as text_file:
-            print(str(epoch)+","+",".join([cpuOcc for cpuOcc in cpuOccList]),file=text_file)
+            print(str(epoch)+","+",".join([str(cpuOcc) for cpuOcc in cpuOccList]),file=text_file)
 
-def updateOccupiedRamCSV(epoch,mode,exp_id,model_id):
+def updateOccupiedRamCSV(epoch,mode,exp_id,model_id,batch_idx):
 
     ramOcc = psutil.virtual_memory()._asdict()["percent"]
 
     csvPath = "../results/{}/{}_occCPURam_{}.csv".format(exp_id,model_id,mode)
 
-    if not os.path.exists(csvPath):
+    if epoch==1 and batch_idx==0:
         with open(csvPath,"w") as text_file:
             print("epoch,"+","+"percent",file=text_file)
             print(str(epoch)+","+str(ramOcc),file=text_file)
@@ -199,11 +199,11 @@ def updateOccupiedRamCSV(epoch,mode,exp_id,model_id):
         with open(csvPath,"a") as text_file:
             print(str(epoch)+","+str(ramOcc),file=text_file)
 
-def updateTimeCSV(epoch,mode,exp_id,model_id,totalTime):
+def updateTimeCSV(epoch,mode,exp_id,model_id,totalTime,batch_idx):
 
     csvPath = "../results/{}/{}_time_{}.csv".format(exp_id,model_id,mode)
 
-    if not os.path.exists(csvPath):
+    if epoch==1 and batch_idx==0:
         with open(csvPath,"w") as text_file:
             print("epoch,"+","+"time",file=text_file)
             print(str(epoch)+","+str(totalTime),file=text_file)
@@ -356,9 +356,9 @@ def epochSeqVal(model,log_interval,loader, epoch, args,writer,metricEarlyStop,mo
 
         if nbVideos<=5 and args.debug:
             if args.cuda:
-                updateOccupiedGPURamCSV(epoch,mode,args.exp_id,args.model_id)
-            updateOccupiedRamCSV(epoch,mode,args.exp_id,args.model_id)
-            updateOccupiedCPUCSV(epoch,mode,args.exp_id,args.model_id)
+                updateOccupiedGPURamCSV(epoch,mode,args.exp_id,args.model_id,batch_idx)
+            updateOccupiedRamCSV(epoch,mode,args.exp_id,args.model_id,batch_idx)
+            updateOccupiedCPUCSV(epoch,mode,args.exp_id,args.model_id,batch_idx)
         if newVideo:
             allTarget = target
             allFeat = feat.unsqueeze(0)
@@ -389,7 +389,7 @@ def epochSeqVal(model,log_interval,loader, epoch, args,writer,metricEarlyStop,mo
 
     if args.debug:
         totalTime = time.time() - start_time
-        updateTimeCSV(epoch,mode,args.exp_id,args.model_id,totalTime)
+        updateTimeCSV(epoch,mode,args.exp_id,args.model_id,totalTime,batch_idx)
 
     return outDict,targDict,metrDict[metricEarlyStop]
 
