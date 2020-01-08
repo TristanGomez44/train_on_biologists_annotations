@@ -308,12 +308,12 @@ class AttentionFullModel(VisualModel):
 
 class DirectPointExtractor(nn.Module):
 
-    def __init__(self):
+    def __init__(self,point_nb):
         super(DirectPointExtractor,self).__init__()
         self.feat = resnet.resnet4(pretrained=True,chan=64,featMap=True)
         self.conv1x1 = nn.Conv2d(64, 32, kernel_size=1, stride=1)
         self.size_red = nn.AdaptiveAvgPool2d((8, 8))
-        self.dense = nn.Linear(8*8*32,256*2)
+        self.dense = nn.Linear(8*8*32,point_nb*2)
 
     def forward(self,x):
         x = self.feat(x)
@@ -328,15 +328,15 @@ class DirectPointExtractor(nn.Module):
 
 class TopkPointExtractor(nn.Module):
 
-    def __init__(self,attention,softCoord):
+    def __init__(self,attention,softCoord,softCoord_kerSize,point_nb):
         super(TopkPointExtractor,self).__init__()
 
         self.feat = resnet.resnet4(pretrained=True,chan=64,featMap=True)
         self.conv1x1 = nn.Conv2d(64, 1, kernel_size=1, stride=1)
-        self.point_extracted = 256
+        self.point_extracted = point_nb
         self.attention = attention
         self.softCoord = softCoord
-        self.softCoord_kerSize = 2
+        self.softCoord_kerSize = softCoord_kerSize
 
     def forward(self,img):
 
@@ -404,14 +404,15 @@ def softCoordRefiner(x,abs,ord,kerSize=6):
 
 class PointNet2(VisualModel):
 
-    def __init__(self,classNb,featModelName='resnet18',pretrainedFeatMod=True,featMap=False,bigMaps=False,topk=False,topk_attention=False,topk_softcoord=False):
+    def __init__(self,classNb,featModelName='resnet18',pretrainedFeatMod=True,featMap=False,bigMaps=False,topk=False,\
+                topk_attention=False,topk_softcoord=False,topk_softCoord_kerSize=2,point_nb=256):
 
         super(PointNet2,self).__init__(featModelName,pretrainedFeatMod,True,bigMaps)
 
         if topk:
-            self.pointExtr = TopkPointExtractor(topk_attention,topk_softcoord)
+            self.pointExtr = TopkPointExtractor(topk_attention,topk_softcoord,topk_softCoord_kerSize,point_nb)
         else:
-            self.pointExtr = DirectPointExtractor()
+            self.pointExtr = DirectPointExtractor(point_nb)
 
         self.pn2 = pointnet2.models.pointnet2_ssg_cls.Pointnet2SSG(num_classes=classNb,input_channels=topk,use_xyz=True)
 
@@ -623,7 +624,8 @@ def netBuilder(args):
             visualModel = AttentionFullModel(args.feat,args.pretrained_visual,args.feat_attention_big_maps,nbFeat,args.class_nb,classBiasMod,args.feat_attention_att_type,args.feat_attention_grouped_att)
             tempModel = Identity(nbFeat,args.class_nb,False,False)
     elif args.temp_mod == "pointnet2":
-        visualModel = PointNet2(args.class_nb,topk=args.pn_topk,topk_attention=args.pn_topk_attention,topk_softcoord=args.pn_topk_softcoord)
+        visualModel = PointNet2(args.class_nb,topk=args.pn_topk,topk_attention=args.pn_topk_attention,topk_softcoord=args.pn_topk_softcoord,\
+                                topk_softCoord_kerSize=args.pn_topk_softcoord_kersize,point_nb=args.pn_point_nb)
         tempModel = Identity(nbFeat,args.class_nb,False,False)
     else:
         raise ValueError("Unknown temporal model type : ",args.temp_mod)
@@ -720,6 +722,10 @@ def addArgs(argreader):
                         help='For the topk point net model. The point extractor will be used as an attention module if True.')
     argreader.parser.add_argument('--pn_topk_softcoord', type=args.str2bool, metavar='BOOL',
                         help='For the topk point net model. The point coordinate will be computed using soft argmax.')
+    argreader.parser.add_argument('--pn_topk_softcoord_kersize', type=int, metavar='KERSIZE',
+                        help='For the topk point net model. This is the kernel size of the soft argmax.')
+    argreader.parser.add_argument('--pn_point_nb', type=int, metavar='NB',
+                        help='For the topk point net model. This is the number of point extracted for each image.')
 
     argreader.parser.add_argument('--resnet_stride', type=int, metavar='INT',
                         help='The stride for the visual model when resnet is used')
