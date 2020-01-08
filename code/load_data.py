@@ -438,9 +438,14 @@ def getGT(vidName,dataset):
 
     datasetList = dataset.split("+")
 
+    datasetOfTheVideo = None
+
     for dataset in datasetList:
         if os.path.exists("../data/{}/annotations/{}_phases.csv".format(dataset,vidName)):
             datasetOfTheVideo = dataset
+
+    if datasetOfTheVideo is None:
+        raise ValueError("Cannot find the annotation of the video {}".format(vidName))
 
     if not os.path.exists("../data/{}/annotations/{}_targ.csv".format(datasetOfTheVideo,vidName)):
 
