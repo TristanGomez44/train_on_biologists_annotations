@@ -39,7 +39,7 @@ from skimage import img_as_ubyte
 import cv2
 import subprocess
 #warnings.simplefilter('error', UserWarning)
-
+import time
 def epochSeqTr(model,optim,log_interval,loader, epoch, args,writer,**kwargs):
     ''' Train a model during one epoch
 
@@ -54,6 +54,9 @@ def epochSeqTr(model,optim,log_interval,loader, epoch, args,writer,**kwargs):
     - width (int): the width of the triangular window (i.e. the number of steps over which the window is spreading)
 
     '''
+
+    if args.debug:
+        start_time = time.time()
 
     model.train()
 
@@ -93,7 +96,7 @@ def epochSeqTr(model,optim,log_interval,loader, epoch, args,writer,**kwargs):
 
         loss.backward()
         optim.step()
-        if validBatch <= 3 and args.debug:
+        if validBatch <= 15 and args.debug:
             updateOccupiedGPURamCSV(epoch,"train",args.exp_id,args.model_id)
         optim.zero_grad()
 
@@ -107,13 +110,17 @@ def epochSeqTr(model,optim,log_interval,loader, epoch, args,writer,**kwargs):
 
         validBatch += 1
 
-        if validBatch > 3 and args.debug:
+        if validBatch > 15 and args.debug:
             break
 
     #If the training set is empty (which we might want to just evaluate the model), then allOut and allGT will still be None
     if validBatch > 0:
         torch.save(model.state_dict(), "../models/{}/model{}_epoch{}".format(args.exp_id,args.model_id, epoch))
         writeSummaries(metrDict,validBatch,writer,epoch,"train",args.model_id,args.exp_id)
+
+    if args.debug:
+        totalTime = time.time() - start_time
+        updateTimeCSV(epoch,"train",args.exp_id,args.model_id,totalTime,batch_idx)
 
 def get_gpu_memory_map():
     """Get the current gpu usage.
@@ -143,6 +150,18 @@ def updateOccupiedGPURamCSV(epoch,mode,exp_id,model_id):
     else:
         with open(csvPath,"a") as text_file:
             print(str(epoch)+","+",".join([occRamDict[device] for device in occRamDict.keys()]),file=text_file)
+
+def updateTimeCSV(epoch,mode,exp_id,model_id,totalTime,batch_idx):
+
+    csvPath = "../results/{}/{}_time_{}.csv".format(exp_id,model_id,mode)
+
+    if epoch==1 and batch_idx==0:
+        with open(csvPath,"w") as text_file:
+            print("epoch,"+","+"time",file=text_file)
+            print(str(epoch)+","+str(totalTime),file=text_file)
+    else:
+        with open(csvPath,"a") as text_file:
+            print(str(epoch)+","+str(totalTime),file=text_file)
 
 def logBeta(alpha):
     alpha_0 = alpha.sum(-1)
@@ -241,6 +260,9 @@ def epochSeqVal(model,log_interval,loader, epoch, args,writer,metricEarlyStop,mo
      - maximiseMetric (bool): If true, the model maximising this metric will be kept.
     '''
 
+    if args.debug:
+        start_time = time.time()
+
     model.eval()
 
     print("Epoch",epoch," : ",mode)
@@ -321,6 +343,10 @@ def epochSeqVal(model,log_interval,loader, epoch, args,writer,metricEarlyStop,mo
         np.savetxt("../results/{}/{}_epoch{}_{}.csv".format(args.exp_id,args.model_id,epoch,key),fullArr.cpu().detach().numpy())
 
     writeSummaries(metrDict,validBatch,writer,epoch,mode,args.model_id,args.exp_id,nbVideos=nbVideos)
+
+    if args.debug:
+        totalTime = time.time() - start_time
+        updateTimeCSV(epoch,mode,args.exp_id,args.model_id,totalTime,batch_idx)
 
     return outDict,targDict,metrDict[metricEarlyStop]
 
