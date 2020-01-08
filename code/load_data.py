@@ -9,7 +9,6 @@ import torchvision
 
 from PIL import Image
 
-import processResults
 import pims
 import time
 
@@ -262,7 +261,12 @@ class TestLoader():
         self.sumL += L
 
         videoPath = self.videoPaths[self.videoInd]
-        video = pims.Video(videoPath)
+
+        try:
+            video = pims.Video(videoPath)
+        except OSError:
+            print("OSError: Could not load meta information",videoPath)
+            sys.exit(0)
 
         vidName = os.path.basename(os.path.splitext(videoPath)[0])
 
@@ -390,10 +394,15 @@ def getGT(vidName,dataset):
 
     datasetList = dataset.split("+")
 
+    datasetOfTheVideo = None
+
     for dataset in datasetList:
         if os.path.exists("../data/{}/annotations/{}_phases.csv".format(dataset,vidName)):
             datasetOfTheVideo = dataset
 
+    if datasetOfTheVideo is None:
+        raise ValueError("Cannot find the dataset of the video {}".format(datasetOfTheVideo))
+        
     if not os.path.exists("../data/{}/annotations/{}_targ.csv".format(datasetOfTheVideo,vidName)):
 
         phases = np.genfromtxt("../data/{}/annotations/{}_phases.csv".format(datasetOfTheVideo,vidName),dtype=str,delimiter=",")
