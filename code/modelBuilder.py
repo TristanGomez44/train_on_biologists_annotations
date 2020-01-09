@@ -10,7 +10,7 @@ import sys
 import pointnet2
 import cv2
 
-def buildFeatModel(featModelName,pretrainedFeatMod,featMap=False,bigMaps=False,stride=2,dilation=1):
+def buildFeatModel(featModelName,pretrainedFeatMod,featMap=False,bigMaps=False,stride=2,dilation=1,**kwargs):
     ''' Build a visual feature model
 
     Args:
@@ -20,7 +20,7 @@ def buildFeatModel(featModelName,pretrainedFeatMod,featMap=False,bigMaps=False,s
 
     '''
     if featModelName.find("resnet") != -1:
-        featModel = getattr(resnet,featModelName)(pretrained=pretrainedFeatMod,featMap=featMap,bigMaps=bigMaps,chan=64,stride=2,dilation=1)
+        featModel = getattr(resnet,featModelName)(pretrained=pretrainedFeatMod,featMap=featMap,bigMaps=bigMaps,**kwargs)
     elif featModelName == "r2plus1d_18":
         featModel = getattr(resnet3D,featModelName)(pretrained=pretrainedFeatMod,featMap=featMap,bigMaps=bigMaps)
     elif featModelName.find("vgg") != -1:
@@ -144,9 +144,13 @@ class CNN2D(VisualModel):
         self.batchSize = x.size(0)
         x = x.view(x.size(0)*x.size(1),x.size(2),x.size(3),x.size(4)).contiguous()
         # NT x C x H x L
-        x = self.featMod(x)
+        res = self.featMod(x)
         # NT x D
-        return {'x':x}
+        if type(res) is dict:
+            #Some feature model can return a dictionnary instead of a tensor
+            return res
+        else:
+            return {'x':res}
 
 class CNN3D(VisualModel):
 
@@ -450,7 +454,6 @@ class LinearTempModel(TempModel):
 
     def __init__(self,nbFeat,nbClass,regression,useTime,dropout):
         super(LinearTempModel,self).__init__(nbFeat,nbClass,regression,useTime)
-
         self.dropout = nn.Dropout(p=dropout)
         if regression:
             self.linLay = nn.Linear(self.nbFeat,1)
@@ -586,12 +589,12 @@ def netBuilder(args):
     ############### Visual Model #######################
     if args.feat.find("resnet") != -1:
         if args.feat=="resnet50" or args.feat=="resnet101" or args.feat=="resnet151":
-            nbFeat = 256*2**(4-1)
-        elif args.feat == "resnet9":
-            nbFeat = 8*2**(2-1)
+            nbFeat = args.resnet_chan*4*2**(4-1)
+        elif args.feat.find("resnet9") != -1:
+            nbFeat = args.resnet_chan*2**(2-1)
         else:
-            nbFeat = 64*2**(4-1)
-        visualModel = CNN2D(args.feat,args.pretrained_visual,stride=args.resnet_stride,dilation=args.resnet_dilation)
+            nbFeat = args.resnet_chan*2**(4-1)
+        visualModel = CNN2D(args.feat,args.pretrained_visual,chan=args.resnet_chan,stride=args.resnet_stride,dilation=args.resnet_dilation,attChan=args.resnet_att_chan,attBlockNb=args.resnet_att_blocks_nb)
     elif args.feat.find("vgg") != -1:
         nbFeat = 4096
         visualModel = CNN2D(args.feat,args.pretrained_visual)
@@ -727,10 +730,19 @@ def addArgs(argreader):
     argreader.parser.add_argument('--pn_point_nb', type=int, metavar='NB',
                         help='For the topk point net model. This is the number of point extracted for each image.')
 
+
+
+    argreader.parser.add_argument('--resnet_chan', type=int, metavar='INT',
+                        help='The channel number for the visual model when resnet is used')
     argreader.parser.add_argument('--resnet_stride', type=int, metavar='INT',
                         help='The stride for the visual model when resnet is used')
     argreader.parser.add_argument('--resnet_dilation', type=int, metavar='INT',
                         help='The dilation for the visual model when resnet is used')
+
+    argreader.parser.add_argument('--resnet_att_chan', type=int, metavar='INT',
+                        help='For the \'resnetX_att\' feat models. The number of channels in the attention module.')
+    argreader.parser.add_argument('--resnet_att_blocks_nb', type=int, metavar='INT',
+                        help='For the \'resnetX_att\' feat models. The number of blocks in the attention module.')
 
     return argreader
 

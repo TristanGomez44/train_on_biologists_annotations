@@ -119,7 +119,7 @@ class Bottleneck(nn.Module):
 class ResNet(nn.Module):
 
     def __init__(self, block, layers, num_classes=1000, zero_init_residual=False, norm_layer=None,maxPoolKer=(3,3),maxPoolPad=(1,1),stride=(2,2),\
-                    featMap=False,chan=64,inChan=3,dilation=1,bigMaps=False,layersNb=4):
+                    featMap=False,chan=64,inChan=3,dilation=1,bigMaps=False,layersNb=4,attention=False,attChan=16,attBlockNb=1):
 
         super(ResNet, self).__init__()
         if norm_layer is None:
@@ -166,8 +166,23 @@ class ResNet(nn.Module):
 
         self.featMap = featMap
 
+        self.attention = attention
+        if attention:
+            self.inplanes = attChan
+            self.att = self._make_layer(block, attChan, attBlockNb, stride=1, norm_layer=norm_layer,feat=True)
+            self.att_conv1x1_1 = conv1x1(chan*1, attChan, stride=1)
+            self.att_conv1x1_2 = conv1x1(chan*2, attChan, stride=1)
+            self.att_conv1x1_3 = conv1x1(chan*3, attChan, stride=1)
+            self.att_conv1x1_4 = conv1x1(chan*4, attChan, stride=1)
+            self.att_final_conv1x1 = conv1x1(attChan, 1, stride=1)
+
+            self.att_1 = nn.Sequential(self.att_conv1x1_1,self.att,self.att_final_conv1x1,nn.Sigmoid())
+            self.att_2 = nn.Sequential(self.att_conv1x1_2,self.att,self.att_final_conv1x1,nn.Sigmoid())
+            self.att_3 = nn.Sequential(self.att_conv1x1_3,self.att,self.att_final_conv1x1,nn.Sigmoid())
+            self.att_4 = nn.Sequential(self.att_conv1x1_4,self.att,self.att_final_conv1x1,nn.Sigmoid())
 
     def _make_layer(self, block, planes, blocks, stride=1, norm_layer=None,feat=False,dilation=1):
+
         if norm_layer is None:
             norm_layer = nn.BatchNorm2d
         downsample = None
@@ -197,14 +212,26 @@ class ResNet(nn.Module):
         x = self.relu(x)
         x = self.maxpool(x)
 
+        if self.attention:
+            attWeightsDict = {}
+
         for i in range(1,self.layersNb+1):
             x = getattr(self,"layer{}".format(i))(x)
+
+            if self.attention:
+                attWeights = getattr(self,"att_{}".format(i))(x)
+                attWeightsDict[i] = attWeights
+                x = x*attWeights
 
         if not self.featMap:
             x = self.avgpool(x)
             x = x.view(x.size(0), -1)
 
-        return x
+        if self.attention:
+            return {"x":x,"attMaps":attWeightsDict}
+        else:
+            return x
+
 
 def resnet4(pretrained=False,chan=8, **kwargs):
     model = ResNet(BasicBlock, [2, 2, 2, 2], chan=chan,layersNb=1,**kwargs)
@@ -215,6 +242,16 @@ def resnet4(pretrained=False,chan=8, **kwargs):
         model.load_state_dict(model_zoo.load_url(model_urls['resnet18']))
 
     return model
+
+def resnet9_att(pretrained=False,chan=8,attChan=16,attBlockNb=1, **kwargs):
+    model = ResNet(BasicBlock, [2, 2, 2, 2], chan=chan,layersNb=2,attention=True,attChan=attChan,attBlockNb=attBlockNb,**kwargs)
+
+    if pretrained and chan != 64:
+        raise ValueError("ResNet9 with {} channel does not have pretrained weights on ImageNet.".format(chan))
+    if pretrained:
+        model.load_state_dict(model_zoo.load_url(model_urls['resnet18']),strict=False)
+    return model
+
 
 def resnet9(pretrained=False,chan=8, **kwargs):
     model = ResNet(BasicBlock, [2, 2, 2, 2], chan=chan,layersNb=2,**kwargs)
