@@ -20,7 +20,7 @@ import cv2
 from PIL import Image
 
 import load_data
-import modelBuilder
+
 
 import metrics
 import utils
@@ -38,7 +38,7 @@ from skimage import img_as_ubyte
 
 from scipy import stats
 
-
+from PIL import Image
 
 def evalModel(dataset,partBeg,partEnd,propSetIntFormat,exp_id,model_id,epoch,regression,uncertainty,nbClass):
     '''
@@ -512,6 +512,74 @@ def plotAttentionMaps(dataset,exp_id,model_id,plotFeatMaps):
                 writer.append_data(img_as_ubyte(frame.astype("uint8")))
                 i+=1
 
+def plotMultiAttentionMaps(dataset,exp_id,model_id):
+
+    featMapPaths = sorted(glob.glob("../results/{}/attMaps_{}_epoch*_*.npy".format(exp_id,model_id)))
+
+    videoNameDict = buildVideoNameDict(dataset,0,100,True,featMapPaths,raiseError=False)
+
+    revVideoNameDict = {}
+
+    for featMapPath in videoNameDict.keys():
+        if not videoNameDict[featMapPath] in revVideoNameDict.keys():
+            revVideoNameDict[videoNameDict[featMapPath]] = [featMapPath]
+        else:
+            revVideoNameDict[videoNameDict[featMapPath]].append(featMapPath)
+
+    for videoName in revVideoNameDict.keys():
+        print(videoName)
+        for path in revVideoNameDict[videoName]:
+            print("\t",path)
+
+    for vidInd,videoName in enumerate(revVideoNameDict.keys()):
+
+        featMapsList = [np.load(featMapPath) for featMapPath in revVideoNameDict[videoName]]
+
+        dataset_of_the_video = load_data.getDataset(videoName)
+        video = pims.Video("../data/{}/{}.avi".format(dataset_of_the_video,videoName))
+
+        epoch = int(os.path.splitext(revVideoNameDict[videoName][0].split("epoch")[1].split("_"+videoName)[0])[0])
+
+        gt = load_data.getGT(videoName,dataset_of_the_video).astype(int)
+        frameStart = (gt == -1).sum()
+
+        videoPath = '../vis/{}/multiAttMaps_{}_{}_{}.mp4'.format(exp_id,model_id,epoch,videoName)
+
+        with imageio.get_writer(videoPath, mode='I') as writer:
+
+            i=frameStart
+
+            print(vidInd+1,"/",len(revVideoNameDict.keys()),videoName)
+
+            frameNb = utils.getVideoFrameNb("../data/{}/{}.avi".format(dataset_of_the_video,videoName))
+
+            while i < frameNb:
+
+                frame = video[i]
+
+                frame = frame[frame.shape[0]-frame.shape[1]:,:]
+
+                dest = Image.new('RGB', (frame.shape[0]*(int(np.sqrt(len(featMapsList)))+1),frame.shape[1]*(int(np.sqrt(len(featMapsList)))+1)))
+
+                for j,featMaps in enumerate(featMapsList):
+
+                    resizedAttFeatMap = resize(featMaps[i-frameStart][0], (frame.shape[0],frame.shape[1]),anti_aliasing=True,mode="constant",order=0)
+                    print(resizedAttFeatMap.min(),resizedAttFeatMap.max(),resizedAttFeatMap.mean(),resizedAttFeatMap.std())
+                    resizedAttFeatMap = resizedAttFeatMap[:,:,np.newaxis]*2/3+1/3
+
+                    frame = frame*resizedAttFeatMap
+                    framePIL = Image.fromarray(frame.astype("uint8"))
+                    dest.paste(framePIL, (framePIL.size[0]*(j%(int(np.sqrt(len(featMapsList)))+1)),framePIL.size[1]*(j//(int(np.sqrt(len(featMapsList)))+1))))
+
+                dest = np.array(dest)
+
+                nearestLowerDiv = dest.shape[0]//16
+                nearestHigherDiv = (nearestLowerDiv+1)*16
+                dest = resize(dest, (nearestHigherDiv,nearestHigherDiv),anti_aliasing=True,mode="constant",order=0)*255
+
+                writer.append_data(dest.astype("uint8"))
+                i+=1
+
 def phaseNbHist(datasets,density):
 
     def countRows(x):
@@ -680,6 +748,7 @@ def main(argv=None):
     argreader.parser.add_argument('--plot_attention_maps',action="store_true",help="To plot the attention map of a model. Requires the arguments 'dataset_test', 'exp_id', 'model_id' to be set.")
     argreader.parser.add_argument('--feat_maps',action="store_true",help="To plot the feature maps instead of the attention maps.")
 
+    argreader.parser.add_argument('--plot_multi_attention_maps',action="store_true",help="To plot the attention maps of a model producing several attention maps per image. Requires the arguments 'dataset_test', 'exp_id', 'model_id' to be set.")
 
     ####################### Plot  phase number histogram #####################
 
@@ -699,7 +768,7 @@ def main(argv=None):
                                     The exp_id, model_id and epoch_to_process arg must be set.')
 
     argreader = load_data.addArgs(argreader)
-    argreader = modelBuilder.addArgs(argreader)
+
 
     #Reading the comand line arg
     argreader.getRemainingArgs()
@@ -730,6 +799,8 @@ def main(argv=None):
         plotData(args.plot_data,args.dataset_test)
     if args.plot_attention_maps:
         plotAttentionMaps(args.dataset_test,args.exp_id,args.model_id,args.feat_maps)
+    if args.plot_multi_attention_maps:
+        plotMultiAttentionMaps(args.dataset_test,args.exp_id,args.model_id)
     if args.phase_nb_hist:
         phaseNbHist(args.phase_nb_hist,args.density)
     if args.plot_confusion_matrix:
