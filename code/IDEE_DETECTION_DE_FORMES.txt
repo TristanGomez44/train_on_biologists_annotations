@@ -1,0 +1,1 @@
+La transformée de fourrier change radicalement quand la texture change. Faut repérer les moments où la TF change ça donne 

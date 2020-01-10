@@ -37,9 +37,15 @@ from skimage import transform,io
 from skimage import img_as_ubyte
 
 import cv2
-import subprocess
+import psutil
 #warnings.simplefilter('error', UserWarning)
+
+import torch.distributed as dist
+from torch.multiprocessing import Process
+
 import time
+import subprocess
+
 def epochSeqTr(model,optim,log_interval,loader, epoch, args,writer,**kwargs):
     ''' Train a model during one epoch
 
@@ -95,9 +101,15 @@ def epochSeqTr(model,optim,log_interval,loader, epoch, args,writer,**kwargs):
             loss = F.cross_entropy(output.view(output.size(0)*output.size(1),-1), target.view(-1))
 
         loss.backward()
+        if args.distributed:
+            average_gradients(model)
+
         optim.step()
-        if validBatch <= 15 and args.debug:
-            updateOccupiedGPURamCSV(epoch,"train",args.exp_id,args.model_id)
+        if validBatch <= 10 and args.debug:
+            if args.cuda:
+                updateOccupiedGPURamCSV(epoch,"train",args.exp_id,args.model_id,batch_idx)
+            updateOccupiedRamCSV(epoch,"train",args.exp_id,args.model_id,batch_idx)
+            updateOccupiedCPUCSV(epoch,"train",args.exp_id,args.model_id,batch_idx)
         optim.zero_grad()
 
         #Metrics
@@ -122,6 +134,13 @@ def epochSeqTr(model,optim,log_interval,loader, epoch, args,writer,**kwargs):
         totalTime = time.time() - start_time
         updateTimeCSV(epoch,"train",args.exp_id,args.model_id,totalTime,batch_idx)
 
+def average_gradients(model):
+    size = float(dist.get_world_size())
+    for param in model.parameters():
+        if not param.grad is None:
+            dist.all_reduce(param.grad.data, op=dist.ReduceOp.SUM)
+            param.grad.data /= size
+
 def get_gpu_memory_map():
     """Get the current gpu usage.
 
@@ -137,19 +156,47 @@ def get_gpu_memory_map():
     gpu_memory_map = dict(zip(range(len(gpu_memory)), gpu_memory))
     return gpu_memory_map
 
-def updateOccupiedGPURamCSV(epoch,mode,exp_id,model_id):
+def updateOccupiedGPURamCSV(epoch,mode,exp_id,model_id,batch_idx):
 
     occRamDict = get_gpu_memory_map()
 
     csvPath = "../results/{}/{}_occRam_{}.csv".format(exp_id,model_id,mode)
 
-    if not os.path.exists(csvPath):
+    if epoch==1 and batch_idx==0:
         with open(csvPath,"w") as text_file:
             print("epoch,"+",".join([str(device) for device in occRamDict.keys()]),file=text_file)
             print(str(epoch)+","+",".join([occRamDict[device] for device in occRamDict.keys()]),file=text_file)
     else:
         with open(csvPath,"a") as text_file:
             print(str(epoch)+","+",".join([occRamDict[device] for device in occRamDict.keys()]),file=text_file)
+
+def updateOccupiedCPUCSV(epoch,mode,exp_id,model_id,batch_idx):
+
+    cpuOccList = psutil.cpu_percent(percpu=True)
+
+    csvPath = "../results/{}/{}_cpuLoad_{}.csv".format(exp_id,model_id,mode)
+
+    if epoch==1 and batch_idx==0:
+        with open(csvPath,"w") as text_file:
+            print("epoch,"+",".join([str(i) for i in range(len(cpuOccList))]),file=text_file)
+            print(str(epoch)+","+",".join([str(cpuOcc) for cpuOcc in cpuOccList]),file=text_file)
+    else:
+        with open(csvPath,"a") as text_file:
+            print(str(epoch)+","+",".join([str(cpuOcc) for cpuOcc in cpuOccList]),file=text_file)
+
+def updateOccupiedRamCSV(epoch,mode,exp_id,model_id,batch_idx):
+
+    ramOcc = psutil.virtual_memory()._asdict()["percent"]
+
+    csvPath = "../results/{}/{}_occCPURam_{}.csv".format(exp_id,model_id,mode)
+
+    if epoch==1 and batch_idx==0:
+        with open(csvPath,"w") as text_file:
+            print("epoch,"+","+"percent",file=text_file)
+            print(str(epoch)+","+str(ramOcc),file=text_file)
+    else:
+        with open(csvPath,"a") as text_file:
+            print(str(epoch)+","+str(ramOcc),file=text_file)
 
 def updateTimeCSV(epoch,mode,exp_id,model_id,totalTime,batch_idx):
 
@@ -292,7 +339,7 @@ def epochSeqVal(model,log_interval,loader, epoch, args,writer,metricEarlyStop,mo
         if args.cuda:
             data, target,frameInds,timeElapsedTensor = data.cuda(), target.cuda(),frameInds.cuda(),timeElapsedTensor.cuda()
 
-        visualDict = model.visualModel(data)
+        visualDict = model.computeVisual(data)
         feat = visualDict["x"].data
 
         update.updateFrameDict(frameIndDict,frameInds,vidName)
@@ -312,6 +359,11 @@ def epochSeqVal(model,log_interval,loader, epoch, args,writer,metricEarlyStop,mo
         fullAffTransSeq = catAffineTransf(visualDict,fullAffTransSeq)
         fullPointsSeq = catPointsSeq(visualDict,fullAffTransSeq)
 
+        if nbVideos<=5 and args.debug:
+            if args.cuda:
+                updateOccupiedGPURamCSV(epoch,mode,args.exp_id,args.model_id,batch_idx)
+            updateOccupiedRamCSV(epoch,mode,args.exp_id,args.model_id,batch_idx)
+            updateOccupiedCPUCSV(epoch,mode,args.exp_id,args.model_id,batch_idx)
         if newVideo:
             allTarget = target
             allFeat = feat.unsqueeze(0)
@@ -639,6 +691,134 @@ def addLossTermArgs(argreader):
 
     return argreader
 
+def init_process(args,rank,size,fn,backend='gloo'):
+    """ Initialize the distributed environment. """
+    os.environ['MASTER_ADDR'] = '127.0.0.1'
+    os.environ['MASTER_PORT'] = '29500'
+    dist.init_process_group(backend, rank=rank, world_size=size)
+    fn(args)
+
+def run(args):
+
+    writer = SummaryWriter("../results/{}".format(args.exp_id))
+
+    np.random.seed(args.seed)
+    torch.manual_seed(args.seed)
+    if args.cuda:
+        torch.cuda.manual_seed(args.seed)
+
+    paramToOpti = []
+
+    trainLoader,trainDataset = load_data.buildSeqTrainLoader(args)
+
+    valLoader = load_data.TestLoader(args.dataset_val,args.val_l,args.val_part_beg,args.val_part_end,args.prop_set_int_fmt,\
+                                        args.img_size,args.orig_img_size,args.resize_image,\
+                                        args.exp_id,args.mask_time_on_image,args.min_phase_nb,args.grid_shuffle_test,args.grid_shuffle_test_size,args.sobel)
+
+    #Building the net
+    net = modelBuilder.netBuilder(args)
+
+    trainFunc = epochSeqTr
+    valFunc = epochSeqVal
+
+    kwargsTr = {'log_interval':args.log_interval,'loader':trainLoader,'args':args,'writer':writer}
+    kwargsVal = kwargsTr.copy()
+
+    kwargsVal['loader'] = valLoader
+    kwargsVal["metricEarlyStop"] = args.metric_early_stop
+
+    for p in net.parameters():
+        paramToOpti.append(p)
+
+    paramToOpti = (p for p in paramToOpti)
+
+    #Getting the contructor and the kwargs for the choosen optimizer
+    optimConst,kwargsOpti = get_OptimConstructor_And_Kwargs(args.optim,args.momentum)
+
+    startEpoch = initialize_Net_And_EpochNumber(net,args.exp_id,args.model_id,args.cuda,args.start_mode,args.init_path,args.strict_init)
+
+    #If no learning rate is schedule is indicated (i.e. there's only one learning rate),
+    #the args.lr argument will be a float and not a float list.
+    #Converting it to a list with one element makes the rest of processing easier
+    if type(args.lr) is float:
+        args.lr = [args.lr]
+
+    lrCounter = 0
+
+    transMat,priors = computeTransMat(args.dataset_train,net.transMat,net.priors,args.train_part_beg,args.train_part_end,args.prop_set_int_fmt)
+    net.setTransMat(transMat)
+    net.setPriors(priors)
+
+    epoch = startEpoch
+
+    if args.start_mode == "scratch":
+        worseEpochNb = 0
+        bestEpoch = epoch
+    else:
+        bestModelPaths = glob.glob("../models/{}/model{}_best_epoch*".format(args.exp_id,args.model_id))
+        if len(bestModelPaths) == 0:
+            worseEpochNb = 0
+            bestEpoch = epoch
+        elif len(bestModelPaths) == 1:
+            bestModelPath = bestModelPaths[0]
+            bestEpoch = int(os.path.basename(bestModelPath).split("epoch")[1])
+            worseEpochNb = startEpoch - bestEpoch
+        else:
+            raise ValueError("Wrong number of best model weight file : ",len(bestModelPaths))
+
+    if args.maximise_val_metric:
+        bestMetricVal = -np.inf
+        isBetter = lambda x,y:x>y
+    else:
+        bestMetricVal = np.inf
+        isBetter = lambda x,y:x<y
+
+    while epoch < args.epochs + 1 and worseEpochNb < args.max_worse_epoch_nb:
+
+        kwargsOpti,kwargsTr,lrCounter = update.updateLR(epoch,args.epochs,args.lr,startEpoch,kwargsOpti,kwargsTr,lrCounter,net,optimConst)
+
+        kwargsTr["epoch"],kwargsVal["epoch"] = epoch,epoch
+        kwargsTr["model"],kwargsVal["model"] = net,net
+
+        if not args.no_train:
+            trainFunc(**kwargsTr)
+        else:
+            net.load_state_dict(torch.load("../models/{}/model{}_epoch{}".format(args.no_train[0],args.no_train[1],epoch)))
+
+        if not args.no_val:
+            with torch.no_grad():
+                _,_,metricVal = valFunc(**kwargsVal)
+
+            if isBetter(metricVal,bestMetricVal):
+                if os.path.exists("../models/{}/model{}_best_epoch{}".format(args.exp_id,args.model_id,bestEpoch)):
+                    os.remove("../models/{}/model{}_best_epoch{}".format(args.exp_id,args.model_id,bestEpoch))
+
+                torch.save(net.state_dict(), "../models/{}/model{}_best_epoch{}".format(args.exp_id,args.model_id, epoch))
+                bestEpoch = epoch
+                bestMetricVal = metricVal
+                worseEpochNb = 0
+            else:
+                worseEpochNb += 1
+
+        epoch += 1
+    if args.run_test:
+
+        kwargsTest = kwargsVal
+        kwargsTest["mode"] = "test"
+
+        testLoader = load_data.TestLoader(args.dataset_test,args.val_l,args.test_part_beg,args.test_part_end,args.prop_set_int_fmt,\
+                                            args.img_size,args.orig_img_size,args.resize_image,\
+                                            args.exp_id,args.mask_time_on_image,args.min_phase_nb,args.grid_shuffle_test,args.grid_shuffle_test_size,args.sobel)
+
+        kwargsTest['loader'] = testLoader
+
+        net.load_state_dict(torch.load("../models/{}/model{}_epoch{}".format(args.exp_id,args.model_id,bestEpoch)))
+        kwargsTest["model"] = net
+        kwargsTest["epoch"] = bestEpoch
+
+        with torch.no_grad():
+            valFunc(**kwargsTest)
+
 def main(argv=None):
 
     #Getting arguments from config file and command line
@@ -682,8 +862,6 @@ def main(argv=None):
     #Write the arguments in a config file so the experiment can be re-run
     argreader.writeConfigFile("../models/{}/{}.ini".format(args.exp_id,args.model_id))
 
-    writer = SummaryWriter("../results/{}".format(args.exp_id))
-
     print("Model :",args.model_id,"Experience :",args.exp_id)
 
     if args.comp_feat:
@@ -713,122 +891,18 @@ def main(argv=None):
 
     else:
 
-        np.random.seed(args.seed)
-        torch.manual_seed(args.seed)
-        if args.cuda:
-            torch.cuda.manual_seed(args.seed)
+        if args.distributed:
+            size = args.distrib_size
+            processes = []
+            for rank in range(size):
+                p = Process(target=init_process, args=(args,rank,size,run))
+                p.start()
+                processes.append(p)
 
-        paramToOpti = []
-
-        trainLoader,trainDataset = load_data.buildSeqTrainLoader(args)
-
-        valLoader = load_data.TestLoader(args.dataset_val,args.val_l,args.val_part_beg,args.val_part_end,args.prop_set_int_fmt,\
-                                            args.img_size,args.orig_img_size,args.resize_image,\
-                                            args.exp_id,args.mask_time_on_image,args.min_phase_nb,args.grid_shuffle_test,args.grid_shuffle_test_size,args.sobel)
-
-        #Building the net
-        net = modelBuilder.netBuilder(args)
-
-        trainFunc = epochSeqTr
-        valFunc = epochSeqVal
-
-        kwargsTr = {'log_interval':args.log_interval,'loader':trainLoader,'args':args,'writer':writer}
-        kwargsVal = kwargsTr.copy()
-
-        kwargsVal['loader'] = valLoader
-        kwargsVal["metricEarlyStop"] = args.metric_early_stop
-
-        for p in net.parameters():
-            paramToOpti.append(p)
-
-        paramToOpti = (p for p in paramToOpti)
-
-        #Getting the contructor and the kwargs for the choosen optimizer
-        optimConst,kwargsOpti = get_OptimConstructor_And_Kwargs(args.optim,args.momentum)
-
-        startEpoch = initialize_Net_And_EpochNumber(net,args.exp_id,args.model_id,args.cuda,args.start_mode,args.init_path,args.strict_init)
-
-        #If no learning rate is schedule is indicated (i.e. there's only one learning rate),
-        #the args.lr argument will be a float and not a float list.
-        #Converting it to a list with one element makes the rest of processing easier
-        if type(args.lr) is float:
-            args.lr = [args.lr]
-
-        lrCounter = 0
-
-        transMat,priors = computeTransMat(args.dataset_train,net.transMat,net.priors,args.train_part_beg,args.train_part_end,args.prop_set_int_fmt)
-        net.setTransMat(transMat)
-        net.setPriors(priors)
-
-        epoch = startEpoch
-
-        if args.start_mode == "scratch":
-            worseEpochNb = 0
-            bestEpoch = epoch
+            for p in processes:
+                p.join()
         else:
-            bestModelPaths = glob.glob("../models/{}/model{}_best_epoch*".format(args.exp_id,args.model_id))
-            if len(bestModelPaths) == 0:
-                worseEpochNb = 0
-                bestEpoch = epoch
-            elif len(bestModelPaths) == 1:
-                bestModelPath = bestModelPaths[0]
-                bestEpoch = int(os.path.basename(bestModelPath).split("epoch")[1])
-                worseEpochNb = startEpoch - bestEpoch
-            else:
-                raise ValueError("Wrong number of best model weight file : ",len(bestModelPaths))
-
-        if args.maximise_val_metric:
-            bestMetricVal = -np.inf
-            isBetter = lambda x,y:x>y
-        else:
-            bestMetricVal = np.inf
-            isBetter = lambda x,y:x<y
-
-        while epoch < args.epochs + 1 and worseEpochNb < args.max_worse_epoch_nb:
-
-            kwargsOpti,kwargsTr,lrCounter = update.updateLR(epoch,args.epochs,args.lr,startEpoch,kwargsOpti,kwargsTr,lrCounter,net,optimConst)
-
-            kwargsTr["epoch"],kwargsVal["epoch"] = epoch,epoch
-            kwargsTr["model"],kwargsVal["model"] = net,net
-
-            if not args.no_train:
-                trainFunc(**kwargsTr)
-            else:
-                net.load_state_dict(torch.load("../models/{}/model{}_epoch{}".format(args.no_train[0],args.no_train[1],epoch)))
-
-            if not args.no_val:
-                with torch.no_grad():
-                    _,_,metricVal = valFunc(**kwargsVal)
-
-                if isBetter(metricVal,bestMetricVal):
-                    if os.path.exists("../models/{}/model{}_best_epoch{}".format(args.exp_id,args.model_id,bestEpoch)):
-                        os.remove("../models/{}/model{}_best_epoch{}".format(args.exp_id,args.model_id,bestEpoch))
-
-                    torch.save(net.state_dict(), "../models/{}/model{}_best_epoch{}".format(args.exp_id,args.model_id, epoch))
-                    bestEpoch = epoch
-                    bestMetricVal = metricVal
-                    worseEpochNb = 0
-                else:
-                    worseEpochNb += 1
-
-            epoch += 1
-        if args.run_test:
-
-            kwargsTest = kwargsVal
-            kwargsTest["mode"] = "test"
-
-            testLoader = load_data.TestLoader(args.dataset_test,args.val_l,args.test_part_beg,args.test_part_end,args.prop_set_int_fmt,\
-                                                args.img_size,args.orig_img_size,args.resize_image,\
-                                                args.exp_id,args.mask_time_on_image,args.min_phase_nb,args.grid_shuffle_test,args.grid_shuffle_test_size,args.sobel)
-
-            kwargsTest['loader'] = testLoader
-
-            net.load_state_dict(torch.load("../models/{}/model{}_epoch{}".format(args.exp_id,args.model_id,bestEpoch)))
-            kwargsTest["model"] = net
-            kwargsTest["epoch"] = bestEpoch
-
-            with torch.no_grad():
-                valFunc(**kwargsTest)
+            run(args)
 
 if __name__ == "__main__":
     main()

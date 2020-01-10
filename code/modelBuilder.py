@@ -76,6 +76,11 @@ class Model(nn.Module):
 
         return resDict
 
+    #This method can not be used when running on several gpu
+    def computeVisual(self,x):
+        resDict = self.visualModel(x)
+        return resDict
+
     def setTransMat(self,transMat):
         self.transMat = transMat
     def setPriors(self,priors):
