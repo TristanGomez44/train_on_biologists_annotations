@@ -406,6 +406,34 @@ def softCoordRefiner(x,abs,ord,kerSize=6):
 
     return allSoftAbs,allSoftOrd,allValues
 
+def fastSoftCoordRefiner(x,abs,ord,kerSize=5):
+
+    if kerSize%2==0:
+        raise ValueError("Kernel size of soft coordinate extractor must not be a multiple of 2.")
+
+    ordKer = (torch.arange(kerSize)-kerSize//2).unsqueeze(1).unsqueeze(0).unsqueeze(0).expand(1,3,kerSize,kerSize).float().to(x.device)
+    absKer = (torch.arange(kerSize)-kerSize//2).unsqueeze(0).unsqueeze(0).unsqueeze(0).expand(1,3,kerSize,kerSize).float().to(x.device)
+
+    ordTens = torch.arange(x.size(-2)).unsqueeze(1).expand(x.size(-2),x.size(-1)).float().to(x.device)
+    absTens = torch.arange(x.size(-1)).unsqueeze(0).expand(x.size(-2),x.size(-1)).float().to(x.device)
+
+    spatialWeightKer = kerSize-(torch.abs(ordKer)+torch.abs(absKer))
+
+    unorm_ordMean = F.conv2d(x, ordKer*spatialWeightKer, stride=1, padding=kerSize//2)
+    unorm_absMean = F.conv2d(x, absKer*spatialWeightKer, stride=1, padding=kerSize//2)
+
+    weightSum = F.conv2d(x, spatialWeightKer, stride=1, padding=kerSize//2)
+
+    ordMean = ordTens+unorm_ordMean/weightSum
+    absMean = absTens+unorm_absMean/weightSum
+
+    ordList = ordMean[:,0,abs.long(),ord.long()]
+    absList = absMean[:,0,abs.long(),ord.long()]
+    valueList = x[:,0,abs.long(),ord.long()]
+
+    return ordList,absList,valueList
+
+
 class PointNet2(VisualModel):
 
     def __init__(self,classNb,featModelName='resnet18',pretrainedFeatMod=True,featMap=False,bigMaps=False,topk=False,\
@@ -763,8 +791,8 @@ if __name__ == "__main__":
         mag= mag.astype("uint8")
         return mag
 
-    abs = torch.tensor([56,47])
-    ord = torch.tensor([77,10])
+    abs = torch.tensor([[56,47]])
+    ord = torch.tensor([[77,10]])
     x = sobelFunc(resize(pims.Video("../data/big/AA83-7.avi")[0],(125,125))*255)
     cv2.imwrite("in.png",x)
 
@@ -773,6 +801,9 @@ if __name__ == "__main__":
     cv2.imwrite("in_masked.png",x)
 
     x = torch.tensor(x).float().permute(2,0,1).unsqueeze(0)
-    abs,ord,values = softCoordRefiner(x,abs.float(),ord.float(),kerSize=10)
 
     print(abs,ord)
+    softAbs,softOrd,softValues = softCoordRefiner(x,abs.float(),ord.float(),kerSize=10)
+    print(softAbs,softOrd,softValues)
+    softAbs,softOrd,softValues = fastSoftCoordRefiner(x,abs.float(),ord.float(),kerSize=5)
+    print(softAbs,softOrd,softValues)
