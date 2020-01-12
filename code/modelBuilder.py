@@ -368,16 +368,16 @@ class TopkPointExtractor(nn.Module):
         abs,ord = (flatInds%x.shape[-1],flatInds//x.shape[-1])
 
         if self.softCoord:
-            abs,ord,flatVals = softCoordRefiner(x,abs,ord,kerSize=self.softCoord_kerSize)
+            abs,ord,flatVals = fastSoftCoordRefiner(x,abs,ord,kerSize=self.softCoord_kerSize)
 
         abs,ord,flatVals = abs.unsqueeze(-1),ord.unsqueeze(-1),flatVals.unsqueeze(-1)
         points = torch.cat((abs,ord),dim=-1).float()
         points = torch.cat((points,torch.zeros(points.size(0),points.size(1),1).to(x.device)),dim=-1)
         points = torch.cat((points,flatVals),dim=-1)
+
         return points
 
-
-def softCoordRefiner(x,abs,ord,kerSize=6):
+def softCoordRefiner(x,abs,ord,kerSize=5):
 
     refAbsTens = torch.arange(x.size(-1)).unsqueeze(0).expand((x.size(-2),x.size(-1))).float().to(x.device)
     refOrdTens = torch.arange(x.size(-2)).unsqueeze(1).expand((x.size(-2),x.size(-1))).float().to(x.device)
@@ -394,8 +394,14 @@ def softCoordRefiner(x,abs,ord,kerSize=6):
             ordTens = ord[batch_ind,i].unsqueeze(0).unsqueeze(1).expand((x.size(-2),x.size(-1))).float()
 
             distTens = torch.abs(refAbsTens-absTens)+torch.abs(refOrdTens-ordTens)
+            spatialWeightTensor = kerSize - distTens
+            spatialWeightTensorMasked = torch.zeros_like(spatialWeightTensor)
+            startOrd,endOrd = ord[batch_ind,i].int().item()-kerSize//2,ord[batch_ind,i].int().item()+kerSize//2+1
+            startAbs,endAbs = abs[batch_ind,i].int().item()-kerSize//2,abs[batch_ind,i].int().item()+kerSize//2+1
+            spatialWeightTensorMasked[startOrd:endOrd,startAbs:endAbs] = spatialWeightTensor[startOrd:endOrd,startAbs:endAbs]
+            spatialWeightTensor = spatialWeightTensorMasked
 
-            weightTens = torch.relu(kerSize - distTens).float()*x[:,0:1]
+            weightTens = spatialWeightTensor.float()*x[batch_ind,0]
 
             softAbs.append(((weightTens*refAbsTens).sum()/weightTens.sum()).unsqueeze(0))
             softOrd.append(((weightTens*refOrdTens).sum()/weightTens.sum()).unsqueeze(0))
@@ -416,25 +422,28 @@ def fastSoftCoordRefiner(x,abs,ord,kerSize=5):
     if kerSize%2==0:
         raise ValueError("Kernel size of soft coordinate extractor must not be a multiple of 2.")
 
-    ordKer = (torch.arange(kerSize)-kerSize//2).unsqueeze(1).unsqueeze(0).unsqueeze(0).expand(1,3,kerSize,kerSize).float().to(x.device)
-    absKer = (torch.arange(kerSize)-kerSize//2).unsqueeze(0).unsqueeze(0).unsqueeze(0).expand(1,3,kerSize,kerSize).float().to(x.device)
+    ordKer = (torch.arange(kerSize)-kerSize//2).unsqueeze(1).unsqueeze(0).unsqueeze(0).expand(1,1,kerSize,kerSize).float().to(x.device)
+    absKer = (torch.arange(kerSize)-kerSize//2).unsqueeze(0).unsqueeze(0).unsqueeze(0).expand(1,1,kerSize,kerSize).float().to(x.device)
 
     ordTens = torch.arange(x.size(-2)).unsqueeze(1).expand(x.size(-2),x.size(-1)).float().to(x.device)
     absTens = torch.arange(x.size(-1)).unsqueeze(0).expand(x.size(-2),x.size(-1)).float().to(x.device)
 
     spatialWeightKer = kerSize-(torch.abs(ordKer)+torch.abs(absKer))
 
-    unorm_ordMean = F.conv2d(x, ordKer*spatialWeightKer, stride=1, padding=kerSize//2)
-    unorm_absMean = F.conv2d(x, absKer*spatialWeightKer, stride=1, padding=kerSize//2)
+    unorm_ordShiftMean = F.conv2d(x, ordKer*spatialWeightKer, stride=1, padding=kerSize//2)
+    unorm_absShiftMean = F.conv2d(x, absKer*spatialWeightKer, stride=1, padding=kerSize//2)
 
     weightSum = F.conv2d(x, spatialWeightKer, stride=1, padding=kerSize//2)
 
-    ordMean = ordTens+unorm_ordMean/weightSum
-    absMean = absTens+unorm_absMean/weightSum
+    startOrd,endOrd = ord[0,0].int().item()-kerSize//2,ord[0,0].int().item()+kerSize//2+1
+    startAbs,endAbs = abs[0,0].int().item()-kerSize//2,abs[0,0].int().item()+kerSize//2+1
 
-    ordList = ordMean[:,0,abs.long(),ord.long()]
-    absList = absMean[:,0,abs.long(),ord.long()]
-    valueList = x[:,0,abs.long(),ord.long()]
+    ordMean = ordTens.unsqueeze(0).unsqueeze(0)+unorm_ordShiftMean/weightSum
+    absMean = absTens.unsqueeze(0).unsqueeze(0)+unorm_absShiftMean/weightSum
+
+    ordList = ordMean[:,0][torch.arange(x.size(0), dtype=torch.long).unsqueeze(1),ord.long(),abs.long()]
+    absList = absMean[:,0][torch.arange(x.size(0), dtype=torch.long).unsqueeze(1),ord.long(),abs.long()]
+    valueList = x[:,0][torch.arange(x.size(0), dtype=torch.long).unsqueeze(1),ord.long(),abs.long()]
 
     return ordList,absList,valueList
 
@@ -779,6 +788,7 @@ def addArgs(argreader):
 
     return argreader
 
+
 if __name__ == "__main__":
 
     import pims
@@ -796,19 +806,19 @@ if __name__ == "__main__":
         mag= mag.astype("uint8")
         return mag
 
-    abs = torch.tensor([[56,47]])
-    ord = torch.tensor([[77,10]])
+    abs = torch.tensor([[56]])
+    ord = torch.tensor([[77]])
     x = sobelFunc(resize(pims.Video("../data/big/AA83-7.avi")[0],(125,125))*255)
     cv2.imwrite("in.png",x)
 
     x[ord[0],abs[0],0] = 255
     x[ord[0],abs[0],1:] = 0
     cv2.imwrite("in_masked.png",x)
-
+    print(abs,ord,x[ord,abs,0])
     x = torch.tensor(x).float().permute(2,0,1).unsqueeze(0)
 
-    print(abs,ord)
-    softAbs,softOrd,softValues = softCoordRefiner(x,abs.float(),ord.float(),kerSize=10)
+
+    softAbs,softOrd,softValues = softCoordRefiner(x,abs.float(),ord.float(),kerSize=5)
     print(softAbs,softOrd,softValues)
     softAbs,softOrd,softValues = fastSoftCoordRefiner(x,abs.float(),ord.float(),kerSize=5)
     print(softAbs,softOrd,softValues)
