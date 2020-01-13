@@ -134,6 +134,7 @@ class VisualModel(nn.Module):
         super(VisualModel,self).__init__()
 
         self.featMod = buildFeatModel(featModelName,pretrainedFeatMod,featMap,bigMaps,**kwargs)
+
         self.featMap = featMap
         self.bigMaps = bigMaps
     def forward(self,x):
@@ -241,11 +242,11 @@ class Attention(nn.Module):
 
 class AttentionModel(VisualModel):
 
-    def __init__(self,featModelName,pretrainedFeatMod,bigMaps,nbFeat,nbClass,classBiasMod=None,attType="shallow",groupedAtt=True):
-        super(AttentionModel,self).__init__(featModelName,pretrainedFeatMod,True,bigMaps)
+    def __init__(self,featModelName,pretrainedFeatMod,bigMaps,nbFeat,nbClass,classBiasMod=None,attType="shallow",groupedAtt=True,**kwargs):
+        super(AttentionModel,self).__init__(featModelName,pretrainedFeatMod,True,bigMaps,**kwargs)
 
         self.classConv = nn.Conv2d(nbFeat,nbClass,1)
-        #self.attention = nn.Conv2d(nbClass,nbClass,attKerSize,padding=attKerSize//2,groups=nbClass)
+        #self.attention = nn.Conv2d(AttentionModelAttentionModelAttentionModelAttentionModelAttentionModelAttentionModelAttentionModelAttentionModelAttentionModelAttentionModelAttentionModelAttentionModelAttentionModelAttentionModelnbClass,nbClass,attKerSize,padding=attKerSize//2,groups=nbClass)
         self.attention = Attention(attType,nbClass,nbClass,groupedAtt)
         self.nbClass = nbClass
         self.classBiasMod = classBiasMod
@@ -274,8 +275,8 @@ class AttentionModel(VisualModel):
 
 class AttentionFullModel(VisualModel):
 
-    def __init__(self,featModelName,pretrainedFeatMod,bigMaps,nbFeat,nbClass,classBiasMod=None,attType="shallow",groupedAtt=True):
-        super(AttentionFullModel,self).__init__(featModelName,pretrainedFeatMod,True,bigMaps)
+    def __init__(self,featModelName,pretrainedFeatMod,bigMaps,nbFeat,nbClass,classBiasMod=None,attType="shallow",groupedAtt=True,**kwargs):
+        super(AttentionFullModel,self).__init__(featModelName,pretrainedFeatMod,True,bigMaps,**kwargs)
 
         #self.attention = nn.Conv2d(nbFeat,nbClass,attKerSize,padding=attKerSize//2)
         self.attention = Attention(attType,nbFeat,nbClass,groupedAtt)
@@ -662,11 +663,13 @@ def netBuilder(args):
         classBiasMod = ClassBias(nbFeat,args.class_nb) if args.class_bias_model else None
 
         if args.temp_mod == "feat_attention":
-            visualModel = AttentionModel(args.feat,args.pretrained_visual,args.feat_attention_big_maps,nbFeat,args.class_nb,classBiasMod,args.feat_attention_att_type,args.feat_attention_grouped_att)
+            visualModel = AttentionModel(args.feat,args.pretrained_visual,args.feat_attention_big_maps,nbFeat,args.class_nb,classBiasMod,args.feat_attention_att_type,args.feat_attention_grouped_att,\
+                                        chan=args.resnet_chan)
             tempModel = Identity(nbFeat,args.class_nb,False,False)
 
         elif args.temp_mod == "feat_attention_full":
-            visualModel = AttentionFullModel(args.feat,args.pretrained_visual,args.feat_attention_big_maps,nbFeat,args.class_nb,classBiasMod,args.feat_attention_att_type,args.feat_attention_grouped_att)
+            visualModel = AttentionFullModel(args.feat,args.pretrained_visual,args.feat_attention_big_maps,nbFeat,args.class_nb,classBiasMod,args.feat_attention_att_type,args.feat_attention_grouped_att,\
+                                            chan=args.resnet_chan)
             tempModel = Identity(nbFeat,args.class_nb,False,False)
     elif args.temp_mod == "pointnet2":
         visualModel = PointNet2(args.class_nb,topk=args.pn_topk,topk_attention=args.pn_topk_attention,topk_softcoord=args.pn_topk_softcoord,\
