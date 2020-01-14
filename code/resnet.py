@@ -263,6 +263,15 @@ def resnet9(pretrained=False,chan=8, **kwargs):
 
     return model
 
+def resnet14_att(pretrained=False,chan=8,attChan=16,attBlockNb=1, **kwargs):
+    model = ResNet(BasicBlock, [2, 2, 2, 2], chan=chan,layersNb=3,attention=True,attChan=attChan,attBlockNb=attBlockNb,**kwargs)
+
+    if pretrained and chan != 64:
+        raise ValueError("ResNet14 with {} channel does not have pretrained weights on ImageNet.".format(chan))
+    if pretrained:
+        model.load_state_dict(model_zoo.load_url(model_urls['resnet18']),strict=False)
+    return model
+
 def resnet18(pretrained=False, **kwargs):
     """Constructs a ResNet-18 model.
     Args:
@@ -273,6 +282,16 @@ def resnet18(pretrained=False, **kwargs):
         model.load_state_dict(model_zoo.load_url(model_urls['resnet18']))
     return model
 
+
+def resnet18_att(pretrained=False, attChan=16,attBlockNb=1,**kwargs):
+    """Constructs a ResNet-18 model.
+    Args:
+        pretrained (bool): If True, returns a model pre-trained on ImageNet
+    """
+    model = ResNet(BasicBlock, [2, 2, 2, 2],attention=True,attChan=attChan,attBlockNb=attBlockNb, **kwargs)
+    if pretrained:
+        model.load_state_dict(model_zoo.load_url(model_urls['resnet18']))
+    return model
 
 def resnet34(pretrained=False, **kwargs):
     """Constructs a ResNet-34 model.
