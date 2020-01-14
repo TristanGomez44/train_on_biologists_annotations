@@ -439,15 +439,14 @@ def fastSoftCoordRefiner(x,abs,ord,kerSize=5):
     startOrd,endOrd = ord[0,0].int().item()-kerSize//2,ord[0,0].int().item()+kerSize//2+1
     startAbs,endAbs = abs[0,0].int().item()-kerSize//2,abs[0,0].int().item()+kerSize//2+1
 
-    ordMean = ordTens.unsqueeze(0).unsqueeze(0)+unorm_ordShiftMean/weightSum
-    absMean = absTens.unsqueeze(0).unsqueeze(0)+unorm_absShiftMean/weightSum
+    ordMean = ordTens.unsqueeze(0).unsqueeze(0)+unorm_ordShiftMean/(weightSum+0.001)
+    absMean = absTens.unsqueeze(0).unsqueeze(0)+unorm_absShiftMean/(weightSum+0.001)
 
     ordList = ordMean[:,0][torch.arange(x.size(0), dtype=torch.long).unsqueeze(1),ord.long(),abs.long()]
     absList = absMean[:,0][torch.arange(x.size(0), dtype=torch.long).unsqueeze(1),ord.long(),abs.long()]
     valueList = x[:,0][torch.arange(x.size(0), dtype=torch.long).unsqueeze(1),ord.long(),abs.long()]
 
     return ordList,absList,valueList
-
 
 class PointNet2(VisualModel):
 
@@ -635,6 +634,8 @@ def netBuilder(args):
             nbFeat = args.resnet_chan*4*2**(4-1)
         elif args.feat.find("resnet9") != -1:
             nbFeat = args.resnet_chan*2**(2-1)
+        elif args.feat.find("resnet4") != -1:
+            nbFeat = args.resnet_chan*2**(1-1)
         else:
             nbFeat = args.resnet_chan*2**(4-1)
         visualModel = CNN2D(args.feat,args.pretrained_visual,chan=args.resnet_chan,stride=args.resnet_stride,dilation=args.resnet_dilation,attChan=args.resnet_att_chan,attBlockNb=args.resnet_att_blocks_nb)
