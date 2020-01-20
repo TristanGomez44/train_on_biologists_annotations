@@ -119,7 +119,7 @@ class Bottleneck(nn.Module):
 class ResNet(nn.Module):
 
     def __init__(self, block, layers, num_classes=1000, zero_init_residual=False, norm_layer=None,maxPoolKer=(3,3),maxPoolPad=(1,1),stride=(2,2),\
-                    featMap=False,chan=64,inChan=3,dilation=1,bigMaps=False,layersNb=4,attention=False,attChan=16,attBlockNb=1):
+                    featMap=False,chan=64,inChan=3,dilation=1,bigMaps=False,layersNb=4,attention=False,attChan=16,attBlockNb=1,applyMaxpool=True):
 
         super(ResNet, self).__init__()
         if norm_layer is None:
@@ -129,14 +129,15 @@ class ResNet(nn.Module):
         self.bn1 = norm_layer(chan)
         self.relu = nn.ReLU(inplace=True)
         self.maxpool = nn.MaxPool2d(kernel_size=maxPoolKer, stride=stride, padding=maxPoolPad)
+        self.applyMaxpool = applyMaxpool
 
         self.nbLayers = len(layers)
 
         #All layers are built but they will not necessarily be used
-        self.layer1 = self._make_layer(block, chan*1, layers[0], stride=1,      norm_layer=norm_layer,feat=False)
-        self.layer2 = self._make_layer(block, chan*2, layers[1], stride=1 if bigMaps else stride, norm_layer=norm_layer,feat=False,dilation=dilation)
-        self.layer3 = self._make_layer(block, chan*4, layers[2], stride=1 if bigMaps else stride, norm_layer=norm_layer,feat=False,dilation=dilation)
-        self.layer4 = self._make_layer(block, chan*8, layers[3], stride=1 if bigMaps else stride, norm_layer=norm_layer,feat=True,dilation=dilation)
+        self.layer1 = self._make_layer(block, chan*1, layers[0], stride=1,                        norm_layer=norm_layer,feat=True if self.nbLayers==1 else False,dilation=dilation)
+        self.layer2 = self._make_layer(block, chan*2, layers[1], stride=1 if bigMaps else stride, norm_layer=norm_layer,feat=True if self.nbLayers==2 else False,dilation=dilation)
+        self.layer3 = self._make_layer(block, chan*4, layers[2], stride=1 if bigMaps else stride, norm_layer=norm_layer,feat=True if self.nbLayers==3 else False,dilation=dilation)
+        self.layer4 = self._make_layer(block, chan*8, layers[3], stride=1 if bigMaps else stride, norm_layer=norm_layer,feat=True if self.nbLayers==4 else False,dilation=dilation)
 
         if layersNb<1 or layersNb>4:
             raise ValueError("Wrong number of layer : ",layersNb)
@@ -172,8 +173,8 @@ class ResNet(nn.Module):
             self.att = self._make_layer(block, attChan, attBlockNb, stride=1, norm_layer=norm_layer,feat=True)
             self.att_conv1x1_1 = conv1x1(chan*1, attChan, stride=1)
             self.att_conv1x1_2 = conv1x1(chan*2, attChan, stride=1)
-            self.att_conv1x1_3 = conv1x1(chan*3, attChan, stride=1)
-            self.att_conv1x1_4 = conv1x1(chan*4, attChan, stride=1)
+            self.att_conv1x1_3 = conv1x1(chan*4, attChan, stride=1)
+            self.att_conv1x1_4 = conv1x1(chan*8, attChan, stride=1)
             self.att_final_conv1x1 = conv1x1(attChan, 1, stride=1)
 
             self.att_1 = nn.Sequential(self.att_conv1x1_1,self.att,self.att_final_conv1x1,nn.Sigmoid())
@@ -210,7 +211,8 @@ class ResNet(nn.Module):
         x = self.conv1(x)
         x = self.bn1(x)
         x = self.relu(x)
-        x = self.maxpool(x)
+        if self.applyMaxpool:
+            x = self.maxpool(x)
 
         if self.attention:
             attWeightsDict = {}
@@ -290,7 +292,7 @@ def resnet18_att(pretrained=False, attChan=16,attBlockNb=1,**kwargs):
     """
     model = ResNet(BasicBlock, [2, 2, 2, 2],attention=True,attChan=attChan,attBlockNb=attBlockNb, **kwargs)
     if pretrained:
-        model.load_state_dict(model_zoo.load_url(model_urls['resnet18']))
+        model.load_state_dict(model_zoo.load_url(model_urls['resnet18']),strict=False)
     return model
 
 def resnet34(pretrained=False, **kwargs):
