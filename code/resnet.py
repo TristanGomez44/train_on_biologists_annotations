@@ -116,10 +116,19 @@ class Bottleneck(nn.Module):
 
         return out
 
+class TanHPlusRelu(nn.Module):
+
+    def __init__(self):
+        super(TanHPlusRelu,self).__init__()
+        self.tanh = nn.Tanh()
+        self.relu = nn.ReLU()
+    def forward(self,x):
+        return self.relu(self.tanh(x))
+
 class ResNet(nn.Module):
 
     def __init__(self, block, layers, num_classes=1000, zero_init_residual=False, norm_layer=None,maxPoolKer=(3,3),maxPoolPad=(1,1),stride=(2,2),\
-                    featMap=False,chan=64,inChan=3,dilation=1,bigMaps=False,layersNb=4,attention=False,attChan=16,attBlockNb=1,applyMaxpool=True):
+                    featMap=False,chan=64,inChan=3,dilation=1,bigMaps=False,layersNb=4,attention=False,attChan=16,attBlockNb=1,applyMaxpool=True,attActFunc="sigmoid"):
 
         super(ResNet, self).__init__()
         if norm_layer is None:
@@ -177,10 +186,17 @@ class ResNet(nn.Module):
             self.att_conv1x1_4 = conv1x1(chan*8, attChan, stride=1)
             self.att_final_conv1x1 = conv1x1(attChan, 1, stride=1)
 
-            self.att_1 = nn.Sequential(self.att_conv1x1_1,self.att,self.att_final_conv1x1,nn.Sigmoid())
-            self.att_2 = nn.Sequential(self.att_conv1x1_2,self.att,self.att_final_conv1x1,nn.Sigmoid())
-            self.att_3 = nn.Sequential(self.att_conv1x1_3,self.att,self.att_final_conv1x1,nn.Sigmoid())
-            self.att_4 = nn.Sequential(self.att_conv1x1_4,self.att,self.att_final_conv1x1,nn.Sigmoid())
+            if attActFunc == "sigmoid":
+                actFuncConstructor = nn.Sigmoid
+            elif attActFunc == "relu":
+                actFuncConstructor = nn.ReLU
+            elif attActFunc == "tanh+relu":
+                actFuncConstructor = TanHPlusRelu
+
+            self.att_1 = nn.Sequential(self.att_conv1x1_1,self.att,self.att_final_conv1x1,actFuncConstructor())
+            self.att_2 = nn.Sequential(self.att_conv1x1_2,self.att,self.att_final_conv1x1,actFuncConstructor())
+            self.att_3 = nn.Sequential(self.att_conv1x1_3,self.att,self.att_final_conv1x1,actFuncConstructor())
+            self.att_4 = nn.Sequential(self.att_conv1x1_4,self.att,self.att_final_conv1x1,actFuncConstructor())
 
     def _make_layer(self, block, planes, blocks, stride=1, norm_layer=None,feat=False,dilation=1):
 

@@ -653,7 +653,8 @@ def netBuilder(args):
             nbFeat = args.resnet_chan*2**(1-1)
         else:
             nbFeat = args.resnet_chan*2**(4-1)
-        visualModel = CNN2D(args.feat,args.pretrained_visual,chan=args.resnet_chan,stride=args.resnet_stride,dilation=args.resnet_dilation,attChan=args.resnet_att_chan,attBlockNb=args.resnet_att_blocks_nb)
+        visualModel = CNN2D(args.feat,args.pretrained_visual,chan=args.resnet_chan,stride=args.resnet_stride,dilation=args.resnet_dilation,\
+                            attChan=args.resnet_att_chan,attBlockNb=args.resnet_att_blocks_nb,attActFunc=args.resnet_att_act_func)
     elif args.feat.find("vgg") != -1:
         nbFeat = 4096
         visualModel = CNN2D(args.feat,args.pretrained_visual)
@@ -804,6 +805,10 @@ def addArgs(argreader):
                         help='For the \'resnetX_att\' feat models. The number of channels in the attention module.')
     argreader.parser.add_argument('--resnet_att_blocks_nb', type=int, metavar='INT',
                         help='For the \'resnetX_att\' feat models. The number of blocks in the attention module.')
+    argreader.parser.add_argument('--resnet_att_act_func', type=str, metavar='INT',
+                        help='For the \'resnetX_att\' feat models. The activation function for the attention weights. Can be "sigmoid", "relu" or "tanh+relu".')
+
+
 
     return argreader
 
