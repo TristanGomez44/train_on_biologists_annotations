@@ -57,12 +57,15 @@ class Model(nn.Module):
         if self.spatTransf:
             x = self.spatTransf(x)["x"]
 
-        x = self.visualModel(x)["x"]
+        visResDict = self.visualModel(x)
+        x = visResDict["x"]
         resDict = self.tempModel(x,self.visualModel.batchSize,timeElapsed)
+
+        for key in visResDict.keys():
+            resDict[key] = visResDict[key]
 
         return resDict
 
-    #This method can not be used when running on several gpu
     def computeVisual(self,x):
         if self.spatTransf:
             resDict = self.spatTransf(x)
@@ -73,12 +76,6 @@ class Model(nn.Module):
 
         if self.spatTransf:
             resDict["theta"] = theta
-
-        return resDict
-
-    #This method can not be used when running on several gpu
-    def computeVisual(self,x):
-        resDict = self.visualModel(x)
         return resDict
 
     def setTransMat(self,transMat):
@@ -325,6 +322,7 @@ class DirectPointExtractor(nn.Module):
         self.size_red = nn.AdaptiveAvgPool2d((8, 8))
         self.dense = nn.Linear(8*8*32,point_nb*2)
 
+
     def forward(self,x):
         x = self.feat(x)
         x = self.conv1x1(x)
@@ -334,11 +332,11 @@ class DirectPointExtractor(nn.Module):
         points = x.view(x.size(0),x.size(1)//2,2)
         points = torch.cat((points,torch.zeros(points.size(0),points.size(1),1).to(x.device)),dim=-1)
 
-        return points
+        return {"points":points}
 
 class TopkPointExtractor(nn.Module):
 
-    def __init__(self,attention,softCoord,softCoord_kerSize,point_nb):
+    def __init__(self,attention,softCoord,softCoord_kerSize,point_nb,reconst):
         super(TopkPointExtractor,self).__init__()
 
         self.feat = resnet.resnet4(pretrained=True,chan=64,featMap=True)
@@ -347,6 +345,10 @@ class TopkPointExtractor(nn.Module):
         self.attention = attention
         self.softCoord = softCoord
         self.softCoord_kerSize = softCoord_kerSize
+
+        self.reconst = reconst
+        if reconst:
+            self.decoder = nn.Sequential(resnet.resnet4(pretrained=True,chan=64,featMap=True,applyMaxpool=False,stride=1),resnet.conv1x1(64, 3, stride=1))
 
     def forward(self,img):
 
@@ -368,6 +370,13 @@ class TopkPointExtractor(nn.Module):
         flatVals,flatInds = torch.topk(flatX, self.point_extracted, dim=-1, largest=True)
         abs,ord = (flatInds%x.shape[-1],flatInds//x.shape[-1])
 
+        retDict={}
+        if self.reconst:
+            sparseX = F.relu(x-flatVals[:,-1].unsqueeze(1).unsqueeze(2).unsqueeze(3))
+            reconst = self.decoder(sparseX.expand((sparseX.size(0),3,sparseX.size(2),sparseX.size(3))))
+            #Keeping only one channel (the three channels are just copies)
+            retDict['reconst'] = reconst[:,0:1]
+
         if self.softCoord:
             abs,ord,flatVals = fastSoftCoordRefiner(x,abs,ord,kerSize=self.softCoord_kerSize)
 
@@ -376,7 +385,9 @@ class TopkPointExtractor(nn.Module):
         points = torch.cat((points,torch.zeros(points.size(0),points.size(1),1).to(x.device)),dim=-1)
         points = torch.cat((points,flatVals),dim=-1)
 
-        return points
+        retDict["points"] = points
+
+        return retDict
 
 def softCoordRefiner(x,abs,ord,kerSize=5):
 
@@ -446,17 +457,17 @@ def fastSoftCoordRefiner(x,abs,ord,kerSize=5):
     absList = absMean[:,0][torch.arange(x.size(0), dtype=torch.long).unsqueeze(1),ord.long(),abs.long()]
     valueList = x[:,0][torch.arange(x.size(0), dtype=torch.long).unsqueeze(1),ord.long(),abs.long()]
 
-    return ordList,absList,valueList
+    return absList,ordList,valueList
 
 class PointNet2(VisualModel):
 
     def __init__(self,classNb,featModelName='resnet18',pretrainedFeatMod=True,featMap=False,bigMaps=False,topk=False,\
-                topk_attention=False,topk_softcoord=False,topk_softCoord_kerSize=2,point_nb=256):
+                topk_attention=False,topk_softcoord=False,topk_softCoord_kerSize=2,point_nb=256,reconst=False):
 
         super(PointNet2,self).__init__(featModelName,pretrainedFeatMod,True,bigMaps)
 
         if topk:
-            self.pointExtr = TopkPointExtractor(topk_attention,topk_softcoord,topk_softCoord_kerSize,point_nb)
+            self.pointExtr = TopkPointExtractor(topk_attention,topk_softcoord,topk_softCoord_kerSize,point_nb,reconst)
         else:
             self.pointExtr = DirectPointExtractor(point_nb)
 
@@ -466,10 +477,12 @@ class PointNet2(VisualModel):
 
         self.batchSize = x.size(0)
         x = x.view(x.size(0)*x.size(1),x.size(2),x.size(3),x.size(4))
-        points = self.pointExtr(x)
+        retDict = self.pointExtr(x)
+        x = self.pn2(retDict['points'].float())
 
-        x = self.pn2(points.float())
-        return {"x":x,"points":points}
+        retDict['x'] = x
+
+        return retDict
 
 ################################ Temporal Model ########################""
 
@@ -632,6 +645,8 @@ def netBuilder(args):
     if args.feat.find("resnet") != -1:
         if args.feat=="resnet50" or args.feat=="resnet101" or args.feat=="resnet151":
             nbFeat = args.resnet_chan*4*2**(4-1)
+        elif args.feat.find("resnet14") != -1:
+            nbFeat = args.resnet_chan*2**(3-1)
         elif args.feat.find("resnet9") != -1:
             nbFeat = args.resnet_chan*2**(2-1)
         elif args.feat.find("resnet4") != -1:
@@ -674,7 +689,7 @@ def netBuilder(args):
             tempModel = Identity(nbFeat,args.class_nb,False,False)
     elif args.temp_mod == "pointnet2":
         visualModel = PointNet2(args.class_nb,topk=args.pn_topk,topk_attention=args.pn_topk_attention,topk_softcoord=args.pn_topk_softcoord,\
-                                topk_softCoord_kerSize=args.pn_topk_softcoord_kersize,point_nb=args.pn_point_nb)
+                                topk_softCoord_kerSize=args.pn_topk_softcoord_kersize,point_nb=args.pn_point_nb,reconst=args.pn_topk_reconst)
         tempModel = Identity(nbFeat,args.class_nb,False,False)
     else:
         raise ValueError("Unknown temporal model type : ",args.temp_mod)
@@ -775,8 +790,8 @@ def addArgs(argreader):
                         help='For the topk point net model. This is the kernel size of the soft argmax.')
     argreader.parser.add_argument('--pn_point_nb', type=int, metavar='NB',
                         help='For the topk point net model. This is the number of point extracted for each image.')
-
-
+    argreader.parser.add_argument('--pn_topk_reconst', type=args.str2bool, metavar='BOOL',
+                        help='For the topk point net model. An input image reconstruction term will added to the loss function if True.')
 
     argreader.parser.add_argument('--resnet_chan', type=int, metavar='INT',
                         help='The channel number for the visual model when resnet is used')

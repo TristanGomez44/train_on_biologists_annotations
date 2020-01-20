@@ -85,7 +85,8 @@ def epochSeqTr(model,optim,log_interval,loader, epoch, args,writer,**kwargs):
             data, target,timeElapsedTensor = data.cuda(), target.cuda(),timeElapsedTensor.cuda()
 
         #Computing predictions
-        output = model(data,timeElapsedTensor)["pred"]
+        resDict = model(data,timeElapsedTensor)
+        output = resDict["pred"]
 
         #Computing loss
         output = output[:,args.train_step_to_ignore:output.size(1)-args.train_step_to_ignore]
@@ -98,7 +99,10 @@ def epochSeqTr(model,optim,log_interval,loader, epoch, args,writer,**kwargs):
         elif args.uncertainty:
             loss = uncertaintyLoss(F.softplus(output)+1,target,model,data,args.uncer_loss_type,args.uncer_exact_inf_div,args.uncert_inf_div_weight,args.uncer_ll_ratio_weight,args.uncer_max_adv_entr_weight,args.class_nb)
         else:
-            loss = F.cross_entropy(output.view(output.size(0)*output.size(1),-1), target.view(-1))
+            loss = args.nll_weight*F.cross_entropy(output.view(output.size(0)*output.size(1),-1), target.view(-1))
+
+        if args.pn_reconst_weight > 0:
+            loss += add_pn_recons_term(args.pn_reconst_weight,resDict,data)
 
         loss.backward()
         if args.distributed:
@@ -133,6 +137,15 @@ def epochSeqTr(model,optim,log_interval,loader, epoch, args,writer,**kwargs):
     if args.debug:
         totalTime = time.time() - start_time
         updateTimeCSV(epoch,"train",args.exp_id,args.model_id,totalTime,batch_idx)
+
+def add_pn_recons_term(pn_reconst_weight,resDict,data):
+
+    reconst = resDict['reconst']
+
+    data = data.view(data.size(0)*data.size(1),data.size(2),data.size(3),data.size(4))
+    data = F.adaptive_avg_pool2d(data, (reconst.size(-2),reconst.size(-1)))
+
+    return pn_reconst_weight*torch.pow(reconst-data,2).mean()
 
 def average_gradients(model):
     size = float(dist.get_world_size())
@@ -322,7 +335,7 @@ def epochSeqVal(model,log_interval,loader, epoch, args,writer,metricEarlyStop,mo
 
     frameIndDict = {}
 
-    fullAttMap,fullFeatMapSeq,fullAffTransSeq,fullPointsSeq = None,None,None,None
+    fullAttMap,fullFeatMapSeq,fullAffTransSeq,fullPointsSeq,fullReconstSeq = None,None,None,None,None
     revLabelDict = formatData.getReversedLabels()
     precVidName = "None"
     videoBegining = True
@@ -350,14 +363,14 @@ def epochSeqVal(model,log_interval,loader, epoch, args,writer,metricEarlyStop,mo
             fullFeatMapSeq = saveMap(fullFeatMapSeq,args.exp_id,args.model_id,epoch,precVidName,key="featMaps")
             fullAffTransSeq = saveAffineTransf(fullAffTransSeq,args.exp_id,args.model_id,epoch,precVidName)
             fullPointsSeq =  savePointsSeq(fullPointsSeq,args.exp_id,args.model_id,epoch,precVidName)
-
-        if nbVideos<=1 and args.debug:
-            updateOccupiedGPURamCSV(epoch,mode,args.exp_id,args.model_id)
+            fullReconstSeq = saveMap(fullReconstSeq,args.exp_id,args.model_id,epoch,precVidName,key="reconst")
 
         fullAttMap = catMap(visualDict,fullAttMap,key="attMaps")
         fullFeatMapSeq = catMap(visualDict,fullFeatMapSeq,key="features")
         fullAffTransSeq = catAffineTransf(visualDict,fullAffTransSeq)
-        fullPointsSeq = catPointsSeq(visualDict,fullAffTransSeq)
+        fullPointsSeq = catPointsSeq(visualDict,fullPointsSeq)
+        if nbVideos < 6:
+            fullReconstSeq = catMap(visualDict,fullReconstSeq,key="reconst")
 
         if nbVideos<=5 and args.debug:
             if args.cuda:
@@ -388,6 +401,7 @@ def epochSeqVal(model,log_interval,loader, epoch, args,writer,metricEarlyStop,mo
         fullFeatMapSeq = saveMap(fullFeatMapSeq,args.exp_id,args.model_id,epoch,precVidName,key="featMaps")
         fullAffTransSeq = saveAffineTransf(fullAffTransSeq,args.exp_id,args.model_id,epoch,precVidName)
         fullPointsSeq =  savePointsSeq(fullPointsSeq,args.exp_id,args.model_id,epoch,precVidName)
+        fullReconstSeq = saveMap(fullReconstSeq,args.exp_id,args.model_id,epoch,precVidName,key="reconst")
 
     for key in outDict.keys():
         fullArr = torch.cat((frameIndDict[key].float(),outDict[key].squeeze(0).squeeze(1)),dim=1)
@@ -435,7 +449,7 @@ def catMap(visualDict,fullMap,key="attMaps"):
     if key in visualDict.keys():
 
         if not type(visualDict[key]) is dict:
-            if key == "features":
+            if key == "features" or key == "reconst":
                 visualDict[key] = (visualDict[key]-visualDict[key].min())/(visualDict[key].max()-visualDict[key].min())
 
             if fullMap is None:
@@ -688,6 +702,13 @@ def addLossTermArgs(argreader):
 
     argreader.parser.add_argument('--uncer_ll_ratio_weight', type=float,metavar='FLOAT',
                     help='The ratio between the likelihood in the information divergence term of the uncertainty loss. It should be between 0 (excluded) and 1 (included).')
+
+    argreader.parser.add_argument('--nll_weight', type=float,metavar='FLOAT',
+                    help='The weight of the negative log-likelihood term in the loss function.')
+
+    argreader.parser.add_argument('--pn_reconst_weight', type=float,metavar='FLOAT',
+                    help='The weight of the reconstruction term in the loss function when using a pn-topk model.')
+
 
     return argreader
 
