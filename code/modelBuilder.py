@@ -336,11 +336,11 @@ class DirectPointExtractor(nn.Module):
 
 class TopkPointExtractor(nn.Module):
 
-    def __init__(self,attention,softCoord,softCoord_kerSize,point_nb,reconst):
+    def __init__(self,attention,softCoord,softCoord_kerSize,point_nb,reconst,encoderChan):
         super(TopkPointExtractor,self).__init__()
 
         self.feat = resnet.resnet4(pretrained=True,chan=64,featMap=True)
-        self.conv1x1 = nn.Conv2d(64, 1, kernel_size=1, stride=1)
+        self.conv1x1 = nn.Conv2d(64, encoderChan, kernel_size=1, stride=1)
         self.point_extracted = point_nb
         self.attention = attention
         self.softCoord = softCoord
@@ -348,13 +348,13 @@ class TopkPointExtractor(nn.Module):
 
         self.reconst = reconst
         if reconst:
-            self.decoder = nn.Sequential(resnet.resnet4(pretrained=True,chan=64,featMap=True,applyMaxpool=False,stride=1),resnet.conv1x1(64, 3, stride=1))
+            self.decoder = nn.Sequential(resnet.conv1x1(encoderChan, 3, stride=1),resnet.resnet4(pretrained=True,chan=64,featMap=True,applyMaxpool=False,stride=1),resnet.conv1x1(64, 3, stride=1))
 
     def forward(self,img):
 
         x = self.feat(img)
-        x = self.conv1x1(x)
-        x = torch.sigmoid(x)
+        x_fullFeat = self.conv1x1(x)
+        x = torch.pow(x_fullFeat,2).sum(dim=1,keepdim=True)
 
         if self.attention:
             #Normalizing the attention weights
@@ -372,15 +372,21 @@ class TopkPointExtractor(nn.Module):
 
         retDict={}
         if self.reconst:
-            sparseX = F.relu(x-flatVals[:,-1].unsqueeze(1).unsqueeze(2).unsqueeze(3))
-            reconst = self.decoder(sparseX.expand((sparseX.size(0),3,sparseX.size(2),sparseX.size(3))))
+            sparseX = x_fullFeat*((x-flatVals[:,-1].unsqueeze(1).unsqueeze(2).unsqueeze(3))>0).float()
+            reconst = self.decoder(sparseX)
             #Keeping only one channel (the three channels are just copies)
             retDict['reconst'] = reconst[:,0:1]
 
-        if self.softCoord:
-            abs,ord,flatVals = fastSoftCoordRefiner(x,abs,ord,kerSize=self.softCoord_kerSize)
+        indices = tuple([torch.arange(x_fullFeat.size(0), dtype=torch.long).unsqueeze(1).unsqueeze(1),
+                         torch.arange(x_fullFeat.size(1), dtype=torch.long).unsqueeze(1).unsqueeze(0),
+                         ord.long().unsqueeze(1),abs.long().unsqueeze(1)])
+        flatVals = x_fullFeat[indices]
+        flatVals = flatVals.permute(0,2,1)
 
-        abs,ord,flatVals = abs.unsqueeze(-1),ord.unsqueeze(-1),flatVals.unsqueeze(-1)
+        if self.softCoord:
+            abs,ord = fastSoftCoordRefiner(x,abs,ord,kerSize=self.softCoord_kerSize)
+
+        abs,ord = abs.unsqueeze(-1),ord.unsqueeze(-1)
         points = torch.cat((abs,ord),dim=-1).float()
         points = torch.cat((points,torch.zeros(points.size(0),points.size(1),1).to(x.device)),dim=-1)
         points = torch.cat((points,flatVals),dim=-1)
@@ -388,46 +394,6 @@ class TopkPointExtractor(nn.Module):
         retDict["points"] = points
 
         return retDict
-
-def softCoordRefiner(x,abs,ord,kerSize=5):
-
-    refAbsTens = torch.arange(x.size(-1)).unsqueeze(0).expand((x.size(-2),x.size(-1))).float().to(x.device)
-    refOrdTens = torch.arange(x.size(-2)).unsqueeze(1).expand((x.size(-2),x.size(-1))).float().to(x.device)
-
-    allValues,allSoftAbs,allSoftOrd = [],[],[]
-
-    for batch_ind in range(x.size(0)):
-
-        values,softAbs,softOrd = [],[],[]
-
-        for i in range(len(abs[0])):
-
-            absTens = abs[batch_ind,i].unsqueeze(0).unsqueeze(1).expand((x.size(-2),x.size(-1))).float()
-            ordTens = ord[batch_ind,i].unsqueeze(0).unsqueeze(1).expand((x.size(-2),x.size(-1))).float()
-
-            distTens = torch.abs(refAbsTens-absTens)+torch.abs(refOrdTens-ordTens)
-            spatialWeightTensor = kerSize - distTens
-            spatialWeightTensorMasked = torch.zeros_like(spatialWeightTensor)
-            startOrd,endOrd = ord[batch_ind,i].int().item()-kerSize//2,ord[batch_ind,i].int().item()+kerSize//2+1
-            startAbs,endAbs = abs[batch_ind,i].int().item()-kerSize//2,abs[batch_ind,i].int().item()+kerSize//2+1
-            spatialWeightTensorMasked[startOrd:endOrd,startAbs:endAbs] = spatialWeightTensor[startOrd:endOrd,startAbs:endAbs]
-            spatialWeightTensor = spatialWeightTensorMasked
-
-            weightTens = spatialWeightTensor.float()*x[batch_ind,0]
-
-            softAbs.append(((weightTens*refAbsTens).sum()/weightTens.sum()).unsqueeze(0))
-            softOrd.append(((weightTens*refOrdTens).sum()/weightTens.sum()).unsqueeze(0))
-            values.append(((weightTens*x[batch_ind]).sum()/weightTens.sum()).unsqueeze(0))
-
-        softAbs,softOrd,values = torch.cat(softAbs,dim=0),torch.cat(softOrd,dim=0),torch.cat(values,dim=0)
-
-        allSoftAbs.append(softAbs.unsqueeze(0))
-        allSoftOrd.append(softOrd.unsqueeze(0))
-        allValues.append(values.unsqueeze(0))
-
-    allSoftAbs,allSoftOrd,allValues = torch.cat(allSoftAbs,dim=0),torch.cat(allSoftOrd,dim=0),torch.cat(allValues,dim=0)
-
-    return allSoftAbs,allSoftOrd,allValues
 
 def fastSoftCoordRefiner(x,abs,ord,kerSize=5):
 
@@ -455,23 +421,22 @@ def fastSoftCoordRefiner(x,abs,ord,kerSize=5):
 
     ordList = ordMean[:,0][torch.arange(x.size(0), dtype=torch.long).unsqueeze(1),ord.long(),abs.long()]
     absList = absMean[:,0][torch.arange(x.size(0), dtype=torch.long).unsqueeze(1),ord.long(),abs.long()]
-    valueList = x[:,0][torch.arange(x.size(0), dtype=torch.long).unsqueeze(1),ord.long(),abs.long()]
 
-    return absList,ordList,valueList
+    return absList,ordList
 
 class PointNet2(VisualModel):
 
-    def __init__(self,classNb,featModelName='resnet18',pretrainedFeatMod=True,featMap=False,bigMaps=False,topk=False,\
-                topk_attention=False,topk_softcoord=False,topk_softCoord_kerSize=2,point_nb=256,reconst=False):
+    def __init__(self,pn_builder,classNb,featModelName='resnet18',pretrainedFeatMod=True,featMap=False,bigMaps=False,topk=False,\
+                topk_attention=False,topk_softcoord=False,topk_softCoord_kerSize=2,point_nb=256,reconst=False,encoderChan=1):
 
         super(PointNet2,self).__init__(featModelName,pretrainedFeatMod,True,bigMaps)
 
         if topk:
-            self.pointExtr = TopkPointExtractor(topk_attention,topk_softcoord,topk_softCoord_kerSize,point_nb,reconst)
+            self.pointExtr = TopkPointExtractor(topk_attention,topk_softcoord,topk_softCoord_kerSize,point_nb,reconst,encoderChan)
         else:
             self.pointExtr = DirectPointExtractor(point_nb)
 
-        self.pn2 = pointnet2.models.pointnet2_ssg_cls.Pointnet2SSG(num_classes=classNb,input_channels=topk,use_xyz=True)
+        self.pn2 = pointnet2.models.pointnet2_ssg_cls.Pointnet2SSG(num_classes=classNb,input_channels=encoderChan if topk else 0,use_xyz=True)
 
     def forward(self,x):
 
@@ -689,8 +654,15 @@ def netBuilder(args):
                                             chan=args.resnet_chan)
             tempModel = Identity(nbFeat,args.class_nb,False,False)
     elif args.temp_mod == "pointnet2":
-        visualModel = PointNet2(args.class_nb,topk=args.pn_topk,topk_attention=args.pn_topk_attention,topk_softcoord=args.pn_topk_softcoord,\
-                                topk_softCoord_kerSize=args.pn_topk_softcoord_kersize,point_nb=args.pn_point_nb,reconst=args.pn_topk_reconst)
+
+        pn_builder = pointnet2.models.pointnet2_ssg_cls.Pointnet2SSG
+        visualModel = PointNet2(pn_builder,args.class_nb,topk=args.pn_topk,topk_attention=args.pn_topk_attention,topk_softcoord=args.pn_topk_softcoord,\
+                                topk_softCoord_kerSize=args.pn_topk_softcoord_kersize,point_nb=args.pn_point_nb,reconst=args.pn_topk_reconst,encoderChan=args.pn_topk_enc_chan)
+        tempModel = Identity(nbFeat,args.class_nb,False,False)
+    elif args.temp_mod == "pointnet2_pp":
+        pn_builder = pointnet2.models.pointnet2_msg_cls.Pointnet2MSG
+        visualModel = PointNet2(pn_builder,args.class_nb,topk=args.pn_topk,topk_attention=args.pn_topk_attention,topk_softcoord=args.pn_topk_softcoord,\
+                                topk_softCoord_kerSize=args.pn_topk_softcoord_kersize,point_nb=args.pn_point_nb,reconst=args.pn_topk_reconst,encoderChan=args.pn_topk_enc_chan)
         tempModel = Identity(nbFeat,args.class_nb,False,False)
     else:
         raise ValueError("Unknown temporal model type : ",args.temp_mod)
@@ -793,6 +765,8 @@ def addArgs(argreader):
                         help='For the topk point net model. This is the number of point extracted for each image.')
     argreader.parser.add_argument('--pn_topk_reconst', type=args.str2bool, metavar='BOOL',
                         help='For the topk point net model. An input image reconstruction term will added to the loss function if True.')
+    argreader.parser.add_argument('--pn_topk_enc_chan', type=int, metavar='NB',
+                        help='For the topk point net model. This is the number of output channel for the encoder')
 
     argreader.parser.add_argument('--resnet_chan', type=int, metavar='INT',
                         help='The channel number for the visual model when resnet is used')
@@ -841,8 +815,5 @@ if __name__ == "__main__":
     print(abs,ord,x[ord,abs,0])
     x = torch.tensor(x).float().permute(2,0,1).unsqueeze(0)
 
-
-    softAbs,softOrd,softValues = softCoordRefiner(x,abs.float(),ord.float(),kerSize=5)
-    print(softAbs,softOrd,softValues)
-    softAbs,softOrd,softValues = fastSoftCoordRefiner(x,abs.float(),ord.float(),kerSize=5)
-    print(softAbs,softOrd,softValues)
+    softAbs,softOrd = fastSoftCoordRefiner(x,abs.float(),ord.float(),kerSize=5)
+    print(softAbs,softOrd)
