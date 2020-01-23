@@ -37,9 +37,9 @@ import imageio
 from skimage import img_as_ubyte
 
 from scipy import stats
-
+import math
 from PIL import Image
-
+from PIL import Image, ImageEnhance
 def evalModel(dataset,partBeg,partEnd,propSetIntFormat,exp_id,model_id,epoch,regression,uncertainty,nbClass):
     '''
     Evaluate a model. It requires the scores for each video to have been computed already with the trainVal.py script. Check readme to
@@ -520,16 +520,13 @@ def plotMultiAttentionMaps(dataset,exp_id,model_id):
 
     revVideoNameDict = {}
 
+    cm = plt.get_cmap('plasma')
+
     for featMapPath in videoNameDict.keys():
         if not videoNameDict[featMapPath] in revVideoNameDict.keys():
             revVideoNameDict[videoNameDict[featMapPath]] = [featMapPath]
         else:
             revVideoNameDict[videoNameDict[featMapPath]].append(featMapPath)
-
-    for videoName in revVideoNameDict.keys():
-        print(videoName)
-        for path in revVideoNameDict[videoName]:
-            print("\t",path)
 
     for vidInd,videoName in enumerate(revVideoNameDict.keys()):
 
@@ -547,35 +544,43 @@ def plotMultiAttentionMaps(dataset,exp_id,model_id):
 
         with imageio.get_writer(videoPath, mode='I') as writer:
 
+            print(vidInd+1,"/",len(revVideoNameDict.keys()),videoName)
+            frameNb = utils.getVideoFrameNb("../data/{}/{}.avi".format(dataset_of_the_video,videoName))
             i=frameStart
 
-            print(vidInd+1,"/",len(revVideoNameDict.keys()),videoName)
-
-            frameNb = utils.getVideoFrameNb("../data/{}/{}.avi".format(dataset_of_the_video,videoName))
-
-            while i < frameNb:
+            while i < len(featMapsList[0]):
 
                 frame = video[i]
-
                 frame = frame[frame.shape[0]-frame.shape[1]:,:]
 
-                dest = Image.new('RGB', (frame.shape[0]*(int(np.sqrt(len(featMapsList)))+1),frame.shape[1]*(int(np.sqrt(len(featMapsList)))+1)))
+                nbRows = math.ceil(np.sqrt(len(featMapsList)+1))
+                nbCols = math.ceil(np.sqrt(len(featMapsList)+1))
+
+                dest = Image.new('RGB', (frame.shape[1]*nbCols,frame.shape[0]*nbRows))
+
+                framePIL = Image.fromarray(frame.astype("uint8"))
+                dest.paste(framePIL, (0,0))
 
                 for j,featMaps in enumerate(featMapsList):
+                    resizedAttFeatMap = resize(featMaps[i-frameStart][0], (frame.shape[1],frame.shape[0]),anti_aliasing=True,mode="constant",order=0)
+                    resizedAttFeatMap = resizedAttFeatMap[:,:,np.newaxis]
 
-                    resizedAttFeatMap = resize(featMaps[i-frameStart][0], (frame.shape[0],frame.shape[1]),anti_aliasing=True,mode="constant",order=0)
-                    print(resizedAttFeatMap.min(),resizedAttFeatMap.max(),resizedAttFeatMap.mean(),resizedAttFeatMap.std())
-                    resizedAttFeatMap = resizedAttFeatMap[:,:,np.newaxis]*2/3+1/3
+                    resizedAttFeatMap = cm(resizedAttFeatMap[:,:,0])[:,:,:3]
+                    frame = (frame*resizedAttFeatMap).astype("float")
 
-                    frame = frame*resizedAttFeatMap
+                    #print(frame.max())
+                    frame = 255*(frame/frame.max())
+
                     framePIL = Image.fromarray(frame.astype("uint8"))
-                    dest.paste(framePIL, (framePIL.size[0]*(j%(int(np.sqrt(len(featMapsList)))+1)),framePIL.size[1]*(j//(int(np.sqrt(len(featMapsList)))+1))))
+                    dest.paste(framePIL, (framePIL.size[0]*((j+1)%nbCols),framePIL.size[1]*((j+1)//nbRows)))
 
                 dest = np.array(dest)
 
                 nearestLowerDiv = dest.shape[0]//16
                 nearestHigherDiv = (nearestLowerDiv+1)*16
                 dest = resize(dest, (nearestHigherDiv,nearestHigherDiv),anti_aliasing=True,mode="constant",order=0)*255
+
+                #dest = (255*dest.astype("float"))/dest.mean(axis=-1).max()
 
                 writer.append_data(dest.astype("uint8"))
                 i+=1
@@ -690,30 +695,69 @@ def fig2data(fig):
     buf = np.roll ( buf, 3, axis = 2 )
     return buf
 
+def change_contrast(img, level):
+    #from https://stackoverflow.com/questions/42045362/change-contrast-of-image-in-pil
+    factor = (259 * (level + 255)) / (255 * (259 - level))
+    def contrast(c):
+        return 128 + factor * (c - 128)
+    return img.point(contrast)
+
 def plotPoints(exp_id,model_id,epoch):
 
     pointsPaths = sorted(glob.glob("../results/{}/points_{}_epoch{}_*.npy".format(exp_id,model_id,epoch)))
     videoNameDict = buildVideoNameDict("small+big",0,1,False,pointsPaths,raiseError=False)
 
+    cm = plt.get_cmap('plasma')
+
     for pointPath in pointsPaths:
         print(pointPath)
-        pointsSeq = np.load(pointPath)
+
+        pointsSeq = np.load(pointPath).astype(int)
+        print(pointsSeq.shape)
+        conf = configparser.ConfigParser()
+        conf.read("../models/{}/{}.ini".format(exp_id,model_id))
+        imgSize = int(conf["default"]["img_size"])//4
+
         videoName = videoNameDict[pointPath]
 
         xMin,xMax = pointsSeq[:,:,0].min(),pointsSeq[:,:,0].max()
         yMin,yMax = pointsSeq[:,:,1].min(),pointsSeq[:,:,1].max()
 
-        with imageio.get_writer("../vis/{}/points_{}_{}_{}.mp4".format(exp_id,model_id,epoch,videoName), mode='I') as writer:
+        dataset = load_data.getDataset(videoName)
+        video = pims.Video("../data/{}/{}.avi".format(dataset,videoName))
+        gt = load_data.getGT(videoName,dataset).astype(int)
+        frameStart = (gt == -1).sum()
+
+        with imageio.get_writer("../vis/{}/points_{}_{}_{}.mp4".format(exp_id,model_id,epoch,videoName), mode='I',fps=20) as writer:
             for i,points in enumerate(pointsSeq):
 
-                fig = plt.figure()
-                plt.xlim(xMin,xMax)
-                plt.ylim(yMin,yMax)
+                #fig = plt.figure()
+                #plt.xlim(xMin,xMax)
+                #plt.ylim(yMin,yMax)
 
-                plt.plot(points[:,0],points[:,1],"*")
-                img = fig2data(fig)
-                plt.close()
-                writer.append_data(img_as_ubyte(img.astype("uint8")))
+                #plt.plot(points[:,0],points[:,1],"*")
+                #img = fig2data(fig)
+                #plt.close()
+
+                frame = video[i+frameStart]
+                frame = frame[frame.shape[0]-frame.shape[1]:,:]
+                #frame = np.array(change_contrast(Image.fromarray(frame.astype("uint8")), 0))
+                frame = 255*(frame/frame.max())
+
+                #points = (points*frame.shape[0]/imgSize).astype(int)
+
+                mask = np.zeros((imgSize,imgSize,3)).astype("float")
+                mask += 0.25
+
+                ptsValues = np.abs(points[:,3:]).sum(axis=-1)
+                ptsValues = cm(ptsValues/ptsValues.max())[:,:3]
+                mask[points[:,1],points[:,0],:3] = ptsValues
+                mask = resize(mask, (frame.shape[0],frame.shape[1]),anti_aliasing=True,mode="constant",order=0)
+
+                frame = frame.astype(float)*mask
+
+                writer.append_data(img_as_ubyte(frame.astype("uint8")))
+
 
 def main(argv=None):
 
