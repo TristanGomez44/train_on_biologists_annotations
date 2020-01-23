@@ -11,6 +11,7 @@ import subprocess
 from args import ArgReader
 from shutil import copyfile
 import warnings
+from shutil import copyfile
 
 labelDict = {"tPB2":0,"tPNa":1,"tPNf":2,"t2":3,"t3":4,"t4":5,"t5":6,"t6":7,"t7":8,"t8":9,"t9+":10,"tM":11,"tSB":12,"tB":13,"tEB":14,"tHB":15}
 
@@ -431,34 +432,75 @@ def getReversedLabels():
 
     return revDict
 
+def formatCUB(pathToCubFolder):
+
+	isTrainList = np.genfromtxt(os.path.join(pathToCubFolder,"train_test_split.txt"),dtype=str)
+	isTrainDict = {row[0]:row[1]=="1" for row in isTrainList}
+
+	imgPath_imgIndList = np.genfromtxt(os.path.join(pathToCubFolder,"images.txt"),dtype=str)
+	imgPath_to_imgIndDict = {row[1]:row[0] for row in imgPath_imgIndList}
+
+	print(imgPath_to_imgIndDict.keys())
+	def createFolders(set):
+
+		if not os.path.exists("../data/CUB_200_2011_{}/".format(set)):
+			os.makedirs("../data/CUB_200_2011_{}/".format(set))
+
+		for foldPath in sorted(glob.glob(os.path.join(pathToCubFolder,"images/*/"))):
+
+			foldName = foldPath.split("/")[-2]
+
+			if not os.path.exists(os.path.join("../data/CUB_200_2011_{}".format(set),foldName)):
+				os.makedirs(os.path.join("../data/CUB_200_2011_{}".format(set),foldName))
+
+	createFolders("train")
+	createFolders("test")
+
+	for imgPath in sorted(glob.glob(os.path.join(pathToCubFolder,"images/*/*.jpg"))):
+
+		imgName = os.path.basename(imgPath)
+		label = imgPath.split("/")[-2]
+		imgInd = imgPath_to_imgIndDict[os.path.join(label,imgName)]
+
+		set = "train" if isTrainDict[imgInd] else "test"
+
+
+		if not os.path.exists("../data/CUB_200_2011_{}/{}/{}".format(set,label,imgName)):
+			copyfile(imgPath, "../data/CUB_200_2011_{}/{}/{}".format(set,label,imgName))
+
+
+
 def main(argv=None):
 
-    #Getting arguments from config file and command row
-    #Building the arg reader
-    argreader = ArgReader(argv)
+	#Getting arguments from config file and command row
+	#Building the arg reader
+	argreader = ArgReader(argv)
 
-    ########### PLOT SCORE EVOLUTION ALONG VIDEO ##################
-    argreader.parser.add_argument('--dataset',type=str,metavar="DATASET",help='The dataset to format')
-    argreader.parser.add_argument('--path_to_zip',type=str,metavar="PATH",help='The path to the zip file containing the dataset "small". Only used if it is the dataset "small" that is \
-                                     being formated.',default="../data/embryo.zip")
-    argreader.parser.add_argument('--path_to_folder',type=str,metavar="PATH",help='The path to the folder containing the dataset "big". Only used if it is the dataset "big" that is \
-                                     being formated.',default="")
+	argreader.parser.add_argument('--dataset',type=str,metavar="DATASET",help='The dataset to format')
+	argreader.parser.add_argument('--path_to_zip',type=str,metavar="PATH",help='The path to the zip file containing the dataset "small". Only used if it is the dataset "small" that is \
+	                                 being formated.',default="../data/embryo.zip")
+	argreader.parser.add_argument('--path_to_folder',type=str,metavar="PATH",help='The path to the folder containing the dataset "big". Only used if it is the dataset "big" that is \
+	                                 being formated.',default="")
 
-    argreader.parser.add_argument('--img_for_crop_nb',type=int,metavar="NB",help='The number of images from which to extract digits',default=2000)
-    argreader.parser.add_argument('--minimum_phase_nb',type=int,metavar="NB",help='The minimum number of phases a video should have annotated to be taken into account.',default=6)
+	argreader.parser.add_argument('--img_for_crop_nb',type=int,metavar="NB",help='The number of images from which to extract digits',default=2000)
+	argreader.parser.add_argument('--minimum_phase_nb',type=int,metavar="NB",help='The minimum number of phases a video should have annotated to be taken into account.',default=6)
 
-    #Reading the comand row arg
-    argreader.getRemainingArgs()
+	argreader.parser.add_argument('--format_cub',type=str,metavar="PATH",help='To format the CUB_200_2011 dataset',default="")
 
-    #Getting the args from command row and config file
-    args = argreader.args
+	#Reading the comand row arg
+	argreader.getRemainingArgs()
 
-    pd.options.display.width = 0
+	#Getting the args from command row and config file
+	args = argreader.args
 
-    if args.dataset == "small":
-        formatDataSmall(args.dataset,args.path_to_zip,args.img_for_crop_nb)
-    elif args.dataset == "big":
-        formatDataBig(args.dataset,args.path_to_folder,args.img_for_crop_nb,args.minimum_phase_nb)
+	pd.options.display.width = 0
+
+	if args.dataset == "small":
+		formatDataSmall(args.dataset,args.path_to_zip,args.img_for_crop_nb)
+	elif args.dataset == "big":
+		formatDataBig(args.dataset,args.path_to_folder,args.img_for_crop_nb,args.minimum_phase_nb)
+	elif args.format_cub:
+		formatCUB(args.format_cub)
 
 if __name__ == "__main__":
     main()
