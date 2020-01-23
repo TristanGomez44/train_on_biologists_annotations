@@ -453,9 +453,9 @@ class PointNet2(VisualModel):
 
 class TempModel(nn.Module):
 
-    def __init__(self,nbFeat,nbClass,regression,useTime):
+    def __init__(self,nbFeat,nbClass,useTime):
         super(TempModel,self).__init__()
-        self.nbFeat,self.nbClass,self.regression = nbFeat,nbClass,regression
+        self.nbFeat,self.nbClass = nbFeat,nbClass
         self.useTime = useTime
 
         if useTime:
@@ -472,13 +472,10 @@ class TempModel(nn.Module):
 
 class LinearTempModel(TempModel):
 
-    def __init__(self,nbFeat,nbClass,regression,useTime,dropout):
-        super(LinearTempModel,self).__init__(nbFeat,nbClass,regression,useTime)
+    def __init__(self,nbFeat,nbClass,useTime,dropout):
+        super(LinearTempModel,self).__init__(nbFeat,nbClass,useTime)
         self.dropout = nn.Dropout(p=dropout)
-        if regression:
-            self.linLay = nn.Linear(self.nbFeat,1)
-        else:
-            self.linLay = nn.Linear(self.nbFeat,self.nbClass)
+        self.linLay = nn.Linear(self.nbFeat,self.nbClass)
 
     def forward(self,x,batchSize,timeTensor=None):
         x = self.catWithTimeFeat(x,timeTensor)
@@ -487,22 +484,18 @@ class LinearTempModel(TempModel):
         x = self.dropout(x)
         x = self.linLay(x)
         # NT x classNb
-        if self.regression:
-            # N x T
-            x = x.view(batchSize,-1)
-        else:
-            #N x T x classNb
-            x = x.view(batchSize,-1,self.nbClass)
 
+        x = x.view(batchSize,-1,self.nbClass)
+        #N x T x classNb
         return {"pred":x}
 
 class LSTMTempModel(TempModel):
 
-    def __init__(self,nbFeat,nbClass,regression,useTime,dropout,nbLayers,nbHidden):
-        super(LSTMTempModel,self).__init__(nbFeat,nbClass,regression,useTime)
+    def __init__(self,nbFeat,nbClass,useTime,dropout,nbLayers,nbHidden):
+        super(LSTMTempModel,self).__init__(nbFeat,nbClass,useTime)
 
         self.lstmTempMod = nn.LSTM(input_size=self.nbFeat,hidden_size=nbHidden,num_layers=nbLayers,batch_first=True,dropout=dropout,bidirectional=True)
-        self.linTempMod = LinearTempModel(nbFeat=nbHidden*2,nbClass=self.nbClass,regression=regression,useTime=False,dropout=dropout)
+        self.linTempMod = LinearTempModel(nbFeat=nbHidden*2,nbClass=self.nbClass,useTime=False,dropout=dropout)
 
     def forward(self,x,batchSize,timeTensor):
         x = self.catWithTimeFeat(x,timeTensor)
@@ -515,37 +508,32 @@ class LSTMTempModel(TempModel):
         x = x.contiguous().view(-1,x.size(-1))
         # NT x H
         x = self.linTempMod(x,batchSize)["pred"]
-        # N x T x classNb (or N x T in case of regression)
+        # N x T x classNb
         return {"pred":x}
 
 class ScoreConvTempModel(TempModel):
 
-    def __init__(self,nbFeat,nbClass,regression,useTime,dropout,kerSize,chan,biLay,attention):
+    def __init__(self,nbFeat,nbClass,useTime,dropout,kerSize,chan,biLay,attention):
 
-        super(ScoreConvTempModel,self).__init__(nbFeat,nbClass,regression,useTime)
+        super(ScoreConvTempModel,self).__init__(nbFeat,nbClass,useTime)
 
-        self.linTempMod = LinearTempModel(nbFeat=self.nbFeat,nbClass=self.nbClass,regression=regression,useTime=False,dropout=dropout)
-        self.scoreConv = ScoreConv(kerSize,chan,biLay,attention,regression)
+        self.linTempMod = LinearTempModel(nbFeat=self.nbFeat,nbClass=self.nbClass,useTime=False,dropout=dropout)
+        self.scoreConv = ScoreConv(kerSize,chan,biLay,attention)
 
     def forward(self,x,batchSize,timeTensor):
         x = self.catWithTimeFeat(x,timeTensor)
 
         # NT x D
         x = self.linTempMod(x,batchSize)["pred"]
-        # N x T x classNb (or N x T in case of regression)
+        # N x T x classNb
         x = x.unsqueeze(1)
-        # N x 1 x T x classNb (or N x 1 x T in case of regression)
-        if self.regression:
-            x = x.unsqueeze(3)
-            #N x 1 x T x 1
+        # N x 1 x T x classNb
+
 
         x = self.scoreConv(x)
-        # N x 1 x T x classNb (or N x 1 x T x 1 in case of regression)
+        # N x 1 x T x classNb
         x = x.squeeze(1)
-        # N x T x classNb (or N x T x 1 in case of regression)
-        if self.regression:
-            x = x.squeeze(2)
-            #N x T
+        # N x T x classNb
 
         return {"pred":x}
 
@@ -562,20 +550,16 @@ class ScoreConv(nn.Module):
     - chan (int): the number of channel when using two convolutions
     - biLay (bool): whether or not to apply two convolutional layers instead of one
     - attention (bool): whether or not to multiply the transformed signal by the input before returning it
-    - regression (bool): True if the problem is treated as regression (i.e. the model has only one output)
 
     '''
 
-    def __init__(self,kerSize,chan,biLay,attention,regression):
+    def __init__(self,kerSize,chan,biLay,attention):
 
         super(ScoreConv,self).__init__()
 
         self.attention = attention
 
-        if regression:
-            kerSize = (kerSize,1)
-        else:
-            kerSize = (kerSize,kerSize)
+        kerSize = (kerSize,kerSize)
 
         if biLay:
             self.conv1 = torch.nn.Conv2d(1,chan,kerSize,padding=(kerSize[0]//2,kerSize[1]//2))
@@ -594,9 +578,9 @@ class ScoreConv(nn.Module):
 
 class Identity(TempModel):
 
-    def __init__(self,nbFeat,nbClass,regression,useTime):
+    def __init__(self,nbFeat,nbClass,useTime):
 
-        super(Identity,self).__init__(nbFeat,nbClass,regression,useTime)
+        super(Identity,self).__init__(nbFeat,nbClass,useTime)
 
     def forward(self,x,batchSize,timeTensor):
 
@@ -635,11 +619,11 @@ def netBuilder(args):
 
     ############### Temporal Model #######################
     if args.temp_mod == "lstm":
-        tempModel = LSTMTempModel(nbFeat,args.class_nb,args.regression,args.use_time,args.dropout,args.lstm_lay,args.lstm_hid_size)
+        tempModel = LSTMTempModel(nbFeat,args.class_nb,args.use_time,args.dropout,args.lstm_lay,args.lstm_hid_size)
     elif args.temp_mod == "linear":
-        tempModel = LinearTempModel(nbFeat,args.class_nb,args.regression,args.use_time,args.dropout)
+        tempModel = LinearTempModel(nbFeat,args.class_nb,args.use_time,args.dropout)
     elif args.temp_mod == "score_conv":
-        tempModel = ScoreConvTempModel(nbFeat,args.class_nb,args.regression,args.use_time,args.dropout,args.score_conv_ker_size,args.score_conv_chan,args.score_conv_bilay,args.score_conv_attention)
+        tempModel = ScoreConvTempModel(nbFeat,args.class_nb,args.use_time,args.dropout,args.score_conv_ker_size,args.score_conv_chan,args.score_conv_bilay,args.score_conv_attention)
     elif args.temp_mod == "feat_attention" or args.temp_mod == "feat_attention_full":
 
         classBiasMod = ClassBias(nbFeat,args.class_nb) if args.class_bias_model else None
@@ -694,12 +678,6 @@ def addArgs(argreader):
 
     argreader.parser.add_argument('--dropout', type=float,metavar='D',
                         help='The dropout amount on each layer of the RNN except the last one')
-
-    argreader.parser.add_argument('--regression', type=args.str2bool,metavar='D',
-                        help='Set to True to train a regression model instead of a discriminator')
-
-    argreader.parser.add_argument('--uncertainty', type=args.str2bool,metavar='D',
-                        help='Set to True to also model prediction uncertainty and data uncertainty')
 
     argreader.parser.add_argument('--temp_mod', type=str,metavar='MOD',
                         help='The temporal model. Can be "linear", "lstm" or "score_conv".')

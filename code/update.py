@@ -10,6 +10,24 @@ plt.switch_backend('agg')
 from sklearn.metrics import roc_auc_score
 import utils
 import sys
+import subprocess
+import psutil
+
+def get_gpu_memory_map():
+    """Get the current gpu usage.
+
+    Returns
+    -------
+    usage: dict
+        Keys are device ids as integers.
+        Values are memory usage as integers in MB.
+    """
+    result = subprocess.check_output(['nvidia-smi', '--query-gpu=memory.used','--format=csv,nounits,noheader'], encoding='utf-8')
+    # Convert lines into a dictionary
+    gpu_memory = [x for x in result.strip().split('\n')]
+    gpu_memory_map = dict(zip(range(len(gpu_memory)), gpu_memory))
+    return gpu_memory_map
+
 
 def computeScore(model,allFeats,timeElapsed,allTarget,valLTemp,vidName):
 
@@ -46,20 +64,11 @@ def updateMetrics(args,model,allFeat,timeElapsed,allTarget,precVidName,nbVideos,
     allOutput = allOutputDict["pred"]
 
     if args.compute_metrics_during_eval:
-        if args.regression:
-            #Converting the output of the sigmoid between 0 and 1 to a scale between -0.5 and class_nb+0.5
-            allOutput = (torch.sigmoid(allOutput)*(args.class_nb+1)-0.5)
-            loss = F.mse_loss(allOutput,allTarget.float())
-        elif args.uncertainty:
-            loss = 0
-        else:
-            loss = F.cross_entropy(allOutput.squeeze(0),allTarget.squeeze(0)).data.item()
+        loss = F.cross_entropy(allOutput.squeeze(0),allTarget.squeeze(0)).data.item()
 
-        metDictSample = metrics.binaryToMetrics(allOutput,allTarget,model.transMat,args.regression,args.uncertainty)
+        metDictSample = metrics.binaryToMetrics(allOutput,allTarget,model.transMat)
         metDictSample["Loss"] = loss
         metrDict = metrics.updateMetrDict(metrDict,metDictSample)
-        if args.regression:
-            allOutput = metrics.regressionPred2Confidence(allOutput,args.class_nb)
 
     outDict[precVidName] = allOutput
     targDict[precVidName] = allTarget
@@ -99,3 +108,121 @@ def updateLR(epoch,maxEpoch,lr,startEpoch,kwargsOpti,kwargsTr,lrCounter,net,opti
             lrCounter += 1
 
     return kwargsOpti,kwargsTr,lrCounter
+
+def updateOccupiedGPURamCSV(epoch,mode,exp_id,model_id,batch_idx):
+
+    occRamDict = get_gpu_memory_map()
+
+    csvPath = "../results/{}/{}_occRam_{}.csv".format(exp_id,model_id,mode)
+
+    if epoch==1 and batch_idx==0:
+        with open(csvPath,"w") as text_file:
+            print("epoch,"+",".join([str(device) for device in occRamDict.keys()]),file=text_file)
+            print(str(epoch)+","+",".join([occRamDict[device] for device in occRamDict.keys()]),file=text_file)
+    else:
+        with open(csvPath,"a") as text_file:
+            print(str(epoch)+","+",".join([occRamDict[device] for device in occRamDict.keys()]),file=text_file)
+
+def updateOccupiedCPUCSV(epoch,mode,exp_id,model_id,batch_idx):
+
+    cpuOccList = psutil.cpu_percent(percpu=True)
+
+    csvPath = "../results/{}/{}_cpuLoad_{}.csv".format(exp_id,model_id,mode)
+
+    if epoch==1 and batch_idx==0:
+        with open(csvPath,"w") as text_file:
+            print("epoch,"+",".join([str(i) for i in range(len(cpuOccList))]),file=text_file)
+            print(str(epoch)+","+",".join([str(cpuOcc) for cpuOcc in cpuOccList]),file=text_file)
+    else:
+        with open(csvPath,"a") as text_file:
+            print(str(epoch)+","+",".join([str(cpuOcc) for cpuOcc in cpuOccList]),file=text_file)
+
+def updateOccupiedRamCSV(epoch,mode,exp_id,model_id,batch_idx):
+
+    ramOcc = psutil.virtual_memory()._asdict()["percent"]
+
+    csvPath = "../results/{}/{}_occCPURam_{}.csv".format(exp_id,model_id,mode)
+
+    if epoch==1 and batch_idx==0:
+        with open(csvPath,"w") as text_file:
+            print("epoch,"+","+"percent",file=text_file)
+            print(str(epoch)+","+str(ramOcc),file=text_file)
+    else:
+        with open(csvPath,"a") as text_file:
+            print(str(epoch)+","+str(ramOcc),file=text_file)
+
+def updateTimeCSV(epoch,mode,exp_id,model_id,totalTime,batch_idx):
+
+    csvPath = "../results/{}/{}_time_{}.csv".format(exp_id,model_id,mode)
+
+    if epoch==1 and batch_idx==0:
+        with open(csvPath,"w") as text_file:
+            print("epoch,"+","+"time",file=text_file)
+            print(str(epoch)+","+str(totalTime),file=text_file)
+    else:
+        with open(csvPath,"a") as text_file:
+            print(str(epoch)+","+str(totalTime),file=text_file)
+
+def catAffineTransf(visualDict,fullAffTransSeq):
+    if "theta" in visualDict.keys():
+        if fullAffTransSeq is None:
+            fullAffTransSeq = visualDict["theta"].cpu()
+        else:
+            fullAffTransSeq = torch.cat((fullAffTransSeq,visualDict["theta"].cpu()),dim=0)
+
+    return fullAffTransSeq
+
+def saveAffineTransf(fullAffTransSeq,exp_id,model_id,epoch,precVidName):
+    if not fullAffTransSeq is None:
+        np.save("../results/{}/affTransf_{}_epoch{}_{}.npy".format(exp_id,model_id,epoch,precVidName),fullAffTransSeq.numpy())
+        fullAffTransSeq = None
+    return fullAffTransSeq
+
+def catPointsSeq(visualDict,fullPointsSeq):
+    if "points" in visualDict.keys():
+        if fullPointsSeq is None:
+            fullPointsSeq = visualDict["points"].cpu()
+        else:
+            fullPointsSeq = torch.cat((fullPointsSeq,visualDict["points"].cpu()),dim=0)
+
+    return fullPointsSeq
+
+def savePointsSeq(fullPointsSeq,exp_id,model_id,epoch,precVidName):
+    if not fullPointsSeq is None:
+        np.save("../results/{}/points_{}_epoch{}_{}.npy".format(exp_id,model_id,epoch,precVidName),fullPointsSeq.numpy())
+        fullPointsSeq = None
+    return fullPointsSeq
+
+def catMap(visualDict,fullMap,key="attMaps"):
+    if key in visualDict.keys():
+
+        if not type(visualDict[key]) is dict:
+            if key == "features" or key == "reconst":
+                visualDict[key] = (visualDict[key]-visualDict[key].min())/(visualDict[key].max()-visualDict[key].min())
+
+            if fullMap is None:
+                fullMap = (visualDict[key].cpu()*255).byte()
+            else:
+                fullMap = torch.cat((fullMap,(visualDict[key].cpu()*255).byte()),dim=0)
+
+        else:
+            visualDict[key] = {layer:(visualDict[key][layer].cpu()*255).byte() for layer in visualDict[key].keys()}
+
+            if fullMap is None:
+                fullMap = visualDict[key]
+            else:
+                for layer in fullMap.keys():
+                    fullMap[layer] = torch.cat((fullMap[layer],visualDict[key][layer]),dim=0)
+
+    return fullMap
+
+def saveMap(fullMap,exp_id,model_id,epoch,precVidName,key="attMaps"):
+    if not fullMap is None:
+
+        if not type(fullMap) is dict:
+            np.save("../results/{}/{}_{}_epoch{}_{}.npy".format(exp_id,key,model_id,epoch,precVidName),fullMap.numpy())
+        else:
+            for layer in fullMap.keys():
+                np.save("../results/{}/{}_{}_epoch{}_{}_lay{}.npy".format(exp_id,key,model_id,epoch,precVidName,layer),fullMap[layer].numpy())
+        fullMap = None
+    return fullMap

@@ -7,7 +7,6 @@ import sys
 import torch.nn.functional as F
 import math
 
-
 import load_data
 
 # Code taken from https://gist.github.com/PetrochukM/afaa3613a99a8e7213d2efdd02ae4762#file-top_k_viterbi-py-L5
@@ -84,21 +83,8 @@ def viterbi_decode(tag_sequence,transition_matrix,top_k=1):
         viterbi_paths.append(viterbi_path)
     return viterbi_paths, viterbi_scores
 
-
-def regressionPred2Confidence(regresPred,nbClass):
-    #Converting each element of output into a list of confidence for each class
-    #Therefore the shape will go from a matrix to a 3D tensor
-    output = torch.abs(regresPred.unsqueeze(2)-torch.arange(nbClass).unsqueeze(0).unsqueeze(0).to(regresPred.device).float())
-    conf = F.softmax(-output,dim=-1)
-
-    return conf
-
-
-def emptyMetrDict(uncertainty=False):
-    if not uncertainty:
-        return {"Loss":0,"Accuracy":0,"Accuracy (Viterbi)":0,"Correlation":0,"Temp Accuracy":0}
-    else:
-        return {"Loss":0,"Accuracy":0,"Accuracy (Viterbi)":0,"Correlation":0,"Entropy (Correct)":None,"Entropy (Incorrect)":None,"Temp Accuracy":0}
+def emptyMetrDict():
+    return {"Loss":0,"Accuracy":0,"Accuracy (Viterbi)":0,"Correlation":0,"Temp Accuracy":0}
 
 def updateMetrDict(metrDict,metrDictSample):
 
@@ -115,7 +101,7 @@ def updateMetrDict(metrDict,metrDictSample):
 
     return metrDict
 
-def binaryToMetrics(output,target,transition_matrix,regression,uncertainty,videoNames=None,onlyPairsCorrelation=True):
+def binaryToMetrics(output,target,transition_matrix,videoNames=None,onlyPairsCorrelation=True):
     ''' Computes metrics over a batch of targets and predictions
 
     Args:
@@ -126,11 +112,7 @@ def binaryToMetrics(output,target,transition_matrix,regression,uncertainty,video
     '''
 
     #Simple Accuracy
-    if regression:
-        pred = torch.round(output).long()
-        output = regressionPred2Confidence(output,transition_matrix.size(0))
-    else:
-        pred = output.argmax(dim=-1)
+    pred = output.argmax(dim=-1)
 
     acc = (pred == target).float().sum()/(pred.numel())
 
@@ -140,11 +122,7 @@ def binaryToMetrics(output,target,transition_matrix,regression,uncertainty,video
         pred = []
         for outSeq in output:
 
-            if uncertainty:
-                outSeq = F.softplus(outSeq)+1
-                outSeq = outSeq/outSeq.sum(dim=-1,keepdim=True)
-            else:
-                outSeq = torch.nn.functional.softmax(outSeq, dim=-1)
+            outSeq = torch.nn.functional.softmax(outSeq, dim=-1)
 
             predSeqs,_ = viterbi_decode(torch.log(outSeq),torch.log(transition_matrix),top_k=1)
 
@@ -159,23 +137,10 @@ def binaryToMetrics(output,target,transition_matrix,regression,uncertainty,video
 
     metDict = {"Accuracy":acc,'Accuracy (Viterbi)':accViterb}
 
-    if uncertainty:
-
-        #output,target = output.view(output.size(0)*output.size(1),-1),target.view(-1)
-
-        probs = output/output.sum(dim=-1,keepdim=True)
-        classNb = probs.size(-1)
-        entropies = -(probs*torch.log(probs)).sum(dim=-1)
-        entropies_norm = entropies/math.log(classNb)
-
-        metDict["Entropy (Correct)"] = entropies_norm[pred == target]
-        metDict["Entropy (Incorrect)"] = entropies_norm[pred != target]
-
     if not videoNames is None:
         metDict["Correlation"],metDict["Temp Accuracy"] = correlation(pred,target,videoNames,onlyPairs=onlyPairsCorrelation)
 
     return metDict
-
 
 def correlation(predBatch,target,videoNames,onlyPairs=True):
     ''' Computes the times at which the model predicts the developpement phase is changing and

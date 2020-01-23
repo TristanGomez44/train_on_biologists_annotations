@@ -422,11 +422,11 @@ def buildSeqTestLoader(args,mode):
     if args.dataset_test.find("big") != -1 or args.dataset_test.find("small") != -1:
 
         if mode == "val":
-            testLoader = load_data.TestLoader(args.dataset_val,args.val_l,args.val_part_beg,args.val_part_end,args.prop_set_int_fmt,\
+            testLoader = TestLoader(args.dataset_val,args.val_l,args.val_part_beg,args.val_part_end,args.prop_set_int_fmt,\
                                                 args.img_size,args.orig_img_size,args.resize_image,\
                                                 args.exp_id,args.mask_time_on_image,args.min_phase_nb,args.grid_shuffle_test,args.grid_shuffle_test_size,args.sobel)
         elif mode == "test":
-            testLoader = load_data.TestLoader(args.dataset_test,args.val_l,args.test_part_beg,args.test_part_end,args.prop_set_int_fmt,\
+            testLoader = TestLoader(args.dataset_test,args.val_l,args.test_part_beg,args.test_part_end,args.prop_set_int_fmt,\
                                                 args.img_size,args.orig_img_size,args.resize_image,\
                                                 args.exp_id,args.mask_time_on_image,args.min_phase_nb,args.grid_shuffle_test,args.grid_shuffle_test_size,args.sobel)
         else:

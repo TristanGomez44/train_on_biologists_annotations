@@ -37,14 +37,14 @@ from skimage import transform,io
 from skimage import img_as_ubyte
 
 import cv2
-import psutil
+
 #warnings.simplefilter('error', UserWarning)
 
 import torch.distributed as dist
 from torch.multiprocessing import Process
 
 import time
-import subprocess
+
 
 def epochSeqTr(model,optim,log_interval,loader, epoch, args,writer,**kwargs):
     ''' Train a model during one epoch
@@ -68,7 +68,7 @@ def epochSeqTr(model,optim,log_interval,loader, epoch, args,writer,**kwargs):
 
     print("Epoch",epoch," : train")
 
-    metrDict = metrics.emptyMetrDict(args.uncertainty)
+    metrDict = metrics.emptyMetrDict()
 
     validBatch = 0
 
@@ -92,14 +92,7 @@ def epochSeqTr(model,optim,log_interval,loader, epoch, args,writer,**kwargs):
         output = output[:,args.train_step_to_ignore:output.size(1)-args.train_step_to_ignore]
         target = target[:,args.train_step_to_ignore:target.size(1)-args.train_step_to_ignore]
 
-        if args.regression:
-            #Converting the output of the sigmoid between 0 and 1 to a scale between -0.5 and class_nb+0.5
-            output = (torch.sigmoid(output)*(args.class_nb+1)-0.5)
-            loss = F.mse_loss(output.view(-1),target.view(-1).float())
-        elif args.uncertainty:
-            loss = uncertaintyLoss(F.softplus(output)+1,target,model,data,args.uncer_loss_type,args.uncer_exact_inf_div,args.uncert_inf_div_weight,args.uncer_ll_ratio_weight,args.uncer_max_adv_entr_weight,args.class_nb)
-        else:
-            loss = args.nll_weight*F.cross_entropy(output.view(output.size(0)*output.size(1),-1), target.view(-1))
+        loss = args.nll_weight*F.cross_entropy(output.view(output.size(0)*output.size(1),-1), target.view(-1))
 
         if args.pn_reconst_weight > 0:
             loss += add_pn_recons_term(args.pn_reconst_weight,resDict,data)
@@ -111,17 +104,14 @@ def epochSeqTr(model,optim,log_interval,loader, epoch, args,writer,**kwargs):
         optim.step()
         if validBatch <= 10 and args.debug:
             if args.cuda:
-                updateOccupiedGPURamCSV(epoch,"train",args.exp_id,args.model_id,batch_idx)
-            updateOccupiedRamCSV(epoch,"train",args.exp_id,args.model_id,batch_idx)
-            updateOccupiedCPUCSV(epoch,"train",args.exp_id,args.model_id,batch_idx)
+                update.updateOccupiedGPURamCSV(epoch,"train",args.exp_id,args.model_id,batch_idx)
+            update.updateOccupiedRamCSV(epoch,"train",args.exp_id,args.model_id,batch_idx)
+            update.updateOccupiedCPUCSV(epoch,"train",args.exp_id,args.model_id,batch_idx)
         optim.zero_grad()
 
         #Metrics
-        metDictSample = metrics.binaryToMetrics(output,target,model.transMat,args.regression,args.uncertainty)
-        #for key in metDictSample.keys():
-        #    metrDict[key] += metDictSample[key]
+        metDictSample = metrics.binaryToMetrics(output,target,model.transMat)
         metDictSample["Loss"] = loss.detach().data.item()
-
         metrDict = metrics.updateMetrDict(metrDict,metDictSample)
 
         validBatch += 1
@@ -136,7 +126,7 @@ def epochSeqTr(model,optim,log_interval,loader, epoch, args,writer,**kwargs):
 
     if args.debug:
         totalTime = time.time() - start_time
-        updateTimeCSV(epoch,"train",args.exp_id,args.model_id,totalTime,batch_idx)
+        update.updateTimeCSV(epoch,"train",args.exp_id,args.model_id,totalTime,batch_idx)
 
 def add_pn_recons_term(pn_reconst_weight,resDict,data):
 
@@ -153,155 +143,6 @@ def average_gradients(model):
         if not param.grad is None:
             dist.all_reduce(param.grad.data, op=dist.ReduceOp.SUM)
             param.grad.data /= size
-
-def get_gpu_memory_map():
-    """Get the current gpu usage.
-
-    Returns
-    -------
-    usage: dict
-        Keys are device ids as integers.
-        Values are memory usage as integers in MB.
-    """
-    result = subprocess.check_output(['nvidia-smi', '--query-gpu=memory.used','--format=csv,nounits,noheader'], encoding='utf-8')
-    # Convert lines into a dictionary
-    gpu_memory = [x for x in result.strip().split('\n')]
-    gpu_memory_map = dict(zip(range(len(gpu_memory)), gpu_memory))
-    return gpu_memory_map
-
-def updateOccupiedGPURamCSV(epoch,mode,exp_id,model_id,batch_idx):
-
-    occRamDict = get_gpu_memory_map()
-
-    csvPath = "../results/{}/{}_occRam_{}.csv".format(exp_id,model_id,mode)
-
-    if epoch==1 and batch_idx==0:
-        with open(csvPath,"w") as text_file:
-            print("epoch,"+",".join([str(device) for device in occRamDict.keys()]),file=text_file)
-            print(str(epoch)+","+",".join([occRamDict[device] for device in occRamDict.keys()]),file=text_file)
-    else:
-        with open(csvPath,"a") as text_file:
-            print(str(epoch)+","+",".join([occRamDict[device] for device in occRamDict.keys()]),file=text_file)
-
-def updateOccupiedCPUCSV(epoch,mode,exp_id,model_id,batch_idx):
-
-    cpuOccList = psutil.cpu_percent(percpu=True)
-
-    csvPath = "../results/{}/{}_cpuLoad_{}.csv".format(exp_id,model_id,mode)
-
-    if epoch==1 and batch_idx==0:
-        with open(csvPath,"w") as text_file:
-            print("epoch,"+",".join([str(i) for i in range(len(cpuOccList))]),file=text_file)
-            print(str(epoch)+","+",".join([str(cpuOcc) for cpuOcc in cpuOccList]),file=text_file)
-    else:
-        with open(csvPath,"a") as text_file:
-            print(str(epoch)+","+",".join([str(cpuOcc) for cpuOcc in cpuOccList]),file=text_file)
-
-def updateOccupiedRamCSV(epoch,mode,exp_id,model_id,batch_idx):
-
-    ramOcc = psutil.virtual_memory()._asdict()["percent"]
-
-    csvPath = "../results/{}/{}_occCPURam_{}.csv".format(exp_id,model_id,mode)
-
-    if epoch==1 and batch_idx==0:
-        with open(csvPath,"w") as text_file:
-            print("epoch,"+","+"percent",file=text_file)
-            print(str(epoch)+","+str(ramOcc),file=text_file)
-    else:
-        with open(csvPath,"a") as text_file:
-            print(str(epoch)+","+str(ramOcc),file=text_file)
-
-def updateTimeCSV(epoch,mode,exp_id,model_id,totalTime,batch_idx):
-
-    csvPath = "../results/{}/{}_time_{}.csv".format(exp_id,model_id,mode)
-
-    if epoch==1 and batch_idx==0:
-        with open(csvPath,"w") as text_file:
-            print("epoch,"+","+"time",file=text_file)
-            print(str(epoch)+","+str(totalTime),file=text_file)
-    else:
-        with open(csvPath,"a") as text_file:
-            print(str(epoch)+","+str(totalTime),file=text_file)
-
-def logBeta(alpha):
-    alpha_0 = alpha.sum(-1)
-    return torch.lgamma(alpha).sum(-1) - torch.lgamma(alpha_0)
-
-def uncertaintyLoss(alpha,target,model,data,lossType,exactInfDiv,infDivWeight,llRatioWeight,maxAdvEntrWeight,classNb):
-
-    meanDistr = alpha/alpha.sum(dim=-1,keepdim=True)
-
-    target = target.view(-1)
-    # One hot encoding buffer that you create out of the loop and just keep reusing
-    target_one_hot = torch.FloatTensor(target.size(0), classNb).to(target.device)
-
-    # In your for loop
-    #target.to("cpu")
-    target_one_hot.zero_()
-    target_one_hot.scatter_(1, target.view(-1,1), 1)
-
-    if lossType == "MSE":
-        loss = F.mse_loss(meanDistr.view(meanDistr.size(0)*meanDistr.size(1),-1),target_one_hot.float())
-    elif lossType == "CE":
-        loss = F.cross_entropy(meanDistr.view(meanDistr.size(0)*meanDistr.size(1),-1), target.view(-1))
-    else:
-        raise ValueError("Unknown loss type : ",lossType)
-
-    assert 0<llRatioWeight and llRatioWeight<=1
-
-    ############# Information divergence term #############
-
-    alpha = alpha.view(alpha.size(0)*alpha.size(1),-1)
-
-    alpha_prime = (1-target_one_hot)+target_one_hot*alpha
-
-    if exactInfDiv:
-
-        if llRatioWeight == 1:
-            distr_alpha = torch.distributions.dirichlet.Dirichlet(alpha)
-            distr_alpha_prime = torch.distributions.dirichlet.Dirichlet(alpha_prime)
-
-            infDivTerm = torch.distributions.kl.kl_divergence(distr_alpha, distr_alpha_prime)
-        else:
-            infDivTerm = logBeta(alpha_prime)-logBeta(alpha)+1/(llRatioWeight-1)*(logBeta(llRatioWeight*alpha+(1-llRatioWeight)*alpha_prime)-logBeta(alpha))
-    else:
-        raise NotImplementedError
-        #infDivTerm = (llRatioWeight/2)*((target_one_hot*torch.pow(alpha-1,2)*polyg(alpha)).sum(dim=-1)-(target_one_hot*torch.pow(alpha-1,2)).sum(dim=-1)*polyg(alpha.sum(dim=-1)))
-
-    ############ Maximum adversarial entropy term #############
-
-    pgd_attack = FGSM(model)
-    data_adv = pgd_attack(data, target.view(data.size(0),data.size(1))).to(data.device)
-    alpha_adv = model(data_adv)
-
-    alpha_adv_0 = alpha_adv.sum(dim=-1)
-    maxAdvEntrTerm = logBeta(alpha_adv)+(alpha_adv_0-classNb)*torch.digamma(alpha_adv_0)-((alpha_adv-1)*torch.digamma(alpha_adv)).sum(dim=-1)
-    maxAdvEntrTerm = torch.clamp(maxAdvEntrTerm,-300,300)
-
-    loss += infDivWeight*infDivTerm.mean()-maxAdvEntrWeight*maxAdvEntrTerm.mean()
-
-    return loss
-
-def computeTransMat(dataset,transMat,priors,propStart,propEnd,propSetIntFormat):
-
-    videoPaths = load_data.findVideos(dataset,propStart,propEnd,propSetIntFormat)
-
-    for videoPath in videoPaths:
-        videoName = os.path.splitext(os.path.basename(videoPath))[0]
-        target = load_data.getGT(videoName,dataset)
-        #Updating the transition matrix
-        for i in range(len(target)-1):
-            transMat[target[i],target[i+1]] += 1
-            priors[target[i]] += 1
-
-        #Taking the last target of the sequence into account only for prior
-        priors[target[-1]] += 1
-
-    #Just in case where propStart==propEnd, which is true for example, when the training set is empty
-    if len(videoPaths) > 0:
-        return transMat/transMat.sum(dim=1,keepdim=True),priors/priors.sum()
-    else:
-        return transMat,priors
 
 def epochSeqVal(model,log_interval,loader, epoch, args,writer,metricEarlyStop,mode="val"):
     '''
@@ -327,7 +168,7 @@ def epochSeqVal(model,log_interval,loader, epoch, args,writer,metricEarlyStop,mo
 
     print("Epoch",epoch," : ",mode)
 
-    metrDict = metrics.emptyMetrDict(args.uncertainty)
+    metrDict = metrics.emptyMetrDict()
 
     nbVideos = 0
 
@@ -359,24 +200,24 @@ def epochSeqVal(model,log_interval,loader, epoch, args,writer,metricEarlyStop,mo
 
         if newVideo and not videoBegining:
             allOutput,nbVideos = update.updateMetrics(args,model,allFeat,allTimeElapsedTensor,allTarget,precVidName,nbVideos,metrDict,outDict,targDict)
-            fullAttMap = saveMap(fullAttMap,args.exp_id,args.model_id,epoch,precVidName,key="attMaps")
-            fullFeatMapSeq = saveMap(fullFeatMapSeq,args.exp_id,args.model_id,epoch,precVidName,key="featMaps")
-            fullAffTransSeq = saveAffineTransf(fullAffTransSeq,args.exp_id,args.model_id,epoch,precVidName)
-            fullPointsSeq =  savePointsSeq(fullPointsSeq,args.exp_id,args.model_id,epoch,precVidName)
-            fullReconstSeq = saveMap(fullReconstSeq,args.exp_id,args.model_id,epoch,precVidName,key="reconst")
+            fullAttMap = update.saveMap(fullAttMap,args.exp_id,args.model_id,epoch,precVidName,key="attMaps")
+            fullFeatMapSeq = update.saveMap(fullFeatMapSeq,args.exp_id,args.model_id,epoch,precVidName,key="featMaps")
+            fullAffTransSeq = update.saveAffineTransf(fullAffTransSeq,args.exp_id,args.model_id,epoch,precVidName)
+            fullPointsSeq =  update.savePointsSeq(fullPointsSeq,args.exp_id,args.model_id,epoch,precVidName)
+            fullReconstSeq = update.saveMap(fullReconstSeq,args.exp_id,args.model_id,epoch,precVidName,key="reconst")
 
-        fullAttMap = catMap(visualDict,fullAttMap,key="attMaps")
-        fullFeatMapSeq = catMap(visualDict,fullFeatMapSeq,key="features")
-        fullAffTransSeq = catAffineTransf(visualDict,fullAffTransSeq)
-        fullPointsSeq = catPointsSeq(visualDict,fullPointsSeq)
+        fullAttMap = update.catMap(visualDict,fullAttMap,key="attMaps")
+        fullFeatMapSeq = update.catMap(visualDict,fullFeatMapSeq,key="features")
+        fullAffTransSeq = update.catAffineTransf(visualDict,fullAffTransSeq)
+        fullPointsSeq = update.catPointsSeq(visualDict,fullPointsSeq)
         if nbVideos < 6:
-            fullReconstSeq = catMap(visualDict,fullReconstSeq,key="reconst")
+            fullReconstSeq = update.catMap(visualDict,fullReconstSeq,key="reconst")
 
         if nbVideos<=5 and args.debug:
             if args.cuda:
-                updateOccupiedGPURamCSV(epoch,mode,args.exp_id,args.model_id,batch_idx)
-            updateOccupiedRamCSV(epoch,mode,args.exp_id,args.model_id,batch_idx)
-            updateOccupiedCPUCSV(epoch,mode,args.exp_id,args.model_id,batch_idx)
+                update.updateOccupiedGPURamCSV(epoch,mode,args.exp_id,args.model_id,batch_idx)
+            update.updateOccupiedRamCSV(epoch,mode,args.exp_id,args.model_id,batch_idx)
+            update.updateOccupiedCPUCSV(epoch,mode,args.exp_id,args.model_id,batch_idx)
         if newVideo:
             allTarget = target
             allFeat = feat.unsqueeze(0)
@@ -397,11 +238,11 @@ def epochSeqVal(model,log_interval,loader, epoch, args,writer,metricEarlyStop,mo
 
     if not args.debug:
         allOutput,nbVideos = update.updateMetrics(args,model,allFeat,allTimeElapsedTensor,allTarget,precVidName,nbVideos,metrDict,outDict,targDict)
-        fullAttMap = saveMap(fullAttMap,args.exp_id,args.model_id,epoch,precVidName,key="attMaps")
-        fullFeatMapSeq = saveMap(fullFeatMapSeq,args.exp_id,args.model_id,epoch,precVidName,key="featMaps")
-        fullAffTransSeq = saveAffineTransf(fullAffTransSeq,args.exp_id,args.model_id,epoch,precVidName)
-        fullPointsSeq =  savePointsSeq(fullPointsSeq,args.exp_id,args.model_id,epoch,precVidName)
-        fullReconstSeq = saveMap(fullReconstSeq,args.exp_id,args.model_id,epoch,precVidName,key="reconst")
+        fullAttMap = update.saveMap(fullAttMap,args.exp_id,args.model_id,epoch,precVidName,key="attMaps")
+        fullFeatMapSeq = update.saveMap(fullFeatMapSeq,args.exp_id,args.model_id,epoch,precVidName,key="featMaps")
+        fullAffTransSeq = update.saveAffineTransf(fullAffTransSeq,args.exp_id,args.model_id,epoch,precVidName)
+        fullPointsSeq =  update.savePointsSeq(fullPointsSeq,args.exp_id,args.model_id,epoch,precVidName)
+        fullReconstSeq = update.saveMap(fullReconstSeq,args.exp_id,args.model_id,epoch,precVidName,key="reconst")
 
     for key in outDict.keys():
         fullArr = torch.cat((frameIndDict[key].float(),outDict[key].squeeze(0).squeeze(1)),dim=1)
@@ -411,73 +252,30 @@ def epochSeqVal(model,log_interval,loader, epoch, args,writer,metricEarlyStop,mo
 
     if args.debug:
         totalTime = time.time() - start_time
-        updateTimeCSV(epoch,mode,args.exp_id,args.model_id,totalTime,batch_idx)
+        update.updateTimeCSV(epoch,mode,args.exp_id,args.model_id,totalTime,batch_idx)
 
     return outDict,targDict,metrDict[metricEarlyStop]
 
-def catAffineTransf(visualDict,fullAffTransSeq):
-    if "theta" in visualDict.keys():
-        if fullAffTransSeq is None:
-            fullAffTransSeq = visualDict["theta"].cpu()
-        else:
-            fullAffTransSeq = torch.cat((fullAffTransSeq,visualDict["theta"].cpu()),dim=0)
+def computeTransMat(dataset,transMat,priors,propStart,propEnd,propSetIntFormat):
 
-    return fullAffTransSeq
+    videoPaths = load_data.findVideos(dataset,propStart,propEnd,propSetIntFormat)
 
-def saveAffineTransf(fullAffTransSeq,exp_id,model_id,epoch,precVidName):
-    if not fullAffTransSeq is None:
-        np.save("../results/{}/affTransf_{}_epoch{}_{}.npy".format(exp_id,model_id,epoch,precVidName),fullAffTransSeq.numpy())
-        fullAffTransSeq = None
-    return fullAffTransSeq
+    for videoPath in videoPaths:
+        videoName = os.path.splitext(os.path.basename(videoPath))[0]
+        target = load_data.getGT(videoName,dataset)
+        #Updating the transition matrix
+        for i in range(len(target)-1):
+            transMat[target[i],target[i+1]] += 1
+            priors[target[i]] += 1
 
-def catPointsSeq(visualDict,fullPointsSeq):
-    if "points" in visualDict.keys():
-        if fullPointsSeq is None:
-            fullPointsSeq = visualDict["points"].cpu()
-        else:
-            fullPointsSeq = torch.cat((fullPointsSeq,visualDict["points"].cpu()),dim=0)
+        #Taking the last target of the sequence into account only for prior
+        priors[target[-1]] += 1
 
-    return fullPointsSeq
-
-def savePointsSeq(fullPointsSeq,exp_id,model_id,epoch,precVidName):
-    if not fullPointsSeq is None:
-        np.save("../results/{}/points_{}_epoch{}_{}.npy".format(exp_id,model_id,epoch,precVidName),fullPointsSeq.numpy())
-        fullPointsSeq = None
-    return fullPointsSeq
-
-def catMap(visualDict,fullMap,key="attMaps"):
-    if key in visualDict.keys():
-
-        if not type(visualDict[key]) is dict:
-            if key == "features" or key == "reconst":
-                visualDict[key] = (visualDict[key]-visualDict[key].min())/(visualDict[key].max()-visualDict[key].min())
-
-            if fullMap is None:
-                fullMap = (visualDict[key].cpu()*255).byte()
-            else:
-                fullMap = torch.cat((fullMap,(visualDict[key].cpu()*255).byte()),dim=0)
-
-        else:
-            visualDict[key] = {layer:(visualDict[key][layer].cpu()*255).byte() for layer in visualDict[key].keys()}
-
-            if fullMap is None:
-                fullMap = visualDict[key]
-            else:
-                for layer in fullMap.keys():
-                    fullMap[layer] = torch.cat((fullMap[layer],visualDict[key][layer]),dim=0)
-
-    return fullMap
-
-def saveMap(fullMap,exp_id,model_id,epoch,precVidName,key="attMaps"):
-    if not fullMap is None:
-
-        if not type(fullMap) is dict:
-            np.save("../results/{}/{}_{}_epoch{}_{}.npy".format(exp_id,key,model_id,epoch,precVidName),fullMap.numpy())
-        else:
-            for layer in fullMap.keys():
-                np.save("../results/{}/{}_{}_epoch{}_{}_lay{}.npy".format(exp_id,key,model_id,epoch,precVidName,layer),fullMap[layer].numpy())
-        fullMap = None
-    return fullMap
+    #Just in case where propStart==propEnd, which is true for example, when the training set is empty
+    if len(videoPaths) > 0:
+        return transMat/transMat.sum(dim=1,keepdim=True),priors/priors.sum()
+    else:
+        return transMat,priors
 
 def writeSummaries(metrDict,batchNb,writer,epoch,mode,model_id,exp_id,nbVideos=None):
     ''' Write the metric computed during an evaluation in a tf writer and in a csv file
@@ -618,38 +416,6 @@ def initialize_Net_And_EpochNumber(net,exp_id,model_id,cuda,start_mode,init_path
 
     return startEpoch
 
-def evalAllImages(exp_id,model_id,model,testLoader,cuda,log_interval):
-    '''
-    Pass all the images and/or the sound extracts of a loader in a feature model and save the feature vector in one csv for each image.
-    Args:
-    - exp_id (str): The experience id
-    - model (nn.Module): the model to process the images
-    - testLoader (load_data.TestLoader): the image and/or sound loader
-    - cuda (bool): True is the computation has to be done on cuda
-    - log_interval (int): the number of batches to wait before logging progression
-    '''
-
-    for batch_idx, (data, _,vidName,frameInds) in enumerate(testLoader):
-
-        if (batch_idx % log_interval == 0):
-            print("\t",testLoader.sumL+1,"/",testLoader.nbShots)
-
-        if not data is None:
-            if cuda:
-                data = data.cuda()
-            data = data[:,:len(frameInds)]
-            data = data.view(data.size(0)*data.size(1),data.size(2),data.size(3),data.size(4))
-
-        if not os.path.exists("../results/{}/{}".format(exp_id,vidName)):
-            os.makedirs("../results/{}/{}".format(exp_id,vidName))
-
-        feats = model(data)
-        for i,feat in enumerate(feats):
-            imageName = frameInds[i]
-            if not os.path.exists("../results/{}/{}/{}_{}.csv".format(exp_id,vidName,imageName,model_id)):
-
-                np.savetxt("../results/{}/{}/{}_{}.csv".format(exp_id,vidName,imageName,model_id),feat.detach().cpu().numpy())
-
 def addInitArgs(argreader):
     argreader.parser.add_argument('--start_mode', type=str,metavar='SM',
                 help='The mode to use to initialise the model. Can be \'scratch\' or \'fine_tune\'.')
@@ -688,21 +454,6 @@ def addValArgs(argreader):
     return argreader
 def addLossTermArgs(argreader):
 
-    argreader.parser.add_argument('--uncer_max_adv_entr_weight', type=float,metavar='FLOAT',
-                    help='The weight of the maximum divergence entropy term (only used when uncertainty is True)')
-
-    argreader.parser.add_argument('--uncert_inf_div_weight', type=float,metavar='FLOAT',
-                    help='The weight of the information divergence term (only used when uncertainty is True)')
-
-    argreader.parser.add_argument('--uncer_loss_type', type=str,metavar='FLOAT',
-                    help='The loss to use for the computation of uncertainty loss. Can be "MSE" or "CE".')
-
-    argreader.parser.add_argument('--uncer_exact_inf_div', type=args.str2bool,metavar='FLOAT',
-                    help='Set to True for exact computation of the information divergence term of the uncertainty loss.')
-
-    argreader.parser.add_argument('--uncer_ll_ratio_weight', type=float,metavar='FLOAT',
-                    help='The ratio between the likelihood in the information divergence term of the uncertainty loss. It should be between 0 (excluded) and 1 (included).')
-
     argreader.parser.add_argument('--nll_weight', type=float,metavar='FLOAT',
                     help='The weight of the negative log-likelihood term in the loss function.')
 
@@ -732,7 +483,7 @@ def run(args):
 
     trainLoader,trainDataset = load_data.buildSeqTrainLoader(args)
 
-    valLoader = buildSeqTestLoader(args,"val")
+    valLoader = load_data.buildSeqTestLoader(args,"val")
     #Building the net
     net = modelBuilder.netBuilder(args)
 
@@ -824,7 +575,7 @@ def run(args):
         kwargsTest = kwargsVal
         kwargsTest["mode"] = "test"
 
-        testLoader = buildSeqTestLoader(args,"test")
+        testLoader = load_data.buildSeqTestLoader(args,"test")
 
         kwargsTest['loader'] = testLoader
 
@@ -880,45 +631,18 @@ def main(argv=None):
 
     print("Model :",args.model_id,"Experience :",args.exp_id)
 
-    if args.comp_feat:
+    if args.distributed:
+        size = args.distrib_size
+        processes = []
+        for rank in range(size):
+            p = Process(target=init_process, args=(args,rank,size,run))
+            p.start()
+            processes.append(p)
 
-        testLoader = load_data.TestLoader(args.val_l,args.dataset_test,args.test_part_beg,args.test_part_end,args.prop_set_int_fmt,args.img_size,args.orig_img_size,\
-                                          args.resize_image,args.exp_id,args.mask_time_on_image,args.min_phase_nb,args.grid_shuffle_test,args.grid_shuffle_test_size)
-
-        if args.feat != "None":
-            featModel = modelBuilder.buildFeatModel(args.feat,args.pretrain_dataset,args.lay_feat_cut)
-            if args.cuda:
-                featModel = featModel.cuda()
-            if args.init_path_visual != "None":
-                featModel.load_state_dict(torch.load(args.init_path_visual))
-            elif args.init_path != "None":
-                model = modelBuilder.netBuilder(args)
-                params = torch.load(args.init_path)
-                state_dict = {k.replace("module.cnn.","cnn.module."): v for k,v in params.items()}
-                model.load_state_dict(state_dict)
-                featModel = model.featModel
-
-            featModel.eval()
-        else:
-            featModel = None
-
-        with torch.no_grad():
-            evalAllImages(args.exp_id,args.model_id,featModel,testLoader,args.cuda,args.log_interval)
-
+        for p in processes:
+            p.join()
     else:
-
-        if args.distributed:
-            size = args.distrib_size
-            processes = []
-            for rank in range(size):
-                p = Process(target=init_process, args=(args,rank,size,run))
-                p.start()
-                processes.append(p)
-
-            for p in processes:
-                p.join()
-        else:
-            run(args)
+        run(args)
 
 if __name__ == "__main__":
     main()
