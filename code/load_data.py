@@ -348,7 +348,6 @@ class Partition(object):
         data_idx = self.index[index]
         return self.data[data_idx]
 
-
 class DataPartitioner(object):
 
     def __init__(self, data, sizes=[0.7, 0.2, 0.1], seed=1234):
@@ -382,10 +381,26 @@ def partition_dataset(dataset):
 
 def buildSeqTrainLoader(args):
 
-    train_dataset = SeqTrDataset(args.dataset_train,args.train_part_beg,args.train_part_end,args.prop_set_int_fmt,args.tr_len,\
-                                        args.img_size,args.orig_img_size,args.resize_image,args.exp_id,args.augment_data,args.mask_time_on_image,\
-                                        args.min_phase_nb,args.grid_shuffle,args.grid_shuffle_size,args.sobel)
-    sampler = Sampler(len(train_dataset.videoPaths),train_dataset.nbImages,args.tr_len)
+    if args.dataset_train.find("big") != -1 or args.dataset_train.find("small") != -1:
+
+        train_dataset = SeqTrDataset(args.dataset_train,args.train_part_beg,args.train_part_end,args.prop_set_int_fmt,args.tr_len,\
+                                            args.img_size,args.orig_img_size,args.resize_image,args.exp_id,args.augment_data,args.mask_time_on_image,\
+                                            args.min_phase_nb,args.grid_shuffle,args.grid_shuffle_size,args.sobel)
+        sampler = Sampler(len(train_dataset.videoPaths),train_dataset.nbImages,args.tr_len)
+        collateFn = collateSeq
+
+    elif args.dataset_train.find("CUB_200_2011") != -1:
+
+        normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],std=[0.229, 0.224, 0.225])
+        transf = transforms.Compose([transforms.RandomResizedCrop(224),transforms.RandomHorizontalFlip(),transforms.ToTensor(),normalize])
+
+        train_dataset = torchvision.datasets.ImageFolder("../data/{}".format(args.dataset_train),transf)
+        sampler = None
+        collateFn = None
+
+
+    else:
+        raise ValueError("Unkown train dataset : {}".format(args.dataset_train))
 
     if args.distributed:
         size = dist.get_world_size()
@@ -396,10 +411,36 @@ def buildSeqTrainLoader(args):
     else:
         bsz = args.batch_size
 
-    trainLoader = torch.utils.data.DataLoader(dataset=train_dataset,batch_size=bsz,sampler=sampler, collate_fn=collateSeq, # use custom collate function here
+    trainLoader = torch.utils.data.DataLoader(dataset=train_dataset,batch_size=bsz,sampler=sampler, collate_fn=collateFn, # use custom collate function here
                       pin_memory=False,num_workers=args.num_workers)
 
     return trainLoader,train_dataset
+
+def buildSeqTestLoader(args,mode):
+
+
+    if args.dataset_test.find("big") != -1 or args.dataset_test.find("small") != -1:
+
+        if mode == "val":
+            testLoader = load_data.TestLoader(args.dataset_val,args.val_l,args.val_part_beg,args.val_part_end,args.prop_set_int_fmt,\
+                                                args.img_size,args.orig_img_size,args.resize_image,\
+                                                args.exp_id,args.mask_time_on_image,args.min_phase_nb,args.grid_shuffle_test,args.grid_shuffle_test_size,args.sobel)
+        elif mode == "test":
+            testLoader = load_data.TestLoader(args.dataset_test,args.val_l,args.test_part_beg,args.test_part_end,args.prop_set_int_fmt,\
+                                                args.img_size,args.orig_img_size,args.resize_image,\
+                                                args.exp_id,args.mask_time_on_image,args.min_phase_nb,args.grid_shuffle_test,args.grid_shuffle_test_size,args.sobel)
+        else:
+            raise ValueError("Unkown test loader mode : {}".format(mode))
+
+    elif args.dataset_test.find("CUB_200_2011") != -1:
+        normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],std=[0.229, 0.224, 0.225])
+        transf = transforms.Compose([transforms.Resize(256),transforms.CenterCrop(224),transforms.ToTensor(),normalize])
+
+        test_dataset = torchvision.datasets.ImageFolder("../data/{}".format(args.dataset_test),transf)
+
+        testLoader = torch.utils.data.DataLoader(dataset=test_dataset,batch_size=args.val_batch_size,num_workers=args.num_workers)
+
+    return testLoader
 
 def removeVid(videoPaths,videoToRemoveNames):
     #Removing videos with bad format
@@ -580,49 +621,30 @@ def addArgs(argreader):
 
 if __name__ == "__main__":
 
-    train_part_beg = 0
-    train_part_end = 1
-    val_part_beg = 0.5
-    val_part_end = 1
-    dataset_train = "big"
-    dataset_val = "small"
+    normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],std=[0.229, 0.224, 0.225])
+    transf = transforms.Compose([transforms.RandomResizedCrop(224),transforms.RandomHorizontalFlip(),transforms.ToTensor(),normalize])
 
-    tr_len = 5
-    val_l = 5
-    img_size = 224
-    orig_img_size = 500
-    resize_image = True
-    exp_id = "Test"
+    train_dataset = torchvision.datasets.ImageFolder("../data/CUB_200_2011_train",transf)
+    sampler = None
+    collateSeq = None
+    num_workers = 4
+    batch_size = 20
 
-    batch_size = 5
-    num_workers = 1
-    augmentData = True
-    maskTimeOnImage = True
-    minPhaseNb = 6
-    propSetIntFormat = False
-
-    gridShuffle = True
-    gridShuffleSize = 7
-
-    gridShuffleTest = True
-    gridShuffleSizeTest = 7
-
-    sobel = True
-
-    train_dataset = SeqTrDataset(dataset_train,train_part_beg,train_part_end,propSetIntFormat,tr_len,\
-                                        img_size,orig_img_size,resize_image,exp_id,augmentData,maskTimeOnImage,minPhaseNb,gridShuffle,gridShuffleSize,sobel)
-    sampler = Sampler(len(train_dataset.videoPaths),train_dataset.nbImages,tr_len)
     trainLoader = torch.utils.data.DataLoader(dataset=train_dataset,batch_size=batch_size,sampler=sampler, collate_fn=collateSeq, # use custom collate function here
                       pin_memory=False,num_workers=num_workers)
 
     for batch in trainLoader:
-        print(batch[0].shape,batch[1].shape,batch[2],batch[-1])
+        print(batch[0].shape,batch[1].shape)
         break
 
-    valLoader = TestLoader(dataset_val,val_l,val_part_beg,val_part_end,propSetIntFormat,\
-                                        img_size,orig_img_size,resize_image,\
-                                        exp_id,maskTimeOnImage,minPhaseNb,gridShuffleTest,gridShuffleSizeTest,sobel)
+    normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],std=[0.229, 0.224, 0.225])
+    transf = transforms.Compose([transforms.Resize(256),transforms.CenterCrop(224),transforms.ToTensor(),normalize])
+    test_dataset = torchvision.datasets.ImageFolder("../data/CUB_200_2011_test",transf)
+
+    val_batch_size = 20
+
+    valLoader = torch.utils.data.DataLoader(dataset=test_dataset,batch_size=val_batch_size,num_workers=num_workers)
 
     for batch in valLoader:
-        print(batch[0].shape,batch[1].shape,batch[2],batch[3])
+        print(batch[0].shape,batch[1].shape)
         break

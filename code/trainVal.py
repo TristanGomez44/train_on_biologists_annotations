@@ -732,10 +732,7 @@ def run(args):
 
     trainLoader,trainDataset = load_data.buildSeqTrainLoader(args)
 
-    valLoader = load_data.TestLoader(args.dataset_val,args.val_l,args.val_part_beg,args.val_part_end,args.prop_set_int_fmt,\
-                                        args.img_size,args.orig_img_size,args.resize_image,\
-                                        args.exp_id,args.mask_time_on_image,args.min_phase_nb,args.grid_shuffle_test,args.grid_shuffle_test_size,args.sobel)
-
+    valLoader = buildSeqTestLoader(args,"val")
     #Building the net
     net = modelBuilder.netBuilder(args)
 
@@ -827,9 +824,7 @@ def run(args):
         kwargsTest = kwargsVal
         kwargsTest["mode"] = "test"
 
-        testLoader = load_data.TestLoader(args.dataset_test,args.val_l,args.test_part_beg,args.test_part_end,args.prop_set_int_fmt,\
-                                            args.img_size,args.orig_img_size,args.resize_image,\
-                                            args.exp_id,args.mask_time_on_image,args.min_phase_nb,args.grid_shuffle_test,args.grid_shuffle_test_size,args.sobel)
+        testLoader = buildSeqTestLoader(args,"test")
 
         kwargsTest['loader'] = testLoader
 
