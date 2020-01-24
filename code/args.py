@@ -115,6 +115,10 @@ class ArgReader():
                             help='the id of the experience')
         self.parser.add_argument('--seed', type=int, metavar='S',help='Seed used to initialise the random number generator.')
 
+        self.parser.add_argument('--video_mode', type=str2bool,metavar='BIDIR',
+                            help='Indicates that videos will be processed, and not isolated images. Set this to True if you want to process \
+                                the embryo videos. For a regular image classification dataset, set this to False')
+
         self.args = None
 
     def getRemainingArgs(self):
