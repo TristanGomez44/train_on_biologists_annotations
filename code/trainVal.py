@@ -45,7 +45,6 @@ from torch.multiprocessing import Process
 
 import time
 
-
 def epochSeqTr(model,optim,log_interval,loader, epoch, args,writer,**kwargs):
     ''' Train a model during one epoch
 
@@ -61,56 +60,44 @@ def epochSeqTr(model,optim,log_interval,loader, epoch, args,writer,**kwargs):
 
     '''
 
-    if args.debug:
-        start_time = time.time()
+    start_time = time.time() if args.debug else None
 
     model.train()
 
     print("Epoch",epoch," : train")
 
     metrDict = metrics.emptyMetrDict()
-
     validBatch = 0
+    allOut,allGT = None,None
 
-    allOut = None
-    allGT = None
-
-    for batch_idx,(data,target,_,_,timeElapsedTensor) in enumerate(loader):
+    for batch_idx,batch in enumerate(loader):
 
         if (batch_idx % log_interval == 0):
-            print("\t",batch_idx*len(data)*len(data[0]),"/",len(loader.dataset))
+            processedImgNb = batch_idx*len(batch[0])*len(batch[0][0]) if args.video_mode else batch_idx*len(batch[0])
+            print("\t",processedImgNb,"/",len(loader.dataset))
 
-        #Puting tensors on cuda
+        data,target = batch[0],batch[1]
         if args.cuda:
-            data, target,timeElapsedTensor = data.cuda(), target.cuda(),timeElapsedTensor.cuda()
+            data, target = data.cuda(), target.cuda()
 
-        #Computing predictions
+        timeElapsedTensor = batch[-1] if args.video_mode else None
+        timeElapsedTensor = timeElapsedTensor.cuda() if (args.video_mode and args.cuda) else None
+
         resDict = model(data,timeElapsedTensor)
         output = resDict["pred"]
 
-        #Computing loss
-        output = output[:,args.train_step_to_ignore:output.size(1)-args.train_step_to_ignore]
-        target = target[:,args.train_step_to_ignore:target.size(1)-args.train_step_to_ignore]
-
-        loss = args.nll_weight*F.cross_entropy(output.view(output.size(0)*output.size(1),-1), target.view(-1))
-
-        if args.pn_reconst_weight > 0:
-            loss += add_pn_recons_term(args.pn_reconst_weight,resDict,data)
+        loss = computeLoss(args.nll_weight,output,target,args.pn_reconst_weight,resDict,data,args.video_mode)
 
         loss.backward()
         if args.distributed:
             average_gradients(model)
 
         optim.step()
-        if validBatch <= 10 and args.debug:
-            if args.cuda:
-                update.updateOccupiedGPURamCSV(epoch,"train",args.exp_id,args.model_id,batch_idx)
-            update.updateOccupiedRamCSV(epoch,"train",args.exp_id,args.model_id,batch_idx)
-            update.updateOccupiedCPUCSV(epoch,"train",args.exp_id,args.model_id,batch_idx)
+        update.updateHardWareOccupation(args.debug,args.cuda,epoch,"train",args.exp_id,args.model_id,batch_idx)
         optim.zero_grad()
 
         #Metrics
-        metDictSample = metrics.binaryToMetrics(output,target,model.transMat)
+        metDictSample = metrics.binaryToMetrics(output,target,model.transMat,videoMode=args.video_mode)
         metDictSample["Loss"] = loss.detach().data.item()
         metrDict = metrics.updateMetrDict(metrDict,metDictSample)
 
@@ -127,6 +114,19 @@ def epochSeqTr(model,optim,log_interval,loader, epoch, args,writer,**kwargs):
     if args.debug:
         totalTime = time.time() - start_time
         update.updateTimeCSV(epoch,"train",args.exp_id,args.model_id,totalTime,batch_idx)
+
+def computeLoss(nll_weight,output,target,pn_reconst_weight,resDict,data,video_mode):
+
+    if video_mode:
+        output = output.view(output.size(0)*output.size(1),-1)
+        target = target.view(-1)
+
+    loss = nll_weight*F.cross_entropy(output, target)
+
+    if pn_reconst_weight > 0:
+        loss += add_pn_recons_term(pn_reconst_weight,resDict,data)
+
+    return loss
 
 def add_pn_recons_term(pn_reconst_weight,resDict,data):
 
@@ -176,8 +176,7 @@ def epochSeqVal(model,log_interval,loader, epoch, args,writer,metricEarlyStop,mo
 
     frameIndDict = {}
 
-    fullAttMap,fullFeatMapSeq,fullAffTransSeq,fullPointsSeq,fullReconstSeq = None,None,None,None,None
-    revLabelDict = formatData.getReversedLabels()
+    intermVarDict = {"fullAttMap":None,"fullFeatMapSeq":None,"fullAffTransSeq":None,"fullPointsSeq":None,"fullReconstSeq":None}
     precVidName = "None"
     videoBegining = True
     validBatch = 0
@@ -200,24 +199,12 @@ def epochSeqVal(model,log_interval,loader, epoch, args,writer,metricEarlyStop,mo
 
         if newVideo and not videoBegining:
             allOutput,nbVideos = update.updateMetrics(args,model,allFeat,allTimeElapsedTensor,allTarget,precVidName,nbVideos,metrDict,outDict,targDict)
-            fullAttMap = update.saveMap(fullAttMap,args.exp_id,args.model_id,epoch,precVidName,key="attMaps")
-            fullFeatMapSeq = update.saveMap(fullFeatMapSeq,args.exp_id,args.model_id,epoch,precVidName,key="featMaps")
-            fullAffTransSeq = update.saveAffineTransf(fullAffTransSeq,args.exp_id,args.model_id,epoch,precVidName)
-            fullPointsSeq =  update.savePointsSeq(fullPointsSeq,args.exp_id,args.model_id,epoch,precVidName)
-            fullReconstSeq = update.saveMap(fullReconstSeq,args.exp_id,args.model_id,epoch,precVidName,key="reconst")
+            intermVarDict = update.saveIntermediateVariables(intermVarDict,args.exp_id,args.model_id,epoch,precVidName)
 
-        fullAttMap = update.catMap(visualDict,fullAttMap,key="attMaps")
-        fullFeatMapSeq = update.catMap(visualDict,fullFeatMapSeq,key="features")
-        fullAffTransSeq = update.catAffineTransf(visualDict,fullAffTransSeq)
-        fullPointsSeq = update.catPointsSeq(visualDict,fullPointsSeq)
-        if nbVideos < 6:
-            fullReconstSeq = update.catMap(visualDict,fullReconstSeq,key="reconst")
+        intermVarDict = update.catIntermediateVariables(visualDict,intermVarDict,nbVideos)
 
-        if nbVideos<=5 and args.debug:
-            if args.cuda:
-                update.updateOccupiedGPURamCSV(epoch,mode,args.exp_id,args.model_id,batch_idx)
-            update.updateOccupiedRamCSV(epoch,mode,args.exp_id,args.model_id,batch_idx)
-            update.updateOccupiedCPUCSV(epoch,mode,args.exp_id,args.model_id,batch_idx)
+        update.updateHardWareOccupation(args.debug,args.cuda,epoch,mode,args.exp_id,args.model_id,batch_idx)
+
         if newVideo:
             allTarget = target
             allFeat = feat.unsqueeze(0)
@@ -238,23 +225,91 @@ def epochSeqVal(model,log_interval,loader, epoch, args,writer,metricEarlyStop,mo
 
     if not args.debug:
         allOutput,nbVideos = update.updateMetrics(args,model,allFeat,allTimeElapsedTensor,allTarget,precVidName,nbVideos,metrDict,outDict,targDict)
-        fullAttMap = update.saveMap(fullAttMap,args.exp_id,args.model_id,epoch,precVidName,key="attMaps")
-        fullFeatMapSeq = update.saveMap(fullFeatMapSeq,args.exp_id,args.model_id,epoch,precVidName,key="featMaps")
-        fullAffTransSeq = update.saveAffineTransf(fullAffTransSeq,args.exp_id,args.model_id,epoch,precVidName)
-        fullPointsSeq =  update.savePointsSeq(fullPointsSeq,args.exp_id,args.model_id,epoch,precVidName)
-        fullReconstSeq = update.saveMap(fullReconstSeq,args.exp_id,args.model_id,epoch,precVidName,key="reconst")
+        intermVarDict = update.saveIntermediateVariables(intermVarDict,args.exp_id,args.model_id,epoch,precVidName)
 
     for key in outDict.keys():
         fullArr = torch.cat((frameIndDict[key].float(),outDict[key].squeeze(0).squeeze(1)),dim=1)
         np.savetxt("../results/{}/{}_epoch{}_{}.csv".format(args.exp_id,args.model_id,epoch,key),fullArr.cpu().detach().numpy())
 
-    writeSummaries(metrDict,validBatch,writer,epoch,mode,args.model_id,args.exp_id,nbVideos=nbVideos)
+    writeSummaries(metrDict,nbVideos,writer,epoch,mode,args.model_id,args.exp_id)
 
     if args.debug:
         totalTime = time.time() - start_time
         update.updateTimeCSV(epoch,mode,args.exp_id,args.model_id,totalTime,batch_idx)
 
-    return outDict,targDict,metrDict[metricEarlyStop]
+    return metrDict[metricEarlyStop]
+
+def epochImgEval(model,log_interval,loader, epoch, args,writer,metricEarlyStop,mode="val"):
+    ''' Train a model during one epoch
+
+    Args:
+    - model (torch.nn.Module): the model to be trained
+    - optim (torch.optim): the optimiser
+    - log_interval (int): the number of epochs to wait before printing a log
+    - loader (load_data.TrainLoader): the train data loader
+    - epoch (int): the current epoch
+    - args (Namespace): the namespace containing all the arguments required for training and building the network
+    - writer (tensorboardX.SummaryWriter): the writer to use to log metrics evolution to tensorboardX
+
+    '''
+
+    if args.debug:
+        start_time = time.time()
+
+    model.eval()
+
+    print("Epoch",epoch," : {}".format(mode))
+
+    metrDict = metrics.emptyMetrDict()
+
+    validBatch = 0
+
+    allOut = None
+    allGT = None
+    intermVarDict = {"fullAttMap":None,"fullFeatMapSeq":None,"fullAffTransSeq":None,"fullPointsSeq":None,"fullReconstSeq":None}
+
+    for batch_idx,(data,target) in enumerate(loader):
+
+        if (batch_idx % log_interval == 0):
+            print("\t",batch_idx*len(data),"/",len(loader.dataset))
+
+        #Puting tensors on cuda
+        if args.cuda:
+            data, target = data.cuda(), target.cuda()
+
+        #Computing predictions
+        resDict = model(data)
+        output = resDict["pred"]
+
+        #Loss
+        loss = args.nll_weight*F.cross_entropy(output, target)
+        if args.pn_reconst_weight > 0:
+            loss += add_pn_recons_term(args.pn_reconst_weight,resDict,data)
+
+        #Other variables produced by the net
+        intermVarDict = update.catIntermediateVariables(resDict,intermVarDict,validBatch)
+
+        #Harware occupation
+        update.updateHardWareOccupation(args.debug,args.cuda,epoch,mode,args.exp_id,args.model_id,batch_idx)
+
+        #Metrics
+        metDictSample = metrics.binaryToMetrics(output,target,videoMode=args.video_mode)
+        metDictSample["Loss"] = loss.detach().data.item()
+        metrDict = metrics.updateMetrDict(metrDict,metDictSample)
+
+        validBatch += 1
+
+        if validBatch > 15 and args.debug:
+            break
+
+    writeSummaries(metrDict,validBatch,writer,epoch,mode,args.model_id,args.exp_id)
+    intermVarDict = update.saveIntermediateVariables(intermVarDict,args.exp_id,args.model_id,epoch)
+
+    if args.debug:
+        totalTime = time.time() - start_time
+        update.updateTimeCSV(epoch,mode,args.exp_id,args.model_id,totalTime,batch_idx)
+
+    return metrDict[metricEarlyStop]
 
 def computeTransMat(dataset,transMat,priors,propStart,propEnd,propSetIntFormat):
 
@@ -277,7 +332,7 @@ def computeTransMat(dataset,transMat,priors,propStart,propEnd,propSetIntFormat):
     else:
         return transMat,priors
 
-def writeSummaries(metrDict,batchNb,writer,epoch,mode,model_id,exp_id,nbVideos=None):
+def writeSummaries(metrDict,sampleNb,writer,epoch,mode,model_id,exp_id):
     ''' Write the metric computed during an evaluation in a tf writer and in a csv file
 
     Args:
@@ -295,14 +350,8 @@ def writeSummaries(metrDict,batchNb,writer,epoch,mode,model_id,exp_id,nbVideos=N
 
     '''
 
-    sampleNb = batchNb if mode == "train" else nbVideos
-
     for metric in metrDict.keys():
-
-        if metric.find("Entropy") == -1:
-            metrDict[metric] /= sampleNb
-        else:
-            metrDict[metric] = torch.median(metrDict[metric])
+        metrDict[metric] /= sampleNb
 
     for metric in metrDict:
         writer.add_scalars(metric,{model_id+"_"+mode:metrDict[metric]},epoch)
@@ -340,7 +389,6 @@ def get_OptimConstructor_And_Kwargs(optimStr,momentum):
         kwargs = {'amsgrad':True}
 
     return optimConst,kwargs
-
 def initialize_Net_And_EpochNumber(net,exp_id,model_id,cuda,start_mode,init_path,strict):
     '''Initialize a network
 
@@ -392,11 +440,11 @@ def initialize_Net_And_EpochNumber(net,exp_id,model_id,cuda,start_mode,init_path
         for key in keysToRemove:
             params.pop(key)
 
-        if hasattr(net,"tempModel"):
-            if not hasattr(net.tempModel,"linLay"):
+        if hasattr(net,"secondModel"):
+            if not hasattr(net.secondModel,"linLay"):
                 def checkAndReplace(key):
-                    if key.find("tempModel.linLay") != -1:
-                        key = key.replace("tempModel.linLay","tempModel.linTempMod.linLay")
+                    if key.find("secondModel.linLay") != -1:
+                        key = key.replace("secondModel.linLay","secondModel.linTempMod.linLay")
                     return key
                 params = {checkAndReplace(k):params[k] for k in params.keys()}
 
@@ -415,6 +463,24 @@ def initialize_Net_And_EpochNumber(net,exp_id,model_id,cuda,start_mode,init_path
             startEpoch = 1
 
     return startEpoch
+def getBestEpochInd_and_WorseEpochNb(start_mode,exp_id,model_id,epoch):
+
+    if start_mode == "scratch":
+        bestEpoch = epoch
+        worseEpochNb = 0
+    else:
+        bestModelPaths = glob.glob("../models/{}/model{}_best_epoch*".format(exp_id,model_id))
+        if len(bestModelPaths) == 0:
+            bestEpoch = epoch
+            worseEpochNb = 0
+        elif len(bestModelPaths) == 1:
+            bestModelPath = bestModelPaths[0]
+            bestEpoch = int(os.path.basename(bestModelPath).split("epoch")[1])
+            worseEpochNb = startEpoch - bestEpoch
+        else:
+            raise ValueError("Wrong number of best model weight file : ",len(bestModelPaths))
+
+    return bestEpoch,worseEpochNb
 
 def addInitArgs(argreader):
     argreader.parser.add_argument('--start_mode', type=str,metavar='SM',
@@ -479,16 +545,14 @@ def run(args):
     if args.cuda:
         torch.cuda.manual_seed(args.seed)
 
-    paramToOpti = []
-
     trainLoader,trainDataset = load_data.buildSeqTrainLoader(args)
-
     valLoader = load_data.buildSeqTestLoader(args,"val")
+
     #Building the net
     net = modelBuilder.netBuilder(args)
 
     trainFunc = epochSeqTr
-    valFunc = epochSeqVal
+    valFunc = epochSeqVal if args.video_mode else epochImgEval
 
     kwargsTr = {'log_interval':args.log_interval,'loader':trainLoader,'args':args,'writer':writer}
     kwargsVal = kwargsTr.copy()
@@ -496,14 +560,8 @@ def run(args):
     kwargsVal['loader'] = valLoader
     kwargsVal["metricEarlyStop"] = args.metric_early_stop
 
-    for p in net.parameters():
-        paramToOpti.append(p)
-
-    paramToOpti = (p for p in paramToOpti)
-
     #Getting the contructor and the kwargs for the choosen optimizer
     optimConst,kwargsOpti = get_OptimConstructor_And_Kwargs(args.optim,args.momentum)
-
     startEpoch = initialize_Net_And_EpochNumber(net,args.exp_id,args.model_id,args.cuda,args.start_mode,args.init_path,args.strict_init)
 
     #If no learning rate is schedule is indicated (i.e. there's only one learning rate),
@@ -519,21 +577,7 @@ def run(args):
     net.setPriors(priors)
 
     epoch = startEpoch
-
-    if args.start_mode == "scratch":
-        worseEpochNb = 0
-        bestEpoch = epoch
-    else:
-        bestModelPaths = glob.glob("../models/{}/model{}_best_epoch*".format(args.exp_id,args.model_id))
-        if len(bestModelPaths) == 0:
-            worseEpochNb = 0
-            bestEpoch = epoch
-        elif len(bestModelPaths) == 1:
-            bestModelPath = bestModelPaths[0]
-            bestEpoch = int(os.path.basename(bestModelPath).split("epoch")[1])
-            worseEpochNb = startEpoch - bestEpoch
-        else:
-            raise ValueError("Wrong number of best model weight file : ",len(bestModelPaths))
+    bestEpoch,worseEpochNb = getBestEpochInd_and_WorseEpochNb(args.start_mode,args.exp_id,args.model_id,epoch)
 
     if args.maximise_val_metric:
         bestMetricVal = -np.inf
@@ -544,7 +588,7 @@ def run(args):
 
     while epoch < args.epochs + 1 and worseEpochNb < args.max_worse_epoch_nb:
 
-        kwargsOpti,kwargsTr,lrCounter = update.updateLR(epoch,args.epochs,args.lr,startEpoch,kwargsOpti,kwargsTr,lrCounter,net,optimConst)
+        kwargsOpti,kwargsTr,lrCounter = update.updateLR_and_Optim(epoch,args.epochs,args.lr,startEpoch,kwargsOpti,kwargsTr,lrCounter,net,optimConst)
 
         kwargsTr["epoch"],kwargsVal["epoch"] = epoch,epoch
         kwargsTr["model"],kwargsVal["model"] = net,net
@@ -556,21 +600,14 @@ def run(args):
 
         if not args.no_val:
             with torch.no_grad():
-                _,_,metricVal = valFunc(**kwargsVal)
+                metricVal = valFunc(**kwargsVal)
 
-            if isBetter(metricVal,bestMetricVal):
-                if os.path.exists("../models/{}/model{}_best_epoch{}".format(args.exp_id,args.model_id,bestEpoch)):
-                    os.remove("../models/{}/model{}_best_epoch{}".format(args.exp_id,args.model_id,bestEpoch))
-
-                torch.save(net.state_dict(), "../models/{}/model{}_best_epoch{}".format(args.exp_id,args.model_id, epoch))
-                bestEpoch = epoch
-                bestMetricVal = metricVal
-                worseEpochNb = 0
-            else:
-                worseEpochNb += 1
+            bestEpoch,bestMetricVal,worseEpochNb = update.updateBestModel(metricVal,bestMetricVal,args.exp_id,args.model_id,bestEpoch,epoch,net,isBetter)
 
         epoch += 1
     if args.run_test:
+
+        testFunc = valFunc
 
         kwargsTest = kwargsVal
         kwargsTest["mode"] = "test"
@@ -584,7 +621,7 @@ def run(args):
         kwargsTest["epoch"] = bestEpoch
 
         with torch.no_grad():
-            valFunc(**kwargsTest)
+            testFunc(**kwargsTest)
 
 def main(argv=None):
 

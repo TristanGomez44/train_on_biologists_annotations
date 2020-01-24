@@ -179,7 +179,7 @@ class PreProcess():
 
     def maskTimeOnImageFunc(self,x):
         if self.maskTimeOnImage:
-            x = x*self.mask[:,:,np.newaxis]
+            x[-50:] = 0
         return x
 
     def removeTopFunc(self,x):
@@ -386,8 +386,10 @@ def buildSeqTrainLoader(args):
         train_dataset = SeqTrDataset(args.dataset_train,args.train_part_beg,args.train_part_end,args.prop_set_int_fmt,args.tr_len,\
                                             args.img_size,args.orig_img_size,args.resize_image,args.exp_id,args.augment_data,args.mask_time_on_image,\
                                             args.min_phase_nb,args.grid_shuffle,args.grid_shuffle_size,args.sobel)
+
         sampler = Sampler(len(train_dataset.videoPaths),train_dataset.nbImages,args.tr_len)
         collateFn = collateSeq
+        kwargs = {"sampler":sampler,"collate_fn":collateFn}
 
     elif args.dataset_train.find("CUB_200_2011") != -1:
 
@@ -395,9 +397,22 @@ def buildSeqTrainLoader(args):
         transf = transforms.Compose([transforms.RandomResizedCrop(224),transforms.RandomHorizontalFlip(),transforms.ToTensor(),normalize])
 
         train_dataset = torchvision.datasets.ImageFolder("../data/{}".format(args.dataset_train),transf)
+        totalLength = len(train_dataset)
+
+        if args.prop_set_int_fmt:
+            args.train_part_end /= 100
+            args.train_part_beg /= 100
+
+        np.random.seed(args.seed)
+        torch.manual_seed(args.seed)
+        if args.cuda:
+            torch.cuda.manual_seed(args.seed)
+
+        train_dataset,_ = torch.utils.data.random_split(train_dataset, [int(totalLength*args.train_prop),totalLength-int(totalLength*args.train_prop)])
+
         sampler = None
         collateFn = None
-
+        kwargs = {}
 
     else:
         raise ValueError("Unkown train dataset : {}".format(args.dataset_train))
@@ -411,32 +426,42 @@ def buildSeqTrainLoader(args):
     else:
         bsz = args.batch_size
 
-    trainLoader = torch.utils.data.DataLoader(dataset=train_dataset,batch_size=bsz,sampler=sampler, collate_fn=collateFn, # use custom collate function here
-                      pin_memory=False,num_workers=args.num_workers)
+    trainLoader = torch.utils.data.DataLoader(dataset=train_dataset,batch_size=bsz, # use custom collate function here
+                      pin_memory=False,num_workers=args.num_workers,**kwargs)
 
     return trainLoader,train_dataset
 
 def buildSeqTestLoader(args,mode):
 
+    datasetName = getattr(args,"dataset_{}".format(mode))
 
-    if args.dataset_test.find("big") != -1 or args.dataset_test.find("small") != -1:
+    if datasetName.find("big") != -1 or datasetName.find("small") != -1:
 
         if mode == "val":
-            testLoader = TestLoader(args.dataset_val,args.val_l,args.val_part_beg,args.val_part_end,args.prop_set_int_fmt,\
+            testLoader = TestLoader(datasetName,args.val_l,args.val_part_beg,args.val_part_end,args.prop_set_int_fmt,\
                                                 args.img_size,args.orig_img_size,args.resize_image,\
                                                 args.exp_id,args.mask_time_on_image,args.min_phase_nb,args.grid_shuffle_test,args.grid_shuffle_test_size,args.sobel)
         elif mode == "test":
-            testLoader = TestLoader(args.dataset_test,args.val_l,args.test_part_beg,args.test_part_end,args.prop_set_int_fmt,\
+            testLoader = TestLoader(datasetName,args.val_l,args.test_part_beg,args.test_part_end,args.prop_set_int_fmt,\
                                                 args.img_size,args.orig_img_size,args.resize_image,\
                                                 args.exp_id,args.mask_time_on_image,args.min_phase_nb,args.grid_shuffle_test,args.grid_shuffle_test_size,args.sobel)
         else:
             raise ValueError("Unkown test loader mode : {}".format(mode))
 
-    elif args.dataset_test.find("CUB_200_2011") != -1:
+    elif datasetName.find("CUB_200_2011") != -1:
         normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],std=[0.229, 0.224, 0.225])
         transf = transforms.Compose([transforms.Resize(256),transforms.CenterCrop(224),transforms.ToTensor(),normalize])
 
-        test_dataset = torchvision.datasets.ImageFolder("../data/{}".format(args.dataset_test),transf)
+        test_dataset = torchvision.datasets.ImageFolder("../data/{}".format(datasetName),transf)
+
+        if mode == "val":
+            np.random.seed(args.seed)
+            torch.manual_seed(args.seed)
+            if args.cuda:
+                torch.cuda.manual_seed(args.seed)
+
+            totalLength = len(test_dataset)
+            _,test_dataset = torch.utils.data.random_split(test_dataset, [int(totalLength*args.train_prop),totalLength-int(totalLength*args.train_prop)])
 
         testLoader = torch.utils.data.DataLoader(dataset=test_dataset,batch_size=args.val_batch_size,num_workers=args.num_workers)
 
@@ -561,17 +586,26 @@ def addArgs(argreader):
                         help='The size of each edge of the images before preprocessing.')
 
     argreader.parser.add_argument('--train_part_beg', type=float,metavar='START',
-                        help='The start position of the train set. If --prop_set_int_fmt is True, it should be int between 0 and 100, else it is a float between 0 and 1.')
+                        help='The start position of the train set. If --prop_set_int_fmt is True, it should be int between 0 and 100, else it is a float between 0 and 1.\
+                        Ignored when video_mode is False.')
     argreader.parser.add_argument('--train_part_end', type=float,metavar='END',
-                        help='The end position of the train set. If --prop_set_int_fmt is True, it should be int between 0 and 100, else it is a float between 0 and 1.')
+                        help='The end position of the train set. If --prop_set_int_fmt is True, it should be int between 0 and 100, else it is a float between 0 and 1.\
+                        Ignored when video_mode is False.')
     argreader.parser.add_argument('--val_part_beg', type=float,metavar='START',
-                        help='The start position of the validation set. If --prop_set_int_fmt is True, it should be int between 0 and 100, else it is a float between 0 and 1.')
+                        help='The start position of the validation set. If --prop_set_int_fmt is True, it should be int between 0 and 100, else it is a float between 0 and 1.\
+                        Ignored when video_mode is False.')
     argreader.parser.add_argument('--val_part_end', type=float,metavar='END',
-                        help='The end position of the validation set. If --prop_set_int_fmt is True, it should be int between 0 and 100, else it is a float between 0 and 1.')
+                        help='The end position of the validation set. If --prop_set_int_fmt is True, it should be int between 0 and 100, else it is a float between 0 and 1.\
+                        Ignored when video_mode is False.')
     argreader.parser.add_argument('--test_part_beg', type=float,metavar='START',
-                        help='The start position of the test set. If --prop_set_int_fmt is True, it should be int between 0 and 100, else it is a float between 0 and 1.')
+                        help='The start position of the test set. If --prop_set_int_fmt is True, it should be int between 0 and 100, else it is a float between 0 and 1.\
+                        Ignored when video_mode is False.')
     argreader.parser.add_argument('--test_part_end', type=float,metavar='END',
-                        help='The end position of the test set. If --prop_set_int_fmt is True, it should be int between 0 and 100, else it is a float between 0 and 1.')
+                        help='The end position of the test set. If --prop_set_int_fmt is True, it should be int between 0 and 100, else it is a float between 0 and 1.\
+                        Ignored when video_mode is False.')
+
+    argreader.parser.add_argument('--train_prop', type=float,metavar='END',
+                        help='The proportion of the train dataset to use for training when working in non video mode. The rest will be used for validation.')
 
     argreader.parser.add_argument('--prop_set_int_fmt', type=args.str2bool,metavar='BOOL',
                         help='Set to True to set the sets (train, validation and test) proportions\
