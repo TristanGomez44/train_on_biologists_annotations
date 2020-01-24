@@ -10,6 +10,7 @@ import sys
 import pointnet2
 import cv2
 
+
 def buildFeatModel(featModelName,pretrainedFeatMod,featMap=False,bigMaps=False,stride=2,dilation=1,**kwargs):
     ''' Build a visual feature model
 
@@ -44,22 +45,22 @@ class DataParallelModel(nn.DataParallel):
 
 class Model(nn.Module):
 
-    def __init__(self,visualModel,tempModel,spatTransf=None):
+    def __init__(self,FirstModel,SecondModel,spatTransf=None):
         super(Model,self).__init__()
-        self.visualModel = visualModel
-        self.tempModel = tempModel
+        self.firstModel = FirstModel
+        self.secondModel = SecondModel
         self.spatTransf = spatTransf
 
-        self.transMat = torch.zeros((self.tempModel.nbClass,self.tempModel.nbClass))
-        self.priors = torch.zeros((self.tempModel.nbClass))
+        self.transMat = torch.zeros((self.secondModel.nbClass,self.secondModel.nbClass))
+        self.priors = torch.zeros((self.secondModel.nbClass))
 
     def forward(self,x,timeElapsed=None):
         if self.spatTransf:
             x = self.spatTransf(x)["x"]
 
-        visResDict = self.visualModel(x)
+        visResDict = self.firstModel(x)
         x = visResDict["x"]
-        resDict = self.tempModel(x,self.visualModel.batchSize,timeElapsed)
+        resDict = self.secondModel(x,self.firstModel.batchSize,timeElapsed)
 
         for key in visResDict.keys():
             resDict[key] = visResDict[key]
@@ -72,7 +73,7 @@ class Model(nn.Module):
             x = resDict["x"]
             theta = resDict["theta"]
 
-        resDict = self.visualModel(x)
+        resDict = self.firstModel(x)
 
         if self.spatTransf:
             resDict["theta"] = theta
@@ -125,29 +126,31 @@ class SpatialTransformer(nn.Module):
 
 ################################# Visual Model ##########################
 
-class VisualModel(nn.Module):
+class FirstModel(nn.Module):
 
-    def __init__(self,featModelName,pretrainedFeatMod=True,featMap=False,bigMaps=False,**kwargs):
-        super(VisualModel,self).__init__()
+    def __init__(self,videoMode,featModelName,pretrainedFeatMod=True,featMap=False,bigMaps=False,**kwargs):
+        super(FirstModel,self).__init__()
 
         self.featMod = buildFeatModel(featModelName,pretrainedFeatMod,featMap,bigMaps,**kwargs)
 
         self.featMap = featMap
         self.bigMaps = bigMaps
+        self.videoMode = videoMode
     def forward(self,x):
         raise NotImplementedError
 
-class CNN2D(VisualModel):
+class CNN2D(FirstModel):
 
-    def __init__(self,featModelName,pretrainedFeatMod=True,featMap=False,bigMaps=False,**kwargs):
-        super(CNN2D,self).__init__(featModelName,pretrainedFeatMod,featMap,bigMaps,**kwargs)
+    def __init__(self,videoMode,featModelName,pretrainedFeatMod=True,featMap=False,bigMaps=False,**kwargs):
+        super(CNN2D,self).__init__(videoMode,featModelName,pretrainedFeatMod,featMap,bigMaps,**kwargs)
 
     def forward(self,x):
         # N x T x C x H x L
         self.batchSize = x.size(0)
-        x = x.view(x.size(0)*x.size(1),x.size(2),x.size(3),x.size(4)).contiguous()
+        x = x.view(x.size(0)*x.size(1),x.size(2),x.size(3),x.size(4)).contiguous() if self.videoMode else x
         # NT x C x H x L
         res = self.featMod(x)
+
         # NT x D
         if type(res) is dict:
             #Some feature model can return a dictionnary instead of a tensor
@@ -155,10 +158,13 @@ class CNN2D(VisualModel):
         else:
             return {'x':res}
 
-class CNN3D(VisualModel):
+class CNN3D(FirstModel):
 
-    def __init__(self,featModelName,pretrainedFeatMod=True,featMap=False,bigMaps=False):
-        super(CNN3D,self).__init__(featModelName,pretrainedFeatMod,featMap,bigMaps)
+    def __init__(self,videoMode,featModelName,pretrainedFeatMod=True,featMap=False,bigMaps=False):
+        super(CNN3D,self).__init__(videoMode,featModelName,pretrainedFeatMod,featMap,bigMaps)
+
+        if not self.videoMode:
+            raise NotImplementedError("A CNN3D can't be used when video_mode is False")
 
     def forward(self,x):
         # N x T x C x H x L
@@ -237,13 +243,12 @@ class Attention(nn.Module):
     def forward(self,x):
         return self.attention(x)
 
-class AttentionModel(VisualModel):
+class AttentionModel(FirstModel):
 
-    def __init__(self,featModelName,pretrainedFeatMod,bigMaps,nbFeat,nbClass,classBiasMod=None,attType="shallow",groupedAtt=True,**kwargs):
-        super(AttentionModel,self).__init__(featModelName,pretrainedFeatMod,True,bigMaps,**kwargs)
+    def __init__(self,videoMode,featModelName,pretrainedFeatMod,bigMaps,nbFeat,nbClass,classBiasMod=None,attType="shallow",groupedAtt=True,**kwargs):
+        super(AttentionModel,self).__init__(videoMode,featModelName,pretrainedFeatMod,True,bigMaps,**kwargs)
 
         self.classConv = nn.Conv2d(nbFeat,nbClass,1)
-        #self.attention = nn.Conv2d(AttentionModelAttentionModelAttentionModelAttentionModelAttentionModelAttentionModelAttentionModelAttentionModelAttentionModelAttentionModelAttentionModelAttentionModelAttentionModelAttentionModelnbClass,nbClass,attKerSize,padding=attKerSize//2,groups=nbClass)
         self.attention = Attention(attType,nbClass,nbClass,groupedAtt)
         self.nbClass = nbClass
         self.classBiasMod = classBiasMod
@@ -251,7 +256,7 @@ class AttentionModel(VisualModel):
     def forward(self,x):
 
         self.batchSize = x.size(0)
-        x = x.view(x.size(0)*x.size(1),x.size(2),x.size(3),x.size(4))
+        x = x.view(x.size(0)*x.size(1),x.size(2),x.size(3),x.size(4)) if self.videoMode else x
         featureVolume = self.featMod(x)
 
         classFeatMaps = self.classConv(featureVolume)
@@ -270,10 +275,10 @@ class AttentionModel(VisualModel):
 
         return {"x":x,"attention":attWeight,"features":classFeatMaps}
 
-class AttentionFullModel(VisualModel):
+class AttentionFullModel(FirstModel):
 
-    def __init__(self,featModelName,pretrainedFeatMod,bigMaps,nbFeat,nbClass,classBiasMod=None,attType="shallow",groupedAtt=True,**kwargs):
-        super(AttentionFullModel,self).__init__(featModelName,pretrainedFeatMod,True,bigMaps,**kwargs)
+    def __init__(self,videoMode,featModelName,pretrainedFeatMod,bigMaps,nbFeat,nbClass,classBiasMod=None,attType="shallow",groupedAtt=True,**kwargs):
+        super(AttentionFullModel,self).__init__(videoMode,featModelName,pretrainedFeatMod,True,bigMaps,**kwargs)
 
         #self.attention = nn.Conv2d(nbFeat,nbClass,attKerSize,padding=attKerSize//2)
         self.attention = Attention(attType,nbFeat,nbClass,groupedAtt)
@@ -285,7 +290,7 @@ class AttentionFullModel(VisualModel):
     def forward(self,x):
 
         self.batchSize = x.size(0)
-        x = x.view(x.size(0)*x.size(1),x.size(2),x.size(3),x.size(4))
+        x = x.view(x.size(0)*x.size(1),x.size(2),x.size(3),x.size(4)) if self.videoMode else x
         x = self.featMod(x)
         # N*T x D x H x W
 
@@ -321,7 +326,6 @@ class DirectPointExtractor(nn.Module):
         self.conv1x1 = nn.Conv2d(64, 32, kernel_size=1, stride=1)
         self.size_red = nn.AdaptiveAvgPool2d((8, 8))
         self.dense = nn.Linear(8*8*32,point_nb*2)
-
 
     def forward(self,x):
         x = self.feat(x)
@@ -424,12 +428,12 @@ def fastSoftCoordRefiner(x,abs,ord,kerSize=5):
 
     return absList,ordList
 
-class PointNet2(VisualModel):
+class PointNet2(FirstModel):
 
-    def __init__(self,pn_builder,classNb,featModelName='resnet18',pretrainedFeatMod=True,featMap=False,bigMaps=False,topk=False,\
+    def __init__(self,videoMode,pn_builder,classNb,featModelName='resnet18',pretrainedFeatMod=True,featMap=False,bigMaps=False,topk=False,\
                 topk_attention=False,topk_softcoord=False,topk_softCoord_kerSize=2,point_nb=256,reconst=False,encoderChan=1):
 
-        super(PointNet2,self).__init__(featModelName,pretrainedFeatMod,True,bigMaps)
+        super(PointNet2,self).__init__(videoMode,featModelName,pretrainedFeatMod,True,bigMaps)
 
         if topk:
             self.pointExtr = TopkPointExtractor(topk_attention,topk_softcoord,topk_softCoord_kerSize,point_nb,reconst,encoderChan)
@@ -441,7 +445,7 @@ class PointNet2(VisualModel):
     def forward(self,x):
 
         self.batchSize = x.size(0)
-        x = x.view(x.size(0)*x.size(1),x.size(2),x.size(3),x.size(4))
+        x = x.view(x.size(0)*x.size(1),x.size(2),x.size(3),x.size(4)) if self.videoMode else x
         retDict = self.pointExtr(x)
         x = self.pn2(retDict['points'].float())
 
@@ -451,15 +455,17 @@ class PointNet2(VisualModel):
 
 ################################ Temporal Model ########################""
 
-class TempModel(nn.Module):
+class SecondModel(nn.Module):
 
-    def __init__(self,nbFeat,nbClass,useTime):
-        super(TempModel,self).__init__()
+    def __init__(self,videoMode,nbFeat,nbClass,useTime):
+        super(SecondModel,self).__init__()
         self.nbFeat,self.nbClass = nbFeat,nbClass
         self.useTime = useTime
 
         if useTime:
             self.nbFeat += 1
+
+        self.videoMode = videoMode
 
     def forward(self,x):
         raise NotImplementedError
@@ -470,10 +476,10 @@ class TempModel(nn.Module):
             x = torch.cat((x,timeTensor),dim=-1)
         return x
 
-class LinearTempModel(TempModel):
+class LinearSecondModel(SecondModel):
 
-    def __init__(self,nbFeat,nbClass,useTime,dropout):
-        super(LinearTempModel,self).__init__(nbFeat,nbClass,useTime)
+    def __init__(self,videoMode,nbFeat,nbClass,useTime,dropout):
+        super(LinearSecondModel,self).__init__(videoMode,nbFeat,nbClass,useTime)
         self.dropout = nn.Dropout(p=dropout)
         self.linLay = nn.Linear(self.nbFeat,self.nbClass)
 
@@ -485,19 +491,25 @@ class LinearTempModel(TempModel):
         x = self.linLay(x)
         # NT x classNb
 
-        x = x.view(batchSize,-1,self.nbClass)
+
+        x = x.view(batchSize,-1,self.nbClass) if self.videoMode else x
+
         #N x T x classNb
         return {"pred":x}
 
-class LSTMTempModel(TempModel):
+class LSTMSecondModel(SecondModel):
 
-    def __init__(self,nbFeat,nbClass,useTime,dropout,nbLayers,nbHidden):
-        super(LSTMTempModel,self).__init__(nbFeat,nbClass,useTime)
+    def __init__(self,videoMode,nbFeat,nbClass,useTime,dropout,nbLayers,nbHidden):
+        super(LSTMSecondModel,self).__init__(videoMode,nbFeat,nbClass,useTime)
 
         self.lstmTempMod = nn.LSTM(input_size=self.nbFeat,hidden_size=nbHidden,num_layers=nbLayers,batch_first=True,dropout=dropout,bidirectional=True)
-        self.linTempMod = LinearTempModel(nbFeat=nbHidden*2,nbClass=self.nbClass,useTime=False,dropout=dropout)
+        self.linTempMod = LinearSecondModel(videoMode=videoMode,nbFeat=nbHidden*2,nbClass=self.nbClass,useTime=False,dropout=dropout)
+
+        if not self.videoMode:
+            raise ValueError("Can't use LSTM as a second model when working on non video mode.")
 
     def forward(self,x,batchSize,timeTensor):
+
         x = self.catWithTimeFeat(x,timeTensor)
 
         # NT x D
@@ -511,14 +523,17 @@ class LSTMTempModel(TempModel):
         # N x T x classNb
         return {"pred":x}
 
-class ScoreConvTempModel(TempModel):
+class ScoreConvSecondModel(SecondModel):
 
-    def __init__(self,nbFeat,nbClass,useTime,dropout,kerSize,chan,biLay,attention):
+    def __init__(self,videoMode,nbFeat,nbClass,useTime,dropout,kerSize,chan,biLay,attention):
 
-        super(ScoreConvTempModel,self).__init__(nbFeat,nbClass,useTime)
+        super(ScoreConvSecondModel,self).__init__(videoMode,nbFeat,nbClass,useTime)
 
-        self.linTempMod = LinearTempModel(nbFeat=self.nbFeat,nbClass=self.nbClass,useTime=False,dropout=dropout)
+        self.linTempMod = LinearSecondModel(videoMode=videoMode,nbFeat=self.nbFeat,nbClass=self.nbClass,useTime=False,dropout=dropout)
         self.scoreConv = ScoreConv(kerSize,chan,biLay,attention)
+
+        if not self.videoMode:
+            raise ValueError("Can't use ScoreConv as a second model when working on non video mode.")
 
     def forward(self,x,batchSize,timeTensor):
         x = self.catWithTimeFeat(x,timeTensor)
@@ -576,15 +591,15 @@ class ScoreConv(nn.Module):
             weights = self.layers(x)
             return weights*x
 
-class Identity(TempModel):
+class Identity(SecondModel):
 
-    def __init__(self,nbFeat,nbClass,useTime):
+    def __init__(self,videoMode,nbFeat,nbClass,useTime):
 
-        super(Identity,self).__init__(nbFeat,nbClass,useTime)
+        super(Identity,self).__init__(videoMode,nbFeat,nbClass,useTime)
 
     def forward(self,x,batchSize,timeTensor):
 
-        x = x.view(batchSize,-1,self.nbClass)
+        x = x.view(batchSize,-1,self.nbClass) if self.videoMode else x
 
         return {"pred":x}
 
@@ -602,52 +617,52 @@ def netBuilder(args):
             nbFeat = args.resnet_chan*2**(1-1)
         else:
             nbFeat = args.resnet_chan*2**(4-1)
-        visualModel = CNN2D(args.feat,args.pretrained_visual,chan=args.resnet_chan,stride=args.resnet_stride,dilation=args.resnet_dilation,\
+        FirstModel = CNN2D(args.video_mode,args.feat,args.pretrained_visual,chan=args.resnet_chan,stride=args.resnet_stride,dilation=args.resnet_dilation,\
                             attChan=args.resnet_att_chan,attBlockNb=args.resnet_att_blocks_nb,attActFunc=args.resnet_att_act_func)
     elif args.feat.find("vgg") != -1:
         nbFeat = 4096
-        visualModel = CNN2D(args.feat,args.pretrained_visual)
+        FirstModel = CNN2D(args.video_mode,args.feat,args.pretrained_visual)
     elif args.feat == "r2plus1d_18":
         nbFeat = 512
-        visualModel = CNN3D(args.feat,args.pretrained_visual)
+        FirstModel = CNN3D(args.video_mode,args.feat,args.pretrained_visual)
     else:
         raise ValueError("Unknown visual model type : ",args.feat)
 
     if args.freeze_visual:
-        for param in visualModel.parameters():
+        for param in FirstModel.parameters():
             param.requires_grad = False
 
     ############### Temporal Model #######################
     if args.temp_mod == "lstm":
-        tempModel = LSTMTempModel(nbFeat,args.class_nb,args.use_time,args.dropout,args.lstm_lay,args.lstm_hid_size)
+        SecondModel = LSTMSecondModel(args.video_mode,nbFeat,args.class_nb,args.use_time,args.dropout,args.lstm_lay,args.lstm_hid_size)
     elif args.temp_mod == "linear":
-        tempModel = LinearTempModel(nbFeat,args.class_nb,args.use_time,args.dropout)
+        SecondModel = LinearSecondModel(args.video_mode,nbFeat,args.class_nb,args.use_time,args.dropout)
     elif args.temp_mod == "score_conv":
-        tempModel = ScoreConvTempModel(nbFeat,args.class_nb,args.use_time,args.dropout,args.score_conv_ker_size,args.score_conv_chan,args.score_conv_bilay,args.score_conv_attention)
+        SecondModel = ScoreConvSecondModel(args.video_mode,nbFeat,args.class_nb,args.use_time,args.dropout,args.score_conv_ker_size,args.score_conv_chan,args.score_conv_bilay,args.score_conv_attention)
     elif args.temp_mod == "feat_attention" or args.temp_mod == "feat_attention_full":
 
         classBiasMod = ClassBias(nbFeat,args.class_nb) if args.class_bias_model else None
 
         if args.temp_mod == "feat_attention":
-            visualModel = AttentionModel(args.feat,args.pretrained_visual,args.feat_attention_big_maps,nbFeat,args.class_nb,classBiasMod,args.feat_attention_att_type,args.feat_attention_grouped_att,\
+            FirstModel = AttentionModel(args.video_mode,args.feat,args.pretrained_visual,args.feat_attention_big_maps,nbFeat,args.class_nb,classBiasMod,args.feat_attention_att_type,args.feat_attention_grouped_att,\
                                         chan=args.resnet_chan)
-            tempModel = Identity(nbFeat,args.class_nb,False,False)
+            SecondModel = Identity(args.video_mode,nbFeat,args.class_nb,False)
 
         elif args.temp_mod == "feat_attention_full":
-            visualModel = AttentionFullModel(args.feat,args.pretrained_visual,args.feat_attention_big_maps,nbFeat,args.class_nb,classBiasMod,args.feat_attention_att_type,args.feat_attention_grouped_att,\
+            FirstModel = AttentionFullModel(args.video_mode,args.feat,args.pretrained_visual,args.feat_attention_big_maps,nbFeat,args.class_nb,classBiasMod,args.feat_attention_att_type,args.feat_attention_grouped_att,\
                                             chan=args.resnet_chan)
-            tempModel = Identity(nbFeat,args.class_nb,False,False)
+            SecondModel = Identity(args.video_mode,nbFeat,args.class_nb,False)
     elif args.temp_mod == "pointnet2":
 
         pn_builder = pointnet2.models.pointnet2_ssg_cls.Pointnet2SSG
-        visualModel = PointNet2(pn_builder,args.class_nb,topk=args.pn_topk,topk_attention=args.pn_topk_attention,topk_softcoord=args.pn_topk_softcoord,\
+        FirstModel = PointNet2(args.video_mode,pn_builder,args.class_nb,topk=args.pn_topk,topk_attention=args.pn_topk_attention,topk_softcoord=args.pn_topk_softcoord,\
                                 topk_softCoord_kerSize=args.pn_topk_softcoord_kersize,point_nb=args.pn_point_nb,reconst=args.pn_topk_reconst,encoderChan=args.pn_topk_enc_chan)
-        tempModel = Identity(nbFeat,args.class_nb,False,False)
+        SecondModel = Identity(args.video_mode,nbFeat,args.class_nb,False)
     elif args.temp_mod == "pointnet2_pp":
         pn_builder = pointnet2.models.pointnet2_msg_cls.Pointnet2MSG
-        visualModel = PointNet2(pn_builder,args.class_nb,topk=args.pn_topk,topk_attention=args.pn_topk_attention,topk_softcoord=args.pn_topk_softcoord,\
+        FirstModel = PointNet2(args.video_mode,pn_builder,args.class_nb,topk=args.pn_topk,topk_attention=args.pn_topk_attention,topk_softcoord=args.pn_topk_softcoord,\
                                 topk_softCoord_kerSize=args.pn_topk_softcoord_kersize,point_nb=args.pn_point_nb,reconst=args.pn_topk_reconst,encoderChan=args.pn_topk_enc_chan)
-        tempModel = Identity(nbFeat,args.class_nb,False,False)
+        SecondModel = Identity(args.video_mode,nbFeat,args.class_nb,False)
     else:
         raise ValueError("Unknown temporal model type : ",args.temp_mod)
 
@@ -658,7 +673,7 @@ def netBuilder(args):
     else:
         spatTransf = None
 
-    net = Model(visualModel,tempModel,spatTransf=spatTransf)
+    net = Model(FirstModel,SecondModel,spatTransf=spatTransf)
 
     if args.multi_gpu:
         net = DataParallelModel(net)
@@ -689,7 +704,7 @@ def addArgs(argreader):
                         help='Size of hidden layers for the lstm temporal model')
 
     argreader.parser.add_argument('--score_conv_ker_size', type=int, metavar='N',
-                        help='The size of the 2d convolution kernel to apply on scores if temp model is a ScoreConvTempModel.')
+                        help='The size of the 2d convolution kernel to apply on scores if temp model is a ScoreConvSecondModel.')
 
     argreader.parser.add_argument('--score_conv_bilay', type=args.str2bool, metavar='N',
                         help='To apply two convolution (the second is a 1x1 conv) on the scores instead of just one layer')
@@ -763,7 +778,6 @@ def addArgs(argreader):
 
 
     return argreader
-
 
 if __name__ == "__main__":
 
