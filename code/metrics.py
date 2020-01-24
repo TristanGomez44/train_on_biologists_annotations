@@ -101,7 +101,7 @@ def updateMetrDict(metrDict,metrDictSample):
 
     return metrDict
 
-def binaryToMetrics(output,target,transition_matrix,videoNames=None,onlyPairsCorrelation=True):
+def binaryToMetrics(output,target,transition_matrix=None,videoNames=None,onlyPairsCorrelation=True,videoMode=True):
     ''' Computes metrics over a batch of targets and predictions
 
     Args:
@@ -116,7 +116,7 @@ def binaryToMetrics(output,target,transition_matrix,videoNames=None,onlyPairsCor
 
     acc = (pred == target).float().sum()/(pred.numel())
 
-    if torch.isnan(transition_matrix).sum() == 0:
+    if videoMode and torch.isnan(transition_matrix).sum() == 0:
 
         #Accuracy with viterbi
         pred = []
@@ -137,7 +137,7 @@ def binaryToMetrics(output,target,transition_matrix,videoNames=None,onlyPairsCor
 
     metDict = {"Accuracy":acc,'Accuracy (Viterbi)':accViterb}
 
-    if not videoNames is None:
+    if not videoNames is None and videoMode:
         metDict["Correlation"],metDict["Temp Accuracy"] = correlation(pred,target,videoNames,onlyPairs=onlyPairsCorrelation)
 
     return metDict
