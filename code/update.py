@@ -12,6 +12,7 @@ import utils
 import sys
 import subprocess
 import psutil
+import os
 
 def get_gpu_memory_map():
     """Get the current gpu usage.
@@ -27,7 +28,6 @@ def get_gpu_memory_map():
     gpu_memory = [x for x in result.strip().split('\n')]
     gpu_memory_map = dict(zip(range(len(gpu_memory)), gpu_memory))
     return gpu_memory_map
-
 
 def computeScore(model,allFeats,timeElapsed,allTarget,valLTemp,vidName):
 
@@ -45,7 +45,7 @@ def computeScore(model,allFeats,timeElapsed,allTarget,valLTemp,vidName):
 
     for i in range(len(chunkList)):
 
-        output = model.tempModel(chunkList[i].squeeze(0),batchSize=1,timeTensor=timeElapsedChunkList[i])
+        output = model.secondModel(chunkList[i].squeeze(0),batchSize=1,timeTensor=timeElapsedChunkList[i])
 
         for tensorName in output.keys():
             if not tensorName in allOutput.keys():
@@ -66,7 +66,7 @@ def updateMetrics(args,model,allFeat,timeElapsed,allTarget,precVidName,nbVideos,
     if args.compute_metrics_during_eval:
         loss = F.cross_entropy(allOutput.squeeze(0),allTarget.squeeze(0)).data.item()
 
-        metDictSample = metrics.binaryToMetrics(allOutput,allTarget,model.transMat)
+        metDictSample = metrics.binaryToMetrics(allOutput,allTarget,model.transMat,videoMode=True)
         metDictSample["Loss"] = loss
         metrDict = metrics.updateMetrDict(metrDict,metDictSample)
 
@@ -94,7 +94,7 @@ def updateFrameDict(frameIndDict,frameInds,vidName):
 
     else:
         frameIndDict[vidName] = frameInds.view(len(frameInds),-1).clone()
-def updateLR(epoch,maxEpoch,lr,startEpoch,kwargsOpti,kwargsTr,lrCounter,net,optimConst):
+def updateLR_and_Optim(epoch,maxEpoch,lr,startEpoch,kwargsOpti,kwargsTr,lrCounter,net,optimConst):
     #This condition determines when the learning rate should be updated (to follow the learning rate schedule)
     #The optimiser have to be rebuilt every time the learning rate is updated
     if (epoch-1) % ((maxEpoch + 1)//len(lr)) == 0 or epoch==startEpoch:
@@ -108,7 +108,27 @@ def updateLR(epoch,maxEpoch,lr,startEpoch,kwargsOpti,kwargsTr,lrCounter,net,opti
             lrCounter += 1
 
     return kwargsOpti,kwargsTr,lrCounter
+def updateBestModel(metricVal,bestMetricVal,exp_id,model_id,bestEpoch,epoch,net,isBetter):
 
+    if isBetter(metricVal,bestMetricVal):
+        if os.path.exists("../models/{}/model{}_best_epoch{}".format(exp_id,model_id,bestEpoch)):
+            os.remove("../models/{}/model{}_best_epoch{}".format(exp_id,model_id,bestEpoch))
+
+        torch.save(net.state_dict(), "../models/{}/model{}_best_epoch{}".format(exp_id,model_id, epoch))
+        bestEpoch = epoch
+        bestMetricVal = metricVal
+        worseEpochNb = 0
+    else:
+        worseEpochNb += 1
+
+    return bestEpoch,bestMetricVal,worseEpochNb
+
+def updateHardWareOccupation(debug,cuda,epoch,mode,exp_id,model_id,batch_idx):
+    if debug:
+        if cuda:
+            updateOccupiedGPURamCSV(epoch,"train",exp_id,model_id,batch_idx)
+        updateOccupiedRamCSV(epoch,"train",exp_id,model_id,batch_idx)
+        updateOccupiedCPUCSV(epoch,"train",exp_id,model_id,batch_idx)
 def updateOccupiedGPURamCSV(epoch,mode,exp_id,model_id,batch_idx):
 
     occRamDict = get_gpu_memory_map()
@@ -122,7 +142,6 @@ def updateOccupiedGPURamCSV(epoch,mode,exp_id,model_id,batch_idx):
     else:
         with open(csvPath,"a") as text_file:
             print(str(epoch)+","+",".join([occRamDict[device] for device in occRamDict.keys()]),file=text_file)
-
 def updateOccupiedCPUCSV(epoch,mode,exp_id,model_id,batch_idx):
 
     cpuOccList = psutil.cpu_percent(percpu=True)
@@ -136,7 +155,6 @@ def updateOccupiedCPUCSV(epoch,mode,exp_id,model_id,batch_idx):
     else:
         with open(csvPath,"a") as text_file:
             print(str(epoch)+","+",".join([str(cpuOcc) for cpuOcc in cpuOccList]),file=text_file)
-
 def updateOccupiedRamCSV(epoch,mode,exp_id,model_id,batch_idx):
 
     ramOcc = psutil.virtual_memory()._asdict()["percent"]
@@ -150,7 +168,6 @@ def updateOccupiedRamCSV(epoch,mode,exp_id,model_id,batch_idx):
     else:
         with open(csvPath,"a") as text_file:
             print(str(epoch)+","+str(ramOcc),file=text_file)
-
 def updateTimeCSV(epoch,mode,exp_id,model_id,totalTime,batch_idx):
 
     csvPath = "../results/{}/{}_time_{}.csv".format(exp_id,model_id,mode)
@@ -163,6 +180,25 @@ def updateTimeCSV(epoch,mode,exp_id,model_id,totalTime,batch_idx):
         with open(csvPath,"a") as text_file:
             print(str(epoch)+","+str(totalTime),file=text_file)
 
+def catIntermediateVariables(visualDict,intermVarDict,nbVideos):
+
+    intermVarDict["fullAttMap"] = catMap(visualDict,intermVarDict["fullAttMap"],key="attMaps")
+    intermVarDict["fullFeatMapSeq"] = catMap(visualDict,intermVarDict["fullFeatMapSeq"],key="features")
+    intermVarDict["fullAffTransSeq"] = catAffineTransf(visualDict,intermVarDict["fullAffTransSeq"])
+    intermVarDict["fullPointsSeq"] = catPointsSeq(visualDict,intermVarDict["fullPointsSeq"])
+    if nbVideos < 6:
+        intermVarDict["fullReconstSeq"] = catMap(visualDict,intermVarDict["fullReconstSeq"],key="reconst")
+
+    return intermVarDict
+def saveIntermediateVariables(intermVarDict,exp_id,model_id,epoch,precVidName=""):
+
+    intermVarDict["fullAttMap"] = saveMap(intermVarDict["fullAttMap"],exp_id,model_id,epoch,precVidName,key="attMaps")
+    intermVarDict["fullFeatMapSeq"] = saveMap(intermVarDict["fullFeatMapSeq"],exp_id,model_id,epoch,precVidName,key="featMaps")
+    intermVarDict["fullAffTransSeq"] = saveAffineTransf(intermVarDict["fullAffTransSeq"],exp_id,model_id,epoch,precVidName)
+    intermVarDict["fullPointsSeq"] =  savePointsSeq(intermVarDict["fullPointsSeq"],exp_id,model_id,epoch,precVidName)
+    intermVarDict["fullReconstSeq"] = saveMap(intermVarDict["fullReconstSeq"],exp_id,model_id,epoch,precVidName,key="reconst")
+
+    return intermVarDict
 def catAffineTransf(visualDict,fullAffTransSeq):
     if "theta" in visualDict.keys():
         if fullAffTransSeq is None:
@@ -171,13 +207,11 @@ def catAffineTransf(visualDict,fullAffTransSeq):
             fullAffTransSeq = torch.cat((fullAffTransSeq,visualDict["theta"].cpu()),dim=0)
 
     return fullAffTransSeq
-
 def saveAffineTransf(fullAffTransSeq,exp_id,model_id,epoch,precVidName):
     if not fullAffTransSeq is None:
         np.save("../results/{}/affTransf_{}_epoch{}_{}.npy".format(exp_id,model_id,epoch,precVidName),fullAffTransSeq.numpy())
         fullAffTransSeq = None
     return fullAffTransSeq
-
 def catPointsSeq(visualDict,fullPointsSeq):
     if "points" in visualDict.keys():
         if fullPointsSeq is None:
@@ -186,13 +220,11 @@ def catPointsSeq(visualDict,fullPointsSeq):
             fullPointsSeq = torch.cat((fullPointsSeq,visualDict["points"].cpu()),dim=0)
 
     return fullPointsSeq
-
 def savePointsSeq(fullPointsSeq,exp_id,model_id,epoch,precVidName):
     if not fullPointsSeq is None:
         np.save("../results/{}/points_{}_epoch{}_{}.npy".format(exp_id,model_id,epoch,precVidName),fullPointsSeq.numpy())
         fullPointsSeq = None
     return fullPointsSeq
-
 def catMap(visualDict,fullMap,key="attMaps"):
     if key in visualDict.keys():
 
@@ -215,7 +247,6 @@ def catMap(visualDict,fullMap,key="attMaps"):
                     fullMap[layer] = torch.cat((fullMap[layer],visualDict[key][layer]),dim=0)
 
     return fullMap
-
 def saveMap(fullMap,exp_id,model_id,epoch,precVidName,key="attMaps"):
     if not fullMap is None:
 
