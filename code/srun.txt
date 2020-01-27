@@ -1,1 +1,0 @@
-srun -N 10 --exclusive --ntasks-per-node=1 --time=9:00:00 --partition=MPI-short --pty bash
