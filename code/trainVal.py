@@ -440,6 +440,9 @@ def initialize_Net_And_EpochNumber(net,exp_id,model_id,cuda,start_mode,init_path
         for key in keysToRemove:
             params.pop(key)
 
+        for key in params.keys():
+            key = key.replace("visualModel","firstModel").replace("tempModel","secondModel")
+
         if hasattr(net,"secondModel"):
             if not hasattr(net.secondModel,"linLay"):
                 def checkAndReplace(key):
@@ -602,7 +605,7 @@ def run(args):
             with torch.no_grad():
                 metricVal = valFunc(**kwargsVal)
 
-            bestEpoch,bestMetricVal,worseEpochNb = update.updateBestModel(metricVal,bestMetricVal,args.exp_id,args.model_id,bestEpoch,epoch,net,isBetter)
+            bestEpoch,bestMetricVal,worseEpochNb = update.updateBestModel(metricVal,bestMetricVal,args.exp_id,args.model_id,bestEpoch,epoch,net,isBetter,worseEpochNb)
 
         epoch += 1
     if args.run_test:
