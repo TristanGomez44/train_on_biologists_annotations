@@ -440,8 +440,11 @@ def initialize_Net_And_EpochNumber(net,exp_id,model_id,cuda,start_mode,init_path
         for key in keysToRemove:
             params.pop(key)
 
+        #This is necessary to start with weights created when the model attributes were "visualModel" and "tempModel".
+        paramsWithNewNames = {}
         for key in params.keys():
-            key = key.replace("visualModel","firstModel").replace("tempModel","secondModel")
+            paramsWithNewNames[key.replace("visualModel","firstModel").replace("tempModel","secondModel")] = params[key]
+        params = paramsWithNewNames
 
         if hasattr(net,"secondModel"):
             if not hasattr(net.secondModel,"linLay"):
