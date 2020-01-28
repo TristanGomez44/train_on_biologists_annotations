@@ -45,10 +45,10 @@ class DataParallelModel(nn.DataParallel):
 
 class Model(nn.Module):
 
-    def __init__(self,FirstModel,SecondModel,spatTransf=None):
+    def __init__(self,firstModel,secondModel,spatTransf=None):
         super(Model,self).__init__()
-        self.firstModel = FirstModel
-        self.secondModel = SecondModel
+        self.firstModel = firstModel
+        self.secondModel = secondModel
         self.spatTransf = spatTransf
 
         self.transMat = torch.zeros((self.secondModel.nbClass,self.secondModel.nbClass))
@@ -340,11 +340,11 @@ class DirectPointExtractor(nn.Module):
 
 class TopkPointExtractor(nn.Module):
 
-    def __init__(self,attention,softCoord,softCoord_kerSize,point_nb,reconst,encoderChan):
+    def __init__(self,nbFeat,featMod,attention,softCoord,softCoord_kerSize,point_nb,reconst,encoderChan):
         super(TopkPointExtractor,self).__init__()
 
-        self.feat = resnet.resnet4(pretrained=True,chan=64,featMap=True)
-        self.conv1x1 = nn.Conv2d(64, encoderChan, kernel_size=1, stride=1)
+        self.feat = featMod
+        self.conv1x1 = nn.Conv2d(nbFeat, encoderChan, kernel_size=1, stride=1)
         self.point_extracted = point_nb
         self.attention = attention
         self.softCoord = softCoord
@@ -430,13 +430,13 @@ def fastSoftCoordRefiner(x,abs,ord,kerSize=5):
 
 class PointNet2(FirstModel):
 
-    def __init__(self,videoMode,pn_builder,classNb,featModelName='resnet18',pretrainedFeatMod=True,featMap=False,bigMaps=False,topk=False,\
-                topk_attention=False,topk_softcoord=False,topk_softCoord_kerSize=2,point_nb=256,reconst=False,encoderChan=1):
+    def __init__(self,videoMode,pn_builder,classNb,nbFeat,featModelName='resnet18',pretrainedFeatMod=True,bigMaps=False,topk=False,\
+                topk_attention=False,topk_softcoord=False,topk_softCoord_kerSize=2,point_nb=256,reconst=False,encoderChan=1,encoderHidChan=64):
 
-        super(PointNet2,self).__init__(videoMode,featModelName,pretrainedFeatMod,True,bigMaps)
+        super(PointNet2,self).__init__(videoMode,featModelName,pretrainedFeatMod,True,bigMaps,chan=encoderHidChan)
 
         if topk:
-            self.pointExtr = TopkPointExtractor(topk_attention,topk_softcoord,topk_softCoord_kerSize,point_nb,reconst,encoderChan)
+            self.pointExtr = TopkPointExtractor(nbFeat,self.featMod,topk_attention,topk_softcoord,topk_softCoord_kerSize,point_nb,reconst,encoderChan)
         else:
             self.pointExtr = DirectPointExtractor(point_nb)
 
@@ -617,52 +617,52 @@ def netBuilder(args):
             nbFeat = args.resnet_chan*2**(1-1)
         else:
             nbFeat = args.resnet_chan*2**(4-1)
-        FirstModel = CNN2D(args.video_mode,args.feat,args.pretrained_visual,chan=args.resnet_chan,stride=args.resnet_stride,dilation=args.resnet_dilation,\
+        firstModel = CNN2D(args.video_mode,args.feat,args.pretrained_visual,chan=args.resnet_chan,stride=args.resnet_stride,dilation=args.resnet_dilation,\
                             attChan=args.resnet_att_chan,attBlockNb=args.resnet_att_blocks_nb,attActFunc=args.resnet_att_act_func)
     elif args.feat.find("vgg") != -1:
         nbFeat = 4096
-        FirstModel = CNN2D(args.video_mode,args.feat,args.pretrained_visual)
+        firstModel = CNN2D(args.video_mode,args.feat,args.pretrained_visual)
     elif args.feat == "r2plus1d_18":
         nbFeat = 512
-        FirstModel = CNN3D(args.video_mode,args.feat,args.pretrained_visual)
+        firstModel = CNN3D(args.video_mode,args.feat,args.pretrained_visual)
     else:
         raise ValueError("Unknown visual model type : ",args.feat)
 
     if args.freeze_visual:
-        for param in FirstModel.parameters():
+        for param in firstModel.parameters():
             param.requires_grad = False
 
     ############### Temporal Model #######################
     if args.temp_mod == "lstm":
-        SecondModel = LSTMSecondModel(args.video_mode,nbFeat,args.class_nb,args.use_time,args.dropout,args.lstm_lay,args.lstm_hid_size)
+        secondModel = LSTMSecondModel(args.video_mode,nbFeat,args.class_nb,args.use_time,args.dropout,args.lstm_lay,args.lstm_hid_size)
     elif args.temp_mod == "linear":
-        SecondModel = LinearSecondModel(args.video_mode,nbFeat,args.class_nb,args.use_time,args.dropout)
+        secondModel = LinearSecondModel(args.video_mode,nbFeat,args.class_nb,args.use_time,args.dropout)
     elif args.temp_mod == "score_conv":
-        SecondModel = ScoreConvSecondModel(args.video_mode,nbFeat,args.class_nb,args.use_time,args.dropout,args.score_conv_ker_size,args.score_conv_chan,args.score_conv_bilay,args.score_conv_attention)
+        secondModel = ScoreConvSecondModel(args.video_mode,nbFeat,args.class_nb,args.use_time,args.dropout,args.score_conv_ker_size,args.score_conv_chan,args.score_conv_bilay,args.score_conv_attention)
     elif args.temp_mod == "feat_attention" or args.temp_mod == "feat_attention_full":
 
         classBiasMod = ClassBias(nbFeat,args.class_nb) if args.class_bias_model else None
 
         if args.temp_mod == "feat_attention":
-            FirstModel = AttentionModel(args.video_mode,args.feat,args.pretrained_visual,args.feat_attention_big_maps,nbFeat,args.class_nb,classBiasMod,args.feat_attention_att_type,args.feat_attention_grouped_att,\
+            firstModel = AttentionModel(args.video_mode,args.feat,args.pretrained_visual,args.feat_attention_big_maps,nbFeat,args.class_nb,classBiasMod,args.feat_attention_att_type,args.feat_attention_grouped_att,\
                                         chan=args.resnet_chan)
-            SecondModel = Identity(args.video_mode,nbFeat,args.class_nb,False)
+            secondModel = Identity(args.video_mode,nbFeat,args.class_nb,False)
 
         elif args.temp_mod == "feat_attention_full":
-            FirstModel = AttentionFullModel(args.video_mode,args.feat,args.pretrained_visual,args.feat_attention_big_maps,nbFeat,args.class_nb,classBiasMod,args.feat_attention_att_type,args.feat_attention_grouped_att,\
+            firstModel = AttentionFullModel(args.video_mode,args.feat,args.pretrained_visual,args.feat_attention_big_maps,nbFeat,args.class_nb,classBiasMod,args.feat_attention_att_type,args.feat_attention_grouped_att,\
                                             chan=args.resnet_chan)
-            SecondModel = Identity(args.video_mode,nbFeat,args.class_nb,False)
+            secondModel = Identity(args.video_mode,nbFeat,args.class_nb,False)
     elif args.temp_mod == "pointnet2":
 
         pn_builder = pointnet2.models.pointnet2_ssg_cls.Pointnet2SSG
-        FirstModel = PointNet2(args.video_mode,pn_builder,args.class_nb,topk=args.pn_topk,topk_attention=args.pn_topk_attention,topk_softcoord=args.pn_topk_softcoord,\
+        firstModel = PointNet2(args.video_mode,pn_builder,args.class_nb,nbFeat=nbFeat,featModelName=args.feat,pretrainedFeatMod=args.pretrained_visual,bigMaps=args.pn_big_maps,encoderHidChan=args.pn_topk_hid_chan,topk=args.pn_topk,topk_attention=args.pn_topk_attention,topk_softcoord=args.pn_topk_softcoord,\
                                 topk_softCoord_kerSize=args.pn_topk_softcoord_kersize,point_nb=args.pn_point_nb,reconst=args.pn_topk_reconst,encoderChan=args.pn_topk_enc_chan)
-        SecondModel = Identity(args.video_mode,nbFeat,args.class_nb,False)
+        secondModel = Identity(args.video_mode,nbFeat,args.class_nb,False)
     elif args.temp_mod == "pointnet2_pp":
         pn_builder = pointnet2.models.pointnet2_msg_cls.Pointnet2MSG
-        FirstModel = PointNet2(args.video_mode,pn_builder,args.class_nb,topk=args.pn_topk,topk_attention=args.pn_topk_attention,topk_softcoord=args.pn_topk_softcoord,\
+        firstModel = PointNet2(args.video_mode,pn_builder,args.class_nb,nbFeat=nbFeat,featModelName=args.feat,pretrainedFeatMod=args.pretrained_visual,bigMaps=args.pn_big_maps,encoderHidChan=args.pn_topk_hid_chan,topk=args.pn_topk,topk_attention=args.pn_topk_attention,topk_softcoord=args.pn_topk_softcoord,\
                                 topk_softCoord_kerSize=args.pn_topk_softcoord_kersize,point_nb=args.pn_point_nb,reconst=args.pn_topk_reconst,encoderChan=args.pn_topk_enc_chan)
-        SecondModel = Identity(args.video_mode,nbFeat,args.class_nb,False)
+        secondModel = Identity(args.video_mode,nbFeat,args.class_nb,False)
     else:
         raise ValueError("Unknown temporal model type : ",args.temp_mod)
 
@@ -673,7 +673,7 @@ def netBuilder(args):
     else:
         spatTransf = None
 
-    net = Model(FirstModel,SecondModel,spatTransf=spatTransf)
+    net = Model(firstModel,secondModel,spatTransf=spatTransf)
 
     if args.multi_gpu:
         net = DataParallelModel(net)
@@ -759,7 +759,12 @@ def addArgs(argreader):
     argreader.parser.add_argument('--pn_topk_reconst', type=args.str2bool, metavar='BOOL',
                         help='For the topk point net model. An input image reconstruction term will added to the loss function if True.')
     argreader.parser.add_argument('--pn_topk_enc_chan', type=int, metavar='NB',
-                        help='For the topk point net model. This is the number of output channel for the encoder')
+                        help='For the topk point net model. This is the number of output channel of the encoder')
+    argreader.parser.add_argument('--pn_topk_hid_chan', type=int, metavar='NB',
+                        help='For the topk point net model. This is the number of hidden channel of the encoder')
+
+    argreader.parser.add_argument('--pn_big_maps', type=args.str2bool, metavar='INT',
+                        help='For the pointnet2 model. To have the feature model to produce big feature maps')
 
     argreader.parser.add_argument('--resnet_chan', type=int, metavar='INT',
                         help='The channel number for the visual model when resnet is used')
@@ -774,8 +779,6 @@ def addArgs(argreader):
                         help='For the \'resnetX_att\' feat models. The number of blocks in the attention module.')
     argreader.parser.add_argument('--resnet_att_act_func', type=str, metavar='INT',
                         help='For the \'resnetX_att\' feat models. The activation function for the attention weights. Can be "sigmoid", "relu" or "tanh+relu".')
-
-
 
     return argreader
 
