@@ -128,7 +128,8 @@ class TanHPlusRelu(nn.Module):
 class ResNet(nn.Module):
 
     def __init__(self, block, layers, num_classes=1000, zero_init_residual=False, norm_layer=None,maxPoolKer=(3,3),maxPoolPad=(1,1),stride=(2,2),\
-                    featMap=False,chan=64,inChan=3,dilation=1,bigMaps=False,layersNb=4,attention=False,attChan=16,attBlockNb=1,applyMaxpool=True,attActFunc="sigmoid"):
+                    featMap=False,chan=64,inChan=3,dilation=1,bigMaps=False,layersNb=4,attention=False,attChan=16,attBlockNb=1,applyMaxpool=True,\
+                    applyAllLayers=False,attActFunc="sigmoid"):
 
         super(ResNet, self).__init__()
         if norm_layer is None:
@@ -142,11 +143,12 @@ class ResNet(nn.Module):
 
         self.nbLayers = len(layers)
 
+        self.applyAllLayers = applyAllLayers
         #All layers are built but they will not necessarily be used
-        self.layer1 = self._make_layer(block, chan*1, layers[0], stride=1,                        norm_layer=norm_layer,feat=True if self.nbLayers==1 else False,dilation=dilation)
-        self.layer2 = self._make_layer(block, chan*2, layers[1], stride=1 if bigMaps else stride, norm_layer=norm_layer,feat=True if self.nbLayers==2 else False,dilation=dilation)
-        self.layer3 = self._make_layer(block, chan*4, layers[2], stride=1 if bigMaps else stride, norm_layer=norm_layer,feat=True if self.nbLayers==3 else False,dilation=dilation)
-        self.layer4 = self._make_layer(block, chan*8, layers[3], stride=1 if bigMaps else stride, norm_layer=norm_layer,feat=True if self.nbLayers==4 else False,dilation=dilation)
+        self.layer1 = self._make_layer(block, chan*1, layers[0], stride=1,                        norm_layer=norm_layer,feat=True if (self.nbLayers==1 and not applyAllLayers) else False,dilation=dilation)
+        self.layer2 = self._make_layer(block, chan*2, layers[1], stride=1 if bigMaps else stride, norm_layer=norm_layer,feat=True if (self.nbLayers==2 and not applyAllLayers) else False,dilation=dilation)
+        self.layer3 = self._make_layer(block, chan*4, layers[2], stride=1 if bigMaps else stride, norm_layer=norm_layer,feat=True if (self.nbLayers==3 and not applyAllLayers) else False,dilation=dilation)
+        self.layer4 = self._make_layer(block, chan*8, layers[3], stride=1 if bigMaps else stride, norm_layer=norm_layer,feat=True if (self.nbLayers==4 and not applyAllLayers) else False,dilation=dilation)
 
         if layersNb<1 or layersNb>4:
             raise ValueError("Wrong number of layer : ",layersNb)
@@ -245,11 +247,19 @@ class ResNet(nn.Module):
             x = self.avgpool(x)
             x = x.view(x.size(0), -1)
 
+            if self.applyAllLayers:
+                x = self.fc(x)
+
         if self.attention:
             return {"x":x,"attMaps":attWeightsDict}
         else:
             return x
 
+
+def removeTopLayer(params):
+    params.pop("fc.weight")
+    params.pop("fc.bias")
+    return params
 
 def resnet4(pretrained=False,chan=8, **kwargs):
     model = ResNet(BasicBlock, [2, 2, 2, 2], chan=chan,layersNb=1,**kwargs)
@@ -257,8 +267,9 @@ def resnet4(pretrained=False,chan=8, **kwargs):
     if pretrained and chan != 64:
         raise ValueError("ResNet4 with {} channel does not have pretrained weights on ImageNet.".format(chan))
     if pretrained:
-        model.load_state_dict(model_zoo.load_url(model_urls['resnet18']))
-
+        params = model_zoo.load_url(model_urls['resnet18'])
+        params = removeTopLayer(params)
+        model.load_state_dict(params,strict=False)
     return model
 
 def resnet9_att(pretrained=False,chan=8,attChan=16,attBlockNb=1, **kwargs):
@@ -267,7 +278,9 @@ def resnet9_att(pretrained=False,chan=8,attChan=16,attBlockNb=1, **kwargs):
     if pretrained and chan != 64:
         raise ValueError("ResNet9 with {} channel does not have pretrained weights on ImageNet.".format(chan))
     if pretrained:
-        model.load_state_dict(model_zoo.load_url(model_urls['resnet18']),strict=False)
+        params = model_zoo.load_url(model_urls['resnet18'])
+        params = removeTopLayer(params)
+        model.load_state_dict(params,strict=False)
     return model
 
 
@@ -277,8 +290,9 @@ def resnet9(pretrained=False,chan=8, **kwargs):
     if pretrained and chan != 64:
         raise ValueError("ResNet9 with {} channel does not have pretrained weights on ImageNet.".format(chan))
     if pretrained:
-        model.load_state_dict(model_zoo.load_url(model_urls['resnet18']))
-
+        params = model_zoo.load_url(model_urls['resnet18'])
+        params = removeTopLayer(params)
+        model.load_state_dict(params,strict=False)
     return model
 
 def resnet14_att(pretrained=False,chan=8,attChan=16,attBlockNb=1, **kwargs):
@@ -287,7 +301,9 @@ def resnet14_att(pretrained=False,chan=8,attChan=16,attBlockNb=1, **kwargs):
     if pretrained and chan != 64:
         raise ValueError("ResNet14 with {} channel does not have pretrained weights on ImageNet.".format(chan))
     if pretrained:
-        model.load_state_dict(model_zoo.load_url(model_urls['resnet18']),strict=False)
+        params = model_zoo.load_url(model_urls['resnet18'])
+        params = removeTopLayer(params)
+        model.load_state_dict(params,strict=False)
     return model
 
 def resnet18(pretrained=False, **kwargs):
@@ -297,18 +313,22 @@ def resnet18(pretrained=False, **kwargs):
     """
     model = ResNet(BasicBlock, [2, 2, 2, 2], **kwargs)
     if pretrained:
-        model.load_state_dict(model_zoo.load_url(model_urls['resnet18']))
+        params = model_zoo.load_url(model_urls['resnet18'])
+        params = removeTopLayer(params)
+        model.load_state_dict(params,strict=False)
     return model
 
 
-def resnet18_att(pretrained=False, attChan=16,attBlockNb=1,**kwargs):
+def resnet18_att(pretrained=False, strict=True,attChan=16,attBlockNb=1,**kwargs):
     """Constructs a ResNet-18 model.
     Args:
         pretrained (bool): If True, returns a model pre-trained on ImageNet
     """
     model = ResNet(BasicBlock, [2, 2, 2, 2],attention=True,attChan=attChan,attBlockNb=attBlockNb, **kwargs)
     if pretrained:
-        model.load_state_dict(model_zoo.load_url(model_urls['resnet18']),strict=False)
+        params = model_zoo.load_url(model_urls['resnet18'])
+        params = removeTopLayer(params)
+        model.load_state_dict(params,strict=False)
     return model
 
 def resnet34(pretrained=False, **kwargs):
@@ -318,18 +338,22 @@ def resnet34(pretrained=False, **kwargs):
     """
     model = ResNet(BasicBlock, [3, 4, 6, 3], **kwargs)
     if pretrained:
-        model.load_state_dict(model_zoo.load_url(model_urls['resnet34']))
+        params = model_zoo.load_url(model_urls['resnet34'])
+        params = removeTopLayer(params)
+        model.load_state_dict(params,strict=False)
     return model
 
 
-def resnet50(pretrained=False, **kwargs):
+def resnet50(pretrained=False, strict=True,**kwargs):
     """Constructs a ResNet-50 model.
     Args:
         pretrained (bool): If True, returns a model pre-trained on ImageNet
     """
     model = ResNet(Bottleneck, [3, 4, 6, 3], **kwargs)
     if pretrained:
-        model.load_state_dict(model_zoo.load_url(model_urls['resnet50']))
+        params = model_zoo.load_url(model_urls['resnet50'])
+        params = removeTopLayer(params)
+        model.load_state_dict(params,strict=False)
     return model
 
 
@@ -340,7 +364,9 @@ def resnet101(pretrained=False, **kwargs):
     """
     model = ResNet(Bottleneck, [3, 4, 23, 3], **kwargs)
     if pretrained:
-        model.load_state_dict(model_zoo.load_url(model_urls['resnet101']))
+        params = model_zoo.load_url(model_urls['resnet101'])
+        params = removeTopLayer(params)
+        model.load_state_dict(params,strict=False)
     return model
 
 
@@ -351,5 +377,7 @@ def resnet152(pretrained=False, **kwargs):
     """
     model = ResNet(Bottleneck, [3, 8, 36, 3], **kwargs)
     if pretrained:
-        model.load_state_dict(model_zoo.load_url(model_urls['resnet152']))
+        params = model_zoo.load_url(model_urls['resnet152'])
+        params = removeTopLayer(params)
+        model.load_state_dict(params,strict=False)
     return model
