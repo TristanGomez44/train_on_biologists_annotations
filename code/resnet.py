@@ -2,10 +2,11 @@ import torch.nn as nn
 import torch.utils.model_zoo as model_zoo
 
 import numpy as np
+from  torch.nn.modules.upsampling import Upsample
 
 '''
 
-Just a modification of the torchvision inception model to get the before-to-last activation
+Just a modification of the torchvision resnet model to get the before-to-last activation
 
 
 '''
@@ -129,7 +130,7 @@ class ResNet(nn.Module):
 
     def __init__(self, block, layers, num_classes=1000, zero_init_residual=False, norm_layer=None,maxPoolKer=(3,3),maxPoolPad=(1,1),stride=(2,2),\
                     featMap=False,chan=64,inChan=3,dilation=1,bigMaps=False,layersNb=4,attention=False,attChan=16,attBlockNb=1,applyMaxpool=True,\
-                    applyAllLayers=False,attActFunc="sigmoid"):
+                    applyAllLayers=False,attActFunc="sigmoid",multiModel=False,multiModSparseConst=False):
 
         super(ResNet, self).__init__()
         if norm_layer is None:
@@ -144,6 +145,7 @@ class ResNet(nn.Module):
         self.nbLayers = len(layers)
 
         self.applyAllLayers = applyAllLayers
+        self.multiModel = multiModel
         #All layers are built but they will not necessarily be used
         self.layer1 = self._make_layer(block, chan*1, layers[0], stride=1,                        norm_layer=norm_layer,feat=True if (self.nbLayers==1 and not applyAllLayers) else False,dilation=dilation)
         self.layer2 = self._make_layer(block, chan*2, layers[1], stride=1 if bigMaps else stride, norm_layer=norm_layer,feat=True if (self.nbLayers==2 and not applyAllLayers) else False,dilation=dilation)
@@ -200,6 +202,15 @@ class ResNet(nn.Module):
             self.att_3 = nn.Sequential(self.att_conv1x1_3,self.att,self.att_final_conv1x1,actFuncConstructor())
             self.att_4 = nn.Sequential(self.att_conv1x1_4,self.att,self.att_final_conv1x1,actFuncConstructor())
 
+        if multiModel:
+            self.fc1 = nn.Linear(chan*(2**(1-1)) * block.expansion, num_classes)
+            self.fc2 = nn.Linear(chan*(2**(2-1)) * block.expansion, num_classes)
+            self.fc3 = nn.Linear(chan*(2**(3-1)) * block.expansion, num_classes)
+            self.fc4 = nn.Linear(chan*(2**(4-1)) * block.expansion, num_classes)
+
+            if multiModSparseConst:
+                self.upsamp = Upsample(scale_factor=2, mode='nearest')
+
     def _make_layer(self, block, planes, blocks, stride=1, norm_layer=None,feat=False,dilation=1):
 
         if norm_layer is None:
@@ -235,20 +246,42 @@ class ResNet(nn.Module):
         if self.attention:
             attWeightsDict = {}
 
+        layerFeat = {}
+
         for i in range(1,self.layersNb+1):
             x = getattr(self,"layer{}".format(i))(x)
 
-            if self.attention:
+            if self.attention and not self.multiModel:
                 attWeights = getattr(self,"att_{}".format(i))(x)
                 attWeightsDict[i] = attWeights
                 x = x*attWeights
 
-        if not self.featMap:
-            x = self.avgpool(x)
-            x = x.view(x.size(0), -1)
+            layerFeat[i] = x
 
-            if self.applyAllLayers:
-                x = self.fc(x)
+        if self.multiModel:
+            scores = None
+            for i in range(self.layersNb,0,-1):
+                if self.attention:
+                    attWeights = getattr(self,"att_{}".format(i))(layerFeat[i])
+                    attWeightsDict[i] = attWeights
+                    attWeights = attWeights*self.upsamp(attWeightsDict[i+1]) if i<self.layersNb and self.multi_mod_sparse_const else attWeights
+
+                    layerFeat[i] = layerFeat[i]*attWeights
+
+                feat = self.avgpool(layerFeat[i]).view(x.size(0), -1)
+                modelScores = getattr(self,"fc{}".format(i))(feat)
+                scores = modelScores if scores is None else (modelScores+scores)
+
+            scores /= self.layersNb
+            x = scores
+        else:
+
+            if not self.featMap:
+                x = self.avgpool(x)
+                x = x.view(x.size(0), -1)
+
+                if self.applyAllLayers:
+                    x = self.fc(x)
 
         if self.attention:
             return {"x":x,"attMaps":attWeightsDict}

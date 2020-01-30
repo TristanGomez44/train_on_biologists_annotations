@@ -619,7 +619,8 @@ def netBuilder(args):
             nbFeat = args.resnet_chan*2**(4-1)
         firstModel = CNN2D(args.video_mode,args.feat,args.pretrained_visual,chan=args.resnet_chan,stride=args.resnet_stride,dilation=args.resnet_dilation,\
                             attChan=args.resnet_att_chan,attBlockNb=args.resnet_att_blocks_nb,attActFunc=args.resnet_att_act_func,\
-                            applyAllLayers=args.resnet_apply_all_layers,num_classes=args.class_nb)
+                            applyAllLayers=args.resnet_apply_all_layers,num_classes=args.class_nb,multiModel=args.resnet_multi_model,\
+                            multiModSparseConst=args.resnet_multi_model_sparse_const)
     elif args.feat.find("vgg") != -1:
         nbFeat = 4096
         firstModel = CNN2D(args.video_mode,args.feat,args.pretrained_visual)
@@ -646,25 +647,27 @@ def netBuilder(args):
 
         if args.temp_mod == "feat_attention":
             firstModel = AttentionModel(args.video_mode,args.feat,args.pretrained_visual,args.feat_attention_big_maps,nbFeat,args.class_nb,classBiasMod,args.feat_attention_att_type,args.feat_attention_grouped_att,\
-                                        chan=args.resnet_chan,applyAllLayers=args.resnet_apply_all_layers,num_classes=args.class_nb)
+                                        chan=args.resnet_chan,applyAllLayers=args.resnet_apply_all_layers,num_classes=args.class_nb,multiModel=args.resnet_multi_model,\
+                                        multiModSparseConst=args.resnet_multi_model_sparse_const)
             secondModel = Identity(args.video_mode,nbFeat,args.class_nb,False)
 
         elif args.temp_mod == "feat_attention_full":
             firstModel = AttentionFullModel(args.video_mode,args.feat,args.pretrained_visual,args.feat_attention_big_maps,nbFeat,args.class_nb,classBiasMod,args.feat_attention_att_type,args.feat_attention_grouped_att,\
-                                            chan=args.resnet_chan,applyAllLayers=args.resnet_apply_all_layers,num_classes=args.class_nb)
+                                            chan=args.resnet_chan,applyAllLayers=args.resnet_apply_all_layers,num_classes=args.class_nb,multiModel=args.resnet_multi_model,\
+                                            multiModSparseConst=args.resnet_multi_model_sparse_const)
             secondModel = Identity(args.video_mode,nbFeat,args.class_nb,False)
     elif args.temp_mod == "pointnet2":
 
         pn_builder = pointnet2.models.pointnet2_ssg_cls.Pointnet2SSG
         firstModel = PointNet2(args.video_mode,pn_builder,args.class_nb,nbFeat=nbFeat,featModelName=args.feat,pretrainedFeatMod=args.pretrained_visual,bigMaps=args.pn_big_maps,encoderHidChan=args.pn_topk_hid_chan,topk=args.pn_topk,topk_attention=args.pn_topk_attention,topk_softcoord=args.pn_topk_softcoord,\
                                 topk_softCoord_kerSize=args.pn_topk_softcoord_kersize,point_nb=args.pn_point_nb,reconst=args.pn_topk_reconst,encoderChan=args.pn_topk_enc_chan,applyAllLayers=args.resnet_apply_all_layers,\
-                                num_classes=args.class_nb)
+                                num_classes=args.class_nb,multiModel=args.resnet_multi_model,multiModSparseConst=args.resnet_multi_model_sparse_const)
         secondModel = Identity(args.video_mode,nbFeat,args.class_nb,False)
     elif args.temp_mod == "pointnet2_pp":
         pn_builder = pointnet2.models.pointnet2_msg_cls.Pointnet2MSG
         firstModel = PointNet2(args.video_mode,pn_builder,args.class_nb,nbFeat=nbFeat,featModelName=args.feat,pretrainedFeatMod=args.pretrained_visual,bigMaps=args.pn_big_maps,encoderHidChan=args.pn_topk_hid_chan,topk=args.pn_topk,topk_attention=args.pn_topk_attention,topk_softcoord=args.pn_topk_softcoord,\
                                 topk_softCoord_kerSize=args.pn_topk_softcoord_kersize,point_nb=args.pn_point_nb,reconst=args.pn_topk_reconst,encoderChan=args.pn_topk_enc_chan,applyAllLayers=args.resnet_apply_all_layers,\
-                                num_classes=args.class_nb)
+                                num_classes=args.class_nb,multiModel=args.resnet_multi_model,multiModSparseConst=args.resnet_multi_model_sparse_const)
         secondModel = Identity(args.video_mode,nbFeat,args.class_nb,False)
     elif args.temp_mod == "identity":
         secondModel = Identity(args.video_mode,nbFeat,args.class_nb,False)
@@ -779,7 +782,12 @@ def addArgs(argreader):
                         help='The dilation for the visual model when resnet is used')
     argreader.parser.add_argument('--resnet_apply_all_layers', type=args.str2bool, metavar='INT',
                         help='To apply all layers (including the final one when resnet is used.)')
-
+    argreader.parser.add_argument('--resnet_multi_model', type=args.str2bool, metavar='INT',
+                        help='To apply average pooling and a dense layer to each feature map. This leads to one model \
+                        per scale. The final scores is the average of the scores provided by each model.')
+    argreader.parser.add_argument('--resnet_multi_model_sparse_const', type=args.str2bool, metavar='INT',
+                        help='For the resnet attention block. Forces the attention map of higher resolution to be sparsier \
+                        than the lower resolution attention maps.')
 
     argreader.parser.add_argument('--resnet_att_chan', type=int, metavar='INT',
                         help='For the \'resnetX_att\' feat models. The number of channels in the attention module.')
