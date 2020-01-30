@@ -4,6 +4,8 @@ import torch.utils.model_zoo as model_zoo
 import numpy as np
 from  torch.nn.modules.upsampling import Upsample
 
+from torch.nn.functional import interpolate as interpo
+
 '''
 
 Just a modification of the torchvision resnet model to get the before-to-last activation
@@ -146,6 +148,7 @@ class ResNet(nn.Module):
 
         self.applyAllLayers = applyAllLayers
         self.multiModel = multiModel
+        self.multiModSparseConst = multiModSparseConst
         #All layers are built but they will not necessarily be used
         self.layer1 = self._make_layer(block, chan*1, layers[0], stride=1,                        norm_layer=norm_layer,feat=True if (self.nbLayers==1 and not applyAllLayers) else False,dilation=dilation)
         self.layer2 = self._make_layer(block, chan*2, layers[1], stride=1 if bigMaps else stride, norm_layer=norm_layer,feat=True if (self.nbLayers==2 and not applyAllLayers) else False,dilation=dilation)
@@ -208,9 +211,6 @@ class ResNet(nn.Module):
             self.fc3 = nn.Linear(chan*(2**(3-1)) * block.expansion, num_classes)
             self.fc4 = nn.Linear(chan*(2**(4-1)) * block.expansion, num_classes)
 
-            if multiModSparseConst:
-                self.upsamp = Upsample(scale_factor=2, mode='nearest')
-
     def _make_layer(self, block, planes, blocks, stride=1, norm_layer=None,feat=False,dilation=1):
 
         if norm_layer is None:
@@ -264,7 +264,7 @@ class ResNet(nn.Module):
                 if self.attention:
                     attWeights = getattr(self,"att_{}".format(i))(layerFeat[i])
                     attWeightsDict[i] = attWeights
-                    attWeights = attWeights*self.upsamp(attWeightsDict[i+1]) if i<self.layersNb and self.multi_mod_sparse_const else attWeights
+                    attWeights = attWeights*interpo(attWeightsDict[i+1], size=(attWeights.size(-2),attWeights.size(-1)), mode='nearest') if i<self.layersNb and self.multiModSparseConst else attWeights
 
                     layerFeat[i] = layerFeat[i]*attWeights
 
