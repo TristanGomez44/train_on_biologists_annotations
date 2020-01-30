@@ -512,9 +512,9 @@ def plotAttentionMaps(dataset,exp_id,model_id,plotFeatMaps):
                 writer.append_data(img_as_ubyte(frame.astype("uint8")))
                 i+=1
 
-def plotMultiAttentionMaps(dataset,exp_id,model_id):
+def plotMultiAttentionMaps(dataset,exp_id,model_id,epochToProcess):
 
-    featMapPaths = sorted(glob.glob("../results/{}/attMaps_{}_epoch*_*.npy".format(exp_id,model_id)))
+    featMapPaths = sorted(glob.glob("../results/{}/attMaps_{}_epoch{}_*.npy".format(exp_id,model_id,epochToProcess)))
 
     videoNameDict = buildVideoNameDict(dataset,0,100,True,featMapPaths,raiseError=False)
 
@@ -535,14 +535,14 @@ def plotMultiAttentionMaps(dataset,exp_id,model_id):
         dataset_of_the_video = load_data.getDataset(videoName)
         video = pims.Video("../data/{}/{}.avi".format(dataset_of_the_video,videoName))
 
-        epoch = int(os.path.splitext(revVideoNameDict[videoName][0].split("epoch")[1].split("_"+videoName)[0])[0])
+        epoch = epochToProcess
 
         gt = load_data.getGT(videoName,dataset_of_the_video).astype(int)
         frameStart = (gt == -1).sum()
 
         videoPath = '../vis/{}/multiAttMaps_{}_{}_{}.mp4'.format(exp_id,model_id,epoch,videoName)
 
-        with imageio.get_writer(videoPath, mode='I') as writer:
+        with imageio.get_writer(videoPath, mode='I',fps=20) as writer:
 
             print(vidInd+1,"/",len(revVideoNameDict.keys()),videoName)
             frameNb = utils.getVideoFrameNb("../data/{}/{}.avi".format(dataset_of_the_video,videoName))
@@ -792,7 +792,8 @@ def main(argv=None):
     argreader.parser.add_argument('--plot_attention_maps',action="store_true",help="To plot the attention map of a model. Requires the arguments 'dataset_test', 'exp_id', 'model_id' to be set.")
     argreader.parser.add_argument('--feat_maps',action="store_true",help="To plot the feature maps instead of the attention maps.")
 
-    argreader.parser.add_argument('--plot_multi_attention_maps',action="store_true",help="To plot the attention maps of a model producing several attention maps per image. Requires the arguments 'dataset_test', 'exp_id', 'model_id' to be set.")
+    argreader.parser.add_argument('--plot_multi_attention_maps',action="store_true",help="To plot the attention maps of a model producing several attention maps per image. \
+                                    Requires the arguments 'dataset_test', 'exp_id', 'model_id' and 'epoch_to_process' to be set.")
 
     ####################### Plot  phase number histogram #####################
 
@@ -844,7 +845,7 @@ def main(argv=None):
     if args.plot_attention_maps:
         plotAttentionMaps(args.dataset_test,args.exp_id,args.model_id,args.feat_maps)
     if args.plot_multi_attention_maps:
-        plotMultiAttentionMaps(args.dataset_test,args.exp_id,args.model_id)
+        plotMultiAttentionMaps(args.dataset_test,args.exp_id,args.model_id,args.epoch_to_process)
     if args.phase_nb_hist:
         phaseNbHist(args.phase_nb_hist,args.density)
     if args.plot_confusion_matrix:
