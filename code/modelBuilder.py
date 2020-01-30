@@ -340,13 +340,13 @@ class DirectPointExtractor(nn.Module):
 
 class TopkPointExtractor(nn.Module):
 
-    def __init__(self,nbFeat,featMod,attention,softCoord,softCoord_kerSize,point_nb,reconst,encoderChan):
+    def __init__(self,nbFeat,featMod,softCoord,softCoord_kerSize,point_nb,reconst,encoderChan):
         super(TopkPointExtractor,self).__init__()
 
         self.feat = featMod
         self.conv1x1 = nn.Conv2d(nbFeat, encoderChan, kernel_size=1, stride=1)
         self.point_extracted = point_nb
-        self.attention = attention
+
         self.softCoord = softCoord
         self.softCoord_kerSize = softCoord_kerSize
 
@@ -359,16 +359,6 @@ class TopkPointExtractor(nn.Module):
         x = self.feat(img)
         x_fullFeat = self.conv1x1(x)
         x = torch.pow(x_fullFeat,2).sum(dim=1,keepdim=True)
-
-        if self.attention:
-            #Normalizing the attention weights
-            x = (x-x.min(dim=-1,keepdim=True)[0].min(dim=-1,keepdim=True)[0])/(x.max(dim=-1,keepdim=True)[0].max(dim=-1,keepdim=True)[0]-x.min(dim=-1,keepdim=True)[0].min(dim=-1,keepdim=True)[0])
-
-            img = torch.nn.functional.adaptive_max_pool2d(img[:,0:1],(x.size(-2),x.size(-1)))
-            #Shifting the image minimum to 0 so the attention weights only reduce the values in the image
-            img = img-img.min(dim=-1,keepdim=True)[0].min(dim=-1,keepdim=True)[0]
-
-            x = x*img
 
         flatX = x.view(x.size(0),-1)
         flatVals,flatInds = torch.topk(flatX, self.point_extracted, dim=-1, largest=True)
@@ -431,12 +421,12 @@ def fastSoftCoordRefiner(x,abs,ord,kerSize=5):
 class PointNet2(FirstModel):
 
     def __init__(self,videoMode,pn_builder,classNb,nbFeat,featModelName='resnet18',pretrainedFeatMod=True,bigMaps=False,topk=False,\
-                topk_attention=False,topk_softcoord=False,topk_softCoord_kerSize=2,point_nb=256,reconst=False,encoderChan=1,encoderHidChan=64,**kwargs):
+                topk_softcoord=False,topk_softCoord_kerSize=2,point_nb=256,reconst=False,encoderChan=1,encoderHidChan=64,**kwargs):
 
         super(PointNet2,self).__init__(videoMode,featModelName,pretrainedFeatMod,True,bigMaps,chan=encoderHidChan,**kwargs)
 
         if topk:
-            self.pointExtr = TopkPointExtractor(nbFeat,self.featMod,topk_attention,topk_softcoord,topk_softCoord_kerSize,point_nb,reconst,encoderChan)
+            self.pointExtr = TopkPointExtractor(nbFeat,self.featMod,topk_softcoord,topk_softCoord_kerSize,point_nb,reconst,encoderChan)
         else:
             self.pointExtr = DirectPointExtractor(point_nb)
 
@@ -659,13 +649,13 @@ def netBuilder(args):
     elif args.temp_mod == "pointnet2":
 
         pn_builder = pointnet2.models.pointnet2_ssg_cls.Pointnet2SSG
-        firstModel = PointNet2(args.video_mode,pn_builder,args.class_nb,nbFeat=nbFeat,featModelName=args.feat,pretrainedFeatMod=args.pretrained_visual,bigMaps=args.pn_big_maps,encoderHidChan=args.pn_topk_hid_chan,topk=args.pn_topk,topk_attention=args.pn_topk_attention,topk_softcoord=args.pn_topk_softcoord,\
+        firstModel = PointNet2(args.video_mode,pn_builder,args.class_nb,nbFeat=nbFeat,featModelName=args.feat,pretrainedFeatMod=args.pretrained_visual,bigMaps=args.pn_big_maps,encoderHidChan=args.pn_topk_hid_chan,topk=args.pn_topk,topk_softcoord=args.pn_topk_softcoord,\
                                 topk_softCoord_kerSize=args.pn_topk_softcoord_kersize,point_nb=args.pn_point_nb,reconst=args.pn_topk_reconst,encoderChan=args.pn_topk_enc_chan,applyAllLayers=args.resnet_apply_all_layers,\
                                 num_classes=args.class_nb,multiModel=args.resnet_multi_model,multiModSparseConst=args.resnet_multi_model_sparse_const)
         secondModel = Identity(args.video_mode,nbFeat,args.class_nb,False)
     elif args.temp_mod == "pointnet2_pp":
         pn_builder = pointnet2.models.pointnet2_msg_cls.Pointnet2MSG
-        firstModel = PointNet2(args.video_mode,pn_builder,args.class_nb,nbFeat=nbFeat,featModelName=args.feat,pretrainedFeatMod=args.pretrained_visual,bigMaps=args.pn_big_maps,encoderHidChan=args.pn_topk_hid_chan,topk=args.pn_topk,topk_attention=args.pn_topk_attention,topk_softcoord=args.pn_topk_softcoord,\
+        firstModel = PointNet2(args.video_mode,pn_builder,args.class_nb,nbFeat=nbFeat,featModelName=args.feat,pretrainedFeatMod=args.pretrained_visual,bigMaps=args.pn_big_maps,encoderHidChan=args.pn_topk_hid_chan,topk=args.pn_topk,topk_softcoord=args.pn_topk_softcoord,\
                                 topk_softCoord_kerSize=args.pn_topk_softcoord_kersize,point_nb=args.pn_point_nb,reconst=args.pn_topk_reconst,encoderChan=args.pn_topk_enc_chan,applyAllLayers=args.resnet_apply_all_layers,\
                                 num_classes=args.class_nb,multiModel=args.resnet_multi_model,multiModSparseConst=args.resnet_multi_model_sparse_const)
         secondModel = Identity(args.video_mode,nbFeat,args.class_nb,False)
@@ -756,8 +746,6 @@ def addArgs(argreader):
                         help='To feed the pointnet model with points extracted using torch.topk and not a direct coordinate predictor. Ignored if the model \
                         doesn\'t use pointnet.')
 
-    argreader.parser.add_argument('--pn_topk_attention', type=args.str2bool, metavar='BOOL',
-                        help='For the topk point net model. The point extractor will be used as an attention module if True.')
     argreader.parser.add_argument('--pn_topk_softcoord', type=args.str2bool, metavar='BOOL',
                         help='For the topk point net model. The point coordinate will be computed using soft argmax.')
     argreader.parser.add_argument('--pn_topk_softcoord_kersize', type=int, metavar='KERSIZE',
