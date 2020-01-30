@@ -132,7 +132,9 @@ def add_pn_recons_term(pn_reconst_weight,resDict,data):
 
     reconst = resDict['reconst']
 
-    data = data.view(data.size(0)*data.size(1),data.size(2),data.size(3),data.size(4))
+    if len(data.size()) == 5:
+        data = data.view(data.size(0)*data.size(1),data.size(2),data.size(3),data.size(4))
+        
     data = F.adaptive_avg_pool2d(data, (reconst.size(-2),reconst.size(-1)))
 
     return pn_reconst_weight*torch.pow(reconst-data,2).mean()
@@ -482,7 +484,7 @@ def getBestEpochInd_and_WorseEpochNb(start_mode,exp_id,model_id,epoch):
         elif len(bestModelPaths) == 1:
             bestModelPath = bestModelPaths[0]
             bestEpoch = int(os.path.basename(bestModelPath).split("epoch")[1])
-            worseEpochNb = startEpoch - bestEpoch
+            worseEpochNb = epoch - bestEpoch
         else:
             raise ValueError("Wrong number of best model weight file : ",len(bestModelPaths))
 
