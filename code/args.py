@@ -100,6 +100,9 @@ class ArgReader():
                             help='The number of machines used for the mode "distribution".')
         self.parser.add_argument('--debug', type=str2bool,metavar='BOOL',
                             help="To run only a few batch of training and a few batch of validation")
+        self.parser.add_argument('--benchmark', type=str2bool,metavar='BOOL',
+                            help="To check hardware occupation during training. Results will be put in the ../results/<exp_id> folder.")
+
         self.parser.add_argument('--redirect_out', type=str2bool,metavar='BIDIR',
                             help='If true, the standard output will be redirected to a file python.out')
         self.parser.add_argument('--note', type=str,metavar='NOTE',
