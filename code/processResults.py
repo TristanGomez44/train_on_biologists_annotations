@@ -747,8 +747,7 @@ def plotPoints(exp_id,model_id,epoch):
 
                 #points = (points*frame.shape[0]/imgSize).astype(int)
 
-                mask = np.zeros((imgSize,imgSize,3)).astype("float")
-                mask += 0.25
+                mask = np.ones((imgSize,imgSize,3)).astype("float")
 
                 ptsValues = np.abs(points[:,3:]).sum(axis=-1)
                 ptsValues = cm(ptsValues/ptsValues.max())[:,:3]
@@ -759,6 +758,56 @@ def plotPoints(exp_id,model_id,epoch):
 
                 writer.append_data(img_as_ubyte(frame.astype("uint8")))
 
+def plotPointsImageDataset(imgNb,redFact,args):
+
+    cm = plt.get_cmap('plasma')
+
+    exp_id = args.exp_id
+    model_id = args.model_id
+
+    pointPaths = sorted(glob.glob("../results/{}/points_{}_epoch*_.npy".format(exp_id,model_id)))
+
+    points = np.concatenate(list(map(lambda x:np.load(x)[:imgNb][:,:,:][np.newaxis],pointPaths)),axis=0)
+    print(points.shape)
+
+    points = np.transpose(points, axes=[1,0,2,3])
+    print(points.shape)
+
+    imgLoader = load_data.buildSeqTestLoader(args,"val",normalize=False)
+
+    batchNb = imgNb//args.val_batch_size
+    totalImgNb = 0
+
+    for batchInd,(imgBatch,_) in enumerate(imgLoader):
+        print(batchInd,imgBatch.size())
+        for imgInd in range(len(imgBatch)):
+
+            if totalImgNb<imgNb:
+                print("\t",imgInd,"/",totalImgNb)
+                print("\t","Writing video",imgInd)
+                with imageio.get_writer("../vis/{}/points_{}_img{}.mp4".format(exp_id,model_id,totalImgNb), mode='I',fps=20) as writer:
+
+                    img = imgBatch[imgInd].detach().permute(1,2,0).numpy().astype(float)
+
+                    for epoch in range(len(points[imgInd])):
+
+                        pts = points[imgInd,epoch]
+                        mask = np.ones((img.shape[0]//redFact,img.shape[1]//redFact,3)).astype("float")
+
+                        ptsValues = np.abs(pts[:,3:]).sum(axis=-1)
+                        ptsValues = cm(ptsValues/ptsValues.max())[:,:3]
+                        mask[pts[:,1].astype(int),pts[:,0].astype(int)] = ptsValues
+
+                        mask = resize(mask, (img.shape[0],img.shape[1]),anti_aliasing=True,mode="constant",order=0)
+
+                        imgMasked = img*255*mask
+
+                        writer.append_data(img_as_ubyte(imgMasked.astype("uint8")))
+
+
+                    totalImgNb += 1
+        if batchInd>=batchNb:
+            break
 
 def main(argv=None):
 
@@ -801,7 +850,7 @@ def main(argv=None):
     argreader.parser.add_argument('--phase_nb_hist',type=str,nargs="*",metavar="DATASET",help='To plot the histogram of phase number of all video in several datasets, \
                                     along with histograms showing the video length distribution. The value of this argument is the names of the datasets.')
 
-    argreader.parser.add_argument('--density',type=str2bool,metavar="BOOl",help='To plot the histogram on a density scale.')
+    argreader.parser.add_argument('--density',type=str2bool,metavar="BOOL",help='To plot the histogram on a density scale.')
 
     ####################### Plot confusion matrix #############################
 
@@ -813,8 +862,17 @@ def main(argv=None):
     argreader.parser.add_argument('--plot_points',action="store_true",help='To plot the points computed by the visual module of a point net model.\
                                     The exp_id, model_id and epoch_to_process arg must be set.')
 
-    argreader = load_data.addArgs(argreader)
+    argreader.parser.add_argument('--plot_points_image_dataset',action="store_true",help='To plot the points computed by the visual module of a point net model \
+                                    on an image dataset. The -c (config file), --image_nb and --reduction_fact arg must be set.')
 
+    argreader.parser.add_argument('--image_nb',type=int,metavar="INT",help='For the --plot_points_image_dataset arg. \
+                                    The number of images to plot the points of.')
+
+    argreader.parser.add_argument('--reduction_fact',type=int,metavar="INT",help='For the --plot_points_image_dataset arg.\
+                                    The reduction factor of the point cloud size compared to the full image. For example if the image has size \
+                                    224x224 and the points cloud lies in a 56x56 frame, this arg should be 224/56=4')
+
+    argreader = load_data.addArgs(argreader)
 
     #Reading the comand line arg
     argreader.getRemainingArgs()
@@ -853,6 +911,8 @@ def main(argv=None):
         plotConfusionMatrix(args.exp_id,args.model_id)
     if args.plot_points:
         plotPoints(args.exp_id,args.model_id,args.epoch_to_process)
+    if args.plot_points_image_dataset:
+        plotPointsImageDataset(args.image_nb,args.reduction_fact,args)
 
 if __name__ == "__main__":
     main()

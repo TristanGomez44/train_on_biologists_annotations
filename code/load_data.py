@@ -431,7 +431,7 @@ def buildSeqTrainLoader(args):
 
     return trainLoader,train_dataset
 
-def buildSeqTestLoader(args,mode):
+def buildSeqTestLoader(args,mode,normalize=True):
 
     datasetName = getattr(args,"dataset_{}".format(mode))
 
@@ -449,8 +449,11 @@ def buildSeqTestLoader(args,mode):
             raise ValueError("Unkown test loader mode : {}".format(mode))
 
     elif datasetName.find("CUB_200_2011") != -1:
-        normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],std=[0.229, 0.224, 0.225])
-        transf = transforms.Compose([transforms.Resize(256),transforms.CenterCrop(224),transforms.ToTensor(),normalize])
+        if normalize:
+            normalizeFunc = transforms.Normalize(mean=[0.485, 0.456, 0.406],std=[0.229, 0.224, 0.225])
+            transf = transforms.Compose([transforms.Resize(256),transforms.CenterCrop(224),transforms.ToTensor(),normalizeFunc])
+        else:
+            transf = transforms.Compose([transforms.Resize(256),transforms.CenterCrop(224),transforms.ToTensor()])
 
         test_dataset = torchvision.datasets.ImageFolder("../data/{}".format(datasetName),transf)
 
