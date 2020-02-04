@@ -11,7 +11,7 @@ import pointnet2
 import cv2
 
 
-def buildFeatModel(featModelName,pretrainedFeatMod,featMap=False,bigMaps=False,stride=2,dilation=1,**kwargs):
+def buildFeatModel(featModelName,pretrainedFeatMod,featMap=False,bigMaps=False,layerSizeReduce=False,stride=2,dilation=1,**kwargs):
     ''' Build a visual feature model
 
     Args:
@@ -21,7 +21,7 @@ def buildFeatModel(featModelName,pretrainedFeatMod,featMap=False,bigMaps=False,s
 
     '''
     if featModelName.find("resnet") != -1:
-        featModel = getattr(resnet,featModelName)(pretrained=pretrainedFeatMod,featMap=featMap,bigMaps=bigMaps,**kwargs)
+        featModel = getattr(resnet,featModelName)(pretrained=pretrainedFeatMod,featMap=featMap,layerSizeReduce=layerSizeReduce,**kwargs)
     elif featModelName == "r2plus1d_18":
         featModel = getattr(resnet3D,featModelName)(pretrained=pretrainedFeatMod,featMap=featMap,bigMaps=bigMaps)
     elif featModelName.find("vgg") != -1:
@@ -95,7 +95,7 @@ class SpatialTransformer(nn.Module):
         self.outSize = outSize
         postVisFeatSize = outSize//4
 
-        self.visFeat = buildFeatModel("resnet4",False,featMap=True,bigMaps=False)
+        self.visFeat = buildFeatModel("resnet4",False,featMap=True,layerSizeReduce=False)
         self.conv1x1 = nn.Conv2d(8,1,1)
         self.mlp = nn.Sequential(nn.Linear(postVisFeatSize*postVisFeatSize,512),nn.ReLU(True),\
                                  nn.Linear(512,6))
@@ -245,8 +245,8 @@ class Attention(nn.Module):
 
 class AttentionModel(FirstModel):
 
-    def __init__(self,videoMode,featModelName,pretrainedFeatMod,bigMaps,nbFeat,nbClass,classBiasMod=None,attType="shallow",groupedAtt=True,**kwargs):
-        super(AttentionModel,self).__init__(videoMode,featModelName,pretrainedFeatMod,True,bigMaps,**kwargs)
+    def __init__(self,videoMode,featModelName,pretrainedFeatMod,nbFeat,nbClass,classBiasMod=None,attType="shallow",groupedAtt=True,**kwargs):
+        super(AttentionModel,self).__init__(videoMode,featModelName,pretrainedFeatMod,True,**kwargs)
 
         self.classConv = nn.Conv2d(nbFeat,nbClass,1)
         self.attention = Attention(attType,nbClass,nbClass,groupedAtt)
@@ -277,8 +277,8 @@ class AttentionModel(FirstModel):
 
 class AttentionFullModel(FirstModel):
 
-    def __init__(self,videoMode,featModelName,pretrainedFeatMod,bigMaps,nbFeat,nbClass,classBiasMod=None,attType="shallow",groupedAtt=True,**kwargs):
-        super(AttentionFullModel,self).__init__(videoMode,featModelName,pretrainedFeatMod,True,bigMaps,**kwargs)
+    def __init__(self,videoMode,featModelName,pretrainedFeatMod,nbFeat,nbClass,classBiasMod=None,attType="shallow",groupedAtt=True,**kwargs):
+        super(AttentionFullModel,self).__init__(videoMode,featModelName,pretrainedFeatMod,True,**kwargs)
 
         #self.attention = nn.Conv2d(nbFeat,nbClass,attKerSize,padding=attKerSize//2)
         self.attention = Attention(attType,nbFeat,nbClass,groupedAtt)
@@ -340,53 +340,63 @@ class DirectPointExtractor(nn.Module):
 
 class TopkPointExtractor(nn.Module):
 
-    def __init__(self,nbFeat,featMod,softCoord,softCoord_kerSize,point_nb,reconst,encoderChan):
+    def __init__(self,nbFeat,featMod,softCoord,softCoord_kerSize,point_nb,reconst,encoderChan,predictDepth):
         super(TopkPointExtractor,self).__init__()
 
         self.feat = featMod
         self.conv1x1 = nn.Conv2d(nbFeat, encoderChan, kernel_size=1, stride=1)
         self.point_extracted = point_nb
-
         self.softCoord = softCoord
         self.softCoord_kerSize = softCoord_kerSize
 
         self.reconst = reconst
         if reconst:
-            self.decoder = nn.Sequential(resnet.conv1x1(encoderChan, 3, stride=1),resnet.resnet4(pretrained=True,chan=64,featMap=True,applyMaxpool=False,stride=1),resnet.conv1x1(64, 3, stride=1))
+            self.decoder = nn.Sequential(resnet.conv1x1(encoderChan, 3, stride=1),\
+                           resnet.resnet4(pretrained=True,chan=64,featMap=True,layerSizeReduce=False,preLayerSizeReduce=False,stride=1),\
+                           resnet.conv1x1(64, 3, stride=1))
+
+        self.predictDepth = predictDepth
+        if predictDepth:
+            self.conv1x1_depth = nn.Conv2d(nbFeat, 1, kernel_size=1, stride=1)
 
     def forward(self,img):
 
-        x = self.feat(img)
-        x_fullFeat = self.conv1x1(x)
-        x = torch.pow(x_fullFeat,2).sum(dim=1,keepdim=True)
+        featureMaps = self.feat(img)
+        pointFeaturesMap = self.conv1x1(featureMaps)
+        x = torch.pow(pointFeaturesMap,2).sum(dim=1,keepdim=True)
 
         flatX = x.view(x.size(0),-1)
         flatVals,flatInds = torch.topk(flatX, self.point_extracted, dim=-1, largest=True)
         abs,ord = (flatInds%x.shape[-1],flatInds//x.shape[-1])
 
         retDict={}
+
+        if self.softCoord:
+            abs,ord = fastSoftCoordRefiner(x,abs,ord,kerSize=self.softCoord_kerSize)
         if self.reconst:
-            sparseX = x_fullFeat*((x-flatVals[:,-1].unsqueeze(1).unsqueeze(2).unsqueeze(3))>0).float()
+            sparseX = pointFeaturesMap*((x-flatVals[:,-1].unsqueeze(1).unsqueeze(2).unsqueeze(3))>0).float()
             reconst = self.decoder(sparseX)
             #Keeping only one channel (the three channels are just copies)
             retDict['reconst'] = reconst[:,0:1]
 
-        indices = tuple([torch.arange(x_fullFeat.size(0), dtype=torch.long).unsqueeze(1).unsqueeze(1),
-                         torch.arange(x_fullFeat.size(1), dtype=torch.long).unsqueeze(1).unsqueeze(0),
+        indices = tuple([torch.arange(pointFeaturesMap.size(0), dtype=torch.long).unsqueeze(1).unsqueeze(1),
+                         torch.arange(pointFeaturesMap.size(1), dtype=torch.long).unsqueeze(1).unsqueeze(0),
                          ord.long().unsqueeze(1),abs.long().unsqueeze(1)])
-        flatVals = x_fullFeat[indices]
-        flatVals = flatVals.permute(0,2,1)
+        pointFeat = pointFeaturesMap[indices]
+        pointFeat = pointFeat.permute(0,2,1)
 
-        if self.softCoord:
-            abs,ord = fastSoftCoordRefiner(x,abs,ord,kerSize=self.softCoord_kerSize)
+        if self.predictDepth:
+            depthMap = torch.tanh(self.conv1x1_depth(featureMaps))*max(img.size(-2),img.size(-1))
+            indices = tuple([torch.arange(depthMap.size(0), dtype=torch.long).unsqueeze(1).unsqueeze(1),
+                             torch.arange(depthMap.size(1), dtype=torch.long).unsqueeze(1).unsqueeze(0),
+                             ord.long().unsqueeze(1),abs.long().unsqueeze(1)])
+            depth = depthMap[indices].permute(0,2,1)
+        else:
+            depth = torch.zeros(img.size(0),self.point_extracted,1).to(x.device)
 
-        abs,ord = abs.unsqueeze(-1),ord.unsqueeze(-1)
-        points = torch.cat((abs,ord),dim=-1).float()
-        points = torch.cat((points,torch.zeros(points.size(0),points.size(1),1).to(x.device)),dim=-1)
-        points = torch.cat((points,flatVals),dim=-1)
-
+        abs,ord = abs.unsqueeze(-1).float(),ord.unsqueeze(-1).float()
+        points = torch.cat((abs,ord,depth,pointFeat),dim=-1).float()
         retDict["points"] = points
-
         return retDict
 
 def fastSoftCoordRefiner(x,abs,ord,kerSize=5):
@@ -420,13 +430,13 @@ def fastSoftCoordRefiner(x,abs,ord,kerSize=5):
 
 class PointNet2(FirstModel):
 
-    def __init__(self,videoMode,pn_builder,classNb,nbFeat,featModelName='resnet18',pretrainedFeatMod=True,bigMaps=False,topk=False,\
-                topk_softcoord=False,topk_softCoord_kerSize=2,point_nb=256,reconst=False,encoderChan=1,encoderHidChan=64,**kwargs):
+    def __init__(self,videoMode,pn_builder,classNb,nbFeat,featModelName='resnet18',pretrainedFeatMod=True,topk=False,\
+                topk_softcoord=False,topk_softCoord_kerSize=2,point_nb=256,reconst=False,encoderChan=1,encoderHidChan=64,predictDepth=False,**kwargs):
 
-        super(PointNet2,self).__init__(videoMode,featModelName,pretrainedFeatMod,True,bigMaps,chan=encoderHidChan,**kwargs)
+        super(PointNet2,self).__init__(videoMode,featModelName,pretrainedFeatMod,True,chan=encoderHidChan,**kwargs)
 
         if topk:
-            self.pointExtr = TopkPointExtractor(nbFeat,self.featMod,topk_softcoord,topk_softCoord_kerSize,point_nb,reconst,encoderChan)
+            self.pointExtr = TopkPointExtractor(nbFeat,self.featMod,topk_softcoord,topk_softCoord_kerSize,point_nb,reconst,encoderChan,predictDepth)
         else:
             self.pointExtr = DirectPointExtractor(point_nb)
 
@@ -481,7 +491,6 @@ class LinearSecondModel(SecondModel):
         x = self.linLay(x)
         # NT x classNb
 
-
         x = x.view(batchSize,-1,self.nbClass) if self.videoMode else x
 
         #N x T x classNb
@@ -499,6 +508,8 @@ class LSTMSecondModel(SecondModel):
             raise ValueError("Can't use LSTM as a second model when working on non video mode.")
 
     def forward(self,x,batchSize,timeTensor):
+
+        self.lstmTempMod.flatten_parameters()
 
         x = self.catWithTimeFeat(x,timeTensor)
 
@@ -609,7 +620,7 @@ def netBuilder(args):
             nbFeat = args.resnet_chan*2**(4-1)
         firstModel = CNN2D(args.video_mode,args.feat,args.pretrained_visual,chan=args.resnet_chan,stride=args.resnet_stride,dilation=args.resnet_dilation,\
                             attChan=args.resnet_att_chan,attBlockNb=args.resnet_att_blocks_nb,attActFunc=args.resnet_att_act_func,\
-                            applyAllLayers=args.resnet_apply_all_layers,num_classes=args.class_nb,multiModel=args.resnet_multi_model,\
+                            multiModel=args.resnet_multi_model,num_classes=args.class_nb,\
                             multiModSparseConst=args.resnet_multi_model_sparse_const)
     elif args.feat.find("vgg") != -1:
         nbFeat = 4096
@@ -636,28 +647,30 @@ def netBuilder(args):
         classBiasMod = ClassBias(nbFeat,args.class_nb) if args.class_bias_model else None
 
         if args.temp_mod == "feat_attention":
-            firstModel = AttentionModel(args.video_mode,args.feat,args.pretrained_visual,args.feat_attention_big_maps,nbFeat,args.class_nb,classBiasMod,args.feat_attention_att_type,args.feat_attention_grouped_att,\
-                                        chan=args.resnet_chan,applyAllLayers=args.resnet_apply_all_layers,num_classes=args.class_nb,multiModel=args.resnet_multi_model,\
-                                        multiModSparseConst=args.resnet_multi_model_sparse_const)
+            firstModel = AttentionModel(args.video_mode,args.feat,args.pretrained_visual,nbFeat,args.class_nb,classBiasMod,args.feat_attention_att_type,args.feat_attention_grouped_att,\
+                                        chan=args.resnet_chan,multiModel=args.resnet_multi_model,dilation=args.resnet_dilation,\
+                                        multiModSparseConst=args.resnet_multi_model_sparse_const,layerSizeReduce=args.resnet_layer_size_reduce)
             secondModel = Identity(args.video_mode,nbFeat,args.class_nb,False)
 
         elif args.temp_mod == "feat_attention_full":
-            firstModel = AttentionFullModel(args.video_mode,args.feat,args.pretrained_visual,args.feat_attention_big_maps,nbFeat,args.class_nb,classBiasMod,args.feat_attention_att_type,args.feat_attention_grouped_att,\
-                                            chan=args.resnet_chan,applyAllLayers=args.resnet_apply_all_layers,num_classes=args.class_nb,multiModel=args.resnet_multi_model,\
-                                            multiModSparseConst=args.resnet_multi_model_sparse_const)
+            firstModel = AttentionFullModel(args.video_mode,args.feat,args.pretrained_visual,nbFeat,args.class_nb,classBiasMod,args.feat_attention_att_type,args.feat_attention_grouped_att,\
+                                            chan=args.resnet_chan,multiModel=args.resnet_multi_model,dilation=args.resnet_dilation,\
+                                            multiModSparseConst=args.resnet_multi_model_sparse_const,layerSizeReduce=args.resnet_layer_size_reduce)
             secondModel = Identity(args.video_mode,nbFeat,args.class_nb,False)
     elif args.temp_mod == "pointnet2":
 
         pn_builder = pointnet2.models.pointnet2_ssg_cls.Pointnet2SSG
-        firstModel = PointNet2(args.video_mode,pn_builder,args.class_nb,nbFeat=nbFeat,featModelName=args.feat,pretrainedFeatMod=args.pretrained_visual,bigMaps=args.pn_big_maps,encoderHidChan=args.pn_topk_hid_chan,topk=args.pn_topk,topk_softcoord=args.pn_topk_softcoord,\
-                                topk_softCoord_kerSize=args.pn_topk_softcoord_kersize,point_nb=args.pn_point_nb,reconst=args.pn_topk_reconst,encoderChan=args.pn_topk_enc_chan,applyAllLayers=args.resnet_apply_all_layers,\
-                                num_classes=args.class_nb,multiModel=args.resnet_multi_model,multiModSparseConst=args.resnet_multi_model_sparse_const)
+        firstModel = PointNet2(args.video_mode,pn_builder,args.class_nb,nbFeat=nbFeat,featModelName=args.feat,pretrainedFeatMod=args.pretrained_visual,encoderHidChan=args.pn_topk_hid_chan,\
+                                topk=args.pn_topk,topk_softcoord=args.pn_topk_softcoord,topk_softCoord_kerSize=args.pn_topk_softcoord_kersize,point_nb=args.pn_point_nb,reconst=args.pn_topk_reconst,\
+                                encoderChan=args.pn_topk_enc_chan,multiModel=args.resnet_multi_model,multiModSparseConst=args.resnet_multi_model_sparse_const,predictDepth=args.pn_topk_pred_depth,\
+                                layerSizeReduce=args.resnet_layer_size_reduce,preLayerSizeReduce=args.resnet_prelay_size_reduce,dilation=args.resnet_dilation)
         secondModel = Identity(args.video_mode,nbFeat,args.class_nb,False)
     elif args.temp_mod == "pointnet2_pp":
         pn_builder = pointnet2.models.pointnet2_msg_cls.Pointnet2MSG
-        firstModel = PointNet2(args.video_mode,pn_builder,args.class_nb,nbFeat=nbFeat,featModelName=args.feat,pretrainedFeatMod=args.pretrained_visual,bigMaps=args.pn_big_maps,encoderHidChan=args.pn_topk_hid_chan,topk=args.pn_topk,topk_softcoord=args.pn_topk_softcoord,\
-                                topk_softCoord_kerSize=args.pn_topk_softcoord_kersize,point_nb=args.pn_point_nb,reconst=args.pn_topk_reconst,encoderChan=args.pn_topk_enc_chan,applyAllLayers=args.resnet_apply_all_layers,\
-                                num_classes=args.class_nb,multiModel=args.resnet_multi_model,multiModSparseConst=args.resnet_multi_model_sparse_const)
+        firstModel = PointNet2(args.video_mode,pn_builder,args.class_nb,nbFeat=nbFeat,featModelName=args.feat,pretrainedFeatMod=args.pretrained_visual,encoderHidChan=args.pn_topk_hid_chan,\
+                                topk=args.pn_topk,topk_softcoord=args.pn_topk_softcoord,topk_softCoord_kerSize=args.pn_topk_softcoord_kersize,point_nb=args.pn_point_nb,reconst=args.pn_topk_reconst,\
+                                encoderChan=args.pn_topk_enc_chan,multiModel=args.resnet_multi_model,multiModSparseConst=args.resnet_multi_model_sparse_const,predictDepth=args.pn_topk_pred_depth,\
+                                layerSizeReduce=args.resnet_layer_size_reduce,preLayerSizeReduce=args.resnet_prelay_size_reduce,dilation=args.resnet_dilation)
         secondModel = Identity(args.video_mode,nbFeat,args.class_nb,False)
     elif args.temp_mod == "identity":
         secondModel = Identity(args.video_mode,nbFeat,args.class_nb,False)
@@ -728,9 +741,6 @@ def addArgs(argreader):
     argreader.parser.add_argument('--feat_attention_grouped_att', type=args.str2bool, metavar='BOOl',
                         help="To use grouped convolution in the attention module.")
 
-    argreader.parser.add_argument('--feat_attention_big_maps', type=args.str2bool, metavar='BOOL',
-                        help='To make the feature and the attention maps bigger.')
-
     argreader.parser.add_argument('--pretrained_visual', type=args.str2bool, metavar='BOOL',
                         help='To have a visual feature extractor pretrained on ImageNet.')
 
@@ -758,9 +768,8 @@ def addArgs(argreader):
                         help='For the topk point net model. This is the number of output channel of the encoder')
     argreader.parser.add_argument('--pn_topk_hid_chan', type=int, metavar='NB',
                         help='For the topk point net model. This is the number of hidden channel of the encoder')
-
-    argreader.parser.add_argument('--pn_big_maps', type=args.str2bool, metavar='INT',
-                        help='For the pointnet2 model. To have the feature model to produce big feature maps')
+    argreader.parser.add_argument('--pn_topk_pred_depth', type=args.str2bool, metavar='INT',
+                        help='For the pointnet2 model. To predict the depth of chosen points.')
 
     argreader.parser.add_argument('--resnet_chan', type=int, metavar='INT',
                         help='The channel number for the visual model when resnet is used')
@@ -768,14 +777,16 @@ def addArgs(argreader):
                         help='The stride for the visual model when resnet is used')
     argreader.parser.add_argument('--resnet_dilation', type=int, metavar='INT',
                         help='The dilation for the visual model when resnet is used')
-    argreader.parser.add_argument('--resnet_apply_all_layers', type=args.str2bool, metavar='INT',
-                        help='To apply all layers (including the final one when resnet is used.)')
     argreader.parser.add_argument('--resnet_multi_model', type=args.str2bool, metavar='INT',
                         help='To apply average pooling and a dense layer to each feature map. This leads to one model \
                         per scale. The final scores is the average of the scores provided by each model.')
     argreader.parser.add_argument('--resnet_multi_model_sparse_const', type=args.str2bool, metavar='INT',
                         help='For the resnet attention block. Forces the attention map of higher resolution to be sparsier \
                         than the lower resolution attention maps.')
+    argreader.parser.add_argument('--resnet_layer_size_reduce', type=args.str2bool, metavar='INT',
+                        help='To apply a stride of 2 in the layer 2,3 and 4 when the resnet model is used.')
+    argreader.parser.add_argument('--resnet_prelay_size_reduce', type=args.str2bool, metavar='INT',
+                        help='To apply a stride of 2 in the convolution and the maxpooling before the layer 1.')
 
     argreader.parser.add_argument('--resnet_att_chan', type=int, metavar='INT',
                         help='For the \'resnetX_att\' feat models. The number of channels in the attention module.')
