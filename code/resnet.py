@@ -5,7 +5,7 @@ import numpy as np
 from  torch.nn.modules.upsampling import Upsample
 
 from torch.nn.functional import interpolate as interpo
-
+import sys
 '''
 
 Just a modification of the torchvision resnet model to get the before-to-last activation
@@ -131,29 +131,27 @@ class TanHPlusRelu(nn.Module):
 class ResNet(nn.Module):
 
     def __init__(self, block, layers, num_classes=1000, zero_init_residual=False, norm_layer=None,maxPoolKer=(3,3),maxPoolPad=(1,1),stride=(2,2),\
-                    featMap=False,chan=64,inChan=3,dilation=1,bigMaps=False,layersNb=4,attention=False,attChan=16,attBlockNb=1,applyMaxpool=True,\
-                    applyAllLayers=False,attActFunc="sigmoid",multiModel=False,multiModSparseConst=False):
+                    featMap=False,chan=64,inChan=3,dilation=1,layerSizeReduce=True,preLayerSizeReduce=True,layersNb=4,attention=False,attChan=16,attBlockNb=1,\
+                    attActFunc="sigmoid",multiModel=False,multiModSparseConst=False):
 
         super(ResNet, self).__init__()
         if norm_layer is None:
             norm_layer = nn.BatchNorm2d
         self.inplanes = chan
-        self.conv1 = nn.Conv2d(inChan, chan, kernel_size=7, stride=stride, padding=3,bias=False)
+        self.conv1 = nn.Conv2d(inChan, chan, kernel_size=7, stride=1 if not preLayerSizeReduce else stride, padding=3,bias=False)
         self.bn1 = norm_layer(chan)
         self.relu = nn.ReLU(inplace=True)
-        self.maxpool = nn.MaxPool2d(kernel_size=maxPoolKer, stride=stride, padding=maxPoolPad)
-        self.applyMaxpool = applyMaxpool
+        self.maxpool = nn.MaxPool2d(kernel_size=maxPoolKer, stride=1 if not preLayerSizeReduce else stride, padding=maxPoolPad)
 
         self.nbLayers = len(layers)
 
-        self.applyAllLayers = applyAllLayers
         self.multiModel = multiModel
         self.multiModSparseConst = multiModSparseConst
         #All layers are built but they will not necessarily be used
-        self.layer1 = self._make_layer(block, chan*1, layers[0], stride=1,                        norm_layer=norm_layer,feat=True if (self.nbLayers==1 and not applyAllLayers) else False,dilation=dilation)
-        self.layer2 = self._make_layer(block, chan*2, layers[1], stride=1 if bigMaps else stride, norm_layer=norm_layer,feat=True if (self.nbLayers==2 and not applyAllLayers) else False,dilation=dilation)
-        self.layer3 = self._make_layer(block, chan*4, layers[2], stride=1 if bigMaps else stride, norm_layer=norm_layer,feat=True if (self.nbLayers==3 and not applyAllLayers) else False,dilation=dilation)
-        self.layer4 = self._make_layer(block, chan*8, layers[3], stride=1 if bigMaps else stride, norm_layer=norm_layer,feat=True if (self.nbLayers==4 and not applyAllLayers) else False,dilation=dilation)
+        self.layer1 = self._make_layer(block, chan*1, layers[0], stride=1,                        norm_layer=norm_layer,feat=True if self.nbLayers==1 else False,dilation=dilation)
+        self.layer2 = self._make_layer(block, chan*2, layers[1], stride=1 if not layerSizeReduce else stride, norm_layer=norm_layer,feat=True if self.nbLayers==2 else False,dilation=dilation)
+        self.layer3 = self._make_layer(block, chan*4, layers[2], stride=1 if not layerSizeReduce else stride, norm_layer=norm_layer,feat=True if self.nbLayers==3 else False,dilation=dilation)
+        self.layer4 = self._make_layer(block, chan*8, layers[3], stride=1 if not layerSizeReduce else stride, norm_layer=norm_layer,feat=True if self.nbLayers==4 else False,dilation=dilation)
 
         if layersNb<1 or layersNb>4:
             raise ValueError("Wrong number of layer : ",layersNb)
@@ -236,12 +234,10 @@ class ResNet(nn.Module):
         return nn.Sequential(*layers)
 
     def forward(self, x):
-
         x = self.conv1(x)
         x = self.bn1(x)
         x = self.relu(x)
-        if self.applyMaxpool:
-            x = self.maxpool(x)
+        x = self.maxpool(x)
 
         if self.attention:
             attWeightsDict = {}
@@ -250,14 +246,12 @@ class ResNet(nn.Module):
 
         for i in range(1,self.layersNb+1):
             x = getattr(self,"layer{}".format(i))(x)
-
             if self.attention and not self.multiModel:
                 attWeights = getattr(self,"att_{}".format(i))(x)
                 attWeightsDict[i] = attWeights
                 x = x*attWeights
 
             layerFeat[i] = x
-
         if self.multiModel:
             scores = None
             for i in range(self.layersNb,0,-1):
@@ -275,13 +269,9 @@ class ResNet(nn.Module):
             scores /= self.layersNb
             x = scores
         else:
-
             if not self.featMap:
                 x = self.avgpool(x)
                 x = x.view(x.size(0), -1)
-
-                if self.applyAllLayers:
-                    x = self.fc(x)
 
         if self.attention:
             return {"x":x,"attMaps":attWeightsDict}

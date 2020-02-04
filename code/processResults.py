@@ -40,7 +40,7 @@ from scipy import stats
 import math
 from PIL import Image
 from PIL import Image, ImageEnhance
-def evalModel(dataset,partBeg,partEnd,propSetIntFormat,exp_id,model_id,epoch,regression,uncertainty,nbClass):
+def evalModel(dataset,partBeg,partEnd,propSetIntFormat,exp_id,model_id,epoch,nbClass):
     '''
     Evaluate a model. It requires the scores for each video to have been computed already with the trainVal.py script. Check readme to
     see how to compute the scores for each video.
@@ -92,7 +92,7 @@ def evalModel(dataset,partBeg,partEnd,propSetIntFormat,exp_id,model_id,epoch,reg
         videoName = videoNameDict[path]
 
         #Compute the metrics with the default threshold (0.5) and with a threshold tuned on each video with a leave-one out method
-        metrDict,frameNb = computeMetrics(path,dataset,videoName,resFilePaths,videoNameDict,metTun,transMat,regression,uncertainty)
+        metrDict,frameNb = computeMetrics(path,dataset,videoName,resFilePaths,videoNameDict,metTun,transMat)
 
         for metricName in metEval.keys():
 
@@ -120,7 +120,7 @@ def evalModel(dataset,partBeg,partEnd,propSetIntFormat,exp_id,model_id,epoch,reg
         print(model_id+","+str(metEval["Accuracy"].sum()/totalFrameNb)+","+str(metEval["Accuracy (Viterbi)"].sum()/totalFrameNb)+","\
                            +str(metEval["Correlation"])+","+str(metEval["Temp Accuracy"].mean()),file=text_file)
 
-def computeMetrics(path,dataset,videoName,resFilePaths,videoNameDict,metTun,transMat,regression,uncertainty):
+def computeMetrics(path,dataset,videoName,resFilePaths,videoNameDict,metTun,transMat):
     '''
     Evaluate a model on a video by using the default threshold and a threshold tuned on all the other video
 
@@ -146,7 +146,7 @@ def computeMetrics(path,dataset,videoName,resFilePaths,videoNameDict,metTun,tran
 
     gt = gt[:len(scores)]
 
-    metr_dict = metrics.binaryToMetrics(torch.tensor(scores[np.newaxis,:]).float(),torch.tensor(gt[np.newaxis,:]),transMat,regression,uncertainty,videoNames=[videoName])
+    metr_dict = metrics.binaryToMetrics(torch.tensor(scores[np.newaxis,:]).float(),torch.tensor(gt[np.newaxis,:]),transMat,videoNames=[videoName])
 
     return metr_dict,len(scores)
 
@@ -404,14 +404,15 @@ def ttest_matrix(groupedLines,keys,exp_id,metricNames,keyToNameDict):
     for i in range(len(keys)):
         for j in range(len(keys)):
             for k in range(len(metricNames)):
-
                 _,mat[i,j,k] = scipy.stats.ttest_ind(groupedLines[keys[i]][:,k],groupedLines[keys[j]][:,k],equal_var=True)
 
-    mat = mat.astype(str)
     for k in range(len(metricNames)):
-        csv = "\t"+"\t".join([keyToNameDict[key] for key in keys])+"\n"
+        csv = "&"+"&".join([keyToNameDict[key] for key in keys])+"\n"
         for i in range(len(keys)):
-            csv += keyToNameDict[keys[i]]+"\t"+"\t".join(mat[i,:,k])+"\n"
+            csv += keyToNameDict[keys[i]]
+            for j in range(len(mat[i,:,k])):
+                csv += "&" + str(round(mat[i,j,k],2))
+            csv += "\n"
 
         with open("../results/{}/ttest_{}.csv".format(exp_id,metricNames[k]),"w") as text_file:
             print(csv,file=text_file)
@@ -836,7 +837,7 @@ def main(argv=None):
 
 
             evalModel(conf["dataset_test"],float(conf["test_part_beg"]),float(conf["test_part_end"]),str2bool(conf["prop_set_int_fmt"]),args.exp_id,model_id,epoch=args.epochs_to_process[i],\
-                        regression=str2bool(conf["regression"]),uncertainty=str2bool(conf["uncertainty"]),nbClass=int(conf["class_nb"]))
+                        nbClass=int(conf["class_nb"]))
 
         if len(args.param_agr) > 0:
             agregatePerfs(args.exp_id,args.param_agr,args.keys,args.names)
