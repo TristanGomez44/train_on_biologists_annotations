@@ -413,7 +413,6 @@ def buildSeqTrainLoader(args):
 
         sampler = None
         collateFn = None
-        kwargs = {}
 
     else:
         raise ValueError("Unkown train dataset : {}".format(args.dataset_train))
@@ -428,7 +427,7 @@ def buildSeqTrainLoader(args):
         bsz = args.batch_size
 
     trainLoader = torch.utils.data.DataLoader(dataset=train_dataset,batch_size=bsz, # use custom collate function here
-                      pin_memory=False,num_workers=args.num_workers,**kwargs)
+                      pin_memory=False,num_workers=args.num_workers,shuffle=True)
 
     return trainLoader,train_dataset
 
