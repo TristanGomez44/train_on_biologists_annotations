@@ -93,7 +93,7 @@ def epochSeqTr(model,optim,log_interval,loader, epoch, args,writer,**kwargs):
             average_gradients(model)
 
         optim.step()
-        update.updateHardWareOccupation(args.debug,args.cuda,epoch,"train",args.exp_id,args.model_id,batch_idx)
+        update.updateHardWareOccupation(args.debug,args.benchmark,args.cuda,epoch,"train",args.exp_id,args.model_id,batch_idx)
         optim.zero_grad()
 
         #Metrics
@@ -134,7 +134,7 @@ def add_pn_recons_term(pn_reconst_weight,resDict,data):
 
     if len(data.size()) == 5:
         data = data.view(data.size(0)*data.size(1),data.size(2),data.size(3),data.size(4))
-        
+
     data = F.adaptive_avg_pool2d(data, (reconst.size(-2),reconst.size(-1)))
 
     return pn_reconst_weight*torch.pow(reconst-data,2).mean()
@@ -205,7 +205,7 @@ def epochSeqVal(model,log_interval,loader, epoch, args,writer,metricEarlyStop,mo
 
         intermVarDict = update.catIntermediateVariables(visualDict,intermVarDict,nbVideos)
 
-        update.updateHardWareOccupation(args.debug,args.cuda,epoch,mode,args.exp_id,args.model_id,batch_idx)
+        update.updateHardWareOccupation(args.debug,args.benchmark,args.cuda,epoch,mode,args.exp_id,args.model_id,batch_idx)
 
         if newVideo:
             allTarget = target
@@ -292,7 +292,7 @@ def epochImgEval(model,log_interval,loader, epoch, args,writer,metricEarlyStop,m
         intermVarDict = update.catIntermediateVariables(resDict,intermVarDict,validBatch)
 
         #Harware occupation
-        update.updateHardWareOccupation(args.debug,args.cuda,epoch,mode,args.exp_id,args.model_id,batch_idx)
+        update.updateHardWareOccupation(args.debug,args.benchmark,args.cuda,epoch,mode,args.exp_id,args.model_id,batch_idx)
 
         #Metrics
         metDictSample = metrics.binaryToMetrics(output,target,videoMode=args.video_mode)
