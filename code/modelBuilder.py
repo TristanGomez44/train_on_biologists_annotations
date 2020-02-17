@@ -350,7 +350,8 @@ class DirectPointExtractor(nn.Module):
 
 class TopkPointExtractor(nn.Module):
 
-    def __init__(self,cuda,nbFeat,featMod,softCoord,softCoord_kerSize,softCoord_secOrder,point_nb,reconst,encoderChan,predictDepth):
+    def __init__(self,cuda,nbFeat,featMod,softCoord,softCoord_kerSize,softCoord_secOrder,point_nb,reconst,encoderChan,\
+                    predictDepth,softcoord_shiftpred):
         super(TopkPointExtractor,self).__init__()
 
         self.feat = featMod
@@ -359,6 +360,7 @@ class TopkPointExtractor(nn.Module):
         self.softCoord = softCoord
         self.softCoord_kerSize = softCoord_kerSize
         self.softCoord_secOrder = softCoord_secOrder
+        self.softcoord_shiftpred = softcoord_shiftpred
 
         self.reconst = reconst
         if reconst:
@@ -369,6 +371,12 @@ class TopkPointExtractor(nn.Module):
         self.predictDepth = predictDepth
         if predictDepth:
             self.conv1x1_depth = nn.Conv2d(nbFeat, 1, kernel_size=1, stride=1)
+
+        if self.softcoord_shiftpred and self.softCoord:
+            raise ValueError("softcoord_shiftpred and softCoord can't be true at the same time.")
+
+        if self.softcoord_shiftpred:
+            self.shiftpred_x,self.shiftpred_y = nn.Conv2d(nbFeat, 1, kernel_size=1, stride=1),nn.Conv2d(nbFeat, 1, kernel_size=1, stride=1)
 
         if self.softCoord:
 
@@ -384,6 +392,15 @@ class TopkPointExtractor(nn.Module):
                 self.spatialWeightKer = self.spatialWeightKer*self.spatialWeightKer
 
             self.ordKerDict,self.absKerDict,self.spatialWeightKerDict = {},{},{}
+
+    def mapToList(self,map,abs,ord):
+        #This extract the desired pixels in a map
+
+        indices = tuple([torch.arange(map.size(0), dtype=torch.long).unsqueeze(1).unsqueeze(1),
+                         torch.arange(map.size(1), dtype=torch.long).unsqueeze(1).unsqueeze(0),
+                         ord.long().unsqueeze(1),abs.long().unsqueeze(1)])
+        list = map[indices].permute(0,2,1)
+        return list
 
     def forward(self,img):
 
@@ -405,20 +422,19 @@ class TopkPointExtractor(nn.Module):
             #Keeping only one channel (the three channels are just copies)
             retDict['reconst'] = reconst[:,0:1]
 
-        indices = tuple([torch.arange(pointFeaturesMap.size(0), dtype=torch.long).unsqueeze(1).unsqueeze(1),
-                         torch.arange(pointFeaturesMap.size(1), dtype=torch.long).unsqueeze(1).unsqueeze(0),
-                         ord.long().unsqueeze(1),abs.long().unsqueeze(1)])
-        pointFeat = pointFeaturesMap[indices]
-        pointFeat = pointFeat.permute(0,2,1)
+        pointFeat = self.mapToList(pointFeaturesMap,abs,ord)
 
         if self.predictDepth:
             depthMap = torch.tanh(self.conv1x1_depth(featureMaps))*max(featureMaps.size(-2),featureMaps.size(-1))//10
-            indices = tuple([torch.arange(depthMap.size(0), dtype=torch.long).unsqueeze(1).unsqueeze(1),
-                             torch.arange(depthMap.size(1), dtype=torch.long).unsqueeze(1).unsqueeze(0),
-                             ord.long().unsqueeze(1),abs.long().unsqueeze(1)])
-            depth = depthMap[indices].permute(0,2,1)
+            depth = self.mapToList(depthMap,abs,ord)
         else:
             depth = torch.zeros(img.size(0),self.point_extracted,1).to(x.device)
+            
+        if self.softcoord_shiftpred:
+            xShiftMap,yShiftMap = torch.tanh(self.shiftpred_x(featureMaps)),torch.tanh(self.shiftpred_y(featureMaps))
+            xShift,yShift = self.mapToList(xShiftMap,abs,ord).squeeze(-1),self.mapToList(yShiftMap,abs,ord).squeeze(-1)
+            abs = xShift + abs.float()
+            ord = yShift + ord.float()
 
         abs,ord = abs.unsqueeze(-1).float(),ord.unsqueeze(-1).float()
         points = torch.cat((abs,ord,depth,pointFeat),dim=-1).float()
@@ -458,12 +474,15 @@ class TopkPointExtractor(nn.Module):
 class PointNet2(FirstModel):
 
     def __init__(self,cuda,videoMode,pn_builder,classNb,nbFeat,featModelName='resnet18',pretrainedFeatMod=True,topk=False,\
-                topk_softcoord=False,topk_softCoord_kerSize=2,topk_softCoord_secOrder=False,point_nb=256,reconst=False,encoderChan=1,encoderHidChan=64,predictDepth=False,**kwargs):
+                topk_softcoord=False,topk_softCoord_kerSize=2,topk_softCoord_secOrder=False,point_nb=256,reconst=False,\
+                encoderChan=1,encoderHidChan=64,predictDepth=False,topk_softcoord_shiftpred=False,**kwargs):
 
         super(PointNet2,self).__init__(videoMode,featModelName,pretrainedFeatMod,True,chan=encoderHidChan,**kwargs)
 
         if topk:
-            self.pointExtr = TopkPointExtractor(cuda,nbFeat,self.featMod,topk_softcoord,topk_softCoord_kerSize,topk_softCoord_secOrder,point_nb,reconst,encoderChan,predictDepth)
+            self.pointExtr = TopkPointExtractor(cuda,nbFeat,self.featMod,topk_softcoord,topk_softCoord_kerSize,\
+                                                topk_softCoord_secOrder,point_nb,reconst,encoderChan,predictDepth,\
+                                                topk_softcoord_shiftpred)
         else:
             self.pointExtr = DirectPointExtractor(point_nb)
 
@@ -698,7 +717,7 @@ def netBuilder(args):
         pn_builder = pointnet2.models.pointnet2_ssg_cls.Pointnet2SSG
         firstModel = PointNet2(args.cuda,args.video_mode,pn_builder,args.class_nb,nbFeat=nbFeat,featModelName=args.feat,pretrainedFeatMod=args.pretrained_visual,encoderHidChan=args.pn_topk_hid_chan,\
                                 topk=args.pn_topk,topk_softcoord=args.pn_topk_softcoord,topk_softCoord_kerSize=args.pn_topk_softcoord_kersize,topk_softCoord_secOrder=args.pn_topk_softcoord_secorder,\
-                                point_nb=args.pn_point_nb,reconst=args.pn_topk_reconst,\
+                                point_nb=args.pn_point_nb,reconst=args.pn_topk_reconst,topk_softcoord_shiftpred=args.pn_topk_softcoord_shiftpred,\
                                 encoderChan=args.pn_topk_enc_chan,multiModel=args.resnet_multi_model,multiModSparseConst=args.resnet_multi_model_sparse_const,predictDepth=args.pn_topk_pred_depth,\
                                 layerSizeReduce=args.resnet_layer_size_reduce,preLayerSizeReduce=args.resnet_prelay_size_reduce,dilation=args.resnet_dilation)
         secondModel = Identity(args.video_mode,nbFeat,args.class_nb,False)
@@ -706,7 +725,7 @@ def netBuilder(args):
         pn_builder = pointnet2.models.pointnet2_msg_cls.Pointnet2MSG
         firstModel = PointNet2(args.cuda,args.video_mode,pn_builder,args.class_nb,nbFeat=nbFeat,featModelName=args.feat,pretrainedFeatMod=args.pretrained_visual,encoderHidChan=args.pn_topk_hid_chan,\
                                 topk=args.pn_topk,topk_softcoord=args.pn_topk_softcoord,topk_softCoord_kerSize=args.pn_topk_softcoord_kersize,topk_softCoord_secOrder=args.pn_topk_softcoord_secorder,\
-                                point_nb=args.pn_point_nb,reconst=args.pn_topk_reconst,\
+                                point_nb=args.pn_point_nb,reconst=args.pn_topk_reconst,topk_softcoord_shiftpred=args.pn_topk_softcoord_shiftpred,\
                                 encoderChan=args.pn_topk_enc_chan,multiModel=args.resnet_multi_model,multiModSparseConst=args.resnet_multi_model_sparse_const,predictDepth=args.pn_topk_pred_depth,\
                                 layerSizeReduce=args.resnet_layer_size_reduce,preLayerSizeReduce=args.resnet_prelay_size_reduce,dilation=args.resnet_dilation)
         secondModel = Identity(args.video_mode,nbFeat,args.class_nb,False)
@@ -800,6 +819,8 @@ def addArgs(argreader):
                         help='For the topk point net model. This is the kernel size of the soft argmax.')
     argreader.parser.add_argument('--pn_topk_softcoord_secorder', type=args.str2bool, metavar='BOOL',
                         help='For the topk point net model. The spatial weight kernel is squarred to make the central elements weight more.')
+    argreader.parser.add_argument('--pn_topk_softcoord_shiftpred', type=args.str2bool, metavar='INT',
+                        help='For the pointnet2 model. To predict the coordinate shift of each point instead of using weighted means.')
 
     argreader.parser.add_argument('--pn_point_nb', type=int, metavar='NB',
                         help='For the topk point net model. This is the number of point extracted for each image.')
