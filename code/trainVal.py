@@ -83,12 +83,13 @@ def epochSeqTr(model,optim,log_interval,loader, epoch, args,writer,**kwargs):
         timeElapsedTensor = batch[-1] if args.video_mode else None
         timeElapsedTensor = timeElapsedTensor.cuda() if (args.video_mode and args.cuda) else None
 
-        resDict = model(data,timeElapsedTensor)
-        output = resDict["pred"]
+        with torch.autograd.detect_anomaly():
+            resDict = model(data,timeElapsedTensor)
+            output = resDict["pred"]
 
-        loss = computeLoss(args.nll_weight,output,target,args.pn_reconst_weight,resDict,data,args.video_mode)
+            loss = computeLoss(args.nll_weight,output,target,args.pn_reconst_weight,resDict,data,args.video_mode)
 
-        loss.backward()
+            loss.backward()
         if args.distributed:
             average_gradients(model)
 
