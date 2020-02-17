@@ -59,11 +59,21 @@ def evalModel(dataset,partBeg,partEnd,propSetIntFormat,exp_id,model_id,epoch,nbC
 
     '''
 
+    print("model_id",model_id,"../results/{}/{}_epoch{}_*.csv".format(exp_id,model_id,epoch))
+
     try:
         resFilePaths = np.array(sorted(glob.glob("../results/{}/{}_epoch{}_*.csv".format(exp_id,model_id,epoch)),key=utils.findNumbers))
         videoNameDict = buildVideoNameDict(dataset,partBeg,partEnd,propSetIntFormat,resFilePaths)
     except ValueError:
-        testEpoch = len(glob.glob("../models/{}/model{}_epoch*".format(exp_id,model_id)))
+
+        def findLastestEpoch(exp_id,model_id):
+            allResFilesPath = sorted(glob.glob("../results/{}/{}_epoch*".format(exp_id,model_id)))
+            allEpochs = list(map(lambda x:int(x[x.find("epoch")+5:].split("_")[0]),allResFilesPath))
+            allEpochs = set(allEpochs)
+            latestEpoch = sorted(list(allEpochs))[-1]
+            return latestEpoch
+
+        testEpoch = findLastestEpoch(exp_id,model_id)
         resFilePaths = np.array(sorted(glob.glob("../results/{}/{}_epoch{}_*.csv".format(exp_id,model_id,testEpoch)),key=utils.findNumbers))
         videoNameDict = buildVideoNameDict(dataset,partBeg,partEnd,propSetIntFormat,resFilePaths)
 
@@ -262,8 +272,8 @@ def labelIndList2FrameInd(labelList,reverLabDict):
 def buildVideoNameDict(dataset,test_part_beg,test_part_end,propSetIntFormat,resFilePaths,raiseError=True):
 
     ''' Build a dictionnary associating a path to a video name (it can be the path to any file than contain the name of a video in its file name) '''
-
     videoPaths = load_data.findVideos(dataset,test_part_beg,test_part_end,propSetIntFormat)
+    print("\t",test_part_beg,test_part_end,len(resFilePaths),len(videoPaths))
     videoNames = list(map(lambda x:os.path.basename(os.path.splitext(x)[0]),videoPaths))
 
     videoNameDict = {}
@@ -732,20 +742,9 @@ def plotPoints(exp_id,model_id,epoch):
         with imageio.get_writer("../vis/{}/points_{}_{}_{}.mp4".format(exp_id,model_id,epoch,videoName), mode='I',fps=20) as writer:
             for i,points in enumerate(pointsSeq):
 
-                #fig = plt.figure()
-                #plt.xlim(xMin,xMax)
-                #plt.ylim(yMin,yMax)
-
-                #plt.plot(points[:,0],points[:,1],"*")
-                #img = fig2data(fig)
-                #plt.close()
-
                 frame = video[i+frameStart]
                 frame = frame[frame.shape[0]-frame.shape[1]:,:]
-                #frame = np.array(change_contrast(Image.fromarray(frame.astype("uint8")), 0))
                 frame = 255*(frame/frame.max())
-
-                #points = (points*frame.shape[0]/imgSize).astype(int)
 
                 mask = np.ones((imgSize,imgSize,3)).astype("float")
 
@@ -758,20 +757,17 @@ def plotPoints(exp_id,model_id,epoch):
 
                 writer.append_data(img_as_ubyte(frame.astype("uint8")))
 
-def plotPointsImageDataset(imgNb,redFact,args):
+def plotPointsImageDataset(imgNb,redFact,plotDepth,args):
 
     cm = plt.get_cmap('plasma')
 
     exp_id = args.exp_id
     model_id = args.model_id
 
-    pointPaths = sorted(glob.glob("../results/{}/points_{}_epoch*_.npy".format(exp_id,model_id)))
+    pointPaths = sorted(glob.glob("../results/{}/points_{}_epoch*_.npy".format(exp_id,model_id)),key=utils.findNumbers)
 
     points = np.concatenate(list(map(lambda x:np.load(x)[:imgNb][:,:,:][np.newaxis],pointPaths)),axis=0)
-    print(points.shape)
-
     points = np.transpose(points, axes=[1,0,2,3])
-    print(points.shape)
 
     imgLoader = load_data.buildSeqTestLoader(args,"val",normalize=False)
 
@@ -785,7 +781,7 @@ def plotPointsImageDataset(imgNb,redFact,args):
             if totalImgNb<imgNb:
                 print("\t",imgInd,"/",totalImgNb)
                 print("\t","Writing video",imgInd)
-                with imageio.get_writer("../vis/{}/points_{}_img{}.mp4".format(exp_id,model_id,totalImgNb), mode='I',fps=20) as writer:
+                with imageio.get_writer("../vis/{}/points_{}_img{}_depth=.mp4".format(exp_id,model_id,totalImgNb,plotDepth), mode='I',fps=20) as writer:
 
                     img = imgBatch[imgInd].detach().permute(1,2,0).numpy().astype(float)
 
@@ -794,7 +790,11 @@ def plotPointsImageDataset(imgNb,redFact,args):
                         pts = points[imgInd,epoch]
                         mask = np.ones((img.shape[0]//redFact,img.shape[1]//redFact,3)).astype("float")
 
-                        ptsValues = np.abs(pts[:,3:]).sum(axis=-1)
+                        if plotDepth:
+                            ptsValues = pts[:,2]
+                        else:
+                            ptsValues = np.abs(pts[:,3:]).sum(axis=-1)
+
                         ptsValues = cm(ptsValues/ptsValues.max())[:,:3]
                         mask[pts[:,1].astype(int),pts[:,0].astype(int)] = ptsValues
 
@@ -872,6 +872,8 @@ def main(argv=None):
                                     The reduction factor of the point cloud size compared to the full image. For example if the image has size \
                                     224x224 and the points cloud lies in a 56x56 frame, this arg should be 224/56=4')
 
+    argreader.parser.add_argument('--plot_depth',type=str2bool,metavar="BOOL",help='For the --plot_points_image_dataset arg. Plots the depth instead of point feature norm.')
+
     argreader = load_data.addArgs(argreader)
 
     #Reading the comand line arg
@@ -912,7 +914,7 @@ def main(argv=None):
     if args.plot_points:
         plotPoints(args.exp_id,args.model_id,args.epoch_to_process)
     if args.plot_points_image_dataset:
-        plotPointsImageDataset(args.image_nb,args.reduction_fact,args)
+        plotPointsImageDataset(args.image_nb,args.reduction_fact,args.plot_depth,args)
 
 if __name__ == "__main__":
     main()
