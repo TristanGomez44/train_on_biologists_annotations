@@ -29,7 +29,7 @@ model_urls = {
 def conv3x3(in_planes, out_planes, stride=1,dilation=1,groups=1):
     """3x3 convolution with padding"""
     return nn.Conv2d(in_planes, out_planes, kernel_size=3, stride=stride,
-                     padding=1, bias=False,dilation=dilation,groups=groups)
+                     padding=dilation, bias=False,dilation=dilation,groups=groups)
 
 
 def conv1x1(in_planes, out_planes, stride=1):
@@ -57,7 +57,6 @@ class BasicBlock(nn.Module):
 
     def forward(self, x):
         identity = x
-
         out = self.conv1(x)
         out = self.bn1(out)
         out = self.relu(out)
@@ -67,7 +66,6 @@ class BasicBlock(nn.Module):
 
         if self.downsample is not None:
             identity = self.downsample(x)
-
         out += identity
 
         if not self.feat:
@@ -143,22 +141,27 @@ class ResNet(nn.Module):
         self.relu = nn.ReLU(inplace=True)
         self.maxpool = nn.MaxPool2d(kernel_size=maxPoolKer, stride=1 if not preLayerSizeReduce else stride, padding=maxPoolPad)
 
+        if type(dilation) is int:
+            dilation = [dilation,dilation,dilation]
+        elif len(dilation) != 3:
+            raise ValueError("dilation must be a list of 3 int or an int.")
+
         self.nbLayers = len(layers)
 
         self.multiModel = multiModel
         self.multiModSparseConst = multiModSparseConst
         #All layers are built but they will not necessarily be used
-        self.layer1 = self._make_layer(block, chan*1, layers[0], stride=1,                        norm_layer=norm_layer,feat=True if self.nbLayers==1 else False,dilation=dilation)
-        self.layer2 = self._make_layer(block, chan*2, layers[1], stride=1 if not layerSizeReduce else stride, norm_layer=norm_layer,feat=True if self.nbLayers==2 else False,dilation=dilation)
-        self.layer3 = self._make_layer(block, chan*4, layers[2], stride=1 if not layerSizeReduce else stride, norm_layer=norm_layer,feat=True if self.nbLayers==3 else False,dilation=dilation)
-        self.layer4 = self._make_layer(block, chan*8, layers[3], stride=1 if not layerSizeReduce else stride, norm_layer=norm_layer,feat=True if self.nbLayers==4 else False,dilation=dilation)
+        self.layer1 = self._make_layer(block, chan*1, layers[0], stride=1,                        norm_layer=norm_layer,feat=True if self.nbLayers==1 else False,dilation=1)
+        self.layer2 = self._make_layer(block, chan*2, layers[1], stride=1 if not layerSizeReduce else stride, norm_layer=norm_layer,feat=True if self.nbLayers==2 else False,dilation=dilation[0])
+        self.layer3 = self._make_layer(block, chan*4, layers[2], stride=1 if not layerSizeReduce else stride, norm_layer=norm_layer,feat=True if self.nbLayers==3 else False,dilation=dilation[1])
+        self.layer4 = self._make_layer(block, chan*8, layers[3], stride=1 if not layerSizeReduce else stride, norm_layer=norm_layer,feat=True if self.nbLayers==4 else False,dilation=dilation[2])
 
         if layersNb<1 or layersNb>4:
             raise ValueError("Wrong number of layer : ",layersNb)
 
         self.layersNb = layersNb
 
-        self.fc = nn.Linear(chan*(2**(4-1)) * block.expansion, num_classes)
+        self.fc = nn.Linear(chan*(2**(4-1)) * block.expansion, 1000)
 
         self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
 
@@ -184,7 +187,10 @@ class ResNet(nn.Module):
         self.attention = attention
         if attention:
             self.inplanes = attChan
-            self.att = self._make_layer(block, attChan, attBlockNb, stride=1, norm_layer=norm_layer,feat=True)
+            self.att1 = self._make_layer(block, attChan, attBlockNb, stride=1, norm_layer=norm_layer,feat=True)
+            self.att2 = self._make_layer(block, attChan, attBlockNb, stride=1, norm_layer=norm_layer,feat=True)
+            self.att3 = self._make_layer(block, attChan, attBlockNb, stride=1, norm_layer=norm_layer,feat=True)
+            self.att4 = self._make_layer(block, attChan, attBlockNb, stride=1, norm_layer=norm_layer,feat=True)
             self.att_conv1x1_1 = conv1x1(chan*1, attChan, stride=1)
             self.att_conv1x1_2 = conv1x1(chan*2, attChan, stride=1)
             self.att_conv1x1_3 = conv1x1(chan*4, attChan, stride=1)
@@ -198,10 +204,10 @@ class ResNet(nn.Module):
             elif attActFunc == "tanh+relu":
                 actFuncConstructor = TanHPlusRelu
 
-            self.att_1 = nn.Sequential(self.att_conv1x1_1,self.att,self.att_final_conv1x1,actFuncConstructor())
-            self.att_2 = nn.Sequential(self.att_conv1x1_2,self.att,self.att_final_conv1x1,actFuncConstructor())
-            self.att_3 = nn.Sequential(self.att_conv1x1_3,self.att,self.att_final_conv1x1,actFuncConstructor())
-            self.att_4 = nn.Sequential(self.att_conv1x1_4,self.att,self.att_final_conv1x1,actFuncConstructor())
+            self.att_1 = nn.Sequential(self.att_conv1x1_1,self.att1,self.att_final_conv1x1,actFuncConstructor())
+            self.att_2 = nn.Sequential(self.att_conv1x1_2,self.att2,self.att_final_conv1x1,actFuncConstructor())
+            self.att_3 = nn.Sequential(self.att_conv1x1_3,self.att3,self.att_final_conv1x1,actFuncConstructor())
+            self.att_4 = nn.Sequential(self.att_conv1x1_4,self.att4,self.att_final_conv1x1,actFuncConstructor())
 
         if multiModel:
             self.fc1 = nn.Linear(chan*(2**(1-1)) * block.expansion, num_classes)
@@ -257,9 +263,8 @@ class ResNet(nn.Module):
             for i in range(self.layersNb,0,-1):
                 if self.attention:
                     attWeights = getattr(self,"att_{}".format(i))(layerFeat[i])
-                    attWeightsDict[i] = attWeights
                     attWeights = attWeights*interpo(attWeightsDict[i+1], size=(attWeights.size(-2),attWeights.size(-1)), mode='nearest') if i<self.layersNb and self.multiModSparseConst else attWeights
-
+                    attWeightsDict[i] = attWeights
                     layerFeat[i] = layerFeat[i]*attWeights
 
                 feat = self.avgpool(layerFeat[i]).view(x.size(0), -1)
