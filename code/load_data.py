@@ -381,7 +381,7 @@ def partition_dataset(dataset):
 
 def buildSeqTrainLoader(args):
 
-    if args.dataset_train.find("big") != -1 or args.dataset_train.find("small") != -1:
+    if args.video_mode:
 
         train_dataset = SeqTrDataset(args.dataset_train,args.train_part_beg,args.train_part_end,args.prop_set_int_fmt,args.tr_len,\
                                             args.img_size,args.orig_img_size,args.resize_image,args.exp_id,args.augment_data,args.mask_time_on_image,\
@@ -391,7 +391,7 @@ def buildSeqTrainLoader(args):
         collateFn = collateSeq
         kwargs = {"sampler":sampler,"collate_fn":collateFn}
 
-    elif args.dataset_train.find("CUB_200_2011") != -1:
+    else:
 
         normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],std=[0.229, 0.224, 0.225])
         transf = transforms.Compose([transforms.RandomResizedCrop(224),transforms.RandomHorizontalFlip(),transforms.ToTensor(),normalize])
@@ -411,11 +411,7 @@ def buildSeqTrainLoader(args):
 
         train_dataset,_ = torch.utils.data.random_split(train_dataset, [int(totalLength*train_prop),totalLength-int(totalLength*train_prop)])
 
-        sampler = None
-        collateFn = None
-
-    else:
-        raise ValueError("Unkown train dataset : {}".format(args.dataset_train))
+        kwargs = {"shuffle":True}
 
     if args.distributed:
         size = dist.get_world_size()
@@ -427,7 +423,7 @@ def buildSeqTrainLoader(args):
         bsz = args.batch_size
 
     trainLoader = torch.utils.data.DataLoader(dataset=train_dataset,batch_size=bsz, # use custom collate function here
-                      pin_memory=False,num_workers=args.num_workers,shuffle=True)
+                      pin_memory=False,num_workers=args.num_workers,**kwargs)
 
     return trainLoader,train_dataset
 
@@ -435,7 +431,7 @@ def buildSeqTestLoader(args,mode,normalize=True):
 
     datasetName = getattr(args,"dataset_{}".format(mode))
 
-    if datasetName.find("big") != -1 or datasetName.find("small") != -1:
+    if args.video_mode:
 
         if mode == "val":
             testLoader = TestLoader(datasetName,args.val_l,args.val_part_beg,args.val_part_end,args.prop_set_int_fmt,\
@@ -448,7 +444,7 @@ def buildSeqTestLoader(args,mode,normalize=True):
         else:
             raise ValueError("Unkown test loader mode : {}".format(mode))
 
-    elif datasetName.find("CUB_200_2011") != -1:
+    else:
         if normalize:
             normalizeFunc = transforms.Normalize(mean=[0.485, 0.456, 0.406],std=[0.229, 0.224, 0.225])
             transf = transforms.Compose([transforms.Resize(256),transforms.CenterCrop(224),transforms.ToTensor(),normalizeFunc])
@@ -666,7 +662,7 @@ if __name__ == "__main__":
     normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],std=[0.229, 0.224, 0.225])
     transf = transforms.Compose([transforms.RandomResizedCrop(224),transforms.RandomHorizontalFlip(),transforms.ToTensor(),normalize])
 
-    train_dataset = torchvision.datasets.ImageFolder("../data/CUB_200_2011_train",transf)
+    train_dataset = torchvision.datasets.ImageFolder("../data/imagenet_train",transf)
     sampler = None
     collateSeq = None
     num_workers = 4
@@ -681,7 +677,7 @@ if __name__ == "__main__":
 
     normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],std=[0.229, 0.224, 0.225])
     transf = transforms.Compose([transforms.Resize(256),transforms.CenterCrop(224),transforms.ToTensor(),normalize])
-    test_dataset = torchvision.datasets.ImageFolder("../data/CUB_200_2011_test",transf)
+    test_dataset = torchvision.datasets.ImageFolder("../data/imagenet_val",transf)
 
     val_batch_size = 20
 
