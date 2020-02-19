@@ -40,6 +40,11 @@ from scipy import stats
 import math
 from PIL import Image
 from PIL import Image, ImageEnhance
+
+from PIL import Image
+from PIL import ImageFont
+from PIL import ImageDraw
+
 def evalModel(dataset,partBeg,partEnd,propSetIntFormat,exp_id,model_id,epoch,nbClass):
     '''
     Evaluate a model. It requires the scores for each video to have been computed already with the trainVal.py script. Check readme to
@@ -781,7 +786,7 @@ def plotPointsImageDataset(imgNb,redFact,plotDepth,args):
             if totalImgNb<imgNb:
                 print("\t",imgInd,"/",totalImgNb)
                 print("\t","Writing video",imgInd)
-                with imageio.get_writer("../vis/{}/points_{}_img{}_depth=.mp4".format(exp_id,model_id,totalImgNb,plotDepth), mode='I',fps=20) as writer:
+                with imageio.get_writer("../vis/{}/points_{}_img{}_depth={}.mp4".format(exp_id,model_id,totalImgNb,plotDepth), mode='I',fps=20,quality=9) as writer:
 
                     img = imgBatch[imgInd].detach().permute(1,2,0).numpy().astype(float)
 
@@ -802,8 +807,12 @@ def plotPointsImageDataset(imgNb,redFact,plotDepth,args):
 
                         imgMasked = img*255*mask
 
+                        imgMasked = Image.fromarray(imgMasked.astype("uint8"))
+                        draw = ImageDraw.Draw(imgMasked)
+                        draw.text((0, 0),str(epoch),(0,0,0))
+                        imgMasked = np.asarray(imgMasked)
+                        cv2.imwrite("testProcessResults.png",imgMasked)
                         writer.append_data(img_as_ubyte(imgMasked.astype("uint8")))
-
 
                     totalImgNb += 1
         if batchInd>=batchNb:
