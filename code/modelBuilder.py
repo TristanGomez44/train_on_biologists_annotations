@@ -631,74 +631,6 @@ class LSTMSecondModel(SecondModel):
         # N x T x classNb
         return {"pred":x}
 
-class ScoreConvSecondModel(SecondModel):
-
-    def __init__(self,videoMode,nbFeat,nbClass,useTime,dropout,kerSize,chan,biLay,attention):
-
-        super(ScoreConvSecondModel,self).__init__(videoMode,nbFeat,nbClass,useTime)
-
-        self.linTempMod = LinearSecondModel(videoMode=videoMode,nbFeat=self.nbFeat,nbClass=self.nbClass,useTime=False,dropout=dropout)
-        self.scoreConv = ScoreConv(kerSize,chan,biLay,attention)
-
-        if not self.videoMode:
-            raise ValueError("Can't use ScoreConv as a second model when working on non video mode.")
-
-    def forward(self,x,batchSize,timeTensor):
-        x = self.catWithTimeFeat(x,timeTensor)
-
-        # NT x D
-        x = self.linTempMod(x,batchSize)["pred"]
-        # N x T x classNb
-        x = x.unsqueeze(1)
-        # N x 1 x T x classNb
-
-
-        x = self.scoreConv(x)
-        # N x 1 x T x classNb
-        x = x.squeeze(1)
-        # N x T x classNb
-
-        return {"pred":x}
-
-class ScoreConv(nn.Module):
-    ''' This is a module that reads the classes scores just before they are passed to the softmax by
-    the temporal model. It apply one or two convolution layers to the signal and uses 1x1 convolution to
-    outputs a transformed signal of the same shape as the input signal.
-
-    It can return this transformed signal and can also returns this transformed signal multiplied
-    by the input, like an attention layer.
-
-    Args:
-    - kerSize (int): the kernel size of the convolution(s)
-    - chan (int): the number of channel when using two convolutions
-    - biLay (bool): whether or not to apply two convolutional layers instead of one
-    - attention (bool): whether or not to multiply the transformed signal by the input before returning it
-
-    '''
-
-    def __init__(self,kerSize,chan,biLay,attention):
-
-        super(ScoreConv,self).__init__()
-
-        self.attention = attention
-
-        kerSize = (kerSize,kerSize)
-
-        if biLay:
-            self.conv1 = torch.nn.Conv2d(1,chan,kerSize,padding=(kerSize[0]//2,kerSize[1]//2))
-            self.conv2 = torch.nn.Conv2d(chan,1,1)
-            self.layers = nn.Sequential(self.conv1,nn.ReLU(),self.conv2)
-        else:
-            self.layers = torch.nn.Conv2d(1,1,kerSize,padding=(kerSize[0]//2,kerSize[1]//2))
-
-    def forward(self,x):
-
-        if not self.attention:
-            return self.layers(x)
-        else:
-            weights = self.layers(x)
-            return weights*x
-
 class Identity(SecondModel):
 
     def __init__(self,videoMode,nbFeat,nbClass,useTime):
@@ -765,8 +697,6 @@ def netBuilder(args):
         secondModel = LSTMSecondModel(args.video_mode,nbFeat,args.class_nb,args.use_time,args.dropout,args.lstm_lay,args.lstm_hid_size)
     elif args.temp_mod == "linear":
         secondModel = LinearSecondModel(args.video_mode,nbFeat,args.class_nb,args.use_time,args.dropout)
-    elif args.temp_mod == "score_conv":
-        secondModel = ScoreConvSecondModel(args.video_mode,nbFeat,args.class_nb,args.use_time,args.dropout,args.score_conv_ker_size,args.score_conv_chan,args.score_conv_bilay,args.score_conv_attention)
     elif args.temp_mod == "feat_attention" or args.temp_mod == "feat_attention_full":
 
         classBiasMod = ClassBias(nbFeat,args.class_nb) if args.class_bias_model else None
@@ -834,18 +764,6 @@ def addArgs(argreader):
 
     argreader.parser.add_argument('--lstm_hid_size', type=int,metavar='N',
                         help='Size of hidden layers for the lstm temporal model')
-
-    argreader.parser.add_argument('--score_conv_ker_size', type=int, metavar='N',
-                        help='The size of the 2d convolution kernel to apply on scores if temp model is a ScoreConvSecondModel.')
-
-    argreader.parser.add_argument('--score_conv_bilay', type=args.str2bool, metavar='N',
-                        help='To apply two convolution (the second is a 1x1 conv) on the scores instead of just one layer')
-
-    argreader.parser.add_argument('--score_conv_attention', type=args.str2bool, metavar='BOOL',
-                        help='To apply the score convolution(s) as an attention layer.')
-
-    argreader.parser.add_argument('--score_conv_chan', type=int, metavar='N',
-                        help='The number of channel of the score convolution layer (used only if --score_conv_bilay')
 
     argreader.parser.add_argument('--freeze_visual', type=args.str2bool, metavar='BOOL',
                         help='To freeze the weights of the visual model during training.')
