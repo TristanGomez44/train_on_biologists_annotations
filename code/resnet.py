@@ -6,6 +6,11 @@ from  torch.nn.modules.upsampling import Upsample
 
 from torch.nn.functional import interpolate as interpo
 import sys
+import glob
+import torch
+import cv2
+from skimage.transform import resize
+import torch.nn.functional as F
 '''
 
 Just a modification of the torchvision resnet model to get the before-to-last activation
@@ -29,7 +34,7 @@ model_urls = {
 def conv3x3(in_planes, out_planes, stride=1,dilation=1,groups=1):
     """3x3 convolution with padding"""
     return nn.Conv2d(in_planes, out_planes, kernel_size=3, stride=stride,
-                     padding=dilation, bias=False,dilation=dilation,groups=groups)
+                     padding=0, bias=False,dilation=dilation,groups=groups)
 
 
 def conv1x1(in_planes, out_planes, stride=1):
@@ -55,13 +60,21 @@ class BasicBlock(nn.Module):
 
         self.feat = feat
 
+        self.p2d = (1, 1, 1, 1)
+
+        if type(stride) is int:
+            stride = [stride,stride]
+        self.p2d_stri = (stride[0]==1, 1, stride[1]==1, 1)
+
     def forward(self, x):
         identity = x
         out = self.conv1(x)
+        out = F.pad(out, self.p2d_stri, "reflect")
         out = self.bn1(out)
         out = self.relu(out)
 
         out = self.conv2(out)
+        out = F.pad(out, self.p2d, "reflect")
         out = self.bn2(out)
 
         if self.downsample is not None:
@@ -93,6 +106,13 @@ class Bottleneck(nn.Module):
 
         self.feat = feat
 
+        self.p2d = (1, 1, 1, 1)
+
+        if type(stride) is int:
+            stride = [stride,stride]
+
+        self.p2d_stri = (stride[0]==1, 1, stride[1]==1, 1)
+
     def forward(self, x):
         identity = x
 
@@ -101,6 +121,7 @@ class Bottleneck(nn.Module):
         out = self.relu(out)
 
         out = self.conv2(out)
+        out = F.pad(out, self.p2d_stri, "reflect")
         out = self.bn2(out)
         out = self.relu(out)
 
@@ -136,7 +157,7 @@ class ResNet(nn.Module):
         if norm_layer is None:
             norm_layer = nn.BatchNorm2d
         self.inplanes = chan
-        self.conv1 = nn.Conv2d(inChan, chan, kernel_size=7, stride=1 if not preLayerSizeReduce else stride, padding=3,bias=False)
+        self.conv1 = nn.Conv2d(inChan, chan, kernel_size=7, stride=1 if not preLayerSizeReduce else stride,bias=False)
         self.bn1 = norm_layer(chan)
         self.relu = nn.ReLU(inplace=True)
         self.maxpool = nn.MaxPool2d(kernel_size=maxPoolKer, stride=1 if not preLayerSizeReduce else stride, padding=maxPoolPad)
@@ -239,7 +260,15 @@ class ResNet(nn.Module):
 
         return nn.Sequential(*layers)
 
+    def writeImg(self,featMap,name,size):
+        x = featMap.sum(dim=1,keepdim=True)
+        nbImagesAlreadyWritten = len(glob.glob("../vis/CUB/{}*.png".format(name)))
+        featMapImg = x.cpu().detach()[0].permute(1,2,0).numpy()
+        featMapImg = resize(featMapImg,(size,size),anti_aliasing=False,mode="constant",order=0)
+        cv2.imwrite("../vis/CUB/{}_img{}.png".format(name,nbImagesAlreadyWritten),featMapImg)
+
     def forward(self, x):
+
         x = self.conv1(x)
         x = self.bn1(x)
         x = self.relu(x)
