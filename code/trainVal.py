@@ -619,7 +619,7 @@ def run(args):
             trainFunc(**kwargsTr)
         else:
             if not args.no_val:
-                net.load_state_dict(torch.load("../models/{}/model{}_epoch{}".format(args.exp_id_no_train[0],args.model_id_no_train[1],epoch),map_location="cpu" if not args.cuda else None))
+                net.load_state_dict(torch.load("../models/{}/model{}_epoch{}".format(args.exp_id_no_train,args.model_id_no_train,epoch),map_location="cpu" if not args.cuda else None))
 
         if not args.no_val:
             with torch.no_grad():
