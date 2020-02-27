@@ -453,11 +453,11 @@ def buildSeqTestLoader(args,mode,normalize=True):
 
         test_dataset = torchvision.datasets.ImageFolder("../data/{}".format(datasetName),transf)
 
-        if mode == "val":
-            np.random.seed(args.seed)
-            torch.manual_seed(args.seed)
+        if mode == "val" and args.dataset_train == args.dataset_val:
+            np.random.seed(1)
+            torch.manual_seed(1)
             if args.cuda:
-                torch.cuda.manual_seed(args.seed)
+                torch.cuda.manual_seed(1)
 
             if args.prop_set_int_fmt:
                 train_prop = args.train_prop/100
@@ -466,6 +466,11 @@ def buildSeqTestLoader(args,mode,normalize=True):
 
             totalLength = len(test_dataset)
             _,test_dataset = torch.utils.data.random_split(test_dataset, [int(totalLength*train_prop),totalLength-int(totalLength*train_prop)])
+
+            np.random.seed(args.seed)
+            torch.manual_seed(args.seed)
+            if args.cuda:
+                torch.cuda.manual_seed(args.seed)
 
         testLoader = torch.utils.data.DataLoader(dataset=test_dataset,batch_size=args.val_batch_size,num_workers=args.num_workers)
 
