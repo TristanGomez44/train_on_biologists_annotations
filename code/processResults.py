@@ -64,7 +64,6 @@ def evalModel(dataset,partBeg,partEnd,propSetIntFormat,exp_id,model_id,epoch,nbC
 
     '''
 
-    print("model_id",model_id,"../results/{}/{}_epoch{}_*.csv".format(exp_id,model_id,epoch))
 
     try:
         resFilePaths = np.array(sorted(glob.glob("../results/{}/{}_epoch{}_*.csv".format(exp_id,model_id,epoch)),key=utils.findNumbers))
@@ -157,7 +156,6 @@ def computeMetrics(path,dataset,videoName,resFilePaths,videoNameDict,metTun,tran
 
     scores = np.genfromtxt(path,delimiter=" ")[:,1:]
 
-    #print(dataset,videoName,scores.shape,gt.shape)
 
     gt = gt[:len(scores)]
 
@@ -168,7 +166,7 @@ def computeMetrics(path,dataset,videoName,resFilePaths,videoNameDict,metTun,tran
 def formatMetr(mean,std):
     return "$"+str(round(mean,2))+" \pm "+str(round(std,2))+"$"
 
-def plotScore(dataset,exp_id,model_id,epoch,trainPartBeg,trainPartEnd,scoreAxNb=4):
+def plotScore(dataset,exp_id,model_ids,epochs,trainPartBeg,trainPartEnd,testPartBeg,testPartEnd,model_labels):
     ''' This function plots the scores given by a model to seral videos.
 
     It also plots the distance between shot features and it also produces features showing the correlation between
@@ -188,29 +186,46 @@ def plotScore(dataset,exp_id,model_id,epoch,trainPartBeg,trainPartEnd,scoreAxNb=
     reverLabDict = formatData.getReversedLabels()
     cmap = cm.hsv(np.linspace(0, 1, len(revLabelDict.keys())))
 
-    resFilePaths = sorted(glob.glob("../results/{}/{}_epoch{}*.csv".format(exp_id,model_id,epoch)))
+    resFilePaths = []
+    for i in range(len(model_ids)):
+        resFilePaths.extend(glob.glob("../results/{}/{}_epoch{}*.csv".format(exp_id,model_ids[i],epochs[i])))
+    resFilePaths = sorted(resFilePaths)
+
     videoPaths = load_data.findVideos(dataset,propStart=0,propEnd=1)
     videoNames = list(map(lambda x:os.path.basename(os.path.splitext(x)[0]),videoPaths))
 
-    for path in resFilePaths:
+    videoNameDict = buildVideoNameDict(dataset,testPartBeg,testPartEnd,propSetIntFormat=True,resFilePaths=resFilePaths,raiseError=True)
+    revVideoNameDict = {}
+    for resFilePath in videoNameDict.keys():
+        if not videoNameDict[resFilePath] in revVideoNameDict.keys():
+            revVideoNameDict[videoNameDict[resFilePath]] = [resFilePath]
+        else:
+            revVideoNameDict[videoNameDict[resFilePath]].append(resFilePath)
 
-        videoName = None
-        for candidateVideoName in videoNames:
-            if "_"+candidateVideoName.replace("__","_")+".csv" in path:
-                videoName = candidateVideoName
+    def getModelName(model_ids,model_names,path):
+        foundModelId = False
+        matchingModelId = None
+        for i,model_id in enumerate(model_ids):
+            if model_id in path:
+                foundModelId = True
+                matchingModelIndex = i
+        if not foundModelId:
+            raise ValueError("Didn't find model id in {}".format(path))
+        return model_names[matchingModelIndex]
 
-        if not videoName is None:
+
+    for videoName in revVideoNameDict.keys():
+        _, axList = plt.subplots(len(model_ids)*2+1, 1,figsize=(30,7))
+        print(videoName)
+        #for i,path in enumerate(revVideoNameDict[videoName]):
+        for i,model_id in enumerate(model_ids):
+
+            path = "../results/{}/{}_epoch{}_{}.csv".format(exp_id,model_ids[i],epochs[i],videoName)
             fileName = os.path.basename(os.path.splitext(path)[0])
 
             scores = np.genfromtxt(path,delimiter=" ")
             nbFrames = scores[-1,0]
             scores = scores[:,1:]
-
-            f, axList = plt.subplots(scoreAxNb+3, 1,figsize=(30,5))
-            ax1 = axList[0]
-
-            #ax1.set_xlim(0,nbFrames)
-            ax1.set_xlabel("GT")
 
             legHandles = []
 
@@ -218,45 +233,55 @@ def plotScore(dataset,exp_id,model_id,epoch,trainPartBeg,trainPartEnd,scoreAxNb=
             expVal = np.exp(scores)
             scores = expVal/expVal.sum(axis=-1,keepdims=True)
 
-            axList[1].set_ylabel("Scores",rotation="horizontal",fontsize=20,horizontalalignment="right",position=(0,-2.5))
-            for i in range(scores.shape[1]):
-                ax = axList[i%((scores.shape[1]+1)//scoreAxNb)]
-                ax.set_xlim(0,nbFrames)
-                fill = ax.fill_between(np.arange(len(scores[:,i])), 0, scores[:,i],label=revLabelDict[i],color=cmap[i])
-
             #Plot the prediction only considering the scores and not the state transition matrix
             predSeq = scores.argmax(axis=-1)
             predSeq = labelIndList2FrameInd(predSeq,reverLabDict)
-            legHandles = plotPhases(predSeq,legHandles,labDict,cmap,axList[-3],nbFrames,"Prediction")
+            legHandles = plotPhases(predSeq,legHandles,labDict,cmap,axList[i],nbFrames,model_labels[i])
 
             #Plot the prediction with viterbi decoding
             transMat = torch.zeros((scores.shape[1],scores.shape[1]))
             priors = torch.zeros((scores.shape[1],))
-            transMat,_ = trainVal.computeTransMat(dataset,transMat,priors,trainPartBeg,trainPartEnd)
+            transMat,_ = trainVal.computeTransMat(dataset,transMat,priors,trainPartBeg,trainPartEnd,propSetIntFormat=True)
             predSeqs,_ = metrics.viterbi_decode(torch.log(torch.tensor(scores).float()),torch.log(transMat),top_k=1)
             predSeq = labelIndList2FrameInd(predSeqs[0],reverLabDict)
-            legHandles = plotPhases(predSeq,legHandles,labDict,cmap,axList[-2],nbFrames,"Prediction (Viterbi)")
+            legHandles = plotPhases(predSeq,legHandles,labDict,cmap,axList[i+len(model_ids)],nbFrames,model_labels[i]+" (Viterbi)")
 
-            #Plot the ground truth phases
-            gt = np.genfromtxt("../data/"+dataset+"/annotations/"+videoName+"_phases.csv",dtype=str,delimiter=",")
-            legHandles = plotPhases(gt,legHandles,labDict,cmap,axList[-1],nbFrames,"GT")
+        #Plot the ground truth phases
+        foundGT = False
+        for splitDataset in dataset.split("+"):
+            if os.path.exists("../data/"+splitDataset+"/annotations/"+videoName+"_phases.csv"):
+                gt = np.genfromtxt("../data/"+splitDataset+"/annotations/"+videoName+"_phases.csv",dtype=str,delimiter=",")
+                foundGT = True
+        if not foundGT:
+            raise ValueError("Didn't find GT for {}".format(videoName))
+        legHandles = plotPhases(gt,legHandles,labDict,cmap,axList[-1],nbFrames,"GT")
 
-            plt.xlabel("Time (frame index)")
-            ax1.legend(bbox_to_anchor=(1.1, 1.05),prop={'size': 15})
-            plt.subplots_adjust(hspace=0.6)
-            plt.savefig("../vis/{}/{}_epoch{}_video{}_scores.png".format(exp_id,model_id,epoch,fileName))
-            plt.close()
+        filteredLegHandles = []
+        labelList = []
+        for legHandle in legHandles:
+            if not legHandle._label in labelList:
+                filteredLegHandles.append(legHandle)
+                labelList.append(legHandle._label)
+        legHandles = filteredLegHandles
 
-        else:
-            raise ValueError("Unkown video : ",path)
+        ax1 = axList[0]
+        plt.xlabel("Temps (index d'image)",fontsize=25)
+        ax1.legend(legHandles,labelList,bbox_to_anchor=(1.1, 1.05),prop={'size': 15})
+        plt.subplots_adjust(hspace=0.6)
+        plt.savefig("../vis/{}/{}_epoch{}_video{}_scores.png".format(exp_id,"-".join(model_ids),"-".join([str(epoch) for epoch in epochs]),videoName))
+        plt.close()
 
 def plotPhases(phases,legHandles,labDict,cmap,ax,nbFrames,ylab):
+    phases = np.array(phases)
+    phases[:,1:] = (phases[:,1:].astype("int")-phases[:,1:].astype("int").min()).astype("str")
+    #print(ylab,phases)
     for i,phase in enumerate(phases):
-        rect = patches.Rectangle((int(phase[1]),0),int(phase[2])-int(phase[1]),1,linewidth=1,color=cmap[labDict[phase[0]]],alpha=1,label=phase[0])
+        rect = patches.Rectangle((int(phase[1]),0),int(phase[2])-int(phase[1]),1,linewidth=1,\
+                                    color=cmap[labDict[phase[0]]],alpha=1,label=phase[0])
         legHandles += [ax.add_patch(rect)]
     ax.set_xlim(0,nbFrames)
-    ax.set_ylabel(ylab,rotation="horizontal",fontsize=20,horizontalalignment="right",position=(0,0.1))
-
+    ax.set_ylabel(ylab,rotation="horizontal",fontsize=25,horizontalalignment="right",position=(0,0.3))
+    ax.set_yticklabels([],[])
     return legHandles
 
 def labelIndList2FrameInd(labelList,reverLabDict):
@@ -278,7 +303,6 @@ def buildVideoNameDict(dataset,test_part_beg,test_part_end,propSetIntFormat,resF
 
     ''' Build a dictionnary associating a path to a video name (it can be the path to any file than contain the name of a video in its file name) '''
     videoPaths = load_data.findVideos(dataset,test_part_beg,test_part_end,propSetIntFormat)
-    print("\t",test_part_beg,test_part_end,len(resFilePaths),len(videoPaths))
     videoNames = list(map(lambda x:os.path.basename(os.path.splitext(x)[0]),videoPaths))
 
     videoNameDict = {}
@@ -319,7 +343,7 @@ def plotData(nbClass,dataset):
         nbImages += len(load_data.getGT(os.path.splitext(os.path.basename(videoPath))[0],dataset))
 
     plt.figure()
-    plt.bar(np.arange(nbClass),priors*nbImages)
+    plt.bar(np.arange(nbClass),priors)
     plt.xticks(np.arange(nbClass),labels,rotation=45)
     plt.xlabel("Developpement phases")
     plt.ylabel("Number of images")
@@ -426,7 +450,7 @@ def ttest_matrix(groupedLines,keys,exp_id,metricNames,keyToNameDict):
         for i in range(len(keys)):
             csv += keyToNameDict[keys[i]]
             for j in range(len(mat[i,:,k])):
-                csv += "&" + str(round(mat[i,j,k],2))
+                csv += "&" + str(round(mat[i,j,k],6))
             csv += "\n"
 
         with open("../results/{}/ttest_{}.csv".format(exp_id,metricNames[k]),"w") as text_file:
@@ -639,18 +663,14 @@ def phaseNbHist(datasets,density):
     plt.savefig("../vis/scenesLengths_{}_density{}.png".format("_".join(datasets),density))
     plt.close()
 
-def plotConfusionMatrix(exp_id,model_id):
+def plotConfusionMatrix(exp_id,model_id,epochToProcess,dataset_test,test_part_beg,test_part_end):
 
-    bestWeightPath = glob.glob("../models/{}/model{}_best_epoch*".format(exp_id,model_id))[0]
-    bestEpoch = bestWeightPath.split("epoch")[1]
-
-    resFilePaths = np.array(sorted(glob.glob("../results/{}/{}_epoch{}_*.csv".format(exp_id,model_id,bestEpoch)),key=utils.findNumbers))
-
+    resFilePaths = np.array(sorted(glob.glob("../results/{}/{}_epoch{}_*.csv".format(exp_id,model_id,epochToProcess)),key=utils.findNumbers))
     conf = configparser.ConfigParser()
     conf.read("../models/{}/{}.ini".format(exp_id,model_id))
     conf = conf["default"]
 
-    videoDict = buildVideoNameDict(conf["dataset_val"],float(conf["val_part_beg"]),float(conf["val_part_end"]),str2bool(conf["prop_set_int_fmt"]),resFilePaths)
+    videoDict = buildVideoNameDict(dataset_test,test_part_beg,test_part_end,True,resFilePaths)
 
     revDict = formatData.getReversedLabels()
     labels = formatData.getLabels()
@@ -658,7 +678,7 @@ def plotConfusionMatrix(exp_id,model_id):
 
     for i,resFilePath in enumerate(resFilePaths):
 
-        if i%5==0:
+        if i%1==0:
             print(i,"/",len(resFilePaths),resFilePath)
 
         pred = np.genfromtxt(resFilePath)
@@ -690,7 +710,7 @@ def plotConfusionMatrix(exp_id,model_id):
         plt.yticks(np.arange(len(labelInds)),labels)
         plt.colorbar(img)
         plt.tight_layout()
-        plt.savefig("../vis/{}/confMat_{}_epoch{}_{}.png".format(exp_id,model_id,bestEpoch,videoDict[resFilePath]))
+        plt.savefig("../vis/{}/confMat_{}_epoch{}_{}.png".format(exp_id,model_id,epochToProcess,videoDict[resFilePath]))
         plt.close()
 
 def fig2data(fig):
@@ -828,8 +848,8 @@ def main(argv=None):
 
     ########### PLOT SCORE EVOLUTION ALONG VIDEO ##################
     argreader.parser.add_argument('--plot_score',action="store_true",help='To plot the probabilities produced by a model for all the videos processed by this model during validation for some epoch.\
-                                                                            The --model_id argument must be set, along with the --exp_id, --dataset_test, --epoch_to_process, --train_part_beg, --train_part_end (for \
-                                                                            computing the state transition matrix.)')
+                                                                            The --model_ids argument must be set, along with the --exp_id, --dataset_test, --epochs_to_process, --train_part_beg, --train_part_end (for \
+                                                                            computing the state transition matrix.), --test_part_beg and --test_part_end. Also use --names to properly name each model.')
 
     ########## COMPUTE METRICS AND PUT THEM IN AN LATEX TABLE #############
     argreader.parser.add_argument('--eval_model',action="store_true",help='Evaluate a model using the csv files containing the scores. The --exp_id argument must be set, \
@@ -864,7 +884,8 @@ def main(argv=None):
     ####################### Plot confusion matrix #############################
 
     argreader.parser.add_argument('--plot_confusion_matrix',action="store_true",help='To plot the confusion matrix of a model at its best validation epoch \
-                                        on the validation dataset. The --model_id and the --exp_id arguments must be set.')
+                                        on the validation dataset. The --model_id, --exp_id, --epoch_to_process, --dataset_test, --test_part_beg, test_part_end\
+                                        arguments must be set.')
 
     ####################### Plot points computed for a point net model #############################
 
@@ -892,7 +913,8 @@ def main(argv=None):
     args = argreader.args
 
     if args.plot_score:
-        plotScore(args.dataset_test,args.exp_id,args.model_id,args.epoch_to_process,args.train_part_beg,args.train_part_end)
+        plotScore(args.dataset_test,args.exp_id,args.model_ids,args.epochs_to_process,args.train_part_beg,args.train_part_end,\
+                    args.test_part_beg,args.test_part_end,args.names)
     if args.eval_model:
 
         if os.path.exists("../results/{}/metrics.csv".format(args.exp_id)):
@@ -919,7 +941,7 @@ def main(argv=None):
     if args.phase_nb_hist:
         phaseNbHist(args.phase_nb_hist,args.density)
     if args.plot_confusion_matrix:
-        plotConfusionMatrix(args.exp_id,args.model_id)
+        plotConfusionMatrix(args.exp_id,args.model_id,args.epoch_to_process,args.dataset_test,args.test_part_beg,args.test_part_end)
     if args.plot_points:
         plotPoints(args.exp_id,args.model_id,args.epoch_to_process)
     if args.plot_points_image_dataset:
