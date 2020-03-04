@@ -29,71 +29,6 @@ def get_gpu_memory_map():
     gpu_memory_map = dict(zip(range(len(gpu_memory)), gpu_memory))
     return gpu_memory_map
 
-def computeScore(model,allFeats,timeElapsed,allTarget,valLTemp,vidName):
-
-    allOutput = {"allPred":None}
-    splitSizes = [valLTemp for _ in range(allFeats.size(1)//valLTemp)]
-
-    if allFeats.size(1)%valLTemp > 0:
-        splitSizes.append(allFeats.size(1)%valLTemp)
-
-    chunkList = torch.split(allFeats,split_size_or_sections=splitSizes,dim=1)
-
-    timeElapsedChunkList = torch.split(timeElapsed,split_size_or_sections=splitSizes,dim=1)
-
-    sumSize = 0
-
-    for i in range(len(chunkList)):
-
-        output = model.secondModel(chunkList[i].squeeze(0),batchSize=1,timeTensor=timeElapsedChunkList[i])
-
-        for tensorName in output.keys():
-            if not tensorName in allOutput.keys():
-                allOutput[tensorName] = output[tensorName]
-            else:
-                allOutput[tensorName] = torch.cat((allOutput[tensorName],output[tensorName]),dim=1)
-
-        sumSize += len(chunkList[i])
-
-    return allOutput
-
-def updateMetrics(args,model,allFeat,timeElapsed,allTarget,precVidName,nbVideos,metrDict,outDict,targDict):
-
-    allOutputDict = computeScore(model,allFeat,timeElapsed,allTarget,args.val_l_temp,precVidName)
-
-    allOutput = allOutputDict["pred"]
-
-    if args.compute_metrics_during_eval:
-        loss = F.cross_entropy(allOutput.squeeze(0),allTarget.squeeze(0)).data.item()
-
-        metDictSample = metrics.binaryToMetrics(allOutput,allTarget,model.transMat,videoMode=True)
-        metDictSample["Loss"] = loss
-        metrDict = metrics.updateMetrDict(metrDict,metDictSample)
-
-    outDict[precVidName] = allOutput
-    targDict[precVidName] = allTarget
-
-    nbVideos += 1
-
-    return allOutput,nbVideos
-
-def updateFrameDict(frameIndDict,frameInds,vidName):
-    ''' Store the prediction of a model in a dictionnary with one entry per movie
-
-    Args:
-     - outDict (dict): the dictionnary where the scores will be stored
-     - output (torch.tensor): the output batch of the model
-     - frameIndDict (dict): a dictionnary collecting the index of each frame used
-     - vidName (str): the name of the video from which the score are produced
-
-    '''
-
-    if vidName in frameIndDict.keys():
-        reshFrInds = frameInds.view(len(frameInds),-1).clone()
-        frameIndDict[vidName] = torch.cat((frameIndDict[vidName],reshFrInds),dim=0)
-
-    else:
-        frameIndDict[vidName] = frameInds.view(len(frameInds),-1).clone()
 def updateLR_and_Optim(epoch,maxEpoch,lr,startEpoch,kwargsOpti,kwargsTr,lrCounter,net,optimConst):
     #This condition determines when the learning rate should be updated (to follow the learning rate schedule)
     #The optimiser have to be rebuilt every time the learning rate is updated
@@ -184,34 +119,18 @@ def catIntermediateVariables(visualDict,intermVarDict,nbVideos):
 
     intermVarDict["fullAttMap"] = catMap(visualDict,intermVarDict["fullAttMap"],key="attMaps")
     intermVarDict["fullFeatMapSeq"] = catMap(visualDict,intermVarDict["fullFeatMapSeq"],key="features")
-    intermVarDict["fullAffTransSeq"] = catAffineTransf(visualDict,intermVarDict["fullAffTransSeq"])
     intermVarDict["fullPointsSeq"] = catPointsSeq(visualDict,intermVarDict["fullPointsSeq"])
     if nbVideos < 6:
         intermVarDict["fullReconstSeq"] = catMap(visualDict,intermVarDict["fullReconstSeq"],key="reconst")
 
     return intermVarDict
-def saveIntermediateVariables(intermVarDict,exp_id,model_id,epoch,precVidName=""):
+def saveIntermediateVariables(intermVarDict,exp_id,model_id,epoch,mode="val"):
 
-    intermVarDict["fullAttMap"] = saveMap(intermVarDict["fullAttMap"],exp_id,model_id,epoch,precVidName,key="attMaps")
-    intermVarDict["fullFeatMapSeq"] = saveMap(intermVarDict["fullFeatMapSeq"],exp_id,model_id,epoch,precVidName,key="featMaps")
-    intermVarDict["fullAffTransSeq"] = saveAffineTransf(intermVarDict["fullAffTransSeq"],exp_id,model_id,epoch,precVidName)
-    intermVarDict["fullPointsSeq"] =  savePointsSeq(intermVarDict["fullPointsSeq"],exp_id,model_id,epoch,precVidName)
-    intermVarDict["fullReconstSeq"] = saveMap(intermVarDict["fullReconstSeq"],exp_id,model_id,epoch,precVidName,key="reconst")
+    intermVarDict["fullAttMap"] = saveMap(intermVarDict["fullAttMap"],exp_id,model_id,epoch,mode,key="attMaps")
+    intermVarDict["fullPointsSeq"] =  savePointsSeq(intermVarDict["fullPointsSeq"],exp_id,model_id,epoch,mode)
+    intermVarDict["fullReconstSeq"] = saveMap(intermVarDict["fullReconstSeq"],exp_id,model_id,epoch,mode,key="reconst")
 
     return intermVarDict
-def catAffineTransf(visualDict,fullAffTransSeq):
-    if "theta" in visualDict.keys():
-        if fullAffTransSeq is None:
-            fullAffTransSeq = visualDict["theta"].cpu()
-        else:
-            fullAffTransSeq = torch.cat((fullAffTransSeq,visualDict["theta"].cpu()),dim=0)
-
-    return fullAffTransSeq
-def saveAffineTransf(fullAffTransSeq,exp_id,model_id,epoch,precVidName):
-    if not fullAffTransSeq is None:
-        np.save("../results/{}/affTransf_{}_epoch{}_{}.npy".format(exp_id,model_id,epoch,precVidName),fullAffTransSeq.numpy())
-        fullAffTransSeq = None
-    return fullAffTransSeq
 def catPointsSeq(visualDict,fullPointsSeq):
     if "points" in visualDict.keys():
         if fullPointsSeq is None:
@@ -220,9 +139,9 @@ def catPointsSeq(visualDict,fullPointsSeq):
             fullPointsSeq = torch.cat((fullPointsSeq,visualDict["points"].cpu()),dim=0)
 
     return fullPointsSeq
-def savePointsSeq(fullPointsSeq,exp_id,model_id,epoch,precVidName):
+def savePointsSeq(fullPointsSeq,exp_id,model_id,epoch,mode):
     if not fullPointsSeq is None:
-        np.save("../results/{}/points_{}_epoch{}_{}.npy".format(exp_id,model_id,epoch,precVidName),fullPointsSeq.numpy())
+        np.save("../results/{}/points_{}_epoch{}_{}.npy".format(exp_id,model_id,epoch,mode),fullPointsSeq.numpy())
         fullPointsSeq = None
     return fullPointsSeq
 def catMap(visualDict,fullMap,key="attMaps"):
@@ -247,13 +166,8 @@ def catMap(visualDict,fullMap,key="attMaps"):
                     fullMap[layer] = torch.cat((fullMap[layer],visualDict[key][layer]),dim=0)
 
     return fullMap
-def saveMap(fullMap,exp_id,model_id,epoch,precVidName,key="attMaps"):
+def saveMap(fullMap,exp_id,model_id,epoch,mode,key="attMaps"):
     if not fullMap is None:
-
-        if not type(fullMap) is dict:
-            np.save("../results/{}/{}_{}_epoch{}_{}.npy".format(exp_id,key,model_id,epoch,precVidName),fullMap.numpy())
-        else:
-            for layer in fullMap.keys():
-                np.save("../results/{}/{}_{}_epoch{}_{}_lay{}.npy".format(exp_id,key,model_id,epoch,precVidName,layer),fullMap[layer].numpy())
+        np.save("../results/{}/{}_{}_epoch{}_{}.npy".format(exp_id,key,model_id,epoch,mode),fullMap.numpy())
         fullMap = None
     return fullMap

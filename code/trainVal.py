@@ -73,20 +73,17 @@ def epochSeqTr(model,optim,log_interval,loader, epoch, args,writer,**kwargs):
     for batch_idx,batch in enumerate(loader):
 
         if (batch_idx % log_interval == 0):
-            processedImgNb = batch_idx*len(batch[0])*len(batch[0][0]) if args.video_mode else batch_idx*len(batch[0])
+            processedImgNb = batch_idx*len(batch[0])
             print("\t",processedImgNb,"/",len(loader.dataset))
 
         data,target = batch[0],batch[1]
         if args.cuda:
             data, target = data.cuda(), target.cuda()
 
-        timeElapsedTensor = batch[-1] if args.video_mode else None
-        timeElapsedTensor = timeElapsedTensor.cuda() if (args.video_mode and args.cuda) else None
-
         with torch.autograd.detect_anomaly():
-            resDict = model(data,timeElapsedTensor)
+            resDict = model(data)
             output = resDict["pred"]
-            loss = computeLoss(args.nll_weight,output,target,args.pn_reconst_weight,resDict,data,args.video_mode)
+            loss = computeLoss(args.nll_weight,output,target,args.pn_reconst_weight,resDict,data)
             loss.backward()
 
         if args.distributed:
@@ -97,7 +94,7 @@ def epochSeqTr(model,optim,log_interval,loader, epoch, args,writer,**kwargs):
         optim.zero_grad()
 
         #Metrics
-        metDictSample = metrics.binaryToMetrics(output,target,model.transMat,videoMode=args.video_mode)
+        metDictSample = metrics.binaryToMetrics(output,target)
         metDictSample["Loss"] = loss.detach().data.item()
         metrDict = metrics.updateMetrDict(metrDict,metDictSample)
 
@@ -115,11 +112,7 @@ def epochSeqTr(model,optim,log_interval,loader, epoch, args,writer,**kwargs):
         totalTime = time.time() - start_time
         update.updateTimeCSV(epoch,"train",args.exp_id,args.model_id,totalTime,batch_idx)
 
-def computeLoss(nll_weight,output,target,pn_reconst_weight,resDict,data,video_mode):
-
-    if video_mode:
-        output = output.view(output.size(0)*output.size(1),-1)
-        target = target.view(-1)
+def computeLoss(nll_weight,output,target,pn_reconst_weight,resDict,data):
 
     loss = nll_weight*F.cross_entropy(output, target)
 
@@ -145,101 +138,6 @@ def average_gradients(model):
         if not param.grad is None:
             dist.all_reduce(param.grad.data, op=dist.ReduceOp.SUM)
             param.grad.data /= size
-
-def epochSeqVal(model,log_interval,loader, epoch, args,writer,metricEarlyStop,mode="val"):
-    '''
-    Validate a model. This function computes several metrics and return the best value found until this point.
-
-    Args:
-     - model (torch.nn.Module): the model to validate
-     - log_interval (int): the number of epochs to wait before printing a log
-     - loader (load_data.TrainLoader): the train data loader
-     - epoch (int): the current epoch
-     - args (Namespace): the namespace containing all the arguments required for training and building the network
-     - writer (tensorboardX.SummaryWriter): the writer to use to log metrics evolution to tensorboardX
-     - width (int): the width of the triangular window (i.e. the number of steps over which the window is spreading)
-     - metricEarlyStop (str): the name of the metric to use for early stopping. Can be any of the metrics computed in the metricDict variable of the writeSummaries function
-     - metricLastVal (float): the best value of the metric to use early stopping until now
-     - maximiseMetric (bool): If true, the model maximising this metric will be kept.
-    '''
-
-    if args.debug:
-        start_time = time.time()
-
-    model.eval()
-
-    print("Epoch",epoch," : ",mode)
-
-    metrDict = metrics.emptyMetrDict()
-
-    nbVideos = 0
-
-    outDict,targDict = {},{}
-
-    frameIndDict = {}
-
-    intermVarDict = {"fullAttMap":None,"fullFeatMapSeq":None,"fullAffTransSeq":None,"fullPointsSeq":None,"fullReconstSeq":None}
-    precVidName = "None"
-    videoBegining = True
-    validBatch = 0
-    nbVideos = 0
-
-    for batch_idx, (data,target,vidName,frameInds,timeElapsedTensor) in enumerate(loader):
-
-        newVideo = (vidName != precVidName) or videoBegining
-
-        if (batch_idx % log_interval == 0):
-            print("\t",loader.sumL+1,"/",loader.nbImages)
-
-        if args.cuda:
-            data, target,frameInds,timeElapsedTensor = data.cuda(), target.cuda(),frameInds.cuda(),timeElapsedTensor.cuda()
-
-        visualDict = model.computeVisual(data)
-        feat = visualDict["x"].data
-
-        update.updateFrameDict(frameIndDict,frameInds,vidName)
-
-        if newVideo and not videoBegining:
-            allOutput,nbVideos = update.updateMetrics(args,model,allFeat,allTimeElapsedTensor,allTarget,precVidName,nbVideos,metrDict,outDict,targDict)
-            intermVarDict = update.saveIntermediateVariables(intermVarDict,args.exp_id,args.model_id,epoch,precVidName)
-
-        intermVarDict = update.catIntermediateVariables(visualDict,intermVarDict,nbVideos)
-
-        update.updateHardWareOccupation(args.debug,args.benchmark,args.cuda,epoch,mode,args.exp_id,args.model_id,batch_idx)
-
-        if newVideo:
-            allTarget = target
-            allFeat = feat.unsqueeze(0)
-            allTimeElapsedTensor = timeElapsedTensor
-
-            videoBegining = False
-        else:
-            allTarget = torch.cat((allTarget,target),dim=1)
-            allFeat = torch.cat((allFeat,feat.unsqueeze(0)),dim=1)
-
-            if torch.is_tensor(allTimeElapsedTensor):
-                allTimeElapsedTensor = torch.cat((allTimeElapsedTensor,timeElapsedTensor),dim=1)
-
-        precVidName = vidName
-
-        if nbVideos > 1 and args.debug:
-            break
-
-    if not args.debug:
-        allOutput,nbVideos = update.updateMetrics(args,model,allFeat,allTimeElapsedTensor,allTarget,precVidName,nbVideos,metrDict,outDict,targDict)
-        intermVarDict = update.saveIntermediateVariables(intermVarDict,args.exp_id,args.model_id,epoch,precVidName)
-
-    for key in outDict.keys():
-        fullArr = torch.cat((frameIndDict[key].float(),outDict[key].squeeze(0).squeeze(1)),dim=1)
-        np.savetxt("../results/{}/{}_epoch{}_{}.csv".format(args.exp_id,args.model_id,epoch,key),fullArr.cpu().detach().numpy())
-
-    writeSummaries(metrDict,nbVideos,writer,epoch,mode,args.model_id,args.exp_id)
-
-    if args.debug:
-        totalTime = time.time() - start_time
-        update.updateTimeCSV(epoch,mode,args.exp_id,args.model_id,totalTime,batch_idx)
-
-    return metrDict[metricEarlyStop]
 
 def epochImgEval(model,log_interval,loader, epoch, args,writer,metricEarlyStop,mode="val"):
     ''' Train a model during one epoch
@@ -295,7 +193,7 @@ def epochImgEval(model,log_interval,loader, epoch, args,writer,metricEarlyStop,m
         update.updateHardWareOccupation(args.debug,args.benchmark,args.cuda,epoch,mode,args.exp_id,args.model_id,batch_idx)
 
         #Metrics
-        metDictSample = metrics.binaryToMetrics(output,target,videoMode=args.video_mode)
+        metDictSample = metrics.binaryToMetrics(output,target)
         metDictSample["Loss"] = loss.detach().data.item()
         metrDict = metrics.updateMetrDict(metrDict,metDictSample)
 
@@ -307,7 +205,7 @@ def epochImgEval(model,log_interval,loader, epoch, args,writer,metricEarlyStop,m
             break
 
     writeSummaries(metrDict,validBatch,writer,epoch,mode,args.model_id,args.exp_id)
-    intermVarDict = update.saveIntermediateVariables(intermVarDict,args.exp_id,args.model_id,epoch)
+    intermVarDict = update.saveIntermediateVariables(intermVarDict,args.exp_id,args.model_id,epoch,mode)
 
     if args.debug:
         totalTime = time.time() - start_time
@@ -326,27 +224,6 @@ def writePreds(predBatch,targBatch,epoch,exp_id,model_id,class_nb,batch_idx):
     with open(csvPath,"a") as text_file:
         for i in range(len(predBatch)):
             print(str(targBatch[i].cpu().detach().numpy())+","+",".join(predBatch[i].cpu().detach().numpy().astype(str)),file=text_file)
-
-def computeTransMat(dataset,transMat,priors,propStart,propEnd,propSetIntFormat):
-
-    videoPaths = load_data.findVideos(dataset,propStart,propEnd,propSetIntFormat)
-
-    for videoPath in videoPaths:
-        videoName = os.path.splitext(os.path.basename(videoPath))[0]
-        target = load_data.getGT(videoName,dataset)
-        #Updating the transition matrix
-        for i in range(len(target)-1):
-            transMat[target[i],target[i+1]] += 1
-            priors[target[i]] += 1
-
-        #Taking the last target of the sequence into account only for prior
-        priors[target[-1]] += 1
-
-    #Just in case where propStart==propEnd, which is true for example, when the training set is empty
-    if len(videoPaths) > 0:
-        return transMat/transMat.sum(dim=1,keepdim=True),priors/priors.sum()
-    else:
-        return transMat,priors
 
 def writeSummaries(metrDict,sampleNb,writer,epoch,mode,model_id,exp_id):
     ''' Write the metric computed during an evaluation in a tf writer and in a csv file
@@ -567,14 +444,14 @@ def run(args):
     if args.cuda:
         torch.cuda.manual_seed(args.seed)
 
-    trainLoader,trainDataset = load_data.buildSeqTrainLoader(args)
-    valLoader = load_data.buildSeqTestLoader(args,"val")
+    trainLoader,trainDataset = load_data.buildTrainLoader(args)
+    valLoader = load_data.buildTestLoader(args,"val")
 
     #Building the net
     net = modelBuilder.netBuilder(args)
 
     trainFunc = epochSeqTr
-    valFunc = epochSeqVal if args.video_mode else epochImgEval
+    valFunc = epochImgEval
 
     kwargsTr = {'log_interval':args.log_interval,'loader':trainLoader,'args':args,'writer':writer}
     kwargsVal = kwargsTr.copy()
@@ -593,10 +470,6 @@ def run(args):
         args.lr = [args.lr]
 
     lrCounter = 0
-
-    transMat,priors = computeTransMat(args.dataset_train,net.transMat,net.priors,args.train_part_beg,args.train_part_end,args.prop_set_int_fmt)
-    net.setTransMat(transMat)
-    net.setPriors(priors)
 
     epoch = startEpoch
     bestEpoch,worseEpochNb = getBestEpochInd_and_WorseEpochNb(args.start_mode,args.exp_id,args.model_id,epoch)
@@ -635,7 +508,7 @@ def run(args):
         kwargsTest = kwargsVal
         kwargsTest["mode"] = "test"
 
-        testLoader = load_data.buildSeqTestLoader(args,"test")
+        testLoader = load_data.buildTestLoader(args,"test")
 
         kwargsTest['loader'] = testLoader
 
@@ -652,8 +525,6 @@ def main(argv=None):
     #Building the arg reader
     argreader = ArgReader(argv)
 
-    argreader.parser.add_argument('--comp_feat',type=str2bool,help='To compute and write in a file the features of all images in the test set. All the arguments used to \
-                                    build the model and the test data loader should be set.')
     argreader.parser.add_argument('--no_train',type=str2bool,help='To use to re-evaluate a model at each epoch after training. At each epoch, the model is not trained but \
                                                                             the weights of the corresponding epoch are loaded and then the model is evaluated.\
                                                                             The arguments --exp_id_no_train and the --model_id_no_train must be set')
