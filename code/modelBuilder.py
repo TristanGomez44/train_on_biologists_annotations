@@ -6,7 +6,7 @@ import resnet
 
 import args
 import sys
-import cv2
+
 import deeplab
 import glob
 from skimage.transform import resize

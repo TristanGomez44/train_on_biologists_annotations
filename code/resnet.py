@@ -8,7 +8,7 @@ from torch.nn.functional import interpolate as interpo
 import sys
 import glob
 import torch
-import cv2
+
 from skimage.transform import resize
 import torch.nn.functional as F
 '''
@@ -243,13 +243,6 @@ class ResNet(nn.Module):
                 layers.append(block(self.inplanes, planes, norm_layer=norm_layer,feat=False,dilation=dilation))
 
         return nn.Sequential(*layers)
-
-    def writeImg(self,featMap,name,size):
-        x = featMap.sum(dim=1,keepdim=True)
-        nbImagesAlreadyWritten = len(glob.glob("../vis/CUB/{}*.png".format(name)))
-        featMapImg = x.cpu().detach()[0].permute(1,2,0).numpy()
-        featMapImg = resize(featMapImg,(size,size),anti_aliasing=False,mode="constant",order=0)
-        cv2.imwrite("../vis/CUB/{}_img{}.png".format(name,nbImagesAlreadyWritten),featMapImg)
 
     def forward(self, x):
 
