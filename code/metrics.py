@@ -9,30 +9,17 @@ import math
 
 import load_data
 
-# Code taken from https://gist.github.com/PetrochukM/afaa3613a99a8e7213d2efdd02ae4762#file-top_k_viterbi-py-L5
-# Credits to AllenNLP for the base implementation and base tests:
-# https://github.com/allenai/allennlp/blob/master/allennlp/nn/util.py#L174
-
-# Modified AllenNLP `viterbi_decode` to support `top_k` sequences efficiently.
-def emptyMetrDict():
-    return {"Loss":0,"Accuracy":0}
-
 def updateMetrDict(metrDict,metrDictSample):
 
-    for metric in metrDict.keys():
-
-        if metric in list(metrDictSample.keys()):
-            if metric.find("Entropy") == -1:
-                metrDict[metric] += metrDictSample[metric]
-            else:
-                if metrDict[metric] is None:
-                    metrDict[metric] = metrDictSample[metric]
-                else:
-                    metrDict[metric] = torch.cat((metrDict[metric],metrDictSample[metric]),dim=0)
+    if metrDict is None:
+        metrDict = metrDictSample
+    else:
+        for metric in metrDict.keys():
+            metrDict[metric] += metrDictSample[metric]
 
     return metrDict
 
-def binaryToMetrics(output,target):
+def binaryToMetrics(output,target,resDict):
     ''' Computes metrics over a batch of targets and predictions
 
     Args:
@@ -44,9 +31,12 @@ def binaryToMetrics(output,target):
 
     #Simple Accuracy
     pred = output.argmax(dim=-1)
-
     acc = (pred == target).float().sum()/(pred.numel())
 
-    metDict = {"Accuracy":acc}
+    if "auxPred" in resDict.keys():
+        auxPred = resDict["auxPred"].argmax(dim=-1)
+        aux_acc = (auxPred == target).float().sum()/(auxPred.numel())
+
+    metDict = {"Accuracy":acc,"Accuracy_aux":aux_acc}
 
     return metDict

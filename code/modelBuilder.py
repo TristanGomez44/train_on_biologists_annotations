@@ -219,7 +219,7 @@ class DirectPointExtractor(nn.Module):
 class TopkPointExtractor(nn.Module):
 
     def __init__(self,cuda,nbFeat,softCoord,softCoord_kerSize,softCoord_secOrder,point_nb,reconst,encoderChan,\
-                    predictDepth,softcoord_shiftpred,furthestPointSampling,furthestPointSampling_nb_pts,dropout):
+                    predictDepth,softcoord_shiftpred,furthestPointSampling,furthestPointSampling_nb_pts,dropout,auxModel):
 
         super(TopkPointExtractor,self).__init__()
 
@@ -264,6 +264,8 @@ class TopkPointExtractor(nn.Module):
 
             self.ordKerDict,self.absKerDict,self.spatialWeightKerDict = {},{},{}
 
+        self.auxModel = auxModel
+
     def forward(self,featureMaps):
 
         #Because of zero padding, the border are very active, so we remove it.
@@ -298,7 +300,7 @@ class TopkPointExtractor(nn.Module):
         retDict={}
 
         if self.softCoord:
-            abs,ord = self.fastSoftCoordRefiner(x,abs,ord,kerSize=self.softCoord_kerSize,secondOrderSpatWeight=self.softCoord_secOrder)
+            abs,ord = self.fastSoftCoordRefiner(x,abs,ord,kerSize=self.softCoorauxModeld_kerSize,secondOrderSpatWeight=self.softCoord_secOrder)
         if self.reconst:
             sparseX = pointFeaturesMap*((x-flatVals[:,-1].unsqueeze(1).unsqueeze(2).unsqueeze(3))>0).float()
             reconst = self.decoder(sparseX)
@@ -325,6 +327,10 @@ class TopkPointExtractor(nn.Module):
         retDict["batch"] = torch.arange(points.size(0)).unsqueeze(1).expand(points.size(0),points.size(1)).reshape(-1).to(points.device)
         retDict["pos"] = points.reshape(points.size(0)*points.size(1),points.size(2))
         retDict["pointfeatures"] = pointFeat.reshape(pointFeat.size(0)*pointFeat.size(1),pointFeat.size(2))
+
+        if self.auxModel:
+            retDict["auxFeat"] = featureMaps.mean(dim=-1).mean(dim=-1)
+
         return retDict
 
     def fastSoftCoordRefiner(self,x,abs,ord,kerSize=5,secondOrderSpatWeight=False):
@@ -362,24 +368,32 @@ class PointNet2(SecondModel):
     def __init__(self,cuda,classNb,nbFeat,pn_model,topk=False,\
                 topk_softcoord=False,topk_softCoord_kerSize=2,topk_softCoord_secOrder=False,point_nb=256,reconst=False,\
                 encoderChan=1,encoderHidChan=64,predictDepth=False,topk_softcoord_shiftpred=False,topk_fps=False,topk_fps_nb_pts=64,\
-                topk_dropout=0):
+                topk_dropout=0,auxModel=False):
 
         super(PointNet2,self).__init__(nbFeat,classNb)
 
         if topk:
             self.pointExtr = TopkPointExtractor(cuda,nbFeat,topk_softcoord,topk_softCoord_kerSize,\
                                                 topk_softCoord_secOrder,point_nb,reconst,encoderChan,predictDepth,\
-                                                topk_softcoord_shiftpred,topk_fps,topk_fps_nb_pts,topk_dropout)
+                                                topk_softcoord_shiftpred,topk_fps,topk_fps_nb_pts,topk_dropout,auxModel)
         else:
             self.pointExtr = DirectPointExtractor(point_nb,nbFeat)
-
+            if auxModel:
+                raise ValueError("Can't use aux model with direct point extractor")
         self.pn2 = pn_model
+
+        self.auxModel = auxModel
+        if auxModel:
+            self.auxModel = nn.Linear(nbFeat,classNb)
 
     def forward(self,x):
 
         retDict = self.pointExtr(x)
         x = self.pn2(retDict['pointfeatures'],retDict['pos'],retDict['batch'])
         retDict['pred'] = x
+
+        if self.auxModel:
+            retDict["auxPred"] = self.auxModel(retDict['auxFeat'])
 
         return retDict
 
@@ -441,7 +455,8 @@ def netBuilder(args):
                                 topk=args.pn_topk,topk_softcoord=args.pn_topk_softcoord,topk_softCoord_kerSize=args.pn_topk_softcoord_kersize,topk_softCoord_secOrder=args.pn_topk_softcoord_secorder,\
                                 point_nb=args.pn_point_nb,reconst=args.pn_topk_reconst,topk_softcoord_shiftpred=args.pn_topk_softcoord_shiftpred,\
                                 encoderChan=args.pn_topk_enc_chan,predictDepth=args.pn_topk_pred_depth,\
-                                topk_fps=args.pn_topk_farthest_pts_sampling,topk_fps_nb_pts=args.pn_topk_fps_nb_points,topk_dropout=args.pn_topk_dropout)
+                                topk_fps=args.pn_topk_farthest_pts_sampling,topk_fps_nb_pts=args.pn_topk_fps_nb_points,topk_dropout=args.pn_topk_dropout,\
+                                auxModel=args.pn_aux_model)
     else:
         raise ValueError("Unknown temporal model type : ",args.second_mod)
 
@@ -531,6 +546,9 @@ def addArgs(argreader):
                         help='For the pointnet2 model. To use the point coordinates as feature.')
     argreader.parser.add_argument('--pn_topk_dropout', type=float, metavar='FLOAT',
                         help='The proportion of point to randomly drop to decrease overfitting.')
+    argreader.parser.add_argument('--pn_aux_model', type=args.str2bool, metavar='INT',
+                        help='To train an auxilliary model that will apply average pooling and a dense layer on the feature map\
+                        to make a prediction alongside pointnet\'s one.')
 
     argreader.parser.add_argument('--resnet_chan', type=int, metavar='INT',
                         help='The channel number for the visual model when resnet is used')

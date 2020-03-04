@@ -53,7 +53,7 @@ def epochSeqTr(model,optim,log_interval,loader, epoch, args,writer,**kwargs):
 
     print("Epoch",epoch," : train")
 
-    metrDict = metrics.emptyMetrDict()
+    metrDict = None
     validBatch = 0
     allOut,allGT = None,None
 
@@ -70,7 +70,7 @@ def epochSeqTr(model,optim,log_interval,loader, epoch, args,writer,**kwargs):
         with torch.autograd.detect_anomaly():
             resDict = model(data)
             output = resDict["pred"]
-            loss = computeLoss(args.nll_weight,output,target,args.pn_reconst_weight,resDict,data)
+            loss = computeLoss(args.nll_weight,args.aux_mod_nll_weight,output,target,args.pn_reconst_weight,resDict,data)
             loss.backward()
 
         if args.distributed:
@@ -81,10 +81,10 @@ def epochSeqTr(model,optim,log_interval,loader, epoch, args,writer,**kwargs):
         optim.zero_grad()
 
         #Metrics
-        metDictSample = metrics.binaryToMetrics(output,target)
+        metDictSample = metrics.binaryToMetrics(output,target,resDict)
         metDictSample["Loss"] = loss.detach().data.item()
         metrDict = metrics.updateMetrDict(metrDict,metDictSample)
-
+        print(metrDict)
         validBatch += 1
 
         if validBatch > 15 and args.debug:
@@ -99,25 +99,21 @@ def epochSeqTr(model,optim,log_interval,loader, epoch, args,writer,**kwargs):
         totalTime = time.time() - start_time
         update.updateTimeCSV(epoch,"train",args.exp_id,args.model_id,totalTime,batch_idx)
 
-def computeLoss(nll_weight,output,target,pn_reconst_weight,resDict,data):
-
+def computeLoss(nll_weight,aux_model_weight,output,target,pn_reconst_weight,resDict,data):
     loss = nll_weight*F.cross_entropy(output, target)
-
     if pn_reconst_weight > 0:
-        loss += add_pn_recons_term(pn_reconst_weight,resDict,data)
-
+        loss += pn_recons_term(pn_reconst_weight,resDict,data)
+    if aux_model_weight > 0:
+        loss += add_aux_model_loss_term(aux_model_weight,resDict,data,target)
     return loss
 
-def add_pn_recons_term(pn_reconst_weight,resDict,data):
-
+def pn_recons_term(pn_reconst_weight,resDict,data):
     reconst = resDict['reconst']
-
-    if len(data.size()) == 5:
-        data = data.view(data.size(0)*data.size(1),data.size(2),data.size(3),data.size(4))
-
     data = F.adaptive_avg_pool2d(data, (reconst.size(-2),reconst.size(-1)))
-
     return pn_reconst_weight*torch.pow(reconst-data,2).mean()
+
+def add_aux_model_loss_term(aux_model_weight,resDict,data,target):
+    return aux_model_weight*F.cross_entropy(resDict["auxPred"], target)
 
 def average_gradients(model):
     size = float(dist.get_world_size())
@@ -147,7 +143,7 @@ def epochImgEval(model,log_interval,loader, epoch, args,writer,metricEarlyStop,m
 
     print("Epoch",epoch," : {}".format(mode))
 
-    metrDict = metrics.emptyMetrDict()
+    metrDict = None
 
     validBatch = 0
 
@@ -169,9 +165,7 @@ def epochImgEval(model,log_interval,loader, epoch, args,writer,metricEarlyStop,m
         output = resDict["pred"]
 
         #Loss
-        loss = args.nll_weight*F.cross_entropy(output, target)
-        if args.pn_reconst_weight > 0:
-            loss += add_pn_recons_term(args.pn_reconst_weight,resDict,data)
+        loss = computeLoss(args.nll_weight,args.aux_mod_nll_weight,output,target,args.pn_reconst_weight,resDict,data)
 
         #Other variables produced by the net
         intermVarDict = update.catIntermediateVariables(resDict,intermVarDict,validBatch)
@@ -180,7 +174,7 @@ def epochImgEval(model,log_interval,loader, epoch, args,writer,metricEarlyStop,m
         update.updateHardWareOccupation(args.debug,args.benchmark,args.cuda,epoch,mode,args.exp_id,args.model_id,batch_idx)
 
         #Metrics
-        metDictSample = metrics.binaryToMetrics(output,target)
+        metDictSample = metrics.binaryToMetrics(output,target,resDict)
         metDictSample["Loss"] = loss.detach().data.item()
         metrDict = metrics.updateMetrDict(metrDict,metDictSample)
 
@@ -234,8 +228,11 @@ def writeSummaries(metrDict,sampleNb,writer,epoch,mode,model_id,exp_id):
         metrDict[metric] /= sampleNb
 
     for metric in metrDict:
-        writer.add_scalars(metric,{model_id+"_"+mode:metrDict[metric]},epoch)
-
+        if metric == "Accuracy_aux":
+            writer.add_scalars("Accuracy",{model_id+"_aux"+"_"+mode:metrDict[metric]},epoch)
+        else:
+            writer.add_scalars(metric,{model_id+"_"+mode:metrDict[metric]},epoch)
+        print(metric,{model_id+"_"+mode:metrDict[metric]},epoch)
     if not os.path.exists("../results/{}/model{}_epoch{}_metrics_{}.csv".format(exp_id,model_id,epoch,mode)):
         header = [metric.lower().replace(" ","_") for metric in metrDict.keys()]
     else:
@@ -408,6 +405,8 @@ def addLossTermArgs(argreader):
 
     argreader.parser.add_argument('--nll_weight', type=float,metavar='FLOAT',
                     help='The weight of the negative log-likelihood term in the loss function.')
+    argreader.parser.add_argument('--aux_mod_nll_weight', type=float,metavar='FLOAT',
+                    help='The weight of the negative log-likelihood term in the loss function for the aux model (when using pointnet).')
 
     argreader.parser.add_argument('--pn_reconst_weight', type=float,metavar='FLOAT',
                     help='The weight of the reconstruction term in the loss function when using a pn-topk model.')
