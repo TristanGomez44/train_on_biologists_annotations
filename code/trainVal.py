@@ -1,12 +1,11 @@
 import os
 import sys
+import glob
 
 import args
 from args import ArgReader
 from args import str2bool
 from args import str2StrList
-
-import glob
 
 import numpy as np
 import torch
@@ -16,8 +15,6 @@ from tensorboardX import SummaryWriter
 import torch.backends.cudnn as cudnn
 torch.backends.cudnn.benchmark = True
 torch.backends.cudnn.enabled = True
-
-from sklearn.metrics import roc_auc_score
 
 import matplotlib.cm as cm
 import matplotlib.pyplot as plt
@@ -29,14 +26,6 @@ import metrics
 import utils
 import update
 import warnings
-import imageio
-
-from skimage import transform,io
-from skimage import img_as_ubyte
-
-import cv2
-
-#warnings.simplefilter('error', UserWarning)
 
 import torch.distributed as dist
 from torch.multiprocessing import Process
