@@ -33,10 +33,11 @@ def binaryToMetrics(output,target,resDict):
     pred = output.argmax(dim=-1)
     acc = (pred == target).float().sum()/(pred.numel())
 
+    metDict = {"Accuracy":acc}
+
     if "auxPred" in resDict.keys():
         auxPred = resDict["auxPred"].argmax(dim=-1)
         aux_acc = (auxPred == target).float().sum()/(auxPred.numel())
-
-    metDict = {"Accuracy":acc,"Accuracy_aux":aux_acc}
+        metDict["Accuracy_aux"] = aux_acc
 
     return metDict
