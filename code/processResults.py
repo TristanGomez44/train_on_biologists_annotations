@@ -15,18 +15,14 @@ from sklearn.manifold import TSNE
 import sklearn
 import matplotlib.cm as cm
 import matplotlib.patches as patches
-import pims
 import cv2
 from PIL import Image
 
 import load_data
 
-
 import metrics
 import utils
-import formatData
 import trainVal
-import formatData
 import scipy
 import sys
 
@@ -38,9 +34,7 @@ from skimage import img_as_ubyte
 
 from scipy import stats
 import math
-from PIL import Image
-from PIL import Image, ImageEnhance
-
+from PIL import ImageEnhance
 from PIL import Image
 from PIL import ImageFont
 from PIL import ImageDraw

@@ -29,8 +29,6 @@ import metrics
 import utils
 import update
 import warnings
-import formatData
-from attack import FGSM
 import imageio
 
 from skimage import transform,io

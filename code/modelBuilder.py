@@ -11,15 +11,8 @@ import deeplab
 import glob
 from skimage.transform import resize
 import matplotlib.pyplot as plt
-
-#pointnet2 and torch_cluster can only be installed on a machine that has a gpu
-#But to avoid program stopping when doing test on a no-gpu machine
-#the error is catched
-try:
-    import torch_geometric
-    import pointnet2
-except ModuleNotFoundError:
-    pass
+import torch_geometric
+import pointnet2
 
 def buildFeatModel(featModelName,pretrainedFeatMod,featMap=True,bigMaps=False,layerSizeReduce=False,stride=2,dilation=1,**kwargs):
     ''' Build a visual feature model
