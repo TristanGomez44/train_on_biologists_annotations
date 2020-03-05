@@ -220,7 +220,7 @@ class TopkPointExtractor(nn.Module):
 
     def __init__(self,cuda,nbFeat,softCoord,softCoord_kerSize,softCoord_secOrder,point_nb,reconst,encoderChan,\
                     predictDepth,softcoord_shiftpred,furthestPointSampling,furthestPointSampling_nb_pts,dropout,auxModel,\
-                    topkRandSamp):
+                    topkRandSamp,topkRSUnifWeight):
 
         super(TopkPointExtractor,self).__init__()
 
@@ -267,6 +267,7 @@ class TopkPointExtractor(nn.Module):
 
         self.auxModel = auxModel
         self.topkRandSamp = topkRandSamp
+        self.topkRSUnifWeight = topkRSUnifWeight
 
     def forward(self,featureMaps):
 
@@ -280,7 +281,8 @@ class TopkPointExtractor(nn.Module):
         if (not self.topkRandSamp) or (self.topkRandSamp and not self.training):
             _,flatInds = torch.topk(flatX, self.point_extracted, dim=-1, largest=True)
         else:
-            flatInds = torch.distributions.categorical.Categorical(probs=flatX/flatX.max(dim=-1,keepdim=True)[0]).sample(torch.tensor([self.point_extracted]))
+            probs = self.topkRSUnifWeight*(1.0/flatX.size(1))+(1-self.topkRSUnifWeight)*flatX/flatX.max(dim=-1,keepdim=True)[0]
+            flatInds = torch.distributions.categorical.Categorical(probs=probs).sample(torch.tensor([self.point_extracted]))
             flatInds = flatInds.permute(1,0)
 
         abs,ord = (flatInds%x.shape[-1],flatInds//x.shape[-1])
@@ -304,7 +306,7 @@ class TopkPointExtractor(nn.Module):
         retDict={}
 
         if self.softCoord:
-            abs,ord = self.fastSoftCoordRefiner(x,abs,ord,kerSize=self.softCoorauxModeld_kerSize,secondOrderSpatWeight=self.softCoord_secOrder)
+            abs,ord = self.fastSoftCoordRefiner(x,abs,ord,kerSize=self.softCoord_kerSize,secondOrderSpatWeight=self.softCoord_secOrder)
         if self.reconst:
             flatVals = mapToList(x,abs,ord)
             sparseX = pointFeaturesMap*((x-flatVals[:,-1].unsqueeze(1).unsqueeze(2).unsqueeze(3))>0).float()
@@ -373,7 +375,7 @@ class PointNet2(SecondModel):
     def __init__(self,cuda,classNb,nbFeat,pn_model,topk=False,\
                 topk_softcoord=False,topk_softCoord_kerSize=2,topk_softCoord_secOrder=False,point_nb=256,reconst=False,\
                 encoderChan=1,encoderHidChan=64,predictDepth=False,topk_softcoord_shiftpred=False,topk_fps=False,topk_fps_nb_pts=64,\
-                topk_dropout=0,auxModel=False,topkRandSamp=False):
+                topk_dropout=0,auxModel=False,topkRandSamp=False,topkRSUnifWeight=0):
 
         super(PointNet2,self).__init__(nbFeat,classNb)
 
@@ -381,7 +383,7 @@ class PointNet2(SecondModel):
             self.pointExtr = TopkPointExtractor(cuda,nbFeat,topk_softcoord,topk_softCoord_kerSize,\
                                                 topk_softCoord_secOrder,point_nb,reconst,encoderChan,predictDepth,\
                                                 topk_softcoord_shiftpred,topk_fps,topk_fps_nb_pts,topk_dropout,auxModel,\
-                                                topkRandSamp)
+                                                topkRandSamp,topkRSUnifWeight)
         else:
             self.pointExtr = DirectPointExtractor(point_nb,nbFeat)
             if auxModel:
@@ -462,7 +464,7 @@ def netBuilder(args):
                                 point_nb=args.pn_point_nb,reconst=args.pn_topk_reconst,topk_softcoord_shiftpred=args.pn_topk_softcoord_shiftpred,\
                                 encoderChan=args.pn_topk_enc_chan,predictDepth=args.pn_topk_pred_depth,\
                                 topk_fps=args.pn_topk_farthest_pts_sampling,topk_fps_nb_pts=args.pn_topk_fps_nb_points,topk_dropout=args.pn_topk_dropout,\
-                                auxModel=args.pn_aux_model,topkRandSamp=args.pn_topk_rand_sampling)
+                                auxModel=args.pn_aux_model,topkRandSamp=args.pn_topk_rand_sampling,topkRSUnifWeight=args.pn_topk_rs_unif_weight)
     else:
         raise ValueError("Unknown temporal model type : ",args.second_mod)
 
@@ -539,6 +541,10 @@ def addArgs(argreader):
                         help='For the pointnet2 model. The number of point extracted by furthest point sampling.')
     argreader.parser.add_argument('--pn_topk_rand_sampling', type=args.str2bool, metavar='INT',
                         help='For the pointnet2 model. To sample point in a probabilistic way instead of topk during training.')
+    argreader.parser.add_argument('--pn_topk_rs_unif_weight', type=float, metavar='INT',
+                        help='For the stochastic sampling of pixels (when --pn_topk_rand_sampling is True). The distribution of probability \
+                        is an interpolation between the uniform distribution and the distribution based purely on pixel feature norm. Set this arg \
+                        respectively to 0 and 1 to make only the feature norm and the uniform distribution matter. This arg must be comprised between 0 and 1.')
 
     argreader.parser.add_argument('--pn_point_nb', type=int, metavar='NB',
                         help='For the topk point net model. This is the number of point extracted for each image.')
