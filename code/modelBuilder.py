@@ -174,8 +174,10 @@ class LinearSecondModel(SecondModel):
         super(LinearSecondModel,self).__init__(nbFeat,nbClass)
         self.dropout = nn.Dropout(p=dropout)
         self.linLay = nn.Linear(self.nbFeat,self.nbClass)
-
-    def forward(self,x,batchSize):
+        self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
+    def forward(self,x):
+        if len(x.size()) == 4:
+            x = self.avgpool(x).squeeze(-1).squeeze(-1)
 
         # N x D
         x = self.dropout(x)
@@ -452,7 +454,7 @@ def netBuilder(args):
 
     ############### Temporal Model #######################
     if args.second_mod == "linear":
-        secondModel = LinearSecondModel(nbFeat,args.class_nb,args.use_time,args.dropout)
+        secondModel = LinearSecondModel(nbFeat,args.class_nb,args.dropout)
     elif args.second_mod == "pointnet2" or args.second_mod == "edgenet":
         if args.second_mod == "pointnet2":
             pn_model = pointnet2.Net(num_classes=args.class_nb,input_channels=args.pn_topk_enc_chan if args.pn_topk else 0)
