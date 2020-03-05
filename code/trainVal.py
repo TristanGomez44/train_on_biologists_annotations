@@ -84,7 +84,7 @@ def epochSeqTr(model,optim,log_interval,loader, epoch, args,writer,**kwargs):
         metDictSample = metrics.binaryToMetrics(output,target,resDict)
         metDictSample["Loss"] = loss.detach().data.item()
         metrDict = metrics.updateMetrDict(metrDict,metDictSample)
-        print(metrDict)
+
         validBatch += 1
 
         if validBatch > 15 and args.debug:
@@ -232,7 +232,7 @@ def writeSummaries(metrDict,sampleNb,writer,epoch,mode,model_id,exp_id):
             writer.add_scalars("Accuracy",{model_id+"_aux"+"_"+mode:metrDict[metric]},epoch)
         else:
             writer.add_scalars(metric,{model_id+"_"+mode:metrDict[metric]},epoch)
-        print(metric,{model_id+"_"+mode:metrDict[metric]},epoch)
+
     if not os.path.exists("../results/{}/model{}_epoch{}_metrics_{}.csv".format(exp_id,model_id,epoch,mode)):
         header = [metric.lower().replace(" ","_") for metric in metrDict.keys()]
     else:
@@ -266,7 +266,7 @@ def get_OptimConstructor_And_Kwargs(optimStr,momentum):
         kwargs = {'amsgrad':True}
 
     return optimConst,kwargs
-def initialize_Net_And_EpochNumber(net,exp_id,model_id,cuda,start_mode,init_path,strict):
+def initialize_Net_And_EpochNumber(net,exp_id,model_id,cuda,start_mode,init_path,strict,init_pn_path):
     '''Initialize a network
 
     If init is None, the network will be left unmodified. Its initial parameters will be saved.
@@ -283,9 +283,20 @@ def initialize_Net_And_EpochNumber(net,exp_id,model_id,cuda,start_mode,init_path
     '''
 
     if start_mode == "scratch":
+
+        if not init_pn_path is None:
+            pn_params = torch.load(init_pn_path,map_location="cpu" if not cuda else None)
+            pn_params_filtered = {}
+            for key in pn_params.keys():
+                if key.find("sa1_module.conv.local_nn.0.0.weight") == -1 and key.find("lin3") == -1:
+                    pn_params_filtered[key] = pn_params[key]
+
+            res = net.secondModel.pn2.load_state_dict(pn_params_filtered,False)
+
         #Saving initial parameters
         torch.save(net.state_dict(), "../models/{}/{}_epoch0".format(exp_id,model_id))
         startEpoch = 1
+
     elif start_mode == "fine_tune":
 
         params = torch.load(init_path,map_location="cpu" if not cuda else None)
@@ -372,7 +383,8 @@ def addInitArgs(argreader):
                 help='The path to the weight file to use to initialise the network')
     argreader.parser.add_argument('--strict_init', type=str2bool,metavar='SM',
                 help='Set to True to make torch.load_state_dict throw an error when not all keys match (to use with --init_path)')
-
+    argreader.parser.add_argument('--init_pn_path', type=str,metavar='SM',
+                help='The path to the weight file of a pn model.')
     return argreader
 def addOptimArgs(argreader):
     argreader.parser.add_argument('--lr', type=args.str2FloatList,metavar='LR',
@@ -447,7 +459,7 @@ def run(args):
 
     #Getting the contructor and the kwargs for the choosen optimizer
     optimConst,kwargsOpti = get_OptimConstructor_And_Kwargs(args.optim,args.momentum)
-    startEpoch = initialize_Net_And_EpochNumber(net,args.exp_id,args.model_id,args.cuda,args.start_mode,args.init_path,args.strict_init)
+    startEpoch = initialize_Net_And_EpochNumber(net,args.exp_id,args.model_id,args.cuda,args.start_mode,args.init_path,args.strict_init,args.init_pn_path)
 
     #If no learning rate is schedule is indicated (i.e. there's only one learning rate),
     #the args.lr argument will be a float and not a float list.
