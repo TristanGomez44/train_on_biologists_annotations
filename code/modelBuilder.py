@@ -2,18 +2,20 @@ import torch
 from torch import nn
 from torch.nn import functional as F
 from torch.nn import DataParallel
-import resnet
 
 import args
 import sys
 
-import deeplab
 import glob
 from skimage.transform import resize
 import matplotlib.pyplot as plt
-import torch_geometric
-import pointnet2
 
+
+from models import deeplab
+from models import resnet
+from models import pointnet2
+
+import torch_geometric
 def buildFeatModel(featModelName,pretrainedFeatMod,featMap=True,bigMaps=False,layerSizeReduce=False,stride=2,dilation=1,**kwargs):
     ''' Build a visual feature model
 

@@ -1,13 +1,14 @@
 
 #This is a modified version of the classes found in torchvision
 
-import resnet
+from models import resnet
 import sys
 
 import torch
 from torch import nn
 from torch.nn import functional as F
 import modelBuilder
+
 def _segm_resnet(name, backbone_name, num_classes=21,**kwargs):
     backbone = resnet.__dict__[backbone_name](dilation=[1, 2, 2],**kwargs)
 
