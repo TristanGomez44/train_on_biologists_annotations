@@ -282,9 +282,16 @@ def initialize_Net_And_EpochNumber(net,exp_id,model_id,cuda,start_mode,init_path
     Returns: the start epoch number
     '''
 
+    if start_mode == "auto":
+        if len(glob.glob("../models/{}/model{}_epoch*".format(exp_id,model_id))) > 0:
+            start_mode = "fine_tune"
+        else:
+            start_mode = "scratch"
+        print("Autodetected mode",start_mode)
+
     if start_mode == "scratch":
 
-        if not init_pn_path is None:
+        if init_pn_path != "None":
             pn_params = torch.load(init_pn_path,map_location="cpu" if not cuda else None)
             pn_params_filtered = {}
             for key in pn_params.keys():
@@ -298,6 +305,9 @@ def initialize_Net_And_EpochNumber(net,exp_id,model_id,cuda,start_mode,init_path
         startEpoch = 1
 
     elif start_mode == "fine_tune":
+
+        if init_path == "None":
+            init_path = sorted(glob.glob("../models/{}/model{}_epoch*".format(exp_id,model_id)),key=utils.findLastNumbers)[-1]
 
         params = torch.load(init_path,map_location="cpu" if not cuda else None)
 
@@ -517,6 +527,16 @@ def run(args):
         with torch.no_grad():
             testFunc(**kwargsTest)
 
+def updateSeedAndNote(args):
+    if args.start_mode == "auto" and len(glob.glob("../models/{}/model{}_epoch*".format(args.exp_id,args.model_id))) > 0:
+        args.seed += 1
+        init_path = args.init_path
+        if init_path == "None" and args.strict_init:
+            init_path = sorted(glob.glob("../models/{}/model{}_epoch*".format(args.exp_id,args.model_id)),key=utils.findLastNumbers)[-1]
+        startEpoch = utils.findLastNumbers(init_path)
+        args.note += ";s{} at {}".format(args.seed,startEpoch)
+    return args
+
 def main(argv=None):
 
     #Getting arguments from config file and command line
@@ -555,9 +575,12 @@ def main(argv=None):
     if not (os.path.exists("../models/{}".format(args.exp_id))):
         os.makedirs("../models/{}".format(args.exp_id))
 
+    args = updateSeedAndNote(args)
+    #Update the config args
+    argreader.args = args
     #Write the arguments in a config file so the experiment can be re-run
-    argreader.writeConfigFile("../models/{}/{}.ini".format(args.exp_id,args.model_id))
 
+    argreader.writeConfigFile("../models/{}/{}.ini".format(args.exp_id,args.model_id))
     print("Model :",args.model_id,"Experience :",args.exp_id)
 
     if args.distributed:
