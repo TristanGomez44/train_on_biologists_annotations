@@ -374,9 +374,105 @@ class TopkPointExtractor(nn.Module):
             self.absKerDict[device] = self.absKer.to(device)
             self.spatialWeightKerDict[device] = self.spatialWeightKer.to(device)
 
+
+class ReinforcePointExtractor(nn.Module):
+
+    def __init__(self,cuda,nbFeat,softCoord,softCoord_kerSize,softCoord_secOrder,point_nb,reconst,encoderChan,\
+                    predictDepth,softcoord_shiftpred,furthestPointSampling,furthestPointSampling_nb_pts,dropout,auxModel,\
+                    topkRandSamp,topkRSUnifWeight):
+
+        super(ReinforcePointExtractor,self).__init__()
+
+        self.conv1x1 = nn.Conv2d(nbFeat, encoderChan, kernel_size=1, stride=1)
+        self.point_extracted = point_nb
+        self.softCoord = softCoord
+        self.softCoord_kerSize = softCoord_kerSize
+        self.softCoord_secOrder = softCoord_secOrder
+        self.softcoord_shiftpred = softcoord_shiftpred
+        self.furthestPointSampling = furthestPointSampling
+        self.furthestPointSampling_nb_pts = furthestPointSampling_nb_pts
+        self.dropout = dropout
+
+        self.reconst = reconst
+        if reconst:
+            self.decoder = nn.Sequential(resnet.conv1x1(encoderChan, 3, stride=1),\
+                           resnet.resnet4(pretrained=True,chan=64,featMap=True,layerSizeReduce=False,preLayerSizeReduce=False,stride=1),\
+                           resnet.conv1x1(64, 3, stride=1))
+
+        self.predictDepth = predictDepth
+        if predictDepth:
+            self.conv1x1_depth = nn.Conv2d(nbFeat, 1, kernel_size=1, stride=1)
+
+        if self.softcoord_shiftpred and self.softCoord:
+            raise ValueError("softcoord_shiftpred and softCoord can't be true at the same time.")
+
+        if self.softcoord_shiftpred:
+            self.shiftpred_x,self.shiftpred_y = nn.Conv2d(nbFeat, 1, kernel_size=1, stride=1),nn.Conv2d(nbFeat, 1, kernel_size=1, stride=1)
+
+        if self.softCoord:
+
+            if self.softCoord_kerSize%2==0:
+                raise ValueError("Kernel size of soft coordinate extractor must not be a multiple of 2.")
+
+            ordKer = (torch.arange(self.softCoord_kerSize)-self.softCoord_kerSize//2).unsqueeze(1).unsqueeze(0).unsqueeze(0).expand(1,1,self.softCoord_kerSize,self.softCoord_kerSize).float()
+            absKer = (torch.arange(self.softCoord_kerSize)-self.softCoord_kerSize//2).unsqueeze(0).unsqueeze(0).unsqueeze(0).expand(1,1,self.softCoord_kerSize,self.softCoord_kerSize).float()
+            self.ordKer,self.absKer = (ordKer.cuda(),absKer.cuda()) if cuda else (ordKer,absKer)
+
+            self.spatialWeightKer = self.softCoord_kerSize-(torch.abs(self.ordKer)+torch.abs(self.absKer))
+            if self.softCoord_secOrder:
+                self.spatialWeightKer = self.spatialWeightKer*self.spatialWeightKer
+
+            self.ordKerDict,self.absKerDict,self.spatialWeightKerDict = {},{},{}
+
+        self.auxModel = auxModel
+        self.topkRandSamp = topkRandSamp
+        self.topkRSUnifWeight = topkRSUnifWeight
+
+    def forward(self,featureMaps):
+
+        #Because of zero padding, the border are very active, so we remove it.
+        featureMaps = featureMaps[:,:,3:-3,3:-3]
+
+        pointFeaturesMap = self.conv1x1(featureMaps)
+        x = torch.pow(pointFeaturesMap,2).sum(dim=1,keepdim=True)
+
+        flatX = x.view(x.size(0),-1)
+
+        probs = flatX/flatX.sum(dim=-1,keepdim=True)[0]
+
+        flatInds = torch.distributions.categorical.Categorical(probs=probs).sample(torch.tensor([self.point_extracted]))
+        flatInds = flatInds.permute(1,0)
+
+        abs,ord = (flatInds%x.shape[-1],flatInds//x.shape[-1])
+
+        retDict={}
+
+        pointFeat = mapToList(pointFeaturesMap,abs,ord)
+
+        depth = torch.zeros(abs.size(0),abs.size(1),1).to(x.device)
+
+        abs,ord = abs.unsqueeze(-1).float(),ord.unsqueeze(-1).float()
+        points = torch.cat((abs,ord,depth),dim=-1).float()
+        retDict['points'] = torch.cat((abs,ord,depth,pointFeat),dim=-1).float()
+        retDict["batch"] = torch.arange(points.size(0)).unsqueeze(1).expand(points.size(0),points.size(1)).reshape(-1).to(points.device)
+        retDict["pos"] = points.reshape(points.size(0)*points.size(1),points.size(2))
+        retDict["pointfeatures"] = pointFeat.reshape(pointFeat.size(0)*pointFeat.size(1),pointFeat.size(2))
+        retDict["probs"] = probs
+        retDict["flatInds"] = flatInds
+
+        return retDict
+
+    def updateDict(self,device):
+
+        if not device in self.ordKerDict.keys():
+            self.ordKerDict[device] = self.ordKer.to(device)
+            self.absKerDict[device] = self.absKer.to(device)
+            self.spatialWeightKerDict[device] = self.spatialWeightKer.to(device)
+
+
 class PointNet2(SecondModel):
 
-    def __init__(self,cuda,classNb,nbFeat,pn_model,topk=False,\
+    def __init__(self,cuda,classNb,nbFeat,pn_model,topk=False, reinfExct = False,\
                 topk_softcoord=False,topk_softCoord_kerSize=2,topk_softCoord_secOrder=False,point_nb=256,reconst=False,\
                 encoderChan=1,encoderHidChan=64,predictDepth=False,topk_softcoord_shiftpred=False,topk_fps=False,topk_fps_nb_pts=64,\
                 topk_dropout=0,auxModel=False,topkRandSamp=False,topkRSUnifWeight=0):
@@ -385,6 +481,11 @@ class PointNet2(SecondModel):
 
         if topk:
             self.pointExtr = TopkPointExtractor(cuda,nbFeat,topk_softcoord,topk_softCoord_kerSize,\
+                                                topk_softCoord_secOrder,point_nb,reconst,encoderChan,predictDepth,\
+                                                topk_softcoord_shiftpred,topk_fps,topk_fps_nb_pts,topk_dropout,auxModel,\
+                                                topkRandSamp,topkRSUnifWeight)
+        elif reinfExct:
+            self.pointExtr = ReinforcePointExtractor(cuda,nbFeat,topk_softcoord,topk_softCoord_kerSize,\
                                                 topk_softCoord_secOrder,point_nb,reconst,encoderChan,predictDepth,\
                                                 topk_softcoord_shiftpred,topk_fps,topk_fps_nb_pts,topk_dropout,auxModel,\
                                                 topkRandSamp,topkRSUnifWeight)
@@ -399,7 +500,6 @@ class PointNet2(SecondModel):
             self.auxModel = nn.Linear(nbFeat,classNb)
 
     def forward(self,x):
-
         retDict = self.pointExtr(x)
         x = self.pn2(retDict['pointfeatures'],retDict['pos'],retDict['batch'])
         retDict['pred'] = x
@@ -408,6 +508,9 @@ class PointNet2(SecondModel):
             retDict["auxPred"] = self.auxModel(retDict['auxFeat'])
 
         return retDict
+
+
+
 
 
 def getResnetFeat(backbone_name,backbone_inplanes):
@@ -459,13 +562,14 @@ def netBuilder(args):
         secondModel = LinearSecondModel(nbFeat,args.class_nb,args.dropout)
     elif args.second_mod == "pointnet2" or args.second_mod == "edgenet":
         if args.second_mod == "pointnet2":
-            pn_model = pointnet2.Net(num_classes=args.class_nb,input_channels=args.pn_topk_enc_chan if args.pn_topk else 0)
+            pn_model = pointnet2.Net(num_classes=args.class_nb,input_channels=args.pn_topk_enc_chan if args.pn_topk or args.pn_reinf else 0)
         else:
             pn_model = pointnet2.EdgeNet(num_classes=args.class_nb,input_channels=args.pn_topk_enc_chan if args.pn_topk else 3)
 
         secondModel = PointNet2(args.cuda,args.class_nb,nbFeat=nbFeat,pn_model=pn_model,encoderHidChan=args.pn_topk_hid_chan,\
-                                topk=args.pn_topk,topk_softcoord=args.pn_topk_softcoord,topk_softCoord_kerSize=args.pn_topk_softcoord_kersize,topk_softCoord_secOrder=args.pn_topk_softcoord_secorder,\
-                                point_nb=args.pn_point_nb,reconst=args.pn_topk_reconst,topk_softcoord_shiftpred=args.pn_topk_softcoord_shiftpred,\
+                                topk=args.pn_topk, reinfExct=args.pn_reinf, topk_softcoord=args.pn_topk_softcoord,topk_softCoord_kerSize=args.pn_topk_softcoord_kersize,\
+                                topk_softCoord_secOrder=args.pn_topk_softcoord_secorder,point_nb=args.pn_point_nb,reconst=args.pn_topk_reconst\
+                                ,topk_softcoord_shiftpred=args.pn_topk_softcoord_shiftpred,\
                                 encoderChan=args.pn_topk_enc_chan,predictDepth=args.pn_topk_pred_depth,\
                                 topk_fps=args.pn_topk_farthest_pts_sampling,topk_fps_nb_pts=args.pn_topk_fps_nb_points,topk_dropout=args.pn_topk_dropout,\
                                 auxModel=args.pn_aux_model,topkRandSamp=args.pn_topk_rand_sampling,topkRSUnifWeight=args.pn_topk_rs_unif_weight)
@@ -530,6 +634,9 @@ def addArgs(argreader):
     argreader.parser.add_argument('--pn_topk', type=args.str2bool, metavar='BOOL',
                         help='To feed the pointnet model with points extracted using torch.topk and not a direct coordinate predictor. Ignored if the model \
                         doesn\'t use pointnet.')
+    argreader.parser.add_argument('--pn_reinf', type=args.str2bool, metavar='BOOL',
+                                  help='To feed the pointnet model with points extracted using reinforcement learning. Ignored if the model \
+                            doesn\'t use pointnet.')
 
     argreader.parser.add_argument('--pn_topk_softcoord', type=args.str2bool, metavar='BOOL',
                         help='For the topk point net model. The point coordinate will be computed using soft argmax.')

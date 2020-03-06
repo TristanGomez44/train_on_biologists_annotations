@@ -13,11 +13,13 @@ from torch.nn import functional as F
 from tensorboardX import SummaryWriter
 
 import torch.backends.cudnn as cudnn
+
 torch.backends.cudnn.benchmark = True
 torch.backends.cudnn.enabled = True
 
 import matplotlib.cm as cm
 import matplotlib.pyplot as plt
+
 plt.switch_backend('agg')
 
 import modelBuilder
@@ -32,7 +34,8 @@ from torch.multiprocessing import Process
 
 import time
 
-def epochSeqTr(model,optim,log_interval,loader, epoch, args,writer,**kwargs):
+
+def epochSeqTr(model, optim, log_interval, loader, epoch, args, writer, **kwargs):
     ''' Train a model during one epoch
 
     Args:
@@ -51,69 +54,85 @@ def epochSeqTr(model,optim,log_interval,loader, epoch, args,writer,**kwargs):
 
     model.train()
 
-    print("Epoch",epoch," : train")
+    print("Epoch", epoch, " : train")
 
     metrDict = None
     validBatch = 0
-    allOut,allGT = None,None
+    allOut, allGT = None, None
 
-    for batch_idx,batch in enumerate(loader):
+    for batch_idx, batch in enumerate(loader):
 
         if (batch_idx % log_interval == 0):
-            processedImgNb = batch_idx*len(batch[0])
-            print("\t",processedImgNb,"/",len(loader.dataset))
+            processedImgNb = batch_idx * len(batch[0])
+            print("\t", processedImgNb, "/", len(loader.dataset))
 
-        data,target = batch[0],batch[1]
+        data, target = batch[0], batch[1]
         if args.cuda:
             data, target = data.cuda(), target.cuda()
 
         with torch.autograd.detect_anomaly():
             resDict = model(data)
             output = resDict["pred"]
-            loss = computeLoss(args.nll_weight,args.aux_mod_nll_weight,output,target,args.pn_reconst_weight,resDict,data)
+            loss = computeLoss(args.nll_weight, args.aux_mod_nll_weight, args.pn_reinf_weight, output, target,
+                               args.pn_reconst_weight, resDict, data)
             loss.backward()
 
         if args.distributed:
             average_gradients(model)
 
         optim.step()
-        update.updateHardWareOccupation(args.debug,args.benchmark,args.cuda,epoch,"train",args.exp_id,args.model_id,batch_idx)
+        update.updateHardWareOccupation(args.debug, args.benchmark, args.cuda, epoch, "train", args.exp_id,
+                                        args.model_id, batch_idx)
         optim.zero_grad()
 
-        #Metrics
-        metDictSample = metrics.binaryToMetrics(output,target,resDict)
+        # Metrics
+        metDictSample = metrics.binaryToMetrics(output, target, resDict)
         metDictSample["Loss"] = loss.detach().data.item()
-        metrDict = metrics.updateMetrDict(metrDict,metDictSample)
+        metrDict = metrics.updateMetrDict(metrDict, metDictSample)
 
         validBatch += 1
 
         if validBatch > 15 and args.debug:
             break
 
-    #If the training set is empty (which we might want to just evaluate the model), then allOut and allGT will still be None
+    # If the training set is empty (which we might want to just evaluate the model), then allOut and allGT will still be None
     if validBatch > 0:
-        torch.save(model.state_dict(), "../models/{}/model{}_epoch{}".format(args.exp_id,args.model_id, epoch))
-        writeSummaries(metrDict,validBatch,writer,epoch,"train",args.model_id,args.exp_id)
+        torch.save(model.state_dict(), "../models/{}/model{}_epoch{}".format(args.exp_id, args.model_id, epoch))
+        writeSummaries(metrDict, validBatch, writer, epoch, "train", args.model_id, args.exp_id)
 
     if args.debug:
         totalTime = time.time() - start_time
-        update.updateTimeCSV(epoch,"train",args.exp_id,args.model_id,totalTime,batch_idx)
+        update.updateTimeCSV(epoch, "train", args.exp_id, args.model_id, totalTime, batch_idx)
 
-def computeLoss(nll_weight,aux_model_weight,output,target,pn_reconst_weight,resDict,data):
-    loss = nll_weight*F.cross_entropy(output, target)
+
+def computeLoss(nll_weight, aux_model_weight, pn_reinf_weight, output, target, pn_reconst_weight, resDict, data):
+    loss = nll_weight * F.cross_entropy(output, target)
     if pn_reconst_weight > 0:
-        loss += pn_recons_term(pn_reconst_weight,resDict,data)
+        loss += pn_recons_term(pn_reconst_weight, resDict, data)
+    if pn_reinf_weight > 0:
+        loss += pn_reinf_term(pn_reinf_weight, resDict, target)
     if aux_model_weight > 0:
-        loss += add_aux_model_loss_term(aux_model_weight,resDict,data,target)
+        loss += add_aux_model_loss_term(aux_model_weight, resDict, data, target)
     return loss
 
-def pn_recons_term(pn_reconst_weight,resDict,data):
-    reconst = resDict['reconst']
-    data = F.adaptive_avg_pool2d(data, (reconst.size(-2),reconst.size(-1)))
-    return pn_reconst_weight*torch.pow(reconst-data,2).mean()
 
-def add_aux_model_loss_term(aux_model_weight,resDict,data,target):
-    return aux_model_weight*F.cross_entropy(resDict["auxPred"], target)
+def pn_reinf_term(pn_reinf_weight, resDict, target):
+    flatInds = resDict['flatInds']
+    pi = resDict['probs'][torch.arange(flatInds.size(0), dtype=torch.long).unsqueeze(1), flatInds]
+    acc = (resDict["pred"].argmax(dim=-1) == target)
+    reward = (acc*2-1).unsqueeze(1)
+    loss_reinforce = torch.sum(-torch.log(pi) * reward)
+    return  pn_reinf_weight*loss_reinforce
+
+def pn_recons_term(pn_reconst_weight, resDict, data):
+    reconst = resDict['reconst']
+    data = F.adaptive_avg_pool2d(data, (reconst.size(-2), reconst.size(-1)))
+    return pn_reconst_weight * torch.pow(reconst - data, 2).mean()
+
+
+def add_aux_model_loss_term(aux_model_weight, resDict, data, target):
+    return aux_model_weight * F.cross_entropy(resDict["auxPred"], target)
+
 
 def average_gradients(model):
     size = float(dist.get_world_size())
@@ -122,7 +141,8 @@ def average_gradients(model):
             dist.all_reduce(param.grad.data, op=dist.ReduceOp.SUM)
             param.grad.data /= size
 
-def epochImgEval(model,log_interval,loader, epoch, args,writer,metricEarlyStop,mode="val"):
+
+def epochImgEval(model, log_interval, loader, epoch, args, writer, metricEarlyStop, mode="val"):
     ''' Train a model during one epoch
 
     Args:
@@ -141,7 +161,7 @@ def epochImgEval(model,log_interval,loader, epoch, args,writer,metricEarlyStop,m
 
     model.eval()
 
-    print("Epoch",epoch," : {}".format(mode))
+    print("Epoch", epoch, " : {}".format(mode))
 
     metrDict = None
 
@@ -149,64 +169,69 @@ def epochImgEval(model,log_interval,loader, epoch, args,writer,metricEarlyStop,m
 
     allOut = None
     allGT = None
-    intermVarDict = {"fullAttMap":None,"fullFeatMapSeq":None,"fullAffTransSeq":None,"fullPointsSeq":None,"fullReconstSeq":None}
+    intermVarDict = {"fullAttMap": None, "fullFeatMapSeq": None, "fullAffTransSeq": None, "fullPointsSeq": None,
+                     "fullReconstSeq": None}
 
-    for batch_idx,(data,target) in enumerate(loader):
+    for batch_idx, (data, target) in enumerate(loader):
 
         if (batch_idx % log_interval == 0):
-            print("\t",batch_idx*len(data),"/",len(loader.dataset))
+            print("\t", batch_idx * len(data), "/", len(loader.dataset))
 
-        #Puting tensors on cuda
+        # Puting tensors on cuda
         if args.cuda:
             data, target = data.cuda(), target.cuda()
 
-        #Computing predictions
+        # Computing predictions
         resDict = model(data)
         output = resDict["pred"]
 
-        #Loss
-        loss = computeLoss(args.nll_weight,args.aux_mod_nll_weight,output,target,args.pn_reconst_weight,resDict,data)
+        # Loss
+        loss = computeLoss(args.nll_weight, args.aux_mod_nll_weight, args.pn_reinf_weight, output, target, args.pn_reconst_weight, resDict,
+                           data)
 
-        #Other variables produced by the net
-        intermVarDict = update.catIntermediateVariables(resDict,intermVarDict,validBatch)
+        # Other variables produced by the net
+        intermVarDict = update.catIntermediateVariables(resDict, intermVarDict, validBatch)
 
-        #Harware occupation
-        update.updateHardWareOccupation(args.debug,args.benchmark,args.cuda,epoch,mode,args.exp_id,args.model_id,batch_idx)
+        # Harware occupation
+        update.updateHardWareOccupation(args.debug, args.benchmark, args.cuda, epoch, mode, args.exp_id, args.model_id,
+                                        batch_idx)
 
-        #Metrics
-        metDictSample = metrics.binaryToMetrics(output,target,resDict)
+        # Metrics
+        metDictSample = metrics.binaryToMetrics(output, target, resDict)
         metDictSample["Loss"] = loss.detach().data.item()
-        metrDict = metrics.updateMetrDict(metrDict,metDictSample)
+        metrDict = metrics.updateMetrDict(metrDict, metDictSample)
 
-        writePreds(output,target,epoch,args.exp_id,args.model_id,args.class_nb,batch_idx)
+        writePreds(output, target, epoch, args.exp_id, args.model_id, args.class_nb, batch_idx)
 
         validBatch += 1
 
         if validBatch > 15 and args.debug:
             break
 
-    writeSummaries(metrDict,validBatch,writer,epoch,mode,args.model_id,args.exp_id)
-    intermVarDict = update.saveIntermediateVariables(intermVarDict,args.exp_id,args.model_id,epoch,mode)
+    writeSummaries(metrDict, validBatch, writer, epoch, mode, args.model_id, args.exp_id)
+    intermVarDict = update.saveIntermediateVariables(intermVarDict, args.exp_id, args.model_id, epoch, mode)
 
     if args.debug:
         totalTime = time.time() - start_time
-        update.updateTimeCSV(epoch,mode,args.exp_id,args.model_id,totalTime,batch_idx)
+        update.updateTimeCSV(epoch, mode, args.exp_id, args.model_id, totalTime, batch_idx)
 
     return metrDict[metricEarlyStop]
 
-def writePreds(predBatch,targBatch,epoch,exp_id,model_id,class_nb,batch_idx):
 
-    csvPath = "../results/{}/{}_epoch{}.csv".format(exp_id,model_id,epoch)
+def writePreds(predBatch, targBatch, epoch, exp_id, model_id, class_nb, batch_idx):
+    csvPath = "../results/{}/{}_epoch{}.csv".format(exp_id, model_id, epoch)
 
-    if (batch_idx==0 and epoch==1) or not os.path.exists(csvPath):
-        with open(csvPath,"w") as text_file:
-            print("targ,"+",".join(np.arange(class_nb).astype(str)),file=text_file)
+    if (batch_idx == 0 and epoch == 1) or not os.path.exists(csvPath):
+        with open(csvPath, "w") as text_file:
+            print("targ," + ",".join(np.arange(class_nb).astype(str)), file=text_file)
 
-    with open(csvPath,"a") as text_file:
+    with open(csvPath, "a") as text_file:
         for i in range(len(predBatch)):
-            print(str(targBatch[i].cpu().detach().numpy())+","+",".join(predBatch[i].cpu().detach().numpy().astype(str)),file=text_file)
+            print(str(targBatch[i].cpu().detach().numpy()) + "," + ",".join(
+                predBatch[i].cpu().detach().numpy().astype(str)), file=text_file)
 
-def writeSummaries(metrDict,sampleNb,writer,epoch,mode,model_id,exp_id):
+
+def writeSummaries(metrDict, sampleNb, writer, epoch, mode, model_id, exp_id):
     ''' Write the metric computed during an evaluation in a tf writer and in a csv file
 
     Args:
@@ -229,22 +254,23 @@ def writeSummaries(metrDict,sampleNb,writer,epoch,mode,model_id,exp_id):
 
     for metric in metrDict:
         if metric == "Accuracy_aux":
-            writer.add_scalars("Accuracy",{model_id+"_aux"+"_"+mode:metrDict[metric]},epoch)
+            writer.add_scalars("Accuracy", {model_id + "_aux" + "_" + mode: metrDict[metric]}, epoch)
         else:
-            writer.add_scalars(metric,{model_id+"_"+mode:metrDict[metric]},epoch)
+            writer.add_scalars(metric, {model_id + "_" + mode: metrDict[metric]}, epoch)
 
-    if not os.path.exists("../results/{}/model{}_epoch{}_metrics_{}.csv".format(exp_id,model_id,epoch,mode)):
-        header = [metric.lower().replace(" ","_") for metric in metrDict.keys()]
+    if not os.path.exists("../results/{}/model{}_epoch{}_metrics_{}.csv".format(exp_id, model_id, epoch, mode)):
+        header = [metric.lower().replace(" ", "_") for metric in metrDict.keys()]
     else:
         header = ""
 
-    with open("../results/{}/model{}_epoch{}_metrics_{}.csv".format(exp_id,model_id,epoch,mode),"a") as text_file:
-        print(header,file=text_file)
-        print(",".join([str(metrDict[metric]) for metric in metrDict.keys()]),file=text_file)
+    with open("../results/{}/model{}_epoch{}_metrics_{}.csv".format(exp_id, model_id, epoch, mode), "a") as text_file:
+        print(header, file=text_file)
+        print(",".join([str(metrDict[metric]) for metric in metrDict.keys()]), file=text_file)
 
     return metrDict
 
-def get_OptimConstructor_And_Kwargs(optimStr,momentum):
+
+def get_OptimConstructor_And_Kwargs(optimStr, momentum):
     '''Return the apropriate constructor and keyword dictionnary for the choosen optimiser
     Args:
         optimStr (str): the name of the optimiser. Can be \'AMSGrad\', \'SGD\' or \'Adam\'.
@@ -254,19 +280,21 @@ def get_OptimConstructor_And_Kwargs(optimStr,momentum):
     '''
 
     if optimStr != "AMSGrad":
-        optimConst = getattr(torch.optim,optimStr)
+        optimConst = getattr(torch.optim, optimStr)
         if optimStr == "SGD":
-            kwargs= {'momentum': momentum}
+            kwargs = {'momentum': momentum}
         elif optimStr == "Adam":
             kwargs = {}
         else:
             raise ValueError("Unknown optimisation algorithm : {}".format(args.optim))
     else:
         optimConst = torch.optim.Adam
-        kwargs = {'amsgrad':True}
+        kwargs = {'amsgrad': True}
 
-    return optimConst,kwargs
-def initialize_Net_And_EpochNumber(net,exp_id,model_id,cuda,start_mode,init_path,strict,init_pn_path):
+    return optimConst, kwargs
+
+
+def initialize_Net_And_EpochNumber(net, exp_id, model_id, cuda, start_mode, init_path, strict, init_pn_path):
     '''Initialize a network
 
     If init is None, the network will be left unmodified. Its initial parameters will be saved.
@@ -283,53 +311,57 @@ def initialize_Net_And_EpochNumber(net,exp_id,model_id,cuda,start_mode,init_path
     '''
 
     if start_mode == "auto":
-        if len(glob.glob("../models/{}/model{}_epoch*".format(exp_id,model_id))) > 0:
+        if len(glob.glob("../models/{}/model{}_epoch*".format(exp_id, model_id))) > 0:
             start_mode = "fine_tune"
         else:
             start_mode = "scratch"
-        print("Autodetected mode",start_mode)
+        print("Autodetected mode", start_mode)
 
     if start_mode == "scratch":
 
         if init_pn_path != "None":
-            pn_params = torch.load(init_pn_path,map_location="cpu" if not cuda else None)
+            pn_params = torch.load(init_pn_path, map_location="cpu" if not cuda else None)
             pn_params_filtered = {}
             for key in pn_params.keys():
                 if key.find("sa1_module.conv.local_nn.0.0.weight") == -1 and key.find("lin3") == -1:
                     pn_params_filtered[key] = pn_params[key]
 
-            res = net.secondModel.pn2.load_state_dict(pn_params_filtered,False)
+            res = net.secondModel.pn2.load_state_dict(pn_params_filtered, False)
 
-        #Saving initial parameters
-        torch.save(net.state_dict(), "../models/{}/{}_epoch0".format(exp_id,model_id))
+        # Saving initial parameters
+        torch.save(net.state_dict(), "../models/{}/{}_epoch0".format(exp_id, model_id))
         startEpoch = 1
 
     elif start_mode == "fine_tune":
 
         if init_path == "None":
-            init_path = sorted(glob.glob("../models/{}/model{}_epoch*".format(exp_id,model_id)),key=utils.findLastNumbers)[-1]
+            init_path = \
+            sorted(glob.glob("../models/{}/model{}_epoch*".format(exp_id, model_id)), key=utils.findLastNumbers)[-1]
 
-        params = torch.load(init_path,map_location="cpu" if not cuda else None)
+        params = torch.load(init_path, map_location="cpu" if not cuda else None)
 
-        #Checking if the key of the model start with "module."
-        startsWithModule = (list(net.state_dict().keys())[0].find("module.") != -1)
+        # Checking if the key of the model start with "module."
+        startsWithModule = (list(net.state_dict().keys())[0].find("module.") == 0)
+        print(startsWithModule)
 
         if startsWithModule:
+            # paramsFormated = {}
+            # for key in params.keys():
+            #     keyFormat = "module." + key if key.find("module") == -1 else key
+            #     paramsFormated[keyFormat] = params[key]
+            # params = paramsFormated
+
             paramsFormated = {}
             for key in params.keys():
-                keyFormat =  "module."+key if key.find("module") == -1 else key
+                keyFormat = key.replace("module.", "")
                 paramsFormated[keyFormat] = params[key]
             params = paramsFormated
 
-        else:
-            paramsFormated = {}
-            for key in params.keys():
-                keyFormat =  key.replace("module.","")
-                paramsFormated[keyFormat] = params[key]
-            params = paramsFormated
+        # else:
 
-        #Removing keys corresponding to parameter which shape are different in the checkpoint and in the current model
-        #For example, this is necessary to load a model trained on n classes to bootstrap a model with m != n classes.
+
+        # Removing keys corresponding to parameter which shape are different in the checkpoint and in the current model
+        # For example, this is necessary to load a model trained on n classes to bootstrap a model with m != n classes.
         keysToRemove = []
         for key in params.keys():
             if key in net.state_dict().keys():
@@ -338,42 +370,45 @@ def initialize_Net_And_EpochNumber(net,exp_id,model_id,cuda,start_mode,init_path
         for key in keysToRemove:
             params.pop(key)
 
-        #This is necessary to start with weights created when the model attributes were "visualModel" and "tempModel".
+        # This is necessary to start with weights created when the model attributes were "visualModel" and "tempModel".
         paramsWithNewNames = {}
         for key in params.keys():
-            paramsWithNewNames[key.replace("visualModel","firstModel").replace("tempModel","secondModel")] = params[key]
+            paramsWithNewNames[key.replace("visualModel", "firstModel").replace("tempModel", "secondModel")] = params[
+                key]
         params = paramsWithNewNames
 
-        if hasattr(net,"secondModel"):
-            if not hasattr(net.secondModel,"linLay"):
+        if hasattr(net, "secondModel"):
+            if not hasattr(net.secondModel, "linLay"):
                 def checkAndReplace(key):
                     if key.find("secondModel.linLay") != -1:
-                        key = key.replace("secondModel.linLay","secondModel.linTempMod.linLay")
+                        key = key.replace("secondModel.linLay", "secondModel.linTempMod.linLay")
                     return key
-                params = {checkAndReplace(k):params[k] for k in params.keys()}
 
-        res = net.load_state_dict(params,strict)
+                params = {checkAndReplace(k): params[k] for k in params.keys()}
 
-        #Depending on the pytorch version the load_state_dict() method can return the list of missing and unexpected parameters keys or nothing
+        res = net.load_state_dict(params, strict)
+
+        # Depending on the pytorch version the load_state_dict() method can return the list of missing and unexpected parameters keys or nothing
         if not res is None:
-            missingKeys,unexpectedKeys = res
-            print("missing keys",missingKeys)
-            print("unexpected keys",unexpectedKeys)
+            missingKeys, unexpectedKeys = res
+            print("missing keys", missingKeys)
+            print("unexpected keys", unexpectedKeys)
 
-        #Start epoch is 1 if strict if false because strict=False means that it is another model which is being trained
+        # Start epoch is 1 if strict if false because strict=False means that it is another model which is being trained
         if strict:
             startEpoch = utils.findLastNumbers(init_path)
         else:
             startEpoch = 1
 
     return startEpoch
-def getBestEpochInd_and_WorseEpochNb(start_mode,exp_id,model_id,epoch):
 
+
+def getBestEpochInd_and_WorseEpochNb(start_mode, exp_id, model_id, epoch):
     if start_mode == "scratch":
         bestEpoch = epoch
         worseEpochNb = 0
     else:
-        bestModelPaths = glob.glob("../models/{}/model{}_best_epoch*".format(exp_id,model_id))
+        bestModelPaths = glob.glob("../models/{}/model{}_best_epoch*".format(exp_id, model_id))
         if len(bestModelPaths) == 0:
             bestEpoch = epoch
             worseEpochNb = 0
@@ -382,69 +417,78 @@ def getBestEpochInd_and_WorseEpochNb(start_mode,exp_id,model_id,epoch):
             bestEpoch = int(os.path.basename(bestModelPath).split("epoch")[1])
             worseEpochNb = epoch - bestEpoch
         else:
-            raise ValueError("Wrong number of best model weight file : ",len(bestModelPaths))
+            raise ValueError("Wrong number of best model weight file : ", len(bestModelPaths))
 
-    return bestEpoch,worseEpochNb
+    return bestEpoch, worseEpochNb
+
 
 def addInitArgs(argreader):
-    argreader.parser.add_argument('--start_mode', type=str,metavar='SM',
-                help='The mode to use to initialise the model. Can be \'scratch\' or \'fine_tune\'.')
-    argreader.parser.add_argument('--init_path', type=str,metavar='SM',
-                help='The path to the weight file to use to initialise the network')
-    argreader.parser.add_argument('--strict_init', type=str2bool,metavar='SM',
-                help='Set to True to make torch.load_state_dict throw an error when not all keys match (to use with --init_path)')
-    argreader.parser.add_argument('--init_pn_path', type=str,metavar='SM',
-                help='The path to the weight file of a pn model.')
+    argreader.parser.add_argument('--start_mode', type=str, metavar='SM',
+                                  help='The mode to use to initialise the model. Can be \'scratch\' or \'fine_tune\'.')
+    argreader.parser.add_argument('--init_path', type=str, metavar='SM',
+                                  help='The path to the weight file to use to initialise the network')
+    argreader.parser.add_argument('--strict_init', type=str2bool, metavar='SM',
+                                  help='Set to True to make torch.load_state_dict throw an error when not all keys match (to use with --init_path)')
+    argreader.parser.add_argument('--init_pn_path', type=str, metavar='SM',
+                                  help='The path to the weight file of a pn model.')
     return argreader
+
+
 def addOptimArgs(argreader):
-    argreader.parser.add_argument('--lr', type=args.str2FloatList,metavar='LR',
-                        help='learning rate (it can be a schedule : --lr 0.01,0.001,0.0001)')
+    argreader.parser.add_argument('--lr', type=args.str2FloatList, metavar='LR',
+                                  help='learning rate (it can be a schedule : --lr 0.01,0.001,0.0001)')
     argreader.parser.add_argument('--momentum', type=float, metavar='M',
-                        help='SGD momentum')
+                                  help='SGD momentum')
     argreader.parser.add_argument('--optim', type=str, metavar='OPTIM',
-                        help='the optimizer to use (default: \'SGD\')')
+                                  help='the optimizer to use (default: \'SGD\')')
     return argreader
+
+
 def addValArgs(argreader):
-    argreader.parser.add_argument('--train_step_to_ignore', type=int,metavar='LMAX',
-                    help='Number of steps that will be ignored at the begining and at the end of the training sequence for binary cross entropy computation')
+    argreader.parser.add_argument('--train_step_to_ignore', type=int, metavar='LMAX',
+                                  help='Number of steps that will be ignored at the begining and at the end of the training sequence for binary cross entropy computation')
 
-    argreader.parser.add_argument('--val_l_temp', type=int,metavar='LMAX',help='Length of sequences for computation of scores when using a CNN temp model.')
+    argreader.parser.add_argument('--val_l_temp', type=int, metavar='LMAX',
+                                  help='Length of sequences for computation of scores when using a CNN temp model.')
 
-    argreader.parser.add_argument('--metric_early_stop', type=str,metavar='METR',
-                    help='The metric to use to choose the best model')
-    argreader.parser.add_argument('--maximise_val_metric', type=args.str2bool,metavar='BOOL',
-                    help='If true, The chosen metric for chosing the best model will be maximised')
-    argreader.parser.add_argument('--max_worse_epoch_nb', type=int,metavar='NB',
-                    help='The number of epochs to wait if the validation performance does not improve.')
-    argreader.parser.add_argument('--run_test', type=args.str2bool,metavar='NB',
-                    help='Evaluate the model on the test set')
+    argreader.parser.add_argument('--metric_early_stop', type=str, metavar='METR',
+                                  help='The metric to use to choose the best model')
+    argreader.parser.add_argument('--maximise_val_metric', type=args.str2bool, metavar='BOOL',
+                                  help='If true, The chosen metric for chosing the best model will be maximised')
+    argreader.parser.add_argument('--max_worse_epoch_nb', type=int, metavar='NB',
+                                  help='The number of epochs to wait if the validation performance does not improve.')
+    argreader.parser.add_argument('--run_test', type=args.str2bool, metavar='NB',
+                                  help='Evaluate the model on the test set')
 
-    argreader.parser.add_argument('--compute_metrics_during_eval', type=args.str2bool,metavar='BOOL',
-                    help='If false, the metrics will not be computed during validation, but the scores produced by the models will still be saved')
+    argreader.parser.add_argument('--compute_metrics_during_eval', type=args.str2bool, metavar='BOOL',
+                                  help='If false, the metrics will not be computed during validation, but the scores produced by the models will still be saved')
 
     return argreader
+
+
 def addLossTermArgs(argreader):
+    argreader.parser.add_argument('--nll_weight', type=float, metavar='FLOAT',
+                                  help='The weight of the negative log-likelihood term in the loss function.')
+    argreader.parser.add_argument('--aux_mod_nll_weight', type=float, metavar='FLOAT',
+                                  help='The weight of the negative log-likelihood term in the loss function for the aux model (when using pointnet).')
 
-    argreader.parser.add_argument('--nll_weight', type=float,metavar='FLOAT',
-                    help='The weight of the negative log-likelihood term in the loss function.')
-    argreader.parser.add_argument('--aux_mod_nll_weight', type=float,metavar='FLOAT',
-                    help='The weight of the negative log-likelihood term in the loss function for the aux model (when using pointnet).')
-
-    argreader.parser.add_argument('--pn_reconst_weight', type=float,metavar='FLOAT',
-                    help='The weight of the reconstruction term in the loss function when using a pn-topk model.')
-
+    argreader.parser.add_argument('--pn_reconst_weight', type=float, metavar='FLOAT',
+                                  help='The weight of the reconstruction term in the loss function when using a pn-topk model.')
+    argreader.parser.add_argument('--pn_reinf_weight', type=float, metavar='FLOAT',
+                                  help='The weight of the reinforcement term in the loss function when using a reinforcement learning.')
 
     return argreader
 
-def init_process(args,rank,size,fn,backend='gloo'):
+
+def init_process(args, rank, size, fn, backend='gloo'):
     """ Initialize the distributed environment. """
     os.environ['MASTER_ADDR'] = '127.0.0.1'
     os.environ['MASTER_PORT'] = '29500'
     dist.init_process_group(backend, rank=rank, world_size=size)
     fn(args)
 
-def run(args):
 
+def run(args):
     writer = SummaryWriter("../results/{}".format(args.exp_id))
 
     np.random.seed(args.seed)
@@ -452,104 +496,115 @@ def run(args):
     if args.cuda:
         torch.cuda.manual_seed(args.seed)
 
-    trainLoader,trainDataset = load_data.buildTrainLoader(args)
-    valLoader = load_data.buildTestLoader(args,"val")
+    trainLoader, trainDataset = load_data.buildTrainLoader(args)
+    valLoader = load_data.buildTestLoader(args, "val")
 
-    #Building the net
+    # Building the net
     net = modelBuilder.netBuilder(args)
 
     trainFunc = epochSeqTr
     valFunc = epochImgEval
 
-    kwargsTr = {'log_interval':args.log_interval,'loader':trainLoader,'args':args,'writer':writer}
+    kwargsTr = {'log_interval': args.log_interval, 'loader': trainLoader, 'args': args, 'writer': writer}
     kwargsVal = kwargsTr.copy()
 
     kwargsVal['loader'] = valLoader
     kwargsVal["metricEarlyStop"] = args.metric_early_stop
 
-    #Getting the contructor and the kwargs for the choosen optimizer
-    optimConst,kwargsOpti = get_OptimConstructor_And_Kwargs(args.optim,args.momentum)
-    startEpoch = initialize_Net_And_EpochNumber(net,args.exp_id,args.model_id,args.cuda,args.start_mode,args.init_path,args.strict_init,args.init_pn_path)
+    # Getting the contructor and the kwargs for the choosen optimizer
+    optimConst, kwargsOpti = get_OptimConstructor_And_Kwargs(args.optim, args.momentum)
+    startEpoch = initialize_Net_And_EpochNumber(net, args.exp_id, args.model_id, args.cuda, args.start_mode,
+                                                args.init_path, args.strict_init, args.init_pn_path)
 
-    #If no learning rate is schedule is indicated (i.e. there's only one learning rate),
-    #the args.lr argument will be a float and not a float list.
-    #Converting it to a list with one element makes the rest of processing easier
+    # If no learning rate is schedule is indicated (i.e. there's only one learning rate),
+    # the args.lr argument will be a float and not a float list.
+    # Converting it to a list with one element makes the rest of processing easier
     if type(args.lr) is float:
         args.lr = [args.lr]
 
     lrCounter = 0
 
     epoch = startEpoch
-    bestEpoch,worseEpochNb = getBestEpochInd_and_WorseEpochNb(args.start_mode,args.exp_id,args.model_id,epoch)
+    bestEpoch, worseEpochNb = getBestEpochInd_and_WorseEpochNb(args.start_mode, args.exp_id, args.model_id, epoch)
 
     if args.maximise_val_metric:
         bestMetricVal = -np.inf
-        isBetter = lambda x,y:x>y
+        isBetter = lambda x, y: x > y
     else:
         bestMetricVal = np.inf
-        isBetter = lambda x,y:x<y
+        isBetter = lambda x, y: x < y
 
     while epoch < args.epochs + 1 and worseEpochNb < args.max_worse_epoch_nb:
 
-        kwargsOpti,kwargsTr,lrCounter = update.updateLR_and_Optim(epoch,args.epochs,args.lr,startEpoch,kwargsOpti,kwargsTr,lrCounter,net,optimConst)
+        kwargsOpti, kwargsTr, lrCounter = update.updateLR_and_Optim(epoch, args.epochs, args.lr, startEpoch, kwargsOpti,
+                                                                    kwargsTr, lrCounter, net, optimConst)
 
-        kwargsTr["epoch"],kwargsVal["epoch"] = epoch,epoch
-        kwargsTr["model"],kwargsVal["model"] = net,net
+        kwargsTr["epoch"], kwargsVal["epoch"] = epoch, epoch
+        kwargsTr["model"], kwargsVal["model"] = net, net
 
         if not args.no_train:
             trainFunc(**kwargsTr)
         else:
             if not args.no_val:
-                net.load_state_dict(torch.load("../models/{}/model{}_epoch{}".format(args.exp_id_no_train,args.model_id_no_train,epoch),map_location="cpu" if not args.cuda else None))
+                net.load_state_dict(torch.load(
+                    "../models/{}/model{}_epoch{}".format(args.exp_id_no_train, args.model_id_no_train, epoch),
+                    map_location="cpu" if not args.cuda else None))
 
         if not args.no_val:
             with torch.no_grad():
                 metricVal = valFunc(**kwargsVal)
 
-            bestEpoch,bestMetricVal,worseEpochNb = update.updateBestModel(metricVal,bestMetricVal,args.exp_id,args.model_id,bestEpoch,epoch,net,isBetter,worseEpochNb)
+            bestEpoch, bestMetricVal, worseEpochNb = update.updateBestModel(metricVal, bestMetricVal, args.exp_id,
+                                                                            args.model_id, bestEpoch, epoch, net,
+                                                                            isBetter, worseEpochNb)
 
         epoch += 1
     if args.run_test:
-
         testFunc = valFunc
 
         kwargsTest = kwargsVal
         kwargsTest["mode"] = "test"
 
-        testLoader = load_data.buildTestLoader(args,"test")
+        testLoader = load_data.buildTestLoader(args, "test")
 
         kwargsTest['loader'] = testLoader
 
-        net.load_state_dict(torch.load("../models/{}/model{}_epoch{}".format(args.exp_id,args.model_id,bestEpoch),map_location="cpu" if not args.cuda else None))
+        net.load_state_dict(torch.load("../models/{}/model{}_epoch{}".format(args.exp_id, args.model_id, bestEpoch),
+                                       map_location="cpu" if not args.cuda else None))
         kwargsTest["model"] = net
         kwargsTest["epoch"] = bestEpoch
 
         with torch.no_grad():
             testFunc(**kwargsTest)
 
+
 def updateSeedAndNote(args):
-    if args.start_mode == "auto" and len(glob.glob("../models/{}/model{}_epoch*".format(args.exp_id,args.model_id))) > 0:
+    if args.start_mode == "auto" and len(
+            glob.glob("../models/{}/model{}_epoch*".format(args.exp_id, args.model_id))) > 0:
         args.seed += 1
         init_path = args.init_path
         if init_path == "None" and args.strict_init:
-            init_path = sorted(glob.glob("../models/{}/model{}_epoch*".format(args.exp_id,args.model_id)),key=utils.findLastNumbers)[-1]
+            init_path = sorted(glob.glob("../models/{}/model{}_epoch*".format(args.exp_id, args.model_id)),
+                               key=utils.findLastNumbers)[-1]
         startEpoch = utils.findLastNumbers(init_path)
-        args.note += ";s{} at {}".format(args.seed,startEpoch)
+        args.note += ";s{} at {}".format(args.seed, startEpoch)
     return args
 
-def main(argv=None):
 
-    #Getting arguments from config file and command line
-    #Building the arg reader
+def main(argv=None):
+    # Getting arguments from config file and command line
+    # Building the arg reader
     argreader = ArgReader(argv)
 
-    argreader.parser.add_argument('--no_train',type=str2bool,help='To use to re-evaluate a model at each epoch after training. At each epoch, the model is not trained but \
+    argreader.parser.add_argument('--no_train', type=str2bool, help='To use to re-evaluate a model at each epoch after training. At each epoch, the model is not trained but \
                                                                             the weights of the corresponding epoch are loaded and then the model is evaluated.\
                                                                             The arguments --exp_id_no_train and the --model_id_no_train must be set')
-    argreader.parser.add_argument('--exp_id_no_train',type=str,help="To use when --no_train is set to True. This is the exp_id of the model to get the weights from.")
-    argreader.parser.add_argument('--model_id_no_train',type=str,help="To use when --no_train is set to True. This is the model_id of the model to get the weights from.")
+    argreader.parser.add_argument('--exp_id_no_train', type=str,
+                                  help="To use when --no_train is set to True. This is the exp_id of the model to get the weights from.")
+    argreader.parser.add_argument('--model_id_no_train', type=str,
+                                  help="To use when --no_train is set to True. This is the model_id of the model to get the weights from.")
 
-    argreader.parser.add_argument('--no_val',type=str2bool,help='To not compute the validation')
+    argreader.parser.add_argument('--no_val', type=str2bool, help='To not compute the validation')
 
     argreader = addInitArgs(argreader)
     argreader = addOptimArgs(argreader)
@@ -559,7 +614,7 @@ def main(argv=None):
     argreader = modelBuilder.addArgs(argreader)
     argreader = load_data.addArgs(argreader)
 
-    #Reading the comand line arg
+    # Reading the comand line arg
     argreader.getRemainingArgs()
 
     args = argreader.args
@@ -567,7 +622,7 @@ def main(argv=None):
     if args.redirect_out:
         sys.stdout = open("python.out", 'w')
 
-    #The folders where the experience file will be written
+    # The folders where the experience file will be written
     if not (os.path.exists("../vis/{}".format(args.exp_id))):
         os.makedirs("../vis/{}".format(args.exp_id))
     if not (os.path.exists("../results/{}".format(args.exp_id))):
@@ -576,18 +631,18 @@ def main(argv=None):
         os.makedirs("../models/{}".format(args.exp_id))
 
     args = updateSeedAndNote(args)
-    #Update the config args
+    # Update the config args
     argreader.args = args
-    #Write the arguments in a config file so the experiment can be re-run
+    # Write the arguments in a config file so the experiment can be re-run
 
-    argreader.writeConfigFile("../models/{}/{}.ini".format(args.exp_id,args.model_id))
-    print("Model :",args.model_id,"Experience :",args.exp_id)
+    argreader.writeConfigFile("../models/{}/{}.ini".format(args.exp_id, args.model_id))
+    print("Model :", args.model_id, "Experience :", args.exp_id)
 
     if args.distributed:
         size = args.distrib_size
         processes = []
         for rank in range(size):
-            p = Process(target=init_process, args=(args,rank,size,run))
+            p = Process(target=init_process, args=(args, rank, size, run))
             p.start()
             processes.append(p)
 
@@ -595,6 +650,7 @@ def main(argv=None):
             p.join()
     else:
         run(args)
+
 
 if __name__ == "__main__":
     main()
