@@ -242,7 +242,7 @@ class TopkPointExtractor(nn.Module):
     def __init__(self, cuda, nbFeat, softCoord, softCoord_kerSize, softCoord_secOrder, point_nb, reconst, encoderChan, \
                  predictDepth, softcoord_shiftpred, furthestPointSampling, furthestPointSampling_nb_pts, dropout,
                  auxModel, \
-                 topkRandSamp, topkRSUnifWeight):
+                 topkRandSamp, topkRSUnifWeight ):
 
         super(TopkPointExtractor, self).__init__()
 
@@ -371,7 +371,6 @@ class TopkPointExtractor(nn.Module):
 
         if self.auxModel:
             retDict["auxFeat"] = featureMaps.mean(dim=-1).mean(dim=-1)
-
         return retDict
 
     def fastSoftCoordRefiner(self, x, abs, ord, kerSize=5, secondOrderSpatWeight=False):
@@ -412,7 +411,7 @@ class ReinforcePointExtractor(nn.Module):
     def __init__(self, cuda, nbFeat, softCoord, softCoord_kerSize, softCoord_secOrder, point_nb, reconst, encoderChan, \
                  predictDepth, softcoord_shiftpred, furthestPointSampling, furthestPointSampling_nb_pts, dropout,
                  auxModel, \
-                 topkRandSamp, topkRSUnifWeight, hasLinearProb):
+                 topkRandSamp, topkRSUnifWeight, hasLinearProb,pn_reinf_use_baseline):
 
         super(ReinforcePointExtractor, self).__init__()
 
@@ -426,6 +425,7 @@ class ReinforcePointExtractor(nn.Module):
         self.furthestPointSampling_nb_pts = furthestPointSampling_nb_pts
         self.dropout = dropout
         self.hasLinearProb = hasLinearProb
+        self.use_baseline = pn_reinf_use_baseline
 
         self.reconst = reconst
         if reconst:
@@ -475,6 +475,8 @@ class ReinforcePointExtractor(nn.Module):
         # Because of zero padding, the border are very active, so we remove it.
         featureMaps = featureMaps[:, :, 3:-3, 3:-3]
 
+
+
         pointFeaturesMap = self.conv1x1(featureMaps)
 
         if self.hasLinearProb:
@@ -511,6 +513,9 @@ class ReinforcePointExtractor(nn.Module):
         retDict["probs"] = probs
         retDict["flatInds"] = flatInds
 
+        if self.use_baseline:
+            retDict["baseFeat"] = featureMaps.mean(dim=-1).mean(dim=-1)
+
         return retDict
 
     def updateDict(self, device):
@@ -528,9 +533,12 @@ class PointNet2(SecondModel):
                  reconst=False, \
                  encoderChan=1, encoderHidChan=64, predictDepth=False, topk_softcoord_shiftpred=False, topk_fps=False,
                  topk_fps_nb_pts=64, \
-                 topk_dropout=0, auxModel=False, topkRandSamp=False, topkRSUnifWeight=0, hasLinearProb=False):
+                 topk_dropout=0, auxModel=False, topkRandSamp=False, topkRSUnifWeight=0, hasLinearProb=False, pn_reinf_use_baseline = False):
 
         super(PointNet2, self).__init__(nbFeat, classNb)
+
+        if pn_reinf_use_baseline:
+            self.baseline_linear = nn.Linear(nbFeat, 1)
 
         if topk:
             self.pointExtr = TopkPointExtractor(cuda, nbFeat, topk_softcoord, topk_softCoord_kerSize, \
@@ -544,7 +552,7 @@ class PointNet2(SecondModel):
                                                      predictDepth, \
                                                      topk_softcoord_shiftpred, topk_fps, topk_fps_nb_pts, topk_dropout,
                                                      auxModel, \
-                                                     topkRandSamp, topkRSUnifWeight, hasLinearProb)
+                                                     topkRandSamp, topkRSUnifWeight, hasLinearProb, pn_reinf_use_baseline)
         else:
             self.pointExtr = DirectPointExtractor(point_nb, nbFeat)
             if auxModel:
@@ -552,16 +560,23 @@ class PointNet2(SecondModel):
         self.pn2 = pn_model
 
         self.auxModel = auxModel
+        self.use_baseline = pn_reinf_use_baseline
         if auxModel:
             self.auxModel = nn.Linear(nbFeat, classNb)
 
     def forward(self, x):
         retDict = self.pointExtr(x)
+
         x = self.pn2(retDict['pointfeatures'], retDict['pos'], retDict['batch'])
         retDict['pred'] = x
 
+
         if self.auxModel:
             retDict["auxPred"] = self.auxModel(retDict['auxFeat'])
+
+        if self.use_baseline:
+            retDict["baseline"] = F.relu((self.baseline_linear(retDict['baseFeat'].detach())))
+
 
         return retDict
 
@@ -636,7 +651,7 @@ def netBuilder(args):
                                 topk_dropout=args.pn_topk_dropout, \
                                 auxModel=args.pn_aux_model, topkRandSamp=args.pn_topk_rand_sampling,
                                 topkRSUnifWeight=args.pn_topk_rs_unif_weight,
-                                hasLinearProb=args.pn_reinf_has_linear_prob)
+                                hasLinearProb=args.pn_reinf_has_linear_prob, pn_reinf_use_baseline=args.pn_reinf_use_baseline)
     else:
         raise ValueError("Unknown temporal model type : ", args.second_mod)
 
@@ -703,6 +718,8 @@ def addArgs(argreader):
                             doesn\'t use pointnet.')
     argreader.parser.add_argument('--pn_reinf_has_linear_prob', type=args.str2bool, metavar='BOOL',
                                   help='To use linear layer to compute probabilities for the reinforcement model')
+    argreader.parser.add_argument('--pn_reinf_use_baseline', type=args.str2bool, metavar='BOOL',
+                                  help='To use linear layer to compute baseline for the reinforcement model training')
 
     argreader.parser.add_argument('--pn_topk_softcoord', type=args.str2bool, metavar='BOOL',
                                   help='For the topk point net model. The point coordinate will be computed using soft argmax.')
