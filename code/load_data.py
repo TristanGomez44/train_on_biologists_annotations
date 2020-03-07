@@ -60,10 +60,10 @@ def buildTrainLoader(args):
     else:
         train_prop = args.train_prop
 
-    np.random.seed(args.seed)
-    torch.manual_seed(args.seed)
+    np.random.seed(1)
+    torch.manual_seed(1)
     if args.cuda:
-        torch.cuda.manual_seed(args.seed)
+        torch.cuda.manual_seed(1)
 
     train_dataset,_ = torch.utils.data.random_split(train_dataset, [int(totalLength*train_prop),totalLength-int(totalLength*train_prop)])
 
