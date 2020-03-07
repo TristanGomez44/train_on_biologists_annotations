@@ -124,7 +124,7 @@ def pn_reinf_term(pn_reinf_weight, resDict, target, pn_reinf_weight_baseline):
     reward = (acc*1.0).unsqueeze(1)
     loss_reinforce = torch.mean(torch.sum(-torch.log(pi) * reward, dim=1))
 
-    if pn_reinf_weight_baseline != 0:
+    if pn_reinf_weight_baseline > 0.0:
         loss_baseline = pn_reinf_weight_baseline * F.mse_loss(resDict['baseline'], reward)
         loss_reinforce += loss_baseline
     return pn_reinf_weight * loss_reinforce
@@ -192,6 +192,7 @@ def epochImgEval(model, log_interval, loader, epoch, args, writer, metricEarlySt
         output = resDict["pred"]
 
         # Loss
+
         loss = computeLoss(args.nll_weight, args.aux_mod_nll_weight, args.pn_reinf_weight, output, target,
                            args.pn_reconst_weight, resDict,
                            data, args.pn_reinf_weight_baseline)
@@ -482,7 +483,7 @@ def addLossTermArgs(argreader):
                                   help='The weight of the reconstruction term in the loss function when using a pn-topk model.')
     argreader.parser.add_argument('--pn_reinf_weight', type=float, metavar='FLOAT',
                                   help='The weight of the reinforcement term in the loss function when using a reinforcement learning.')
-    argreader.parser.add_argument('--pn_reinf_weight_baseline', type=float, metavar='FLOAT',
+    argreader.parser.add_argument('--pn_reinf_weight_baseline', type=float, metavar='FLOAT', default=0,
                                   help='The weight of the reinforcement term in the loss function when using a reinforcement learning.')
     return argreader
 
