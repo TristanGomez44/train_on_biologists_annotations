@@ -74,7 +74,7 @@ def epochSeqTr(model, optim, log_interval, loader, epoch, args, writer, **kwargs
             resDict = model(data)
             output = resDict["pred"]
             loss = computeLoss(args.nll_weight, args.aux_mod_nll_weight, args.pn_reinf_weight, output, target,
-                               args.pn_reconst_weight, resDict, data)
+                               args.pn_reconst_weight, resDict, data, args.pn_reinf_weight_baseline)
             loss.backward()
 
         if args.distributed:
@@ -105,24 +105,30 @@ def epochSeqTr(model, optim, log_interval, loader, epoch, args, writer, **kwargs
         update.updateTimeCSV(epoch, "train", args.exp_id, args.model_id, totalTime, batch_idx)
 
 
-def computeLoss(nll_weight, aux_model_weight, pn_reinf_weight, output, target, pn_reconst_weight, resDict, data):
+def computeLoss(nll_weight, aux_model_weight, pn_reinf_weight, output, target, pn_reconst_weight, resDict, data,
+                pn_reinf_weight_baseline):
     loss = nll_weight * F.cross_entropy(output, target)
     if pn_reconst_weight > 0:
         loss += pn_recons_term(pn_reconst_weight, resDict, data)
     if pn_reinf_weight > 0:
-        loss += pn_reinf_term(pn_reinf_weight, resDict, target)
+        loss += pn_reinf_term(pn_reinf_weight, resDict, target, pn_reinf_weight_baseline)
     if aux_model_weight > 0:
         loss += add_aux_model_loss_term(aux_model_weight, resDict, data, target)
     return loss
 
 
-def pn_reinf_term(pn_reinf_weight, resDict, target):
+def pn_reinf_term(pn_reinf_weight, resDict, target, pn_reinf_weight_baseline):
     flatInds = resDict['flatInds']
     pi = resDict['probs'][torch.arange(flatInds.size(0), dtype=torch.long).unsqueeze(1), flatInds]
     acc = (resDict["pred"].argmax(dim=-1) == target)
-    reward = (acc*2-1).unsqueeze(1)
-    loss_reinforce = torch.sum(-torch.log(pi) * reward)
-    return  pn_reinf_weight*loss_reinforce
+    reward = (acc*1.0).unsqueeze(1)
+    loss_reinforce = torch.mean(torch.sum(-torch.log(pi) * reward, dim=1))
+
+    if pn_reinf_weight_baseline > 0.0:
+        loss_baseline = pn_reinf_weight_baseline * F.mse_loss(resDict['baseline'], reward)
+        loss_reinforce += loss_baseline
+    return pn_reinf_weight * loss_reinforce
+
 
 def pn_recons_term(pn_reconst_weight, resDict, data):
     reconst = resDict['reconst']
@@ -186,8 +192,10 @@ def epochImgEval(model, log_interval, loader, epoch, args, writer, metricEarlySt
         output = resDict["pred"]
 
         # Loss
-        loss = computeLoss(args.nll_weight, args.aux_mod_nll_weight, args.pn_reinf_weight, output, target, args.pn_reconst_weight, resDict,
-                           data)
+
+        loss = computeLoss(args.nll_weight, args.aux_mod_nll_weight, args.pn_reinf_weight, output, target,
+                           args.pn_reconst_weight, resDict,
+                           data, args.pn_reinf_weight_baseline)
 
         # Other variables produced by the net
         intermVarDict = update.catIntermediateVariables(resDict, intermVarDict, validBatch)
@@ -336,7 +344,7 @@ def initialize_Net_And_EpochNumber(net, exp_id, model_id, cuda, start_mode, init
 
         if init_path == "None":
             init_path = \
-            sorted(glob.glob("../models/{}/model{}_epoch*".format(exp_id, model_id)), key=utils.findLastNumbers)[-1]
+                sorted(glob.glob("../models/{}/model{}_epoch*".format(exp_id, model_id)), key=utils.findLastNumbers)[-1]
 
         params = torch.load(init_path, map_location="cpu" if not cuda else None)
 
@@ -358,7 +366,6 @@ def initialize_Net_And_EpochNumber(net, exp_id, model_id, cuda, start_mode, init
             params = paramsFormated
 
         # else:
-
 
         # Removing keys corresponding to parameter which shape are different in the checkpoint and in the current model
         # For example, this is necessary to load a model trained on n classes to bootstrap a model with m != n classes.
@@ -476,7 +483,8 @@ def addLossTermArgs(argreader):
                                   help='The weight of the reconstruction term in the loss function when using a pn-topk model.')
     argreader.parser.add_argument('--pn_reinf_weight', type=float, metavar='FLOAT',
                                   help='The weight of the reinforcement term in the loss function when using a reinforcement learning.')
-
+    argreader.parser.add_argument('--pn_reinf_weight_baseline', type=float, metavar='FLOAT', default=0,
+                                  help='The weight of the reinforcement term in the loss function when using a reinforcement learning.')
     return argreader
 
 
