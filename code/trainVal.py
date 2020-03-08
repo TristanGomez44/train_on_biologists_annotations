@@ -353,17 +353,17 @@ def initialize_Net_And_EpochNumber(net, exp_id, model_id, cuda, start_mode, init
         print(startsWithModule)
 
         if startsWithModule:
-            # paramsFormated = {}
-            # for key in params.keys():
-            #     keyFormat = "module." + key if key.find("module") == -1 else key
-            #     paramsFormated[keyFormat] = params[key]
-            # params = paramsFormated
-
             paramsFormated = {}
             for key in params.keys():
-                keyFormat = key.replace("module.", "")
+                keyFormat = "module." + key if key.find("module") == -1 else key
                 paramsFormated[keyFormat] = params[key]
             params = paramsFormated
+
+            #paramsFormated = {}
+            #for key in params.keys():
+            #    keyFormat = key.replace("module.", "")
+            #    paramsFormated[keyFormat] = params[key]
+            #params = paramsFormated
 
         # else:
 
