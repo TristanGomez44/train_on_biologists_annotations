@@ -586,6 +586,8 @@ def getResnetFeat(backbone_name, backbone_inplanes):
         nbFeat = backbone_inplanes * 4 * 2 ** (4 - 1)
     elif backbone_name.find("deeplab") != -1:
         nbFeat = 256
+    elif backbone_name.find("resnet34") != -1:
+        nbFeat = backbone_inplanes * 2 ** (4 - 1)
     elif backbone_name.find("resnet18") != -1:
         nbFeat = backbone_inplanes * 2 ** (4 - 1)
     elif backbone_name.find("resnet14") != -1:
