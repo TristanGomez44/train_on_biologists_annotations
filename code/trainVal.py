@@ -365,6 +365,8 @@ def initialize_Net_And_EpochNumber(net, exp_id, model_id, cuda, start_mode, init
                 keyFormat = key.split('.')
                 if keyFormat[0]=='module':
                     keyFormat = '.'.join(keyFormat[1:])
+                else:
+                    keyFormat = '.'.join(keyFormat)
                 # keyFormat = key.replace("module.", "") if key.find("module.") == 0 else key
                 paramsFormated[keyFormat] = params[key]
             params = paramsFormated
