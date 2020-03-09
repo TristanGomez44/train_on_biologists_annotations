@@ -242,7 +242,7 @@ class TopkPointExtractor(nn.Module):
     def __init__(self, cuda, nbFeat, softCoord, softCoord_kerSize, softCoord_secOrder, point_nb, reconst, encoderChan, \
                  predictDepth, softcoord_shiftpred, furthestPointSampling, furthestPointSampling_nb_pts, dropout,
                  auxModel, \
-                 topkRandSamp, topkRSUnifWeight ):
+                 topkRandSamp, topkRSUnifWeight,topk_euclinorm ):
 
         super(TopkPointExtractor, self).__init__()
 
@@ -255,6 +255,7 @@ class TopkPointExtractor(nn.Module):
         self.furthestPointSampling = furthestPointSampling
         self.furthestPointSampling_nb_pts = furthestPointSampling_nb_pts
         self.dropout = dropout
+        self.topk_euclinorm = topk_euclinorm
 
         self.reconst = reconst
         if reconst:
@@ -302,7 +303,11 @@ class TopkPointExtractor(nn.Module):
         featureMaps = featureMaps[:, :, 3:-3, 3:-3]
 
         pointFeaturesMap = self.conv1x1(featureMaps)
-        x = torch.pow(pointFeaturesMap, 2).sum(dim=1, keepdim=True)
+
+        if self.topk_euclinorm:
+            x = torch.pow(pointFeaturesMap, 2).sum(dim=1, keepdim=True)
+        else:
+            x = F.relu(pointFeaturesMap).sum(dim=1, keepdim=True)
 
         flatX = x.view(x.size(0), -1)
         if (not self.topkRandSamp) or (self.topkRandSamp and not self.training):
@@ -536,7 +541,8 @@ class PointNet2(SecondModel):
                  reconst=False, \
                  encoderChan=1, encoderHidChan=64, predictDepth=False, topk_softcoord_shiftpred=False, topk_fps=False,
                  topk_fps_nb_pts=64, \
-                 topk_dropout=0, auxModel=False, topkRandSamp=False, topkRSUnifWeight=0, hasLinearProb=False, use_baseline = False):
+                 topk_dropout=0, auxModel=False, topkRandSamp=False, topkRSUnifWeight=0, hasLinearProb=False, use_baseline = False,\
+                 topk_euclinorm=True):
 
         super(PointNet2, self).__init__(nbFeat, classNb)
 
@@ -546,7 +552,7 @@ class PointNet2(SecondModel):
                                                 topk_softCoord_secOrder, point_nb, reconst, encoderChan, predictDepth, \
                                                 topk_softcoord_shiftpred, topk_fps, topk_fps_nb_pts, topk_dropout,
                                                 auxModel, \
-                                                topkRandSamp, topkRSUnifWeight)
+                                                topkRandSamp, topkRSUnifWeight,topk_euclinorm)
         elif reinfExct:
             self.pointExtr = ReinforcePointExtractor(cuda, nbFeat, topk_softcoord, topk_softCoord_kerSize, \
                                                      topk_softCoord_secOrder, point_nb, reconst, encoderChan,
@@ -646,7 +652,8 @@ def netBuilder(args):
                                 topk_dropout=args.pn_topk_dropout, \
                                 auxModel=args.pn_aux_model, topkRandSamp=args.pn_topk_rand_sampling,
                                 topkRSUnifWeight=args.pn_topk_rs_unif_weight,
-                                hasLinearProb=args.pn_reinf_has_linear_prob,use_baseline=args.pn_reinf_use_baseline)
+                                hasLinearProb=args.pn_reinf_has_linear_prob,use_baseline=args.pn_reinf_use_baseline,\
+                                topk_euclinorm=pn_topk_euclinorm)
     else:
         raise ValueError("Unknown temporal model type : ", args.second_mod)
 
@@ -734,6 +741,10 @@ def addArgs(argreader):
                                   help='For the stochastic sampling of pixels (when --pn_topk_rand_sampling is True). The distribution of probability \
                         is an interpolation between the uniform distribution and the distribution based purely on pixel feature norm. Set this arg \
                         respectively to 0 and 1 to make only the feature norm and the uniform distribution matter. This arg must be comprised between 0 and 1.')
+
+    argreader.parser.add_argument('--pn_topk_euclinorm', type=args.str2bool, metavar='BOOL',
+                                  help='For the topk point net model. To use the euclidean norm to compute pixel importance instead of using their raw value \
+                                  filtered by a Relu.')
 
     argreader.parser.add_argument('--pn_point_nb', type=int, metavar='NB',
                                   help='For the topk point net model. This is the number of point extracted for each image.')
