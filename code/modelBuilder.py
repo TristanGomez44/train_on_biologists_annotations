@@ -411,7 +411,7 @@ class ReinforcePointExtractor(nn.Module):
     def __init__(self, cuda, nbFeat, softCoord, softCoord_kerSize, softCoord_secOrder, point_nb, reconst, encoderChan, \
                  predictDepth, softcoord_shiftpred, furthestPointSampling, furthestPointSampling_nb_pts, dropout,
                  auxModel, \
-                 topkRandSamp, topkRSUnifWeight, hasLinearProb,pn_reinf_use_baseline):
+                 topkRandSamp, topkRSUnifWeight, hasLinearProb,use_baseline):
 
         super(ReinforcePointExtractor, self).__init__()
 
@@ -425,7 +425,7 @@ class ReinforcePointExtractor(nn.Module):
         self.furthestPointSampling_nb_pts = furthestPointSampling_nb_pts
         self.dropout = dropout
         self.hasLinearProb = hasLinearProb
-        self.use_baseline = pn_reinf_use_baseline
+        self.use_baseline = use_baseline
 
         self.reconst = reconst
         if reconst:
@@ -469,6 +469,8 @@ class ReinforcePointExtractor(nn.Module):
         self.auxModel = auxModel
         self.topkRandSamp = topkRandSamp
         self.topkRSUnifWeight = topkRSUnifWeight
+        if use_baseline:
+            self.baseline_linear = nn.Linear(nbFeat, 1)
 
     def forward(self, featureMaps):
 
@@ -515,6 +517,7 @@ class ReinforcePointExtractor(nn.Module):
 
         if self.use_baseline:
             retDict["baseFeat"] = featureMaps.mean(dim=-1).mean(dim=-1)
+            retDict["baseline"] = F.relu((self.baseline_linear(retDict['baseFeat'].detach())))
 
         return retDict
 
@@ -533,12 +536,10 @@ class PointNet2(SecondModel):
                  reconst=False, \
                  encoderChan=1, encoderHidChan=64, predictDepth=False, topk_softcoord_shiftpred=False, topk_fps=False,
                  topk_fps_nb_pts=64, \
-                 topk_dropout=0, auxModel=False, topkRandSamp=False, topkRSUnifWeight=0, hasLinearProb=False, pn_reinf_use_baseline = False):
+                 topk_dropout=0, auxModel=False, topkRandSamp=False, topkRSUnifWeight=0, hasLinearProb=False, use_baseline = False):
 
         super(PointNet2, self).__init__(nbFeat, classNb)
 
-        if pn_reinf_use_baseline:
-            self.baseline_linear = nn.Linear(nbFeat, 1)
 
         if topk:
             self.pointExtr = TopkPointExtractor(cuda, nbFeat, topk_softcoord, topk_softCoord_kerSize, \
@@ -552,7 +553,7 @@ class PointNet2(SecondModel):
                                                      predictDepth, \
                                                      topk_softcoord_shiftpred, topk_fps, topk_fps_nb_pts, topk_dropout,
                                                      auxModel, \
-                                                     topkRandSamp, topkRSUnifWeight, hasLinearProb, pn_reinf_use_baseline)
+                                                     topkRandSamp, topkRSUnifWeight, hasLinearProb, use_baseline)
         else:
             self.pointExtr = DirectPointExtractor(point_nb, nbFeat)
             if auxModel:
@@ -560,7 +561,6 @@ class PointNet2(SecondModel):
         self.pn2 = pn_model
 
         self.auxModel = auxModel
-        self.use_baseline = pn_reinf_use_baseline
         if auxModel:
             self.auxModel = nn.Linear(nbFeat, classNb)
 
@@ -570,16 +570,10 @@ class PointNet2(SecondModel):
         x = self.pn2(retDict['pointfeatures'], retDict['pos'], retDict['batch'])
         retDict['pred'] = x
 
-
         if self.auxModel:
             retDict["auxPred"] = self.auxModel(retDict['auxFeat'])
 
-        if self.use_baseline:
-            retDict["baseline"] = F.relu((self.baseline_linear(retDict['baseFeat'].detach())))
-
-
         return retDict
-
 
 def getResnetFeat(backbone_name, backbone_inplanes):
     if backbone_name == "resnet50" or backbone_name == "resnet101" or backbone_name == "resnet151":
@@ -646,14 +640,13 @@ def netBuilder(args):
                                 topk=args.pn_topk, reinfExct=args.pn_reinf, topk_softcoord=args.pn_topk_softcoord,
                                 topk_softCoord_kerSize=args.pn_topk_softcoord_kersize, \
                                 topk_softCoord_secOrder=args.pn_topk_softcoord_secorder, point_nb=args.pn_point_nb,
-                                reconst=args.pn_topk_reconst \
-                                , topk_softcoord_shiftpred=args.pn_topk_softcoord_shiftpred, \
+                                reconst=args.pn_topk_reconst,topk_softcoord_shiftpred=args.pn_topk_softcoord_shiftpred, \
                                 encoderChan=args.pn_topk_enc_chan, predictDepth=args.pn_topk_pred_depth, \
                                 topk_fps=args.pn_topk_farthest_pts_sampling, topk_fps_nb_pts=args.pn_topk_fps_nb_points,
                                 topk_dropout=args.pn_topk_dropout, \
                                 auxModel=args.pn_aux_model, topkRandSamp=args.pn_topk_rand_sampling,
                                 topkRSUnifWeight=args.pn_topk_rs_unif_weight,
-                                hasLinearProb=args.pn_reinf_has_linear_prob, pn_reinf_use_baseline=args.pn_reinf_use_baseline)
+                                hasLinearProb=args.pn_reinf_has_linear_prob,use_baseline=args.pn_reinf_use_baseline)
     else:
         raise ValueError("Unknown temporal model type : ", args.second_mod)
 
