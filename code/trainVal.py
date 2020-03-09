@@ -121,7 +121,7 @@ def pn_reinf_term(pn_reinf_weight, resDict, target, pn_reinf_weight_baseline):
     flatInds = resDict['flatInds']
     pi = resDict['probs'][torch.arange(flatInds.size(0), dtype=torch.long).unsqueeze(1), flatInds]
     acc = (resDict["pred"].argmax(dim=-1) == target)
-    reward = (acc*1.0).unsqueeze(1)
+    reward = (acc * 1.0).unsqueeze(1)
     loss_reinforce = torch.mean(torch.sum(-torch.log(pi) * reward, dim=1))
 
     if pn_reinf_weight_baseline > 0.0:
@@ -359,11 +359,15 @@ def initialize_Net_And_EpochNumber(net, exp_id, model_id, cuda, start_mode, init
                 paramsFormated[keyFormat] = params[key]
             params = paramsFormated
 
-            #paramsFormated = {}
-            #for key in params.keys():
-            #    keyFormat = key.replace("module.", "")
-            #    paramsFormated[keyFormat] = params[key]
-            #params = paramsFormated
+        else:
+            paramsFormated = {}
+            for key in params.keys():
+                keyFormat = key.split('.')
+                if keyFormat[0]=='module':
+                    keyFormat = '.'.join(keyFormat[1:])
+                # keyFormat = key.replace("module.", "") if key.find("module.") == 0 else key
+                paramsFormated[keyFormat] = params[key]
+            params = paramsFormated
 
         # else:
 
@@ -483,7 +487,7 @@ def addLossTermArgs(argreader):
                                   help='The weight of the reconstruction term in the loss function when using a pn-topk model.')
     argreader.parser.add_argument('--pn_reinf_weight', type=float, metavar='FLOAT',
                                   help='The weight of the reinforcement term in the loss function when using a reinforcement learning.')
-    argreader.parser.add_argument('--pn_reinf_weight_baseline', type=float, metavar='FLOAT', default=0,
+    argreader.parser.add_argument('--pn_reinf_weight_baseline', type=float, metavar='FLOAT',
                                   help='The weight of the reinforcement term in the loss function when using a reinforcement learning.')
     return argreader
 
