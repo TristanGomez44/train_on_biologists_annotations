@@ -653,7 +653,7 @@ def netBuilder(args):
                                 auxModel=args.pn_aux_model, topkRandSamp=args.pn_topk_rand_sampling,
                                 topkRSUnifWeight=args.pn_topk_rs_unif_weight,
                                 hasLinearProb=args.pn_reinf_has_linear_prob,use_baseline=args.pn_reinf_use_baseline,\
-                                topk_euclinorm=pn_topk_euclinorm)
+                                topk_euclinorm=args.pn_topk_euclinorm)
     else:
         raise ValueError("Unknown temporal model type : ", args.second_mod)
 
