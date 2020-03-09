@@ -636,10 +636,10 @@ def netBuilder(args):
     elif args.second_mod == "pointnet2" or args.second_mod == "edgenet":
         if args.second_mod == "pointnet2":
             pn_model = pointnet2.Net(num_classes=args.class_nb,
-                                     input_channels=args.pn_topk_enc_chan if args.pn_topk or args.pn_reinf else 0)
+                                     input_channels=args.pn_enc_chan if args.pn_topk or args.pn_reinf else 0)
         else:
             pn_model = pointnet2.EdgeNet(num_classes=args.class_nb,
-                                         input_channels=args.pn_topk_enc_chan if args.pn_topk else 3)
+                                         input_channels=args.pn_enc_chan if args.pn_topk else 3)
 
         secondModel = PointNet2(args.cuda, args.class_nb, nbFeat=nbFeat, pn_model=pn_model,
                                 encoderHidChan=args.pn_topk_hid_chan, \
@@ -647,7 +647,7 @@ def netBuilder(args):
                                 topk_softCoord_kerSize=args.pn_topk_softcoord_kersize, \
                                 topk_softCoord_secOrder=args.pn_topk_softcoord_secorder, point_nb=args.pn_point_nb,
                                 reconst=args.pn_topk_reconst,topk_softcoord_shiftpred=args.pn_topk_softcoord_shiftpred, \
-                                encoderChan=args.pn_topk_enc_chan, predictDepth=args.pn_topk_pred_depth, \
+                                encoderChan=args.pn_enc_chan, predictDepth=args.pn_topk_pred_depth, \
                                 topk_fps=args.pn_topk_farthest_pts_sampling, topk_fps_nb_pts=args.pn_topk_fps_nb_points,
                                 topk_dropout=args.pn_topk_dropout, \
                                 auxModel=args.pn_aux_model, topkRandSamp=args.pn_topk_rand_sampling,
@@ -750,7 +750,7 @@ def addArgs(argreader):
                                   help='For the topk point net model. This is the number of point extracted for each image.')
     argreader.parser.add_argument('--pn_topk_reconst', type=args.str2bool, metavar='BOOL',
                                   help='For the topk point net model. An input image reconstruction term will added to the loss function if True.')
-    argreader.parser.add_argument('--pn_topk_enc_chan', type=int, metavar='NB',
+    argreader.parser.add_argument('--pn_enc_chan', type=int, metavar='NB',
                                   help='For the topk point net model. This is the number of output channel of the encoder')
     argreader.parser.add_argument('--pn_topk_hid_chan', type=int, metavar='NB',
                                   help='For the topk point net model. This is the number of hidden channel of the encoder')
