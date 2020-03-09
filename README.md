@@ -13,6 +13,7 @@ source ~/pn_env/bin/activate
 pip install torch_cluster torch_scatter torch_sparse torch_geometric
 pip install torchvision
 pip install tensorboardX
+pip install psutil
 
 ## Train a model
 
