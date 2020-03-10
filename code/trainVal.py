@@ -123,13 +123,14 @@ def computeLoss(nll_weight, aux_model_weight, pn_reinf_weight, output, target, p
 def pn_reinf_term(pn_reinf_weight, resDict, target, pn_reinf_weight_baseline):
     flatInds = resDict['flatInds']
     pi = resDict['probs'][torch.arange(flatInds.size(0), dtype=torch.long).unsqueeze(1), flatInds]
-    acc = (resDict["pred"].argmax(dim=-1) == target)
+    acc = (resDict["pred"].detach().argmax(dim=-1) == target)
     reward = (acc * 1.0).unsqueeze(1)
-    loss_reinforce = torch.mean(torch.sum(-torch.log(pi) * reward, dim=1))
 
     if pn_reinf_weight_baseline > 0.0:
-        loss_baseline = pn_reinf_weight_baseline * F.mse_loss(resDict['baseline'], reward)
-        loss_reinforce += loss_baseline
+        baseline = pn_reinf_weight_baseline * F.mse_loss(resDict['baseline'], reward)
+        reward = baseline.detach() - reward
+
+    loss_reinforce = torch.mean(torch.mean(-torch.log(pi) * reward, dim=1))
     return pn_reinf_weight * loss_reinforce
 
 
