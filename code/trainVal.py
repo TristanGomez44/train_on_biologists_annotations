@@ -97,7 +97,10 @@ def epochSeqTr(model, optim, log_interval, loader, epoch, args, writer, **kwargs
 
     # If the training set is empty (which we might want to just evaluate the model), then allOut and allGT will still be None
     if validBatch > 0:
+
         torch.save(model.state_dict(), "../models/{}/model{}_epoch{}".format(args.exp_id, args.model_id, epoch))
+        if (not args.save_all) and os.path.exists("../models/{}/model{}_epoch{}".format(args.exp_id, args.model_id, epoch-1)):
+            os.remove("../models/{}/model{}_epoch{}".format(args.exp_id, args.model_id, epoch-1))
         writeSummaries(metrDict, validBatch, writer, epoch, "train", args.model_id, args.exp_id)
 
     if args.debug:
@@ -198,7 +201,7 @@ def epochImgEval(model, log_interval, loader, epoch, args, writer, metricEarlySt
                            data, args.pn_reinf_weight_baseline)
 
         # Other variables produced by the net
-        intermVarDict = update.catIntermediateVariables(resDict, intermVarDict, validBatch)
+        intermVarDict = update.catIntermediateVariables(resDict, intermVarDict, validBatch,args.save_all)
 
         # Harware occupation
         update.updateHardWareOccupation(args.debug, args.benchmark, args.cuda, epoch, mode, args.exp_id, args.model_id,
@@ -217,7 +220,7 @@ def epochImgEval(model, log_interval, loader, epoch, args, writer, metricEarlySt
             break
 
     writeSummaries(metrDict, validBatch, writer, epoch, mode, args.model_id, args.exp_id)
-    intermVarDict = update.saveIntermediateVariables(intermVarDict, args.exp_id, args.model_id, epoch, mode)
+    intermVarDict = update.saveIntermediateVariables(intermVarDict, args.exp_id, args.model_id, epoch, mode, args.save_all)
 
     if args.debug:
         totalTime = time.time() - start_time
@@ -617,6 +620,8 @@ def main(argv=None):
                                   help="To use when --no_train is set to True. This is the exp_id of the model to get the weights from.")
     argreader.parser.add_argument('--model_id_no_train', type=str,
                                   help="To use when --no_train is set to True. This is the model_id of the model to get the weights from.")
+    argreader.parser.add_argument('--save_all', type=str2bool,
+                                  help="Whether to save network weights at each epoch.")
 
     argreader.parser.add_argument('--no_val', type=str2bool, help='To not compute the validation')
 
