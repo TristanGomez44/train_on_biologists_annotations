@@ -13,10 +13,15 @@ import matplotlib.pyplot as plt
 from models import deeplab
 from models import resnet
 from models import pointnet2
-
+import torchvision
 import torch_geometric
 
+import matplotlib.pyplot as plt
+plt.switch_backend('agg')
+
 _EPSILON = 10e-7
+
+from  torch.nn.modules.upsampling import Upsample
 
 
 def buildFeatModel(featModelName, pretrainedFeatMod, featMap=True, bigMaps=False, layerSizeReduce=False, stride=2,
@@ -64,26 +69,84 @@ class DataParallelModel(nn.DataParallel):
         except AttributeError:
             return getattr(self.module, name)
 
-
 class Model(nn.Module):
 
-    def __init__(self, firstModel, secondModel):
+    def __init__(self, firstModel, secondModel,zoom=False):
         super(Model, self).__init__()
         self.firstModel = firstModel
         self.secondModel = secondModel
+        self.zoom = zoom
 
-    def forward(self, x):
-        visResDict = self.firstModel(x)
-        x = visResDict["x"]
+    def forward(self, origImg):
+        visResDict = self.firstModel(origImg)
+        resDict = self.secondModel(visResDict["x"])
 
-        resDict = self.secondModel(x)
+        resDict = self.merge(visResDict,resDict)
 
-        for key in visResDict.keys():
-            resDict[key] = visResDict[key]
+        if self.zoom:
+            croppedImg,xMinCr,xMaxCr,yMinCr,yMaxCr = self.computeZoom(origImg,visResDict["x"],resDict)
+            visResDict_zoom = self.firstModel(croppedImg)
+            resDict_zoom = self.secondModel(visResDict_zoom["x"])
+            resDict_zoom = self.merge(visResDict_zoom,resDict_zoom)
+            resDict = self.merge(resDict_zoom,resDict,"zoom")
 
         return resDict
 
+    def computeZoom(self,origImg,x,retDict):
+        imgSize = torch.tensor(origImg.size())[-2:].to(x.device)
+        xSize = torch.tensor(x.size())[-2:].to(x.device)
 
+        pts = retDict['points']
+        pts = pts.view(x.size(0),-1,pts.size(-1))
+
+        ptsValues = torch.abs(pts[:,:,4:]).sum(axis=-1)
+        ptsValues = ptsValues/ptsValues.max()
+        ptsValues = torch.pow(ptsValues,2)
+        means = (pts[:,:,:2]*ptsValues.unsqueeze(2)).sum(dim=1)/ptsValues.sum(dim=1).unsqueeze(1)
+        stds = torch.sqrt((torch.pow(pts[:,:,:2]-pts[:,:,:2].mean(dim=1).unsqueeze(1),2)*ptsValues.unsqueeze(2)).sum(dim=1)/ptsValues.sum(dim=1).unsqueeze(1))
+
+        means *= (imgSize/xSize).unsqueeze(0)
+        stds *= (imgSize/xSize).unsqueeze(0)
+
+        xMin,xMax,yMin,yMax = means[:,1]-2*stds[:,1],means[:,1]+2*stds[:,1],means[:,0]-2*stds[:,0],means[:,0]+2*stds[:,0]
+        xMin = xMin.unsqueeze(1).unsqueeze(1).unsqueeze(1).expand(-1,origImg.size(1),-1,-1)
+        xMax = xMax.unsqueeze(1).unsqueeze(1).unsqueeze(1).expand(-1,origImg.size(1),-1,-1)
+        yMin = yMin.unsqueeze(1).unsqueeze(1).unsqueeze(1).expand(-1,origImg.size(1),-1,-1)
+        yMax = yMax.unsqueeze(1).unsqueeze(1).unsqueeze(1).expand(-1,origImg.size(1),-1,-1)
+
+        indsX = torch.arange(origImg.size(-1)).unsqueeze(1).unsqueeze(0).unsqueeze(0).expand(-1,origImg.size(1),-1,-1).to(origImg.device)
+        indsY = torch.arange(origImg.size(-2)).unsqueeze(0).unsqueeze(0).unsqueeze(0).expand(-1,origImg.size(1),-1,-1).to(origImg.device)
+
+        maskedImage = torch.zeros_like(origImg)
+
+        mask = (yMin < indsY)*(indsY < yMax)*(xMin < indsX)*(indsX < xMax)
+        maskedImage[mask] = origImg[mask]
+
+        theta = torch.eye(3)[:2].unsqueeze(0).expand(x.size(0),-1,-1)
+        #theta = torch.zeros((x.size(0),2,3))
+        #theta[:,0,0] = (4*stds.max(dim=-1)[0])/imgSize[0]
+        #theta[:,1,1] = (4*stds.max(dim=-1)[0])/imgSize[0]
+        #theta[:,:,2] = (means - imgSize.unsqueeze(0)/2)/imgSize.unsqueeze(0)
+
+        flowField = F.affine_grid(theta, origImg.size(),align_corners=False).to(x.device)
+        croppedImg = F.grid_sample(maskedImage, flowField,align_corners=False,padding_mode='border')
+
+        return croppedImg,xMin,xMax,yMin,yMax
+
+    def merge(self,dictA,dictB,suffix=""):
+        for key in dictA.keys():
+            if key in dictB:
+                dictB[key+"_"+suffix] = dictA[key]
+            else:
+                dictB[key] = dictA[key]
+        return dictB
+
+def plotBox(mask,xMin,xMax,yMin,yMax,chan):
+    mask[chan][max(xMin,0):min(xMax,mask.size(1)-1),max(yMin,0)] = 1
+    mask[chan][max(xMin,0):min(xMax,mask.size(1)-1),min(yMax,mask.size(2)-1)] = 1
+    mask[chan][max(xMin,0),max(yMin,0):min(yMax,mask.size(2)-1)] = 1
+    mask[chan][min(xMax,mask.size(1)-1),max(yMin,0):min(yMax,mask.size(2)-1)] = 1
+    return mask
 ################################# Visual Model ##########################
 
 class FirstModel(nn.Module):
@@ -124,7 +187,7 @@ class CNN2D_simpleAttention(FirstModel):
 
     def __init__(self, featModelName, pretrainedFeatMod=True, featMap=True, bigMaps=False, chan=64, attBlockNb=2,
                  attChan=16, \
-                 topk=False, topk_pxls_nb=256, **kwargs):
+                 topk=False, topk_pxls_nb=256, topk_enc_chan=64,**kwargs):
 
         super(CNN2D_simpleAttention, self).__init__(featModelName, pretrainedFeatMod, featMap, bigMaps, **kwargs)
         self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
@@ -144,11 +207,20 @@ class CNN2D_simpleAttention(FirstModel):
             self.attention = None
             self.topk_pxls_nb = topk_pxls_nb
 
+        self.topk_enc_chan = topk_enc_chan
+        if self.topk_enc_chan != -1:
+            self.conv1x1 = nn.Conv2d(inFeat,self.topk_enc_chan,1)
+
     def forward(self, x):
         # N x C x H x L
         self.batchSize = x.size(0)
         # N x C x H x L
         features = self.featMod(x)
+
+        if self.topk_enc_chan != -1:
+            features = self.conv1x1(features)
+
+        retDict = {}
 
         if not self.topk:
             spatialWeights = torch.sigmoid(self.attention(features))
@@ -169,8 +241,13 @@ class CNN2D_simpleAttention(FirstModel):
                              ord.long().unsqueeze(1), abs.long().unsqueeze(1)])
             spatialWeights[indices] = 1
 
-        return {'x': features, 'attMaps': spatialWeights}
+            depth = torch.zeros(abs.size(0), abs.size(1), 1).to(x.device)
+            retDict['points'] = torch.cat((abs.unsqueeze(2).float(), ord.unsqueeze(2).float(), depth, featureList), dim=-1).float()
 
+        retDict["x"] = features
+        retDict["attMaps"] = spatialWeights
+
+        return retDict
 
 ################################ Temporal Model ########################""
 
@@ -610,7 +687,10 @@ def netBuilder(args):
         else:
             CNNconst = CNN2D_simpleAttention
             kwargs = {"featMap": True, "topk": args.resnet_simple_att_topk,
-                      "topk_pxls_nb": args.resnet_simple_att_topk_pxls_nb}
+                      "topk_pxls_nb": args.resnet_simple_att_topk_pxls_nb,
+                      "topk_enc_chan":args.resnet_simple_att_topk_enc_chan}
+            if args.resnet_simple_att_topk_enc_chan != -1:
+                nbFeat = args.resnet_simple_att_topk_enc_chan
 
         firstModel = CNNconst(args.first_mod, args.pretrained_visual, chan=args.resnet_chan, stride=args.resnet_stride,
                               dilation=args.resnet_dilation, \
@@ -657,7 +737,7 @@ def netBuilder(args):
 
     ############### Whole Model ##########################
 
-    net = Model(firstModel, secondModel)
+    net = Model(firstModel, secondModel,zoom=args.zoom)
 
     if args.cuda:
         net.cuda()
@@ -743,6 +823,8 @@ def addArgs(argreader):
     argreader.parser.add_argument('--pn_topk_euclinorm', type=args.str2bool, metavar='BOOL',
                                   help='For the topk point net model. To use the euclidean norm to compute pixel importance instead of using their raw value \
                                   filtered by a Relu.')
+    argreader.parser.add_argument('--zoom', type=args.str2bool, metavar='BOOL',
+                                  help='To use with a model that generates points. To zoom on the part of the images where the points are focused an apply the model a second time on it.')
 
     argreader.parser.add_argument('--pn_point_nb', type=int, metavar='NB',
                                   help='For the topk point net model. This is the number of point extracted for each image.')
@@ -784,6 +866,8 @@ def addArgs(argreader):
                                   help='To use top-k feature as attention model with resnet. Ignored when --resnet_simple_att is False.')
     argreader.parser.add_argument('--resnet_simple_att_topk_pxls_nb', type=int, metavar='INT',
                                   help='The value of k when using top-k selection for resnet simple attention. Ignored when --resnet_simple_att_topk is False.')
+    argreader.parser.add_argument('--resnet_simple_att_topk_enc_chan', type=int, metavar='NB',
+                                  help='For the resnet_simple_att_topk model. This is the number of output channel of the encoder. Ignored when --resnet_simple_att_topk is False.')
 
     argreader.parser.add_argument('--resnet_att_chan', type=int, metavar='INT',
                                   help='For the \'resnetX_att\' feat models. The number of channels in the attention module.')
