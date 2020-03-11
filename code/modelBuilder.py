@@ -305,7 +305,7 @@ class TopkPointExtractor(nn.Module):
     def __init__(self, cuda, nbFeat, softCoord, softCoord_kerSize, softCoord_secOrder, point_nb, reconst, encoderChan, \
                  predictDepth, softcoord_shiftpred, furthestPointSampling, furthestPointSampling_nb_pts, dropout,
                  auxModel, \
-                 topkRandSamp, topkRSUnifWeight,topk_euclinorm ):
+                 topkRandSamp, topkRSUnifWeight, topk_euclinorm):
 
         super(TopkPointExtractor, self).__init__()
 
@@ -479,7 +479,7 @@ class ReinforcePointExtractor(nn.Module):
     def __init__(self, cuda, nbFeat, softCoord, softCoord_kerSize, softCoord_secOrder, point_nb, reconst, encoderChan, \
                  predictDepth, softcoord_shiftpred, furthestPointSampling, furthestPointSampling_nb_pts, dropout,
                  auxModel, \
-                 topkRandSamp, topkRSUnifWeight, hasLinearProb,use_baseline):
+                 topkRandSamp, topkRSUnifWeight, hasLinearProb, use_baseline):
 
         super(ReinforcePointExtractor, self).__init__()
 
@@ -546,24 +546,20 @@ class ReinforcePointExtractor(nn.Module):
         featureMaps = featureMaps[:, :, 3:-3, 3:-3]
 
 
-
+        import numpy as np
         pointFeaturesMap = self.conv1x1(featureMaps)
 
         if self.hasLinearProb:
             x = self.lin_prob(pointFeaturesMap)
-            x = x - x.min(dim=-1, keepdim=True)[0].min(dim=-2, keepdim=True)[0] +_EPSILON
-
-            # x = (x - x.min(dim=-1, keepdim=True).min(dim=-2, keepdim=True))
-            # x = x / x.sum(dim=-1, keepdim=True).sum(dim=-2, keepdim=True)
+            flatX = x.view(x.size(0), -1)
+            probs = F.softmax(flatX, dim=(1))+_EPSILON
+            # probs = flatX / flatX.sum(dim=-1, keepdim=True)[0]
         else:
             x = torch.pow(pointFeaturesMap, 2).sum(dim=1, keepdim=True)
 
-        flatX = x.view(x.size(0), -1)
+        # flatInds = torch.distributions.categorical.Categorical(probs=probs).sample(torch.tensor([self.point_extracted]))
+        _, flatInds = torch.topk(probs, self.point_extracted, dim=-1, largest=True)
 
-        probs = flatX / flatX.sum(dim=-1, keepdim=True)[0]
-
-        flatInds = torch.distributions.categorical.Categorical(probs=probs).sample(torch.tensor([self.point_extracted]))
-        flatInds = flatInds.permute(1, 0)
 
         abs, ord = (flatInds % x.shape[-1], flatInds // x.shape[-1])
 
@@ -587,6 +583,7 @@ class ReinforcePointExtractor(nn.Module):
             retDict["baseFeat"] = featureMaps.mean(dim=-1).mean(dim=-1)
             retDict["baseline"] = F.relu((self.baseline_linear(retDict['baseFeat'].detach())))
 
+
         return retDict
 
     def updateDict(self, device):
@@ -604,18 +601,18 @@ class PointNet2(SecondModel):
                  reconst=False, \
                  encoderChan=1, encoderHidChan=64, predictDepth=False, topk_softcoord_shiftpred=False, topk_fps=False,
                  topk_fps_nb_pts=64, \
-                 topk_dropout=0, auxModel=False, topkRandSamp=False, topkRSUnifWeight=0, hasLinearProb=False, use_baseline = False,\
+                 topk_dropout=0, auxModel=False, topkRandSamp=False, topkRSUnifWeight=0, hasLinearProb=False,
+                 use_baseline=False, \
                  topk_euclinorm=True):
 
         super(PointNet2, self).__init__(nbFeat, classNb)
-
 
         if topk:
             self.pointExtr = TopkPointExtractor(cuda, nbFeat, topk_softcoord, topk_softCoord_kerSize, \
                                                 topk_softCoord_secOrder, point_nb, reconst, encoderChan, predictDepth, \
                                                 topk_softcoord_shiftpred, topk_fps, topk_fps_nb_pts, topk_dropout,
                                                 auxModel, \
-                                                topkRandSamp, topkRSUnifWeight,topk_euclinorm)
+                                                topkRandSamp, topkRSUnifWeight, topk_euclinorm)
         elif reinfExct:
             self.pointExtr = ReinforcePointExtractor(cuda, nbFeat, topk_softcoord, topk_softCoord_kerSize, \
                                                      topk_softCoord_secOrder, point_nb, reconst, encoderChan,
@@ -643,6 +640,7 @@ class PointNet2(SecondModel):
             retDict["auxPred"] = self.auxModel(retDict['auxFeat'])
 
         return retDict
+
 
 def getResnetFeat(backbone_name, backbone_inplanes):
     if backbone_name == "resnet50" or backbone_name == "resnet101" or backbone_name == "resnet151":
@@ -709,13 +707,13 @@ def netBuilder(args):
                                 topk=args.pn_topk, reinfExct=args.pn_reinf, topk_softcoord=args.pn_topk_softcoord,
                                 topk_softCoord_kerSize=args.pn_topk_softcoord_kersize, \
                                 topk_softCoord_secOrder=args.pn_topk_softcoord_secorder, point_nb=args.pn_point_nb,
-                                reconst=args.pn_topk_reconst,topk_softcoord_shiftpred=args.pn_topk_softcoord_shiftpred, \
+                                reconst=args.pn_topk_reconst, topk_softcoord_shiftpred=args.pn_topk_softcoord_shiftpred, \
                                 encoderChan=args.pn_enc_chan, predictDepth=args.pn_topk_pred_depth, \
                                 topk_fps=args.pn_topk_farthest_pts_sampling, topk_fps_nb_pts=args.pn_topk_fps_nb_points,
                                 topk_dropout=args.pn_topk_dropout, \
                                 auxModel=args.pn_aux_model, topkRandSamp=args.pn_topk_rand_sampling,
                                 topkRSUnifWeight=args.pn_topk_rs_unif_weight,
-                                hasLinearProb=args.pn_reinf_has_linear_prob,use_baseline=args.pn_reinf_use_baseline,\
+                                hasLinearProb=args.pn_reinf_has_linear_prob, use_baseline=args.pn_reinf_use_baseline, \
                                 topk_euclinorm=args.pn_topk_euclinorm)
     else:
         raise ValueError("Unknown temporal model type : ", args.second_mod)

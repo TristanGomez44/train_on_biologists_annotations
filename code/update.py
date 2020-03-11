@@ -115,20 +115,21 @@ def updateTimeCSV(epoch,mode,exp_id,model_id,totalTime,batch_idx):
         with open(csvPath,"a") as text_file:
             print(str(epoch)+","+str(totalTime),file=text_file)
 
-def catIntermediateVariables(visualDict,intermVarDict,nbVideos):
-
-    intermVarDict["fullAttMap"] = catMap(visualDict,intermVarDict["fullAttMap"],key="attMaps")
-    intermVarDict["fullFeatMapSeq"] = catMap(visualDict,intermVarDict["fullFeatMapSeq"],key="features")
-    intermVarDict["fullPointsSeq"] = catPointsSeq(visualDict,intermVarDict["fullPointsSeq"])
-    if nbVideos < 6:
-        intermVarDict["fullReconstSeq"] = catMap(visualDict,intermVarDict["fullReconstSeq"],key="reconst")
+def catIntermediateVariables(visualDict,intermVarDict,nbVideos, save_all):
+    if save_all:
+        intermVarDict["fullAttMap"] = catMap(visualDict,intermVarDict["fullAttMap"],key="attMaps")
+        intermVarDict["fullFeatMapSeq"] = catMap(visualDict,intermVarDict["fullFeatMapSeq"],key="features")
+        intermVarDict["fullPointsSeq"] = catPointsSeq(visualDict,intermVarDict["fullPointsSeq"])
+        if nbVideos < 6:
+            intermVarDict["fullReconstSeq"] = catMap(visualDict,intermVarDict["fullReconstSeq"],key="reconst")
 
     return intermVarDict
-def saveIntermediateVariables(intermVarDict,exp_id,model_id,epoch,mode="val"):
 
-    intermVarDict["fullAttMap"] = saveMap(intermVarDict["fullAttMap"],exp_id,model_id,epoch,mode,key="attMaps")
-    intermVarDict["fullPointsSeq"] =  savePointsSeq(intermVarDict["fullPointsSeq"],exp_id,model_id,epoch,mode)
-    intermVarDict["fullReconstSeq"] = saveMap(intermVarDict["fullReconstSeq"],exp_id,model_id,epoch,mode,key="reconst")
+def saveIntermediateVariables(intermVarDict,exp_id,model_id,epoch,mode="val",save_all=True):
+    if save_all:
+        intermVarDict["fullAttMap"] = saveMap(intermVarDict["fullAttMap"],exp_id,model_id,epoch,mode,key="attMaps")
+        intermVarDict["fullPointsSeq"] =  savePointsSeq(intermVarDict["fullPointsSeq"],exp_id,model_id,epoch,mode)
+        intermVarDict["fullReconstSeq"] = saveMap(intermVarDict["fullReconstSeq"],exp_id,model_id,epoch,mode,key="reconst")
 
     return intermVarDict
 def catPointsSeq(visualDict,fullPointsSeq):
