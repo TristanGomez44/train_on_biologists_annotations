@@ -187,7 +187,7 @@ class CNN2D_simpleAttention(FirstModel):
 
     def __init__(self, featModelName, pretrainedFeatMod=True, featMap=True, bigMaps=False, chan=64, attBlockNb=2,
                  attChan=16, \
-                 topk=False, topk_pxls_nb=256, **kwargs):
+                 topk=False, topk_pxls_nb=256, topk_enc_chan=64,**kwargs):
 
         super(CNN2D_simpleAttention, self).__init__(featModelName, pretrainedFeatMod, featMap, bigMaps, **kwargs)
         self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
@@ -207,11 +207,20 @@ class CNN2D_simpleAttention(FirstModel):
             self.attention = None
             self.topk_pxls_nb = topk_pxls_nb
 
+        self.topk_enc_chan = topk_enc_chan
+        if self.topk_enc_chan != -1:
+            self.conv1x1 = nn.Conv2d(inFeat,self.topk_enc_chan,1)
+
     def forward(self, x):
         # N x C x H x L
         self.batchSize = x.size(0)
         # N x C x H x L
         features = self.featMod(x)
+
+        if self.topk_enc_chan != -1:
+            features = self.conv1x1(features)
+
+        retDict = {}
 
         if not self.topk:
             spatialWeights = torch.sigmoid(self.attention(features))
@@ -232,8 +241,13 @@ class CNN2D_simpleAttention(FirstModel):
                              ord.long().unsqueeze(1), abs.long().unsqueeze(1)])
             spatialWeights[indices] = 1
 
-        return {'x': features, 'attMaps': spatialWeights}
+            depth = torch.zeros(abs.size(0), abs.size(1), 1).to(x.device)
+            retDict['points'] = torch.cat((abs.unsqueeze(2).float(), ord.unsqueeze(2).float(), depth, featureList), dim=-1).float()
 
+        retDict["x"] = features
+        retDict["attMaps"] = spatialWeights
+
+        return retDict
 
 ################################ Temporal Model ########################""
 
@@ -673,7 +687,10 @@ def netBuilder(args):
         else:
             CNNconst = CNN2D_simpleAttention
             kwargs = {"featMap": True, "topk": args.resnet_simple_att_topk,
-                      "topk_pxls_nb": args.resnet_simple_att_topk_pxls_nb}
+                      "topk_pxls_nb": args.resnet_simple_att_topk_pxls_nb,
+                      "topk_enc_chan":args.resnet_simple_att_topk_enc_chan}
+            if args.resnet_simple_att_topk_enc_chan != -1:
+                nbFeat = args.resnet_simple_att_topk_enc_chan
 
         firstModel = CNNconst(args.first_mod, args.pretrained_visual, chan=args.resnet_chan, stride=args.resnet_stride,
                               dilation=args.resnet_dilation, \
@@ -849,6 +866,8 @@ def addArgs(argreader):
                                   help='To use top-k feature as attention model with resnet. Ignored when --resnet_simple_att is False.')
     argreader.parser.add_argument('--resnet_simple_att_topk_pxls_nb', type=int, metavar='INT',
                                   help='The value of k when using top-k selection for resnet simple attention. Ignored when --resnet_simple_att_topk is False.')
+    argreader.parser.add_argument('--resnet_simple_att_topk_enc_chan', type=int, metavar='NB',
+                                  help='For the resnet_simple_att_topk model. This is the number of output channel of the encoder. Ignored when --resnet_simple_att_topk is False.')
 
     argreader.parser.add_argument('--resnet_att_chan', type=int, metavar='INT',
                                   help='For the \'resnetX_att\' feat models. The number of channels in the attention module.')
