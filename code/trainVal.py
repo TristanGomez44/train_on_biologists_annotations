@@ -73,7 +73,7 @@ def epochSeqTr(model, optim, log_interval, loader, epoch, args, writer, **kwargs
         with torch.autograd.detect_anomaly():
             resDict = model(data)
             output = resDict["pred"]
-            loss = computeLoss(args.nll_weight, args.aux_mod_nll_weight, args.pn_reinf_weight, output, target,
+            loss = computeLoss(args.nll_weight, args.aux_mod_nll_weight, args.zoom_nll_weight,args.pn_reinf_weight, output, target,
                                args.pn_reconst_weight, resDict, data, args.pn_reinf_weight_baseline)
             loss.backward()
 
@@ -105,7 +105,7 @@ def epochSeqTr(model, optim, log_interval, loader, epoch, args, writer, **kwargs
         update.updateTimeCSV(epoch, "train", args.exp_id, args.model_id, totalTime, batch_idx)
 
 
-def computeLoss(nll_weight, aux_model_weight, pn_reinf_weight, output, target, pn_reconst_weight, resDict, data,
+def computeLoss(nll_weight, aux_model_weight, zoom_nll_weight,pn_reinf_weight, output, target, pn_reconst_weight, resDict, data,
                 pn_reinf_weight_baseline):
     loss = nll_weight * F.cross_entropy(output, target)
     if pn_reconst_weight > 0:
@@ -113,9 +113,10 @@ def computeLoss(nll_weight, aux_model_weight, pn_reinf_weight, output, target, p
     if pn_reinf_weight > 0:
         loss += pn_reinf_term(pn_reinf_weight, resDict, target, pn_reinf_weight_baseline)
     if aux_model_weight > 0:
-        loss += add_aux_model_loss_term(aux_model_weight, resDict, data, target)
+        loss += aux_model_loss_term(aux_model_weight, resDict, data, target)
+    if zoom_nll_weight > 0:
+        loss += zoom_loss_term(zoom_nll_weight, resDict, data, target)
     return loss
-
 
 def pn_reinf_term(pn_reinf_weight, resDict, target, pn_reinf_weight_baseline):
     flatInds = resDict['flatInds']
@@ -129,16 +130,16 @@ def pn_reinf_term(pn_reinf_weight, resDict, target, pn_reinf_weight_baseline):
         loss_reinforce += loss_baseline
     return pn_reinf_weight * loss_reinforce
 
-
 def pn_recons_term(pn_reconst_weight, resDict, data):
     reconst = resDict['reconst']
     data = F.adaptive_avg_pool2d(data, (reconst.size(-2), reconst.size(-1)))
     return pn_reconst_weight * torch.pow(reconst - data, 2).mean()
 
-
-def add_aux_model_loss_term(aux_model_weight, resDict, data, target):
+def aux_model_loss_term(aux_model_weight, resDict, data, target):
     return aux_model_weight * F.cross_entropy(resDict["auxPred"], target)
 
+def zoom_loss_term(zoom_nll_weight, resDict, data, target):
+    return zoom_nll_weight * F.cross_entropy(resDict["pred_zoom"], target)
 
 def average_gradients(model):
     size = float(dist.get_world_size())
@@ -193,7 +194,7 @@ def epochImgEval(model, log_interval, loader, epoch, args, writer, metricEarlySt
 
         # Loss
 
-        loss = computeLoss(args.nll_weight, args.aux_mod_nll_weight, args.pn_reinf_weight, output, target,
+        loss = computeLoss(args.nll_weight, args.aux_mod_nll_weight, args.zoom_nll_weight,args.pn_reinf_weight, output, target,
                            args.pn_reconst_weight, resDict,
                            data, args.pn_reinf_weight_baseline)
 
@@ -484,6 +485,8 @@ def addLossTermArgs(argreader):
                                   help='The weight of the negative log-likelihood term in the loss function.')
     argreader.parser.add_argument('--aux_mod_nll_weight', type=float, metavar='FLOAT',
                                   help='The weight of the negative log-likelihood term in the loss function for the aux model (when using pointnet).')
+    argreader.parser.add_argument('--zoom_nll_weight', type=float, metavar='FLOAT',
+                                  help='The weight of the negative log-likelihood term in the loss function for the zoom model (when using a model that generates points).')
 
     argreader.parser.add_argument('--pn_reconst_weight', type=float, metavar='FLOAT',
                                   help='The weight of the reconstruction term in the loss function when using a pn-topk model.')
