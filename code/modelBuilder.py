@@ -46,16 +46,13 @@ def buildFeatModel(featModelName, pretrainedFeatMod, featMap=True, bigMaps=False
 
     return featModel
 
-
 def mapToList(map, abs, ord):
     # This extract the desired pixels in a map
-
     indices = tuple([torch.arange(map.size(0), dtype=torch.long).unsqueeze(1).unsqueeze(1),
                      torch.arange(map.size(1), dtype=torch.long).unsqueeze(1).unsqueeze(0),
                      ord.long().unsqueeze(1), abs.long().unsqueeze(1)])
     list = map[indices].permute(0, 2, 1)
     return list
-
 
 # This class is just the class nn.DataParallel that allow running computation on multiple gpus
 # but it adds the possibility to access the attribute of the model
@@ -319,7 +316,7 @@ class TopkPointExtractor(nn.Module):
     def __init__(self, cuda, nbFeat, softCoord, softCoord_kerSize, softCoord_secOrder, point_nb, reconst, encoderChan, \
                  predictDepth, softcoord_shiftpred, furthestPointSampling, furthestPointSampling_nb_pts, dropout,
                  auxModel, \
-                 topkRandSamp, topkRSUnifWeight, topk_euclinorm):
+                 topkRandSamp, topkRSUnifWeight, topk_euclinorm,hasLinearProb):
 
         super(TopkPointExtractor, self).__init__()
 
@@ -373,6 +370,8 @@ class TopkPointExtractor(nn.Module):
         self.auxModel = auxModel
         self.topkRandSamp = topkRandSamp
         self.topkRSUnifWeight = topkRSUnifWeight
+        self.hasLinearProb = hasLinearProb
+        self.linearProb = nn.Conv2d(encoderChan, 1, kernel_size=1, stride=1)
 
     def forward(self, featureMaps):
 
@@ -383,6 +382,8 @@ class TopkPointExtractor(nn.Module):
 
         if self.topk_euclinorm:
             x = torch.pow(pointFeaturesMap, 2).sum(dim=1, keepdim=True)
+        elif self.hasLinearProb:
+            x = torch.sigmoid(self.linearProb(pointFeaturesMap))
         else:
             x = F.relu(pointFeaturesMap).sum(dim=1, keepdim=True)
 
@@ -626,7 +627,7 @@ class PointNet2(SecondModel):
                                                 topk_softCoord_secOrder, point_nb, reconst, encoderChan, predictDepth, \
                                                 topk_softcoord_shiftpred, topk_fps, topk_fps_nb_pts, topk_dropout,
                                                 auxModel, \
-                                                topkRandSamp, topkRSUnifWeight, topk_euclinorm)
+                                                topkRandSamp, topkRSUnifWeight, topk_euclinorm,hasLinearProb)
         elif reinfExct:
             self.pointExtr = ReinforcePointExtractor(cuda, nbFeat, topk_softcoord, topk_softCoord_kerSize, \
                                                      topk_softCoord_secOrder, point_nb, reconst, encoderChan,
@@ -730,8 +731,10 @@ def netBuilder(args):
                                 topk_dropout=args.pn_topk_dropout, \
                                 auxModel=args.pn_aux_model, topkRandSamp=args.pn_topk_rand_sampling,
                                 topkRSUnifWeight=args.pn_topk_rs_unif_weight,
-                                hasLinearProb=args.pn_reinf_has_linear_prob, use_baseline=args.pn_reinf_use_baseline, \
+                                hasLinearProb=args.pn_has_linear_prob, use_baseline=args.pn_reinf_use_baseline, \
                                 topk_euclinorm=args.pn_topk_euclinorm)
+
+
     else:
         raise ValueError("Unknown temporal model type : ", args.second_mod)
 
@@ -796,7 +799,7 @@ def addArgs(argreader):
     argreader.parser.add_argument('--pn_reinf', type=args.str2bool, metavar='BOOL',
                                   help='To feed the pointnet model with points extracted using reinforcement learning. Ignored if the model \
                             doesn\'t use pointnet.')
-    argreader.parser.add_argument('--pn_reinf_has_linear_prob', type=args.str2bool, metavar='BOOL',
+    argreader.parser.add_argument('--pn_has_linear_prob', type=args.str2bool, metavar='BOOL',
                                   help='To use linear layer to compute probabilities for the reinforcement model')
     argreader.parser.add_argument('--pn_reinf_use_baseline', type=args.str2bool, metavar='BOOL',
                                   help='To use linear layer to compute baseline for the reinforcement model training')
@@ -823,6 +826,7 @@ def addArgs(argreader):
     argreader.parser.add_argument('--pn_topk_euclinorm', type=args.str2bool, metavar='BOOL',
                                   help='For the topk point net model. To use the euclidean norm to compute pixel importance instead of using their raw value \
                                   filtered by a Relu.')
+
     argreader.parser.add_argument('--zoom', type=args.str2bool, metavar='BOOL',
                                   help='To use with a model that generates points. To zoom on the part of the images where the points are focused an apply the model a second time on it.')
 
