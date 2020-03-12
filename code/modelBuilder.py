@@ -493,7 +493,7 @@ class ReinforcePointExtractor(nn.Module):
     def __init__(self, cuda, nbFeat, softCoord, softCoord_kerSize, softCoord_secOrder, point_nb, reconst, encoderChan, \
                  predictDepth, softcoord_shiftpred, furthestPointSampling, furthestPointSampling_nb_pts, dropout,
                  auxModel, \
-                 topkRandSamp, topkRSUnifWeight, hasLinearProb, use_baseline):
+                 topkRandSamp, topkRSUnifWeight, hasLinearProb, use_baseline, reinf_linear_only):
 
         super(ReinforcePointExtractor, self).__init__()
 
@@ -551,6 +551,7 @@ class ReinforcePointExtractor(nn.Module):
         self.auxModel = auxModel
         self.topkRandSamp = topkRandSamp
         self.topkRSUnifWeight = topkRSUnifWeight
+        self.reinf_linear_only = reinf_linear_only
         if use_baseline:
             self.baseline_linear = nn.Linear(nbFeat, 1)
 
@@ -564,10 +565,13 @@ class ReinforcePointExtractor(nn.Module):
         pointFeaturesMap = self.conv1x1(featureMaps)
 
         if self.hasLinearProb:
-            x = self.lin_prob(pointFeaturesMap)
+            if self.reinf_linear_only:
+                x = self.lin_prob(pointFeaturesMap.detach())
+            else:
+                x = self.lin_prob(pointFeaturesMap)
             flatX = x.view(x.size(0), -1)
             # probs = F.softmax(flatX, dim=(1))+_EPSILON
-            flatX = F.sigmoid(flatX)
+            flatX = torch.sigmoid(flatX)
             probs = flatX / flatX.sum(dim=1, keepdim=True) +_EPSILON
             # probs = flatX / flatX.sum(dim=-1, keepdim=True)[0]
         else:
@@ -619,7 +623,7 @@ class PointNet2(SecondModel):
                  topk_fps_nb_pts=64, \
                  topk_dropout=0, auxModel=False, topkRandSamp=False, topkRSUnifWeight=0, hasLinearProb=False,
                  use_baseline=False, \
-                 topk_euclinorm=True):
+                 topk_euclinorm=True , reinf_linear_only=False):
 
         super(PointNet2, self).__init__(nbFeat, classNb)
 
@@ -635,7 +639,7 @@ class PointNet2(SecondModel):
                                                      predictDepth, \
                                                      topk_softcoord_shiftpred, topk_fps, topk_fps_nb_pts, topk_dropout,
                                                      auxModel, \
-                                                     topkRandSamp, topkRSUnifWeight, hasLinearProb, use_baseline)
+                                                     topkRandSamp, topkRSUnifWeight, hasLinearProb, use_baseline, reinf_linear_only)
         else:
             self.pointExtr = DirectPointExtractor(point_nb, nbFeat)
             if auxModel:
@@ -733,7 +737,7 @@ def netBuilder(args):
                                 auxModel=args.pn_aux_model, topkRandSamp=args.pn_topk_rand_sampling,
                                 topkRSUnifWeight=args.pn_topk_rs_unif_weight,
                                 hasLinearProb=args.pn_reinf_has_linear_prob, use_baseline=args.pn_reinf_use_baseline, \
-                                topk_euclinorm=args.pn_topk_euclinorm)
+                                topk_euclinorm=args.pn_topk_euclinorm, reinf_linear_only=args.pn_train_reinf_linear_only)
     else:
         raise ValueError("Unknown temporal model type : ", args.second_mod)
 
@@ -802,6 +806,9 @@ def addArgs(argreader):
                                   help='To use linear layer to compute probabilities for the reinforcement model')
     argreader.parser.add_argument('--pn_reinf_use_baseline', type=args.str2bool, metavar='BOOL',
                                   help='To use linear layer to compute baseline for the reinforcement model training')
+    argreader.parser.add_argument('--pn_train_reinf_linear_only', type=args.str2bool, metavar='BOOL',
+                                  help='To prevent reinforcement loss to propagate in firstModel ')
+
 
     argreader.parser.add_argument('--pn_topk_softcoord', type=args.str2bool, metavar='BOOL',
                                   help='For the topk point net model. The point coordinate will be computed using soft argmax.')
