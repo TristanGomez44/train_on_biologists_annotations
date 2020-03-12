@@ -566,7 +566,8 @@ class ReinforcePointExtractor(nn.Module):
         if self.hasLinearProb:
             x = self.lin_prob(pointFeaturesMap)
             flatX = x.view(x.size(0), -1)
-            probs = F.softmax(flatX, dim=(1))+_EPSILON
+            # probs = F.softmax(flatX, dim=(1))+_EPSILON
+            probs = flatX / flatX.sum(dim=1, keepdim=True) +_EPSILON
             # probs = flatX / flatX.sum(dim=-1, keepdim=True)[0]
         else:
             x = torch.pow(pointFeaturesMap, 2).sum(dim=1, keepdim=True)
