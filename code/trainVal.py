@@ -73,8 +73,11 @@ def epochSeqTr(model, optim, log_interval, loader, epoch, args, writer, **kwargs
         with torch.autograd.detect_anomaly():
             resDict = model(data)
             output = resDict["pred"]
-            loss = computeLoss(args.nll_weight, args.aux_mod_nll_weight, args.zoom_nll_weight,args.pn_reinf_weight, output, target,
-                               args.pn_reconst_weight, resDict, data, args.pn_reinf_weight_baseline)
+
+            loss = computeLoss(args.nll_weight, args.aux_mod_nll_weight,args.zoom_nll_weight, args.pn_reinf_weight, output, target,
+                               args.pn_reconst_weight, resDict, data, args.pn_reinf_weight_baseline,
+                               args.pn_reinf_score_reward)
+
             loss.backward()
 
         if args.distributed:
@@ -99,8 +102,9 @@ def epochSeqTr(model, optim, log_interval, loader, epoch, args, writer, **kwargs
     if validBatch > 0:
 
         torch.save(model.state_dict(), "../models/{}/model{}_epoch{}".format(args.exp_id, args.model_id, epoch))
-        if (not args.save_all) and os.path.exists("../models/{}/model{}_epoch{}".format(args.exp_id, args.model_id, epoch-1)):
-            os.remove("../models/{}/model{}_epoch{}".format(args.exp_id, args.model_id, epoch-1))
+        if (not args.save_all) and os.path.exists(
+                "../models/{}/model{}_epoch{}".format(args.exp_id, args.model_id, epoch - 1)):
+            os.remove("../models/{}/model{}_epoch{}".format(args.exp_id, args.model_id, epoch - 1))
         writeSummaries(metrDict, validBatch, writer, epoch, "train", args.model_id, args.exp_id)
 
     if args.debug:
@@ -108,24 +112,32 @@ def epochSeqTr(model, optim, log_interval, loader, epoch, args, writer, **kwargs
         update.updateTimeCSV(epoch, "train", args.exp_id, args.model_id, totalTime, batch_idx)
 
 
-def computeLoss(nll_weight, aux_model_weight, zoom_nll_weight,pn_reinf_weight, output, target, pn_reconst_weight, resDict, data,
-                pn_reinf_weight_baseline):
+
+def computeLoss(nll_weight, aux_model_weight,zoom_nll_weight, pn_reinf_weight, output, target, pn_reconst_weight, resDict, data,
+                pn_reinf_weight_baseline, score_reward):
+
     loss = nll_weight * F.cross_entropy(output, target)
     if pn_reconst_weight > 0:
         loss += pn_recons_term(pn_reconst_weight, resDict, data)
     if pn_reinf_weight > 0:
-        loss += pn_reinf_term(pn_reinf_weight, resDict, target, pn_reinf_weight_baseline)
+        loss += pn_reinf_term(pn_reinf_weight, resDict, target, pn_reinf_weight_baseline, score_reward)
     if aux_model_weight > 0:
         loss += aux_model_loss_term(aux_model_weight, resDict, data, target)
     if zoom_nll_weight > 0:
         loss += zoom_loss_term(zoom_nll_weight, resDict, data, target)
     return loss
 
-def pn_reinf_term(pn_reinf_weight, resDict, target, pn_reinf_weight_baseline):
+def pn_reinf_term(pn_reinf_weight, resDict, target, pn_reinf_weight_baseline, score_reward):
     flatInds = resDict['flatInds']
     pi = resDict['probs'][torch.arange(flatInds.size(0), dtype=torch.long).unsqueeze(1), flatInds]
     acc = (resDict["pred"].detach().argmax(dim=-1) == target)
-    reward = (acc * 1.0).unsqueeze(1)
+
+    if score_reward:
+        _, topk = torch.topk(resDict["pred"], 200)
+        ranks = (topk == target.unsqueeze(1)).nonzero()[:, 1].type(torch.cuda.FloatTensor)
+        reward = ((200 - ranks) / 200).unsqueeze(1)
+    else:
+        reward = (acc * 1.0).unsqueeze(1)
 
     if pn_reinf_weight_baseline > 0.0:
         baseline = pn_reinf_weight_baseline * F.mse_loss(resDict['baseline'], reward)
@@ -200,10 +212,10 @@ def epochImgEval(model, log_interval, loader, epoch, args, writer, metricEarlySt
 
         loss = computeLoss(args.nll_weight, args.aux_mod_nll_weight, args.zoom_nll_weight,args.pn_reinf_weight, output, target,
                            args.pn_reconst_weight, resDict,
-                           data, args.pn_reinf_weight_baseline)
+                           data, args.pn_reinf_weight_baseline, args.pn_reinf_score_reward)
 
         # Other variables produced by the net
-        intermVarDict = update.catIntermediateVariables(resDict, intermVarDict, validBatch,args.save_all)
+        intermVarDict = update.catIntermediateVariables(resDict, intermVarDict, validBatch, args.save_all)
 
         # Harware occupation
         update.updateHardWareOccupation(args.debug, args.benchmark, args.cuda, epoch, mode, args.exp_id, args.model_id,
@@ -222,7 +234,8 @@ def epochImgEval(model, log_interval, loader, epoch, args, writer, metricEarlySt
             break
 
     writeSummaries(metrDict, validBatch, writer, epoch, mode, args.model_id, args.exp_id)
-    intermVarDict = update.saveIntermediateVariables(intermVarDict, args.exp_id, args.model_id, epoch, mode, args.save_all)
+    intermVarDict = update.saveIntermediateVariables(intermVarDict, args.exp_id, args.model_id, epoch, mode,
+                                                     args.save_all)
 
     if args.debug:
         totalTime = time.time() - start_time
@@ -368,7 +381,7 @@ def initialize_Net_And_EpochNumber(net, exp_id, model_id, cuda, start_mode, init
             paramsFormated = {}
             for key in params.keys():
                 keyFormat = key.split('.')
-                if keyFormat[0]=='module':
+                if keyFormat[0] == 'module':
                     keyFormat = '.'.join(keyFormat[1:])
                 else:
                     keyFormat = '.'.join(keyFormat)
@@ -481,6 +494,7 @@ def addValArgs(argreader):
     argreader.parser.add_argument('--compute_metrics_during_eval', type=args.str2bool, metavar='BOOL',
                                   help='If false, the metrics will not be computed during validation, but the scores produced by the models will still be saved')
 
+
     return argreader
 
 
@@ -497,7 +511,9 @@ def addLossTermArgs(argreader):
     argreader.parser.add_argument('--pn_reinf_weight', type=float, metavar='FLOAT',
                                   help='The weight of the reinforcement term in the loss function when using a reinforcement learning.')
     argreader.parser.add_argument('--pn_reinf_weight_baseline', type=float, metavar='FLOAT',
-                                  help='The weight of the reinforcement term in the loss function when using a reinforcement learning.')
+                                  help='The weight of the reinforcement baseline term in the loss function when using a reinforcement learning.')
+    argreader.parser.add_argument('--pn_reinf_score_reward', type=args.str2bool, metavar='BOOL',
+                                  help='Whether to calculate the reinforcement learning reward with topk score')
     return argreader
 
 
