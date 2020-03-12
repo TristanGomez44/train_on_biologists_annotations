@@ -567,6 +567,7 @@ class ReinforcePointExtractor(nn.Module):
             x = self.lin_prob(pointFeaturesMap)
             flatX = x.view(x.size(0), -1)
             # probs = F.softmax(flatX, dim=(1))+_EPSILON
+            flatX = F.sigmoid(flatX)
             probs = flatX / flatX.sum(dim=1, keepdim=True) +_EPSILON
             # probs = flatX / flatX.sum(dim=-1, keepdim=True)[0]
         else:
