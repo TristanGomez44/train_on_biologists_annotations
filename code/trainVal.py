@@ -74,9 +74,7 @@ def epochSeqTr(model, optim, log_interval, loader, epoch, args, writer, **kwargs
             resDict = model(data)
             output = resDict["pred"]
 
-            loss = computeLoss(args.nll_weight, args.aux_mod_nll_weight,args.zoom_nll_weight, args.pn_reinf_weight, output, target,
-                               args.pn_reconst_weight, resDict, data, args.pn_reinf_weight_baseline,
-                               args.pn_reinf_score_reward)
+            loss = computeLoss(args, output, target, resDict, data)
 
             loss.backward()
 
@@ -111,10 +109,15 @@ def epochSeqTr(model, optim, log_interval, loader, epoch, args, writer, **kwargs
         totalTime = time.time() - start_time
         update.updateTimeCSV(epoch, "train", args.exp_id, args.model_id, totalTime, batch_idx)
 
+def computeLoss(args, output, target, resDict, data):
 
-
-def computeLoss(nll_weight, aux_model_weight,zoom_nll_weight, pn_reinf_weight, output, target, pn_reconst_weight, resDict, data,
-                pn_reinf_weight_baseline, score_reward):
+    nll_weight = args.nll_weight
+    aux_model_weight = args.aux_mod_nll_weight
+    zoom_nll_weight = args.zoom_nll_weight
+    pn_reinf_weight = args.pn_reinf_weight
+    pn_reconst_weight = args.pn_reconst_weight
+    pn_reinf_weight_baseline = args.pn_reinf_weight_baseline
+    score_reward = args.pn_reinf_score_reward
 
     loss = nll_weight * F.cross_entropy(output, target)
     if pn_reconst_weight > 0:
@@ -210,9 +213,7 @@ def epochImgEval(model, log_interval, loader, epoch, args, writer, metricEarlySt
 
         # Loss
 
-        loss = computeLoss(args.nll_weight, args.aux_mod_nll_weight, args.zoom_nll_weight,args.pn_reinf_weight, output, target,
-                           args.pn_reconst_weight, resDict,
-                           data, args.pn_reinf_weight_baseline, args.pn_reinf_score_reward)
+        loss = computeLoss(args, output, target, resDict, data)
 
         # Other variables produced by the net
         intermVarDict = update.catIntermediateVariables(resDict, intermVarDict, validBatch, args.save_all)
@@ -514,6 +515,7 @@ def addLossTermArgs(argreader):
                                   help='The weight of the reinforcement baseline term in the loss function when using a reinforcement learning.')
     argreader.parser.add_argument('--pn_reinf_score_reward', type=args.str2bool, metavar='BOOL',
                                   help='Whether to calculate the reinforcement learning reward with topk score')
+
     return argreader
 
 

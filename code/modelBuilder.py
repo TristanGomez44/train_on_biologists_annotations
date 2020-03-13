@@ -707,6 +707,7 @@ def netBuilder(args):
                               multiModSparseConst=args.resnet_multi_model_sparse_const, num_classes=args.class_nb, \
                               layerSizeReduce=args.resnet_layer_size_reduce,
                               preLayerSizeReduce=args.resnet_prelay_size_reduce, \
+                              applyStrideOnAll=args.resnet_apply_stride_on_all, \
                               **kwargs)
     else:
         raise ValueError("Unknown visual model type : ", args.first_mod)
@@ -880,11 +881,16 @@ def addArgs(argreader):
     argreader.parser.add_argument('--resnet_simple_att_topk_enc_chan', type=int, metavar='NB',
                                   help='For the resnet_simple_att_topk model. This is the number of output channel of the encoder. Ignored when --resnet_simple_att_topk is False.')
 
+    argreader.parser.add_argument('--resnet_apply_stride_on_all', type=args.str2bool, metavar='NB',
+                                  help='Apply stride on every non 3x3 convolution')
+
+
     argreader.parser.add_argument('--resnet_att_chan', type=int, metavar='INT',
                                   help='For the \'resnetX_att\' feat models. The number of channels in the attention module.')
     argreader.parser.add_argument('--resnet_att_blocks_nb', type=int, metavar='INT',
                                   help='For the \'resnetX_att\' feat models. The number of blocks in the attention module.')
     argreader.parser.add_argument('--resnet_att_act_func', type=str, metavar='INT',
                                   help='For the \'resnetX_att\' feat models. The activation function for the attention weights. Can be "sigmoid", "relu" or "tanh+relu".')
+
 
     return argreader
