@@ -246,6 +246,8 @@ class ResNet(nn.Module):
 
     def forward(self, x):
 
+        retDict = {}
+
         x = self.conv1(x)
         x = self.bn1(x)
         x = self.relu(x)
@@ -284,11 +286,11 @@ class ResNet(nn.Module):
                 x = self.avgpool(x)
                 x = x.view(x.size(0), -1)
 
+        retDict["x"] = x
         if self.attention:
-            return {"x":x,"attMaps":attWeightsDict}
-        else:
-            return x
+            retDict["attMaps"] = attWeightsDict
 
+        return retDict
 
 def removeTopLayer(params):
     params.pop("fc.weight")

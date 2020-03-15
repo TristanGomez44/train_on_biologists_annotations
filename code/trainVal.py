@@ -118,6 +118,7 @@ def computeLoss(args, output, target, resDict, data):
     pn_reconst_weight = args.pn_reconst_weight
     pn_reinf_weight_baseline = args.pn_reinf_weight_baseline
     score_reward = args.pn_reinf_score_reward
+    text_enc_weight = args.text_enc_weight
 
     loss = nll_weight * F.cross_entropy(output, target)
     if pn_reconst_weight > 0:
@@ -128,6 +129,8 @@ def computeLoss(args, output, target, resDict, data):
         loss += aux_model_loss_term(aux_model_weight, resDict, data, target)
     if zoom_nll_weight > 0:
         loss += zoom_loss_term(zoom_nll_weight, resDict, data, target)
+    if text_enc_weight > 0:
+        loss += text_enc_term(text_enc_weight, resDict, data, target,args.text_enc_pos_dil,args.text_enc_neg_dil,args.text_env_margin)
     return loss
 
 def pn_reinf_term(pn_reinf_weight, resDict, target, pn_reinf_weight_baseline, score_reward):
@@ -159,6 +162,15 @@ def aux_model_loss_term(aux_model_weight, resDict, data, target):
 
 def zoom_loss_term(zoom_nll_weight, resDict, data, target):
     return zoom_nll_weight * F.cross_entropy(resDict["pred_zoom"], target)
+
+def text_enc_term(text_enc_weight, resDict, data, target,posDil,negDil,margin):
+
+    features = resDict["featVolume"]
+
+    totalDiffPos = modelBuilder.computeTotalDiff(features,posDil)
+    totalDiffNeg = modelBuilder.computeTotalDiff(features,negDil)
+
+    return -text_enc_weight*torch.max(totalDiffNeg.mean() - totalDiffPos.mean()+margin,0)[0]
 
 def average_gradients(model):
     size = float(dist.get_world_size())
@@ -196,7 +208,7 @@ def epochImgEval(model, log_interval, loader, epoch, args, writer, metricEarlySt
     allOut = None
     allGT = None
     intermVarDict = {"fullAttMap": None, "fullFeatMapSeq": None, "fullAffTransSeq": None, "fullPointsSeq": None,
-                     "fullReconstSeq": None}
+                     "fullReconstSeq": None,"fullProbMap":None}
 
     for batch_idx, (data, target) in enumerate(loader):
 
@@ -515,6 +527,15 @@ def addLossTermArgs(argreader):
                                   help='The weight of the reinforcement baseline term in the loss function when using a reinforcement learning.')
     argreader.parser.add_argument('--pn_reinf_score_reward', type=args.str2bool, metavar='BOOL',
                                   help='Whether to calculate the reinforcement learning reward with topk score')
+
+    argreader.parser.add_argument('--text_enc_weight', type=float, metavar='BOOL',
+                                  help='The weight of the texture encoding loss term.')
+    argreader.parser.add_argument('--text_enc_pos_dil', type=int, metavar='BOOL',
+                                  help='The dilation for the positive terms of the texture encoding loss term.')
+    argreader.parser.add_argument('--text_enc_neg_dil', type=int, metavar='BOOL',
+                                  help='The dilation for the negative terms of the texture encoding loss term.')
+    argreader.parser.add_argument('--text_env_margin', type=float, metavar='BOOL',
+                                  help='The margin for the texture encoding loss term.')
 
     return argreader
 
