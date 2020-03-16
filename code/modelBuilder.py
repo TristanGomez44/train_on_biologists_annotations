@@ -753,6 +753,7 @@ def netBuilder(args):
                               layerSizeReduce=args.resnet_layer_size_reduce,
                               preLayerSizeReduce=args.resnet_prelay_size_reduce, \
                               applyStrideOnAll=args.resnet_apply_stride_on_all, \
+                              replaceBy1x1=args.resnet_replace_by_1x1,\
                               **kwargs)
     else:
         raise ValueError("Unknown visual model type : ", args.first_mod)
@@ -929,6 +930,8 @@ def addArgs(argreader):
 
     argreader.parser.add_argument('--resnet_apply_stride_on_all', type=args.str2bool, metavar='NB',
                                   help='Apply stride on every non 3x3 convolution')
+    argreader.parser.add_argument('--resnet_replace_by_1x1', type=args.str2bool, metavar='NB',
+                                  help='Replace the second 3x3 conv of BasicBlock by a 1x1 conv')
 
     argreader.parser.add_argument('--resnet_att_chan', type=int, metavar='INT',
                                   help='For the \'resnetX_att\' feat models. The number of channels in the attention module.')

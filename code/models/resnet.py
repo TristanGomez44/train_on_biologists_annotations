@@ -37,15 +37,16 @@ def conv3x3(in_planes, out_planes, stride=1,dilation=1,groups=1):
                      padding=dilation, bias=False,dilation=dilation,groups=groups)
 
 
-def conv1x1(in_planes, out_planes, stride=1):
+def conv1x1(in_planes, out_planes, stride=1,groups=1):
     """1x1 convolution"""
-    return nn.Conv2d(in_planes, out_planes, kernel_size=1, stride=stride, bias=False)
+    return nn.Conv2d(in_planes, out_planes, kernel_size=1, stride=stride, bias=False,groups=groups)
 
 
 class BasicBlock(nn.Module):
     expansion = 1
 
-    def __init__(self, inplanes, planes, stride=1, downsample=None, norm_layer=None,feat=False,dilation=1,groups=1,applyStrideOnAll=False):
+    def __init__(self, inplanes, planes, stride=1, downsample=None, norm_layer=None,feat=False,dilation=1,groups=1,applyStrideOnAll=False,\
+                replaceBy1x1=False):
         super(BasicBlock, self).__init__()
         if norm_layer is None:
             norm_layer = nn.BatchNorm2d
@@ -53,7 +54,11 @@ class BasicBlock(nn.Module):
         self.conv1 = conv3x3(inplanes, planes, stride,dilation,groups=groups)
         self.bn1 = norm_layer(planes)
         self.relu = nn.ReLU(inplace=True)
-        self.conv2 = conv3x3(planes, planes,groups=groups,stride=stride if applyStrideOnAll else 1)
+        if replaceBy1x1:
+            self.conv2 = conv1x1(planes, planes,groups=groups,stride=stride if applyStrideOnAll else 1)
+        else:
+            self.conv2 = conv3x3(planes, planes,groups=groups,stride=stride if applyStrideOnAll else 1)
+
         self.bn2 = norm_layer(planes)
         self.downsample = downsample
         self.stride = stride
@@ -81,7 +86,7 @@ class BasicBlock(nn.Module):
 class Bottleneck(nn.Module):
     expansion = 4
 
-    def __init__(self, inplanes, planes, stride=1, downsample=None, norm_layer=None,feat=False,dilation=1,applyStrideOnAll=True):
+    def __init__(self, inplanes, planes, stride=1, downsample=None, norm_layer=None,feat=False,dilation=1,applyStrideOnAll=True,replaceBy1x1=False):
         super(Bottleneck, self).__init__()
         if norm_layer is None:
             norm_layer = nn.BatchNorm2d
@@ -135,7 +140,7 @@ class ResNet(nn.Module):
 
     def __init__(self, block, layers, num_classes=1000, zero_init_residual=False, norm_layer=None,maxPoolKer=(3,3),maxPoolPad=(1,1),stride=(2,2),\
                     featMap=False,chan=64,inChan=3,dilation=1,layerSizeReduce=True,preLayerSizeReduce=True,layersNb=4,attention=False,attChan=16,attBlockNb=1,\
-                    attActFunc="sigmoid",multiModel=False,multiModSparseConst=False,applyStrideOnAll=False):
+                    attActFunc="sigmoid",multiModel=False,multiModSparseConst=False,applyStrideOnAll=False,replaceBy1x1=False):
 
         super(ResNet, self).__init__()
         if norm_layer is None:
@@ -155,11 +160,16 @@ class ResNet(nn.Module):
 
         self.multiModel = multiModel
         self.multiModSparseConst = multiModSparseConst
+        self.replaceBy1x1 = replaceBy1x1
         #All layers are built but they will not necessarily be used
-        self.layer1 = self._make_layer(block, chan*1, layers[0], stride=1,                        norm_layer=norm_layer,feat=True if self.nbLayers==1 else False,dilation=1,applyStrideOnAll=applyStrideOnAll)
-        self.layer2 = self._make_layer(block, chan*2, layers[1], stride=1 if not layerSizeReduce else stride, norm_layer=norm_layer,feat=True if self.nbLayers==2 else False,dilation=dilation[0],applyStrideOnAll=applyStrideOnAll)
-        self.layer3 = self._make_layer(block, chan*4, layers[2], stride=1 if not layerSizeReduce else stride, norm_layer=norm_layer,feat=True if self.nbLayers==3 else False,dilation=dilation[1],applyStrideOnAll=applyStrideOnAll)
-        self.layer4 = self._make_layer(block, chan*8, layers[3], stride=1 if not layerSizeReduce else stride, norm_layer=norm_layer,feat=True if self.nbLayers==4 else False,dilation=dilation[2],applyStrideOnAll=applyStrideOnAll)
+        self.layer1 = self._make_layer(block, chan*1, layers[0], stride=1,norm_layer=norm_layer,feat=True if self.nbLayers==1 else False,\
+                                        dilation=1,applyStrideOnAll=applyStrideOnAll,replaceBy1x1=replaceBy1x1)
+        self.layer2 = self._make_layer(block, chan*2, layers[1], stride=1 if not layerSizeReduce else stride, norm_layer=norm_layer,\
+                                        feat=True if self.nbLayers==2 else False,dilation=dilation[0],applyStrideOnAll=applyStrideOnAll,replaceBy1x1=replaceBy1x1)
+        self.layer3 = self._make_layer(block, chan*4, layers[2], stride=1 if not layerSizeReduce else stride, norm_layer=norm_layer,\
+                                        feat=True if self.nbLayers==3 else False,dilation=dilation[1],applyStrideOnAll=applyStrideOnAll,replaceBy1x1=replaceBy1x1)
+        self.layer4 = self._make_layer(block, chan*8, layers[3], stride=1 if not layerSizeReduce else stride, norm_layer=norm_layer,\
+                                        feat=True if self.nbLayers==4 else False,dilation=dilation[2],applyStrideOnAll=applyStrideOnAll,replaceBy1x1=replaceBy1x1)
 
         if layersNb<1 or layersNb>4:
             raise ValueError("Wrong number of layer : ",layersNb)
@@ -220,7 +230,7 @@ class ResNet(nn.Module):
             self.fc3 = nn.Linear(chan*(2**(3-1)) * block.expansion, num_classes)
             self.fc4 = nn.Linear(chan*(2**(4-1)) * block.expansion, num_classes)
 
-    def _make_layer(self, block, planes, blocks, stride=1, norm_layer=None,feat=False,dilation=1,applyStrideOnAll=False):
+    def _make_layer(self, block, planes, blocks, stride=1, norm_layer=None,feat=False,dilation=1,applyStrideOnAll=False,replaceBy1x1=False):
 
         if norm_layer is None:
             norm_layer = nn.BatchNorm2d
@@ -232,15 +242,15 @@ class ResNet(nn.Module):
             )
 
         layers = []
-        layers.append(block(self.inplanes, planes, stride, downsample, norm_layer,applyStrideOnAll=applyStrideOnAll))
+        layers.append(block(self.inplanes, planes, stride, downsample, norm_layer,applyStrideOnAll=applyStrideOnAll,replaceBy1x1=replaceBy1x1))
         self.inplanes = planes * block.expansion
 
         for i in range(1, blocks):
 
             if i == blocks-1 and feat:
-                layers.append(block(self.inplanes, planes, norm_layer=norm_layer,feat=True,dilation=dilation,applyStrideOnAll=applyStrideOnAll))
+                layers.append(block(self.inplanes, planes, norm_layer=norm_layer,feat=True,dilation=dilation,applyStrideOnAll=applyStrideOnAll,replaceBy1x1=replaceBy1x1))
             else:
-                layers.append(block(self.inplanes, planes, norm_layer=norm_layer,feat=False,dilation=dilation,applyStrideOnAll=applyStrideOnAll))
+                layers.append(block(self.inplanes, planes, norm_layer=norm_layer,feat=False,dilation=dilation,applyStrideOnAll=applyStrideOnAll,replaceBy1x1=replaceBy1x1))
 
         return nn.Sequential(*layers)
 
@@ -351,6 +361,13 @@ def resnet18(pretrained=False, **kwargs):
     if pretrained:
         params = model_zoo.load_url(model_urls['resnet18'])
         params = removeTopLayer(params)
+
+        paramsToLoad = {}
+        for key in params:
+            if key in model.state_dict() and model.state_dict()[key].size() == params[key].size():
+                paramsToLoad[key] = params[key]
+        params = paramsToLoad
+        
         model.load_state_dict(params,strict=False)
     return model
 
