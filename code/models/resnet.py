@@ -326,6 +326,13 @@ def resnet9_att(pretrained=False,chan=8,attChan=16,attBlockNb=1, **kwargs):
     if pretrained:
         params = model_zoo.load_url(model_urls['resnet18'])
         params = removeTopLayer(params)
+
+        paramsToLoad = {}
+        for key in params:
+            if key in model.state_dict() and model.state_dict()[key].size() == params[key].size():
+                paramsToLoad[key] = params[key]
+        params = paramsToLoad
+
         model.load_state_dict(params,strict=False)
     return model
 
@@ -367,7 +374,7 @@ def resnet18(pretrained=False, **kwargs):
             if key in model.state_dict() and model.state_dict()[key].size() == params[key].size():
                 paramsToLoad[key] = params[key]
         params = paramsToLoad
-        
+
         model.load_state_dict(params,strict=False)
     return model
 
