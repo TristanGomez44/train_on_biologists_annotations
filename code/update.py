@@ -121,16 +121,19 @@ def catIntermediateVariables(visualDict,intermVarDict,nbVideos, save_all):
         intermVarDict["fullFeatMapSeq"] = catMap(visualDict,intermVarDict["fullFeatMapSeq"],key="features")
         intermVarDict["fullPointsSeq"] = catPointsSeq(visualDict,intermVarDict["fullPointsSeq"])
         if nbVideos < 6:
-            intermVarDict["fullReconstSeq"] = catMap(visualDict,intermVarDict["fullReconstSeq"],key="reconst")
+            intermVarDict["fullPNReconstSeq"] = catMap(visualDict,intermVarDict["fullPNReconstSeq"],key="pn_reconst")
         intermVarDict["fullProbMap"] = catMap(visualDict,intermVarDict["fullProbMap"],key="prob_map")
+        intermVarDict["fullReconstSeq"] = catMap(visualDict,intermVarDict["fullReconstSeq"],key="reconst")
+
     return intermVarDict
 
 def saveIntermediateVariables(intermVarDict,exp_id,model_id,epoch,mode="val",save_all=True):
     if save_all:
         intermVarDict["fullAttMap"] = saveMap(intermVarDict["fullAttMap"],exp_id,model_id,epoch,mode,key="attMaps")
         intermVarDict["fullPointsSeq"] =  savePointsSeq(intermVarDict["fullPointsSeq"],exp_id,model_id,epoch,mode)
-        intermVarDict["fullReconstSeq"] = saveMap(intermVarDict["fullReconstSeq"],exp_id,model_id,epoch,mode,key="reconst")
+        intermVarDict["fullPNReconstSeq"] = saveMap(intermVarDict["fullPNReconstSeq"],exp_id,model_id,epoch,mode,key="pn_reconst")
         intermVarDict["fullProbMap"] = saveMap(intermVarDict["fullProbMap"],exp_id,model_id,epoch,mode,key="prob_map")
+        intermVarDict["fullReconstSeq"] = saveMap(intermVarDict["fullReconstSeq"],exp_id,model_id,epoch,mode,key="reconst")
     return intermVarDict
 
 def catPointsSeq(visualDict,fullPointsSeq):
@@ -151,7 +154,7 @@ def catMap(visualDict,fullMap,key="attMaps"):
     if key in visualDict.keys():
 
         if not type(visualDict[key]) is dict:
-            if key == "features" or key == "reconst":
+            if key == "features" or key == "pn_reconst":
                 visualDict[key] = (visualDict[key]-visualDict[key].min())/(visualDict[key].max()-visualDict[key].min())
 
             if fullMap is None:
