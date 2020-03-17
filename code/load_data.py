@@ -146,16 +146,6 @@ def addArgs(argreader):
     argreader.parser.add_argument('--val_batch_size', type=int, metavar='BS',
                                   help='The batchsize to use for validation')
 
-    argreader.parser.add_argument('--tr_len', type=int, metavar='LMAX',
-                                  help='The maximum length of a training sequence')
-    argreader.parser.add_argument('--val_l', type=int, metavar='LMAX',
-                                  help='Length of sequences for validation.')
-
-    argreader.parser.add_argument('--img_size', type=int, metavar='EDGE_SIZE',
-                                  help='The size of each edge of the images after resizing, if resizing is desired. Else is should be equal to --orig_img_size')
-    argreader.parser.add_argument('--orig_img_size', type=int, metavar='EDGE_SIZE',
-                                  help='The size of each edge of the images before preprocessing.')
-
     argreader.parser.add_argument('--train_prop', type=float, metavar='END',
                                   help='The proportion of the train dataset to use for training when working in non video mode. The rest will be used for validation.')
 
@@ -170,35 +160,8 @@ def addArgs(argreader):
     argreader.parser.add_argument('--dataset_test', type=str, metavar='DATASET',
                                   help='The dataset for testing. Can be "big" or "small"')
 
-    argreader.parser.add_argument('--resize_image', type=args.str2bool, metavar='S',
-                                  help='to resize the image to the size indicated by the img_width and img_heigth arguments.')
-
     argreader.parser.add_argument('--class_nb', type=int, metavar='S',
                                   help='The number of class of to model')
-
-    argreader.parser.add_argument('--augment_data', type=args.str2bool, metavar='S',
-                                  help='Set to True to augment the training data with transformations')
-
-    argreader.parser.add_argument('--mask_time_on_image', type=args.str2bool, metavar='S',
-                                  help='To mask the time displayed on the images')
-
-    argreader.parser.add_argument('--min_phase_nb', type=int, metavar='S',
-                                  help='The minimum number of phases a video must have to be included in the dataset')
-
-    argreader.parser.add_argument('--grid_shuffle', type=args.str2bool, metavar='S',
-                                  help='Apply a grid shuffle transformation from albumentation to the training images')
-
-    argreader.parser.add_argument('--grid_shuffle_size', type=int, metavar='S',
-                                  help='The grid size for grid shuffle.')
-
-    argreader.parser.add_argument('--grid_shuffle_test', type=args.str2bool, metavar='S',
-                                  help='Apply a grid shuffle transformation from albumentation to the testing images')
-
-    argreader.parser.add_argument('--grid_shuffle_test_size', type=int, metavar='S',
-                                  help='The grid size for grid shuffle for the test phase.')
-
-    argreader.parser.add_argument('--sobel', type=args.str2bool, metavar='S',
-                                  help='To apply sobel transform to each image')
 
     argreader.parser.add_argument('--old_preprocess', type=args.str2bool, metavar='S',
                                   help='To use the old images pre-processor.')
