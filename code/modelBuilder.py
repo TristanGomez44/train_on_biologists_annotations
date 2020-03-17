@@ -389,7 +389,7 @@ class TopkPointExtractor(nn.Module):
         if self.topk_euclinorm:
             x = torch.pow(pointFeaturesMap, 2).sum(dim=1, keepdim=True)
         elif self.textEncod:
-            x = computeTotalDiff(featureMaps,dilation=1)
+            x = -computeTotalSim(featureMaps,dilation=1)
             retDict["featVolume"] = featureMaps
         elif self.hasLinearProb:
             x = torch.sigmoid(self.linearProb(pointFeaturesMap))
@@ -526,7 +526,7 @@ def applyDiffKer_CosSimi(where,features,dilation=1):
 
     return diff
 
-def computeTotalDiff(features,dilation):
+def computeTotalSim(features,dilation):
     topDiff = applyDiffKer_CosSimi("top",features,dilation)
     botDiff = applyDiffKer_CosSimi("bot",features,dilation)
     leftDiff = applyDiffKer_CosSimi("left",features,dilation)

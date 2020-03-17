@@ -167,10 +167,10 @@ def text_enc_term(text_enc_weight, resDict, data, target,posDil,negDil,margin):
 
     features = resDict["featVolume"]
 
-    totalDiffPos = modelBuilder.computeTotalDiff(features,posDil)
-    totalDiffNeg = modelBuilder.computeTotalDiff(features,negDil)
+    totalSimPos = modelBuilder.computeTotalSim(features,posDil)
+    totalSimNeg = modelBuilder.computeTotalSim(features,negDil)
 
-    return -text_enc_weight*torch.max(totalDiffNeg.mean() - totalDiffPos.mean()+margin,0)[0]
+    return -text_enc_weight*torch.max(totalSimPos.mean() - totalSimNeg.mean()+margin,0)[0]
 
 def average_gradients(model):
     size = float(dist.get_world_size())
