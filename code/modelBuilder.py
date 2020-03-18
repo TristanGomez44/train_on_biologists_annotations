@@ -162,8 +162,16 @@ class FirstModel(nn.Module):
 
 class CNN2D(FirstModel):
 
-    def __init__(self, featModelName, pretrainedFeatMod=True, featMap=True, bigMaps=False, **kwargs):
-        super(CNN2D, self).__init__(featModelName, pretrainedFeatMod, featMap, bigMaps, **kwargs)
+    def __init__(self, featModelName, pretrainedFeatMod=True, featMap=True, bigMaps=False, reconst=None, **kwargs):
+        super(CNN2D, self).__init__(featModelName, pretrainedFeatMod, featMap, bigMaps,**kwargs)
+
+        self.reconst = reconst
+        if self.reconst:
+            decoderInChan = getResnetFeat(featModelName, kwargs["chan"])
+            self.decoder = resnet.ResNetDecoder(decoderInChan,resnet.BasicBlockTranspose, [2, 2, 2, 2],layerSizeReduce=kwargs["layerSizeReduce"],
+                                                postLayerSizeReduce=kwargs["preLayerSizeReduce"],layersNb=getLayerNb(featModelName))
+        else:
+            self.decoder = None
 
     def forward(self, x):
         # N x C x H x L
@@ -172,13 +180,15 @@ class CNN2D(FirstModel):
         # N x C x H x L
         res = self.featMod(x)
 
+        if self.reconst:
+            res["reconst"] = self.decoder(res["x"])["x"]
+
         # N x D
         if type(res) is dict:
             # Some feature model can return a dictionnary instead of a tensor
             return res
         else:
             return {'x': res}
-
 
 class CNN2D_simpleAttention(FirstModel):
 
@@ -212,7 +222,12 @@ class CNN2D_simpleAttention(FirstModel):
         # N x C x H x L
         self.batchSize = x.size(0)
         # N x C x H x L
-        features = self.featMod(x)
+        output = self.featMod(x)
+
+        if type(output) is dict:
+            features = output["x"]
+        else:
+            features = output
 
         if self.topk_enc_chan != -1:
             features = self.conv1x1(features)
@@ -256,7 +271,6 @@ class SecondModel(nn.Module):
 
     def forward(self, x):
         raise NotImplementedError
-
 
 class LinearSecondModel(SecondModel):
 
@@ -316,7 +330,7 @@ class TopkPointExtractor(nn.Module):
     def __init__(self, cuda, nbFeat, softCoord, softCoord_kerSize, softCoord_secOrder, point_nb, reconst, encoderChan, \
                  predictDepth, softcoord_shiftpred, furthestPointSampling, furthestPointSampling_nb_pts, dropout,
                  auxModel, \
-                 topkRandSamp, topkRSUnifWeight, topk_euclinorm,hasLinearProb):
+                 topkRandSamp, topkRSUnifWeight, topk_euclinorm,hasLinearProb,textEncod):
 
         super(TopkPointExtractor, self).__init__()
 
@@ -371,23 +385,31 @@ class TopkPointExtractor(nn.Module):
         self.topkRandSamp = topkRandSamp
         self.topkRSUnifWeight = topkRSUnifWeight
         self.hasLinearProb = hasLinearProb
-        self.linearProb = nn.Conv2d(encoderChan, 1, kernel_size=1, stride=1)
+        if self.hasLinearProb:
+            self.linearProb = nn.Conv2d(encoderChan, 1, kernel_size=1, stride=1)
+        self.textEncod = textEncod
 
     def forward(self, featureMaps):
+        retDict = {}
 
         # Because of zero padding, the border are very active, so we remove it.
         featureMaps = featureMaps[:, :, 3:-3, 3:-3]
 
         pointFeaturesMap = self.conv1x1(featureMaps)
-
         if self.topk_euclinorm:
             x = torch.pow(pointFeaturesMap, 2).sum(dim=1, keepdim=True)
+        elif self.textEncod:
+            x = -computeTotalSim(featureMaps,dilation=1)
+            retDict["featVolume"] = featureMaps
         elif self.hasLinearProb:
             x = torch.sigmoid(self.linearProb(pointFeaturesMap))
         else:
             x = F.relu(pointFeaturesMap).sum(dim=1, keepdim=True)
 
+        retDict["prob_map"] = x
+
         flatX = x.view(x.size(0), -1)
+
         if (not self.topkRandSamp) or (self.topkRandSamp and not self.training):
             _, flatInds = torch.topk(flatX, self.point_extracted, dim=-1, largest=True)
         else:
@@ -417,8 +439,6 @@ class TopkPointExtractor(nn.Module):
             abs = abs[torch.arange(abs.size(0)).unsqueeze(1).long(), idx]
             ord = ord[torch.arange(ord.size(0)).unsqueeze(1).long(), idx]
 
-        retDict = {}
-
         if self.softCoord:
             abs, ord = self.fastSoftCoordRefiner(x, abs, ord, kerSize=self.softCoord_kerSize,
                                                  secondOrderSpatWeight=self.softCoord_secOrder)
@@ -427,7 +447,7 @@ class TopkPointExtractor(nn.Module):
             sparseX = pointFeaturesMap * ((x - flatVals[:, -1].unsqueeze(1).unsqueeze(2).unsqueeze(3)) > 0).float()
             reconst = self.decoder(sparseX)
             # Keeping only one channel (the three channels are just copies)
-            retDict['reconst'] = reconst[:, 0:1]
+            retDict['pn_reconst'] = reconst[:, 0:1]
 
         pointFeat = mapToList(pointFeaturesMap, abs, ord)
 
@@ -488,6 +508,41 @@ class TopkPointExtractor(nn.Module):
             self.absKerDict[device] = self.absKer.to(device)
             self.spatialWeightKerDict[device] = self.spatialWeightKer.to(device)
 
+
+def applyDiffKer_CosSimi(where,features,dilation=1):
+    origFeatSize = features.size()
+    featNb = origFeatSize[1]
+    if where=="top":
+        #x,y = 0,1
+        padd = torch.zeros((features.size(0),features.size(1),features.size(2),dilation)).to(features.device)+0.0001
+        featuresShift = torch.cat((features[:,:,:,dilation:],padd),dim=-1)
+    elif where=="bot":
+        #x,y= 2,1
+        padd = torch.zeros((features.size(0),features.size(1),features.size(2),dilation)).to(features.device)+0.0001
+        featuresShift = torch.cat((padd,features[:,:,:,:-dilation]),dim=-1)
+    elif where=="left":
+        #x,y = 1,0
+        padd = torch.zeros((features.size(0),features.size(1),dilation,features.size(3))).to(features.device)+0.0001
+        featuresShift = torch.cat((padd,features[:,:,:-dilation,:]),dim=-2)
+    elif where=="right":
+        #x,y = 1,2
+        padd = torch.zeros((features.size(0),features.size(1),dilation,features.size(3))).to(features.device)+0.0001
+        featuresShift = torch.cat((features[:,:,dilation:,:],padd),dim=-2)
+    else:
+        raise ValueError("Unkown position")
+
+    diff = (features*featuresShift).sum(dim=1,keepdim=True)
+    diff /= torch.sqrt(torch.pow(features,2).sum(dim=1,keepdim=True))*torch.sqrt(torch.pow(featuresShift,2).sum(dim=1,keepdim=True))
+
+    return diff
+
+def computeTotalSim(features,dilation):
+    topDiff = applyDiffKer_CosSimi("top",features,dilation)
+    botDiff = applyDiffKer_CosSimi("bot",features,dilation)
+    leftDiff = applyDiffKer_CosSimi("left",features,dilation)
+    rightDiff = applyDiffKer_CosSimi("right",features,dilation)
+    totalDiff = (topDiff + botDiff + leftDiff + rightDiff)/4
+    return totalDiff
 
 class ReinforcePointExtractor(nn.Module):
 
@@ -633,7 +688,7 @@ class PointNet2(SecondModel):
                  topk_fps_nb_pts=64, \
                  topk_dropout=0, auxModel=False, topkRandSamp=False, topkRSUnifWeight=0, hasLinearProb=False,
                  use_baseline=False, \
-                 topk_euclinorm=True , reinf_linear_only=False, pn_clustering=False):
+                 topk_euclinorm=True , reinf_linear_only=False, pn_clustering=False,  textEncod=False):
 
         super(PointNet2, self).__init__(nbFeat, classNb)
 
@@ -642,7 +697,7 @@ class PointNet2(SecondModel):
                                                 topk_softCoord_secOrder, point_nb, reconst, encoderChan, predictDepth, \
                                                 topk_softcoord_shiftpred, topk_fps, topk_fps_nb_pts, topk_dropout,
                                                 auxModel, \
-                                                topkRandSamp, topkRSUnifWeight, topk_euclinorm,hasLinearProb)
+                                                topkRandSamp, topkRSUnifWeight, topk_euclinorm,hasLinearProb,textEncod)
         elif reinfExct:
             self.pointExtr = ReinforcePointExtractor(cuda, nbFeat, topk_softcoord, topk_softCoord_kerSize, \
                                                      topk_softCoord_secOrder, point_nb, reconst, encoderChan,
@@ -676,6 +731,13 @@ class PointNet2(SecondModel):
 
         return retDict
 
+def getLayerNb(backbone_name):
+    if backbone_name.find("18") != -1:
+        return 4
+    elif backbone_name.find("9") != -1:
+        return 2
+    else:
+        raise ValueError("Cant get layer number for ",backbone_name)
 
 def getResnetFeat(backbone_name, backbone_inplanes):
     if backbone_name == "resnet50" or backbone_name == "resnet101" or backbone_name == "resnet151":
@@ -704,7 +766,7 @@ def netBuilder(args):
 
         if not args.resnet_simple_att:
             CNNconst = CNN2D
-            kwargs = {}
+            kwargs = {"reconst":args.resnet_reconst}
         else:
             CNNconst = CNN2D_simpleAttention
             kwargs = {"featMap": True, "topk": args.resnet_simple_att_topk,
@@ -722,6 +784,7 @@ def netBuilder(args):
                               layerSizeReduce=args.resnet_layer_size_reduce,
                               preLayerSizeReduce=args.resnet_prelay_size_reduce, \
                               applyStrideOnAll=args.resnet_apply_stride_on_all, \
+                              replaceBy1x1=args.resnet_replace_by_1x1,\
                               **kwargs)
     else:
         raise ValueError("Unknown visual model type : ", args.first_mod)
@@ -754,7 +817,8 @@ def netBuilder(args):
                                 topkRSUnifWeight=args.pn_topk_rs_unif_weight,
                                 hasLinearProb=args.pn_has_linear_prob, use_baseline=args.pn_reinf_use_baseline, \
                                 topk_euclinorm=args.pn_topk_euclinorm, reinf_linear_only=args.pn_train_reinf_linear_only,
-                                pn_clustering=args.pn_clustering)
+                                pn_clustering=args.pn_clustering, textEncod=args.texture_encoding)
+
     else:
         raise ValueError("Unknown temporal model type : ", args.second_mod)
 
@@ -900,7 +964,11 @@ def addArgs(argreader):
 
     argreader.parser.add_argument('--resnet_apply_stride_on_all', type=args.str2bool, metavar='NB',
                                   help='Apply stride on every non 3x3 convolution')
-
+    argreader.parser.add_argument('--resnet_replace_by_1x1', type=args.str2bool, metavar='NB',
+                                  help='Replace the second 3x3 conv of BasicBlock by a 1x1 conv')
+    argreader.parser.add_argument('--resnet_reconst', type=args.str2bool, metavar='NB',
+                                  help='Output a reconstruction of the input using a resnet-18 like decoder. The weight of the corresponding term \
+                                  in the loss function must be set superior to 0 for the decoder to be trained.')
 
     argreader.parser.add_argument('--resnet_att_chan', type=int, metavar='INT',
                                   help='For the \'resnetX_att\' feat models. The number of channels in the attention module.')
@@ -909,5 +977,7 @@ def addArgs(argreader):
     argreader.parser.add_argument('--resnet_att_act_func', type=str, metavar='INT',
                                   help='For the \'resnetX_att\' feat models. The activation function for the attention weights. Can be "sigmoid", "relu" or "tanh+relu".')
 
+    argreader.parser.add_argument('--texture_encoding', type=args.str2bool, metavar='INT',
+                                  help='Use a feature model ')
 
     return argreader
