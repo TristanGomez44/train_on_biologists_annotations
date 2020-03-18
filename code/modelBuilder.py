@@ -550,6 +550,7 @@ class ReinforcePointExtractor(nn.Module):
             self.ordKerDict, self.absKerDict, self.spatialWeightKerDict = {}, {}, {}
 
         self.auxModel = auxModel
+
         self.topkRandSamp = topkRandSamp
         self.topkRSUnifWeight = topkRSUnifWeight
         self.reinf_linear_only = reinf_linear_only
@@ -560,9 +561,6 @@ class ReinforcePointExtractor(nn.Module):
 
         # Because of zero padding, the border are very active, so we remove it.
         featureMaps = featureMaps[:, :, 3:-3, 3:-3]
-
-
-        import numpy as np
         pointFeaturesMap = self.conv1x1(featureMaps)
 
         if self.hasLinearProb:
@@ -573,7 +571,7 @@ class ReinforcePointExtractor(nn.Module):
             flatX = x.view(x.size(0), -1)
             # probs = F.softmax(flatX, dim=(1))+_EPSILON
             flatX = torch.sigmoid(flatX)
-            probs = flatX / flatX.sum(dim=1, keepdim=True) +_EPSILON
+            probs = flatX / (flatX.sum(dim=1, keepdim=True) +_EPSILON)
             # probs = flatX / flatX.sum(dim=-1, keepdim=True)[0]
         else:
             x = torch.pow(pointFeaturesMap, 2).sum(dim=1, keepdim=True)
@@ -604,6 +602,9 @@ class ReinforcePointExtractor(nn.Module):
             retDict["baseFeat"] = featureMaps.mean(dim=-1).mean(dim=-1)
             retDict["baseline"] = F.relu((self.baseline_linear(retDict['baseFeat'].detach())))
 
+        if self.auxModel:
+            retDict["auxFeat"] = featureMaps.mean(dim=-1).mean(dim=-1)
+
 
         return retDict
 
@@ -613,6 +614,14 @@ class ReinforcePointExtractor(nn.Module):
             self.ordKerDict[device] = self.ordKer.to(device)
             self.absKerDict[device] = self.absKer.to(device)
             self.spatialWeightKerDict[device] = self.spatialWeightKer.to(device)
+
+class ClusterModel(nn.Module):
+    def __init__(self, nb_cluster):
+        super(ClusterModel, self).__init__()
+        pass
+
+    def forward(self, retDict):
+        return retDict
 
 
 class PointNet2(SecondModel):
@@ -624,7 +633,7 @@ class PointNet2(SecondModel):
                  topk_fps_nb_pts=64, \
                  topk_dropout=0, auxModel=False, topkRandSamp=False, topkRSUnifWeight=0, hasLinearProb=False,
                  use_baseline=False, \
-                 topk_euclinorm=True , reinf_linear_only=False):
+                 topk_euclinorm=True , reinf_linear_only=False, pn_clustering=False):
 
         super(PointNet2, self).__init__(nbFeat, classNb)
 
@@ -646,6 +655,9 @@ class PointNet2(SecondModel):
             if auxModel:
                 raise ValueError("Can't use aux model with direct point extractor")
         self.pn2 = pn_model
+        self.clustering = pn_clustering
+        if self.clustering:
+            self.cluster_model = ClusterModel(nb_cluster=4)
 
         self.auxModel = auxModel
         if auxModel:
@@ -654,6 +666,8 @@ class PointNet2(SecondModel):
     def forward(self, x):
         retDict = self.pointExtr(x)
 
+        if self.clustering:
+            retDict = self.cluster_model(retDict)
         x = self.pn2(retDict['pointfeatures'], retDict['pos'], retDict['batch'])
         retDict['pred'] = x
 
@@ -739,7 +753,8 @@ def netBuilder(args):
                                 auxModel=args.pn_aux_model, topkRandSamp=args.pn_topk_rand_sampling,
                                 topkRSUnifWeight=args.pn_topk_rs_unif_weight,
                                 hasLinearProb=args.pn_has_linear_prob, use_baseline=args.pn_reinf_use_baseline, \
-                                topk_euclinorm=args.pn_topk_euclinorm, reinf_linear_only=args.pn_train_reinf_linear_only)
+                                topk_euclinorm=args.pn_topk_euclinorm, reinf_linear_only=args.pn_train_reinf_linear_only,
+                                pn_clustering=args.pn_clustering)
     else:
         raise ValueError("Unknown temporal model type : ", args.second_mod)
 
@@ -810,6 +825,8 @@ def addArgs(argreader):
                                   help='To use linear layer to compute baseline for the reinforcement model training')
     argreader.parser.add_argument('--pn_train_reinf_linear_only', type=args.str2bool, metavar='BOOL',
                                   help='To prevent reinforcement loss to propagate in firstModel ')
+    argreader.parser.add_argument('--pn_clustering', type=args.str2bool, metavar='BOOL',
+                                  help='To introduce a clustering model between point extractor and pointNet network ')
 
 
     argreader.parser.add_argument('--pn_topk_softcoord', type=args.str2bool, metavar='BOOL',
