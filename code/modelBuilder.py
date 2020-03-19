@@ -173,15 +173,18 @@ class Compressor(nn.Module):
     def forward(self,x):
         origFeatSize = (x.size(-2),x.size(-1))
 
+        localInfo = self.conv1x1(x)
+
         if self.context:
             globalInfo = self.conv1x1_glob(x)
             globalInfo = F.interpolate(F.interpolate(globalInfo,scale_factor=1/self.contextMapFactor),size=origFeatSize,mode='bilinear',align_corners=False)
+            compressedFeatures = torch.cat((localInfo,globalInfo),dim=1)
+            retDict = {"features":compressedFeatures,"localFeatures":localInfo,"globalFeatures":globalInfo}
+        else:
+            compressedFeatures = localInfo
+            retDict = {"features":compressedFeatures,"localFeatures":localInfo}
 
-        localInfo = self.conv1x1(x)
-
-        compressedFeatures = torch.cat((localInfo,globalInfo),dim=1)
-
-        return {"features":compressedFeatures,"localFeatures":localInfo,"globalFeatures":globalInfo}
+        return retDict
 
 class CNN2D(FirstModel):
 
