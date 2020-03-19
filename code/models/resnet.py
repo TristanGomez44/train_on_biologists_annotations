@@ -341,7 +341,7 @@ class ResNet(nn.Module):
                 x = self.avgpool(x)
                 x = x.view(x.size(0), -1)
 
-
+        retDict["layerFeat"] = layerFeat
         retDict["x"] = x
         if self.attention:
             retDict["attMaps"] = attWeightsDict
@@ -510,7 +510,6 @@ def resnet18(pretrained=False, **kwargs):
 
         model.load_state_dict(params,strict=False)
     return model
-
 
 def resnet18_att(pretrained=False, strict=True,attChan=16,attBlockNb=1,**kwargs):
     """Constructs a ResNet-18 model.

@@ -162,16 +162,18 @@ class FirstModel(nn.Module):
 
 class CNN2D(FirstModel):
 
-    def __init__(self, featModelName, pretrainedFeatMod=True, featMap=True, bigMaps=False, reconst=None, **kwargs):
+    def __init__(self, featModelName, pretrainedFeatMod=True, featMap=True, bigMaps=False, reconst=None,reconst_enc_chan=64, **kwargs):
         super(CNN2D, self).__init__(featModelName, pretrainedFeatMod, featMap, bigMaps,**kwargs)
 
         self.reconst = reconst
         if self.reconst:
-            decoderInChan = getResnetFeat(featModelName, kwargs["chan"])
-            self.decoder = resnet.ResNetDecoder(decoderInChan,resnet.BasicBlockTranspose, [2, 2, 2, 2],layerSizeReduce=kwargs["layerSizeReduce"],
+            featureVolumeChannelNumber = getResnetFeat(featModelName, kwargs["chan"])
+            self.conv1x1 = nn.Conv2d(featureVolumeChannelNumber,reconst_enc_chan,1)
+            self.decoder = resnet.ResNetDecoder(reconst_enc_chan,resnet.BasicBlockTranspose, [2, 2, 2, 2],layerSizeReduce=kwargs["layerSizeReduce"],
                                                 postLayerSizeReduce=kwargs["preLayerSizeReduce"],layersNb=getLayerNb(featModelName))
         else:
             self.decoder = None
+            self.conv1x1 = None
 
     def forward(self, x):
         # N x C x H x L
@@ -181,7 +183,7 @@ class CNN2D(FirstModel):
         res = self.featMod(x)
 
         if self.reconst:
-            res["reconst"] = self.decoder(res["x"])["x"]
+            res["reconst"] = self.decoder(self.conv1x1(res["x"]))["x"]
 
         # N x D
         if type(res) is dict:
@@ -732,12 +734,10 @@ class PointNet2(SecondModel):
         return retDict
 
 def getLayerNb(backbone_name):
-    if backbone_name.find("18") != -1:
-        return 4
-    elif backbone_name.find("9") != -1:
+    if backbone_name.find("9") != -1:
         return 2
     else:
-        raise ValueError("Cant get layer number for ",backbone_name)
+        return 4
 
 def getResnetFeat(backbone_name, backbone_inplanes):
     if backbone_name == "resnet50" or backbone_name == "resnet101" or backbone_name == "resnet151":
@@ -766,7 +766,7 @@ def netBuilder(args):
 
         if not args.resnet_simple_att:
             CNNconst = CNN2D
-            kwargs = {"reconst":args.resnet_reconst}
+            kwargs = {"reconst":args.resnet_reconst,"reconst_enc_chan":args.resnet_reconst_enc_chan}
         else:
             CNNconst = CNN2D_simpleAttention
             kwargs = {"featMap": True, "topk": args.resnet_simple_att_topk,
@@ -969,6 +969,10 @@ def addArgs(argreader):
     argreader.parser.add_argument('--resnet_reconst', type=args.str2bool, metavar='NB',
                                   help='Output a reconstruction of the input using a resnet-18 like decoder. The weight of the corresponding term \
                                   in the loss function must be set superior to 0 for the decoder to be trained.')
+    argreader.parser.add_argument('--resnet_reconst_enc_chan', type=int, metavar='NB',
+                                  help='For the resnet reconstruction. The number of channel the encoded representation has.')
+
+
 
     argreader.parser.add_argument('--resnet_att_chan', type=int, metavar='INT',
                                   help='For the \'resnetX_att\' feat models. The number of channels in the attention module.')
