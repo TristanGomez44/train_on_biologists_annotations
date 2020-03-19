@@ -78,14 +78,14 @@ class Model(nn.Module):
         visResDict = self.firstModel(origImg)
         resDict = self.secondModel(visResDict["x"])
 
-        resDict = self.merge(visResDict,resDict)
+        resDict = merge(visResDict,resDict)
 
         if self.zoom:
             croppedImg,xMinCr,xMaxCr,yMinCr,yMaxCr = self.computeZoom(origImg,visResDict["x"],resDict)
             visResDict_zoom = self.firstModel(croppedImg)
             resDict_zoom = self.secondModel(visResDict_zoom["x"])
-            resDict_zoom = self.merge(visResDict_zoom,resDict_zoom)
-            resDict = self.merge(resDict_zoom,resDict,"zoom")
+            resDict_zoom = merge(visResDict_zoom,resDict_zoom)
+            resDict = merge(resDict_zoom,resDict,"zoom")
 
         return resDict
 
@@ -130,13 +130,13 @@ class Model(nn.Module):
 
         return croppedImg,xMin,xMax,yMin,yMax
 
-    def merge(self,dictA,dictB,suffix=""):
-        for key in dictA.keys():
-            if key in dictB:
-                dictB[key+"_"+suffix] = dictA[key]
-            else:
-                dictB[key] = dictA[key]
-        return dictB
+def merge(dictA,dictB,suffix=""):
+    for key in dictA.keys():
+        if key in dictB:
+            dictB[key+"_"+suffix] = dictA[key]
+        else:
+            dictB[key] = dictA[key]
+    return dictB
 
 def plotBox(mask,xMin,xMax,yMin,yMax,chan):
     mask[chan][max(xMin,0):min(xMax,mask.size(1)-1),max(yMin,0)] = 1
@@ -159,21 +159,47 @@ class FirstModel(nn.Module):
     def forward(self, x):
         raise NotImplementedError
 
+class Compressor(nn.Module):
+    def __init__(self, context,inChan,encChan,contextMapFactor,contextGlobalInfoChan):
+        super(Compressor, self).__init__()
+
+        self.context = context
+        if context:
+            self.conv1x1_glob = nn.Conv2d(inChan,contextGlobalInfoChan,1)
+        else:
+            self.conv1x1_glob = None
+        self.conv1x1 = nn.Conv2d(inChan,encChan,1)
+        self.contextMapFactor = contextMapFactor
+    def forward(self,x):
+        origFeatSize = (x.size(-2),x.size(-1))
+
+        if self.context:
+            globalInfo = self.conv1x1_glob(x)
+            globalInfo = F.interpolate(F.interpolate(globalInfo,scale_factor=1/self.contextMapFactor),size=origFeatSize,mode='bilinear',align_corners=False)
+
+        localInfo = self.conv1x1(x)
+
+        compressedFeatures = torch.cat((localInfo,globalInfo),dim=1)
+
+        return {"features":compressedFeatures,"localFeatures":localInfo,"globalFeatures":globalInfo}
 
 class CNN2D(FirstModel):
 
-    def __init__(self, featModelName, pretrainedFeatMod=True, featMap=True, bigMaps=False, reconst=None,reconst_enc_chan=64, **kwargs):
+    def __init__(self, featModelName, pretrainedFeatMod=True, featMap=True, bigMaps=False, reconst=None,reconst_enc_chan=64,\
+                        contextFeat=False,contextMapFactor=8,contextGlobalInfoChan=8,**kwargs):
         super(CNN2D, self).__init__(featModelName, pretrainedFeatMod, featMap, bigMaps,**kwargs)
 
         self.reconst = reconst
         if self.reconst:
             featureVolumeChannelNumber = getResnetFeat(featModelName, kwargs["chan"])
-            self.conv1x1 = nn.Conv2d(featureVolumeChannelNumber,reconst_enc_chan,1)
-            self.decoder = resnet.ResNetDecoder(reconst_enc_chan,resnet.BasicBlockTranspose, [2, 2, 2, 2],layerSizeReduce=kwargs["layerSizeReduce"],
+            inDecoderChan = reconst_enc_chan + contextGlobalInfoChan if contextFeat else reconst_enc_chan
+            self.decoder = resnet.ResNetDecoder(inDecoderChan,resnet.BasicBlockTranspose, [2, 2, 2, 2],layerSizeReduce=kwargs["layerSizeReduce"],
                                                 postLayerSizeReduce=kwargs["preLayerSizeReduce"],layersNb=getLayerNb(featModelName))
+            self.compressor = Compressor(contextFeat,featureVolumeChannelNumber,reconst_enc_chan,contextMapFactor,contextGlobalInfoChan)
         else:
             self.decoder = None
-            self.conv1x1 = None
+            self.compressor = None
+
 
     def forward(self, x):
         # N x C x H x L
@@ -183,7 +209,9 @@ class CNN2D(FirstModel):
         res = self.featMod(x)
 
         if self.reconst:
-            res["reconst"] = self.decoder(self.conv1x1(res["x"]))["x"]
+            compressedRetDict = self.compressor(res["x"])
+            res = merge(res,compressedRetDict,suffix="")
+            res["reconst"] = self.decoder(compressedRetDict["features"])["x"]
 
         # N x D
         if type(res) is dict:
@@ -766,7 +794,9 @@ def netBuilder(args):
 
         if not args.resnet_simple_att:
             CNNconst = CNN2D
-            kwargs = {"reconst":args.resnet_reconst,"reconst_enc_chan":args.resnet_reconst_enc_chan}
+            kwargs = {"reconst":args.resnet_reconst,"reconst_enc_chan":args.resnet_reconst_enc_chan,\
+                        "contextFeat":args.resnet_reconst_context,"contextMapFactor":args.resnet_reconst_cont_fact,\
+                        "contextGlobalInfoChan":args.resnet_reconst_context_globalinfo_chan}
         else:
             CNNconst = CNN2D_simpleAttention
             kwargs = {"featMap": True, "topk": args.resnet_simple_att_topk,
@@ -971,8 +1001,14 @@ def addArgs(argreader):
                                   in the loss function must be set superior to 0 for the decoder to be trained.')
     argreader.parser.add_argument('--resnet_reconst_enc_chan', type=int, metavar='NB',
                                   help='For the resnet reconstruction. The number of channel the encoded representation has.')
+    argreader.parser.add_argument('--resnet_reconst_context', type=args.str2bool, metavar='NB',
+                                  help='For the resnet reconstruction. To add global info in the feature map using sub sampling.')
 
-
+    argreader.parser.add_argument('--resnet_reconst_cont_fact', type=int, metavar='NB',
+                                  help='For the resnet reconstruction using context. The scaling factor between the original feature map and the global info \
+                                  feature map. Set this to 8 to have global info feature map to be 8 times smaller than the input feature volume.')
+    argreader.parser.add_argument('--resnet_reconst_context_globalinfo_chan', type=int, metavar='NB',
+                                  help='For the resnet reconstruction with context. The number of channel used for the global information.')
 
     argreader.parser.add_argument('--resnet_att_chan', type=int, metavar='INT',
                                   help='For the \'resnetX_att\' feat models. The number of channels in the attention module.')
