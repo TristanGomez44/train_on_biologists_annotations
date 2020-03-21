@@ -555,7 +555,7 @@ def neighb_pred_err(pred,pointFeaturesMap,retDict):
     maskShiftDict = {}
     mean_error_map = None
     for where in ["top","bot","left","right"]:
-        featureShift,maskShiftDict[where] = shiftFeat(where,pointFeaturesMap,1)
+        featureShift,maskShiftDict[where] = shiftFeat(where,pointFeaturesMap.detach(),1)
         error_map = torch.sqrt(torch.pow(featureShift-pred,2).sum(dim=1,keepdim=True))*maskShiftDict[where]
         if mean_error_map is None:
             mean_error_map = error_map
