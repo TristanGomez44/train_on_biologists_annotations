@@ -441,13 +441,13 @@ class TopkPointExtractor(nn.Module):
             x = neighb_pred_err(pred,pointFeaturesMap,retDict)
             retDict["neighFeatPredErr"] = x
         elif self.textEncod:
-            x = -computeTotalSim(featureMaps,dilation=1)
-            retDict["featVolume"] = featureMaps
+            x = -computeTotalSim(pointFeaturesMap,dilation=1)
         elif self.hasLinearProb:
             x = torch.sigmoid(self.linearProb(pointFeaturesMap))
         else:
             x = F.relu(pointFeaturesMap).sum(dim=1, keepdim=True)
 
+        retDict["featVolume"] = pointFeaturesMap
         retDict["prob_map"] = x
 
         flatX = x.view(x.size(0), -1)
@@ -556,15 +556,13 @@ def neighb_pred_err(pred,pointFeaturesMap,retDict):
     mean_error_map = None
     for where in ["top","bot","left","right"]:
         featureShift,maskShiftDict[where] = shiftFeat(where,pointFeaturesMap,1)
-        error_map = torch.sqrt(torch.pow(featureShift-pred,2).sum(dim=1))*maskShiftDict[where]
-
+        error_map = torch.sqrt(torch.pow(featureShift-pred,2).sum(dim=1,keepdim=True))*maskShiftDict[where]
         if mean_error_map is None:
             mean_error_map = error_map
         else:
             mean_error_map += error_map
 
     mean_error_map /= (maskShiftDict["top"] + maskShiftDict["bot"] + maskShiftDict["left"] + maskShiftDict["right"])
-
     return mean_error_map
 
 def shiftFeat(where,features,dilation):
@@ -595,7 +593,6 @@ def shiftFeat(where,features,dilation):
         raise ValueError("Unkown position")
 
     maskShift = maskShift.mean(dim=1,keepdim=True)
-
     return featuresShift,maskShift
 
 def applyDiffKer_CosSimi(where,features,dilation=1):
