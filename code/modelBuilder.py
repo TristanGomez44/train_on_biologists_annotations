@@ -363,7 +363,7 @@ class TopkPointExtractor(nn.Module):
     def __init__(self, cuda, nbFeat, softCoord, softCoord_kerSize, softCoord_secOrder, point_nb, reconst, encoderChan, \
                  predictDepth, softcoord_shiftpred, furthestPointSampling, furthestPointSampling_nb_pts, dropout,
                  auxModel, \
-                 topkRandSamp, topkRSUnifWeight, topk_euclinorm,hasLinearProb,textEncod):
+                 topkRandSamp, topkRSUnifWeight, topk_euclinorm,hasLinearProb,textEncod,neighbFeatPred):
 
         super(TopkPointExtractor, self).__init__()
 
@@ -421,6 +421,11 @@ class TopkPointExtractor(nn.Module):
         if self.hasLinearProb:
             self.linearProb = nn.Conv2d(encoderChan, 1, kernel_size=1, stride=1)
         self.textEncod = textEncod
+        self.neighbFeatPred = neighbFeatPred
+        if self.neighbFeatPred:
+            self.neighbFeat_mlp = nn.Sequential(nn.Linear(encoderChan,64),nn.ReLU(),nn.Linear(64,encoderChan))
+        else:
+            self.neighbFeat_mlp = None
 
     def forward(self, featureMaps):
         retDict = {}
@@ -431,6 +436,10 @@ class TopkPointExtractor(nn.Module):
         pointFeaturesMap = self.conv1x1(featureMaps)
         if self.topk_euclinorm:
             x = torch.pow(pointFeaturesMap, 2).sum(dim=1, keepdim=True)
+        elif self.neighbFeatPred:
+            pred = self.neighbFeat_mlp(pointFeaturesMap.detach().permute(0,2,3,1)).permute(0,3,1,2)
+            x = neighb_pred_err(pred,pointFeaturesMap,retDict)
+            retDict["neighFeatPredErr"] = x
         elif self.textEncod:
             x = -computeTotalSim(featureMaps,dilation=1)
             retDict["featVolume"] = featureMaps
@@ -541,30 +550,59 @@ class TopkPointExtractor(nn.Module):
             self.absKerDict[device] = self.absKer.to(device)
             self.spatialWeightKerDict[device] = self.spatialWeightKer.to(device)
 
+def neighb_pred_err(pred,pointFeaturesMap,retDict):
 
-def applyDiffKer_CosSimi(where,features,dilation=1):
-    origFeatSize = features.size()
-    featNb = origFeatSize[1]
+    maskShiftDict = {}
+    mean_error_map = None
+    for where in ["top","bot","left","right"]:
+        featureShift,maskShiftDict[where] = shiftFeat(where,pointFeaturesMap,1)
+        error_map = torch.sqrt(torch.pow(featureShift-pred,2).sum(dim=1))*maskShiftDict[where]
+
+        if mean_error_map is None:
+            mean_error_map = error_map
+        else:
+            mean_error_map += error_map
+
+    mean_error_map /= (maskShiftDict["top"] + maskShiftDict["bot"] + maskShiftDict["left"] + maskShiftDict["right"])
+
+    return mean_error_map
+
+def shiftFeat(where,features,dilation):
+
+    mask = torch.ones_like(features)
+
     if where=="top":
         #x,y = 0,1
         padd = torch.zeros((features.size(0),features.size(1),features.size(2),dilation)).to(features.device)+0.0001
         featuresShift = torch.cat((features[:,:,:,dilation:],padd),dim=-1)
+        maskShift = torch.cat((mask[:,:,:,dilation:],padd),dim=-1)
     elif where=="bot":
         #x,y= 2,1
         padd = torch.zeros((features.size(0),features.size(1),features.size(2),dilation)).to(features.device)+0.0001
         featuresShift = torch.cat((padd,features[:,:,:,:-dilation]),dim=-1)
+        maskShift = torch.cat((padd,mask[:,:,:,:-dilation]),dim=-1)
     elif where=="left":
         #x,y = 1,0
         padd = torch.zeros((features.size(0),features.size(1),dilation,features.size(3))).to(features.device)+0.0001
         featuresShift = torch.cat((padd,features[:,:,:-dilation,:]),dim=-2)
+        maskShift = torch.cat((padd,mask[:,:,:-dilation,:]),dim=-2)
     elif where=="right":
         #x,y = 1,2
         padd = torch.zeros((features.size(0),features.size(1),dilation,features.size(3))).to(features.device)+0.0001
         featuresShift = torch.cat((features[:,:,dilation:,:],padd),dim=-2)
+        maskShift = torch.cat((mask[:,:,dilation:,:],padd),dim=-2)
     else:
         raise ValueError("Unkown position")
 
-    diff = (features*featuresShift).sum(dim=1,keepdim=True)
+    maskShift = maskShift.mean(dim=1,keepdim=True)
+
+    return featuresShift,maskShift
+
+def applyDiffKer_CosSimi(where,features,dilation=1):
+    origFeatSize = features.size()
+    featNb = origFeatSize[1]
+    featuresShift,maskShift = shiftFeat(where,features,dilation)
+    diff = (features*featuresShift*maskShift).sum(dim=1,keepdim=True)
     diff /= torch.sqrt(torch.pow(features,2).sum(dim=1,keepdim=True))*torch.sqrt(torch.pow(featuresShift,2).sum(dim=1,keepdim=True))
 
     return diff
@@ -721,7 +759,7 @@ class PointNet2(SecondModel):
                  topk_fps_nb_pts=64, \
                  topk_dropout=0, auxModel=False, topkRandSamp=False, topkRSUnifWeight=0, hasLinearProb=False,
                  use_baseline=False, \
-                 topk_euclinorm=True , reinf_linear_only=False, pn_clustering=False,  textEncod=False):
+                 topk_euclinorm=True , reinf_linear_only=False, pn_clustering=False,  textEncod=False,neighbFeatPred=False):
 
         super(PointNet2, self).__init__(nbFeat, classNb)
 
@@ -730,7 +768,7 @@ class PointNet2(SecondModel):
                                                 topk_softCoord_secOrder, point_nb, reconst, encoderChan, predictDepth, \
                                                 topk_softcoord_shiftpred, topk_fps, topk_fps_nb_pts, topk_dropout,
                                                 auxModel, \
-                                                topkRandSamp, topkRSUnifWeight, topk_euclinorm,hasLinearProb,textEncod)
+                                                topkRandSamp, topkRSUnifWeight, topk_euclinorm,hasLinearProb,textEncod,neighbFeatPred)
         elif reinfExct:
             self.pointExtr = ReinforcePointExtractor(cuda, nbFeat, topk_softcoord, topk_softCoord_kerSize, \
                                                      topk_softCoord_secOrder, point_nb, reconst, encoderChan,
@@ -850,7 +888,7 @@ def netBuilder(args):
                                 topkRSUnifWeight=args.pn_topk_rs_unif_weight,
                                 hasLinearProb=args.pn_has_linear_prob, use_baseline=args.pn_reinf_use_baseline, \
                                 topk_euclinorm=args.pn_topk_euclinorm, reinf_linear_only=args.pn_train_reinf_linear_only,
-                                pn_clustering=args.pn_clustering, textEncod=args.texture_encoding)
+                                pn_clustering=args.pn_clustering, textEncod=args.texture_encoding,neighbFeatPred=args.neigh_feat_pred)
 
     else:
         raise ValueError("Unknown temporal model type : ", args.second_mod)
@@ -970,6 +1008,11 @@ def addArgs(argreader):
                                   help='To train an auxilliary model that will apply average pooling and a dense layer on the feature map\
                         to make a prediction alongside pointnet\'s one.')
 
+    argreader.parser.add_argument('--texture_encoding', type=args.str2bool, metavar='INT',
+                                  help='For the pn topk model. Extract the pixels which features are the most different of their neighbors.')
+    argreader.parser.add_argument('--neigh_feat_pred', type=args.str2bool, metavar='INT',
+                                  help='For the pn topk model. Extract the pixels which features are the most difficult to predict using neighboring features.')
+
     argreader.parser.add_argument('--resnet_chan', type=int, metavar='INT',
                                   help='The channel number for the visual model when resnet is used')
     argreader.parser.add_argument('--resnet_stride', type=int, metavar='INT',
@@ -1020,7 +1063,5 @@ def addArgs(argreader):
     argreader.parser.add_argument('--resnet_att_act_func', type=str, metavar='INT',
                                   help='For the \'resnetX_att\' feat models. The activation function for the attention weights. Can be "sigmoid", "relu" or "tanh+relu".')
 
-    argreader.parser.add_argument('--texture_encoding', type=args.str2bool, metavar='INT',
-                                  help='Use a feature model ')
 
     return argreader

@@ -111,29 +111,21 @@ def epochSeqTr(model, optim, log_interval, loader, epoch, args, writer, **kwargs
 
 def computeLoss(args, output, target, resDict, data):
 
-    nll_weight = args.nll_weight
-    aux_model_weight = args.aux_mod_nll_weight
-    zoom_nll_weight = args.zoom_nll_weight
-    pn_reinf_weight = args.pn_reinf_weight
-    pn_reconst_weight = args.pn_reconst_weight
-    pn_reinf_weight_baseline = args.pn_reinf_weight_baseline
-    score_reward = args.pn_reinf_score_reward
-    text_enc_weight = args.text_enc_weight
-    reconst_weight = args.reconst_weight
-
-    loss = nll_weight * F.cross_entropy(output, target)
-    if pn_reconst_weight > 0:
-        loss += pn_recons_term(pn_reconst_weight, resDict, data)
-    if pn_reinf_weight > 0:
-        loss += pn_reinf_term(pn_reinf_weight, resDict, target, pn_reinf_weight_baseline, score_reward)
-    if aux_model_weight > 0:
-        loss += aux_model_loss_term(aux_model_weight, resDict, data, target)
-    if zoom_nll_weight > 0:
-        loss += zoom_loss_term(zoom_nll_weight, resDict, data, target)
-    if text_enc_weight > 0:
-        loss += text_enc_term(text_enc_weight, resDict, data, target,args.text_enc_pos_dil,args.text_enc_neg_dil,args.text_env_margin)
-    if reconst_weight > 0:
-        loss += reconst_term(reconst_weight,resDict,data)
+    loss = args.nll_weight * F.cross_entropy(output, target)
+    if args.pn_reconst_weight > 0:
+        loss += pn_recons_term(args.pn_reconst_weight, resDict, data)
+    if args.pn_reinf_weight > 0:
+        loss += pn_reinf_term(args.pn_reinf_weight, resDict, target, args.pn_reinf_weight_baseline, args.score_reward)
+    if args.aux_mod_nll_weight > 0:
+        loss += aux_model_loss_term(args.aux_mod_nll_weight, resDict, data, target)
+    if args.zoom_nll_weight > 0:
+        loss += zoom_loss_term(args.zoom_nll_weight, resDict, data, target)
+    if args.text_enc_weight > 0:
+        loss += text_enc_term(args.text_enc_weight, resDict, data, target,args.text_enc_pos_dil,args.text_enc_neg_dil,args.text_env_margin)
+    if args.reconst_weight > 0:
+        loss += reconst_term(args.reconst_weight,resDict,data)
+    if args.neigh_pred_weight > 0:
+        loss += neigh_pred_term(args.neigh_pred_weight,resDict)
     return loss
 
 def pn_reinf_term(pn_reinf_weight, resDict, target, pn_reinf_weight_baseline, score_reward):
@@ -179,6 +171,10 @@ def reconst_term(reconst_weight,resDict,data):
     reconst = resDict['reconst']
     data = F.adaptive_avg_pool2d(data, (reconst.size(-2), reconst.size(-1)))
     return reconst_weight * torch.pow(reconst - data, 2).mean()
+
+def neigh_pred_term(neigh_pred_weight,resDict):
+    x = resDict["neighFeatPredErr"]
+    return neigh_pred_weight*x.mean()
 
 def average_gradients(model):
     size = float(dist.get_world_size())
@@ -547,6 +543,8 @@ def addLossTermArgs(argreader):
 
     argreader.parser.add_argument('--reconst_weight', type=float, metavar='BOOL',
                                   help='The weight of the input image reconstruction term.')
+    argreader.parser.add_argument('--neigh_pred_weight', type=float, metavar='BOOL',
+                                  help='The weight of neighbor features prediction error term.')
 
     return argreader
 
