@@ -76,8 +76,8 @@ class Model(nn.Module):
 
     def forward(self, origImg):
         visResDict = self.firstModel(origImg)
-        resDict = self.secondModel(visResDict["x"])
 
+        resDict = self.secondModel(visResDict["x"])
         resDict = merge(visResDict,resDict)
 
         if self.zoom:
@@ -213,8 +213,11 @@ class CNN2D(FirstModel):
 
         if self.reconst:
             compressedRetDict = self.compressor(res["x"])
-            res = merge(res,compressedRetDict,suffix="")
-            res["reconst"] = self.decoder(compressedRetDict["features"])["x"]
+            res = merge(compressedRetDict,res,suffix="")
+
+            decodResDict = self.decoder(compressedRetDict["features"])
+            res["reconst"] = decodResDict["x"]
+            res = merge(decodResDict,res,suffix="decod")
 
         # N x D
         if type(res) is dict:
@@ -556,7 +559,9 @@ def neighb_pred_err(pred,pointFeaturesMap,retDict):
     mean_error_map = None
     for where in ["top","bot","left","right"]:
         featureShift,maskShiftDict[where] = shiftFeat(where,pointFeaturesMap.detach(),1)
-        error_map = torch.sqrt(torch.pow(featureShift-pred,2).sum(dim=1,keepdim=True))*maskShiftDict[where]
+        norm = torch.sqrt(torch.pow(featureShift,2).sum(dim=1,keepdim=True))*torch.sqrt(torch.pow(pred,2).sum(dim=1,keepdim=True))
+        error_map = ((featureShift*pred).sum(dim=1,keepdim=True)/norm)*maskShiftDict[where]
+
         if mean_error_map is None:
             mean_error_map = error_map
         else:
@@ -595,21 +600,26 @@ def shiftFeat(where,features,dilation):
     maskShift = maskShift.mean(dim=1,keepdim=True)
     return featuresShift,maskShift
 
-def applyDiffKer_CosSimi(where,features,dilation=1):
+def applyDiffKer_CosSimi(direction,features,dilation=1):
     origFeatSize = features.size()
     featNb = origFeatSize[1]
-    featuresShift,maskShift = shiftFeat(where,features,dilation)
-    diff = (features*featuresShift*maskShift).sum(dim=1,keepdim=True)
-    diff /= torch.sqrt(torch.pow(features,2).sum(dim=1,keepdim=True))*torch.sqrt(torch.pow(featuresShift,2).sum(dim=1,keepdim=True))
+
+    if direction == "horizontal":
+        featuresShift1,maskShift1 = shiftFeat("right",features,dilation)
+        featuresShift2,maskShift2 = shiftFeat("left",features,dilation)
+    elif direction == "vertical":
+        featuresShift1,maskShift1 = shiftFeat("top",features,dilation)
+        featuresShift2,maskShift2 = shiftFeat("bot",features,dilation)
+
+    diff = (featuresShift1*featuresShift2*maskShift1*maskShift2).sum(dim=1,keepdim=True)
+    diff /= torch.sqrt(torch.pow(featuresShift1,2).sum(dim=1,keepdim=True))*torch.sqrt(torch.pow(featuresShift2,2).sum(dim=1,keepdim=True))
 
     return diff
 
 def computeTotalSim(features,dilation):
-    topDiff = applyDiffKer_CosSimi("top",features,dilation)
-    botDiff = applyDiffKer_CosSimi("bot",features,dilation)
-    leftDiff = applyDiffKer_CosSimi("left",features,dilation)
-    rightDiff = applyDiffKer_CosSimi("right",features,dilation)
-    totalDiff = (topDiff + botDiff + leftDiff + rightDiff)/4
+    horizDiff = applyDiffKer_CosSimi("horizontal",features,dilation)
+    vertiDiff = applyDiffKer_CosSimi("vertical",features,dilation)
+    totalDiff = (horizDiff + vertiDiff)/2
     return totalDiff
 
 class ReinforcePointExtractor(nn.Module):

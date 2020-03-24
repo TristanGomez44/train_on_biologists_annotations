@@ -418,9 +418,11 @@ class ResNetDecoder(nn.Module):
     def forward(self, x):
 
         retDict = {}
+        layerFeat = {}
 
         for i in range(4,4-self.layersNb,-1):
             x = getattr(self,"layer{}".format(i))(x)
+            layerFeat[i] = x
 
         if self.postLayerSizeReduce:
             x = self.upsample_x2(x)
@@ -432,6 +434,7 @@ class ResNetDecoder(nn.Module):
             x = self.upsample_x2(x)
 
         retDict["x"] = x
+        retDict["layerFeat"] = layerFeat
 
         return retDict
 
