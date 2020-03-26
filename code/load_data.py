@@ -50,16 +50,20 @@ class DataPartitioner(object):
         return Partition(self.data, self.partitions[partition])
 
 
-def buildTrainLoader(args):
+def buildTrainLoader(args,transf=None,shuffle=True):
     normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
 
-    resizedImgSize = 500 if args.big_images else 224
-    if args.old_preprocess:
-        transf = transforms.Compose(
-            [transforms.RandomResizedCrop(resizedImgSize), transforms.RandomHorizontalFlip(), transforms.ToTensor(), normalize])
-    else:
-        transf = transforms.Compose([transforms.Resize(resizedImgSize), transforms.RandomCrop(resizedImgSize, padding=0, pad_if_needed=True),
-                                     transforms.RandomHorizontalFlip(), transforms.ToTensor(), normalize])
+    if transf is None:
+        resizedImgSize = 500 if args.big_images else 224
+        if args.old_preprocess:
+            transf = transforms.Compose(
+                [transforms.RandomResizedCrop(resizedImgSize), transforms.RandomHorizontalFlip(), transforms.ToTensor()])
+        else:
+            transf = transforms.Compose([transforms.Resize(resizedImgSize), transforms.RandomCrop(resizedImgSize, padding=0, pad_if_needed=True),
+                                         transforms.RandomHorizontalFlip(), transforms.ToTensor()])
+
+        if args.normalize_data:
+            transf = transforms.Compose([transf,normalize])
 
     train_dataset = torchvision.datasets.ImageFolder("../data/{}".format(args.dataset_train), transf)
     totalLength = len(train_dataset)
@@ -77,7 +81,7 @@ def buildTrainLoader(args):
     train_dataset, _ = torch.utils.data.random_split(train_dataset, [int(totalLength * train_prop),
                                                                      totalLength - int(totalLength * train_prop)])
 
-    kwargs = {"shuffle": True}
+    kwargs = {"shuffle": shuffle}
 
     if args.distributed:
         size = dist.get_world_size()
@@ -167,5 +171,9 @@ def addArgs(argreader):
                                   help='To use the old images pre-processor.')
     argreader.parser.add_argument('--big_images', type=args.str2bool, metavar='S',
                                   help='To resize the images to 500 pixels instead of 224')
+    argreader.parser.add_argument('--normalize_data', type=args.str2bool, metavar='S',
+                                  help='To normalize the data using imagenet means and std before puting it between 0 and 1.')
+
+
 
     return argreader
