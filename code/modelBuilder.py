@@ -159,31 +159,17 @@ class FirstModel(nn.Module):
     def forward(self, x):
         raise NotImplementedError
 
-class Compressor(nn.Module):
-    def __init__(self, context,inChan,encChan,contextMapFactor,contextGlobalInfoChan):
-        super(Compressor, self).__init__()
+class Bottleneck(nn.Module):
+    def __init__(self,inChan,encChan):
+        super(Bottleneck, self).__init__()
+        self.conv1x1_compr = nn.Conv2d(inChan,encChan,1)
+        self.conv1x1_decompr = nn.Conv2d(encChan,inChan,1)
 
-        self.context = context
-        if context:
-            self.conv1x1_glob = nn.Conv2d(inChan,contextGlobalInfoChan,1)
-        else:
-            self.conv1x1_glob = None
-        self.conv1x1 = nn.Conv2d(inChan,encChan,1)
-        self.contextMapFactor = contextMapFactor
     def forward(self,x):
         origFeatSize = (x.size(-2),x.size(-1))
-
-        localInfo = self.conv1x1(x)
-
-        if self.context:
-            globalInfo = self.conv1x1_glob(x)
-            globalInfo = F.interpolate(F.interpolate(globalInfo,scale_factor=1/self.contextMapFactor),size=origFeatSize,mode='bilinear',align_corners=False)
-            compressedFeatures = torch.cat((localInfo,globalInfo),dim=1)
-            retDict = {"features":compressedFeatures,"localFeatures":localInfo,"globalFeatures":globalInfo}
-        else:
-            compressedFeatures = localInfo
-            retDict = {"features":compressedFeatures,"localFeatures":localInfo}
-
+        comprFeat = self.conv1x1_compr(x)
+        decomprFeat = self.conv1x1_decompr(comprFeat)
+        retDict = {"features":comprFeat,"decomprFeat":decomprFeat}
         return retDict
 
 class CNN2D(FirstModel):
@@ -194,14 +180,14 @@ class CNN2D(FirstModel):
 
         self.reconst = reconst
         if self.reconst:
-            featureVolumeChannelNumber = getResnetFeat(featModelName, kwargs["chan"])
-            inDecoderChan = reconst_enc_chan + contextGlobalInfoChan if contextFeat else reconst_enc_chan
-            self.decoder = resnet.ResNetDecoder(inDecoderChan,resnet.BasicBlockTranspose, [2, 2, 2, 2],layerSizeReduce=kwargs["layerSizeReduce"],
+            featNb = getResnetFeat(featModelName, kwargs["chan"])
+            self.bottleneck = Bottleneck(featNb,reconst_enc_chan)
+            self.decoder = resnet.ResNetDecoder(featNb,resnet.BasicBlockTranspose, [2, 2, 2, 2],layerSizeReduce=kwargs["layerSizeReduce"],
                                                 postLayerSizeReduce=kwargs["preLayerSizeReduce"],layersNb=getLayerNb(featModelName))
-            self.compressor = Compressor(contextFeat,featureVolumeChannelNumber,reconst_enc_chan,contextMapFactor,contextGlobalInfoChan)
+
         else:
             self.decoder = None
-            self.compressor = None
+            self.bottleneck = None
 
 
     def forward(self, x):
@@ -212,10 +198,10 @@ class CNN2D(FirstModel):
         res = self.featMod(x)
 
         if self.reconst:
-            compressedRetDict = self.compressor(res["x"])
-            res = merge(compressedRetDict,res,suffix="")
+            bottleneckRetDict = self.bottleneck(res["x"])
+            res = merge(bottleneckRetDict,res,suffix="")
 
-            decodResDict = self.decoder(compressedRetDict["features"])
+            decodResDict = self.decoder(bottleneckRetDict["decomprFeat"])
             res["reconst"] = decodResDict["x"]
             res = merge(decodResDict,res,suffix="decod")
 
@@ -370,7 +356,10 @@ class TopkPointExtractor(nn.Module):
 
         super(TopkPointExtractor, self).__init__()
 
-        self.conv1x1 = nn.Conv2d(nbFeat, encoderChan, kernel_size=1, stride=1)
+        if nbFeat != encoderChan:
+            self.conv1x1 = nn.Conv2d(nbFeat, encoderChan, kernel_size=1, stride=1)
+        else:
+            self.conv1x1 = None
         self.point_extracted = point_nb
         self.softCoord = softCoord
         self.softCoord_kerSize = softCoord_kerSize
@@ -436,7 +425,11 @@ class TopkPointExtractor(nn.Module):
         # Because of zero padding, the border are very active, so we remove it.
         featureMaps = featureMaps[:, :, 3:-3, 3:-3]
 
-        pointFeaturesMap = self.conv1x1(featureMaps)
+        if self.conv1x1:
+            pointFeaturesMap = self.conv1x1(featureMaps)
+        else:
+            pointFeaturesMap = featureMaps
+
         if self.topk_euclinorm:
             x = torch.pow(pointFeaturesMap, 2).sum(dim=1, keepdim=True)
         elif self.neighbFeatPred:
