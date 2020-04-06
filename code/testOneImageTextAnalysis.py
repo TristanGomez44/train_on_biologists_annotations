@@ -86,6 +86,8 @@ def main(argv=None):
                                   help="stride for pixel similarity",default=4)
     argreader.parser.add_argument('--patch_sim_kertype', type=str,
                                   help="Kernel type. Can be linear, squarred or constant.",default="linear")
+    argreader.parser.add_argument('--patch_sim_gram_order', type=int,
+                                  help="If 2, computes correlation between feature maps. If 1, computes average of feature maps.",default=1)
 
     argreader.parser.add_argument('--data_batch_index', type=int,
                                   help="The index of the batch to process first",default=0)
@@ -228,7 +230,7 @@ def main(argv=None):
             gramDistMap = buildModule(True,GramDistMap,args.cuda,args.multi_gpu,kwargs)
 
             kwargs = {"resnet":args.patch_sim_resnet,"resType":args.patch_sim_restype,"pretr":args.patch_sim_pretr_res,"nbGroup":args.patch_sim_group_nb,\
-                        "reluOnSimple":args.patch_sim_relu_on_simple,"chan":args.resnet_chan}
+                        "reluOnSimple":args.patch_sim_relu_on_simple,"chan":args.resnet_chan,"gramOrder":args.patch_sim_gram_order}
             net = buildModule(True,PatchSimCNN,args.cuda,args.multi_gpu,kwargs)
 
             patch = data.unfold(2, args.patch_size, args.patch_stride).unfold(3, args.patch_size, args.patch_stride).permute(0,2,3,1,4,5)
@@ -237,8 +239,9 @@ def main(argv=None):
             patch = patch.reshape(patch.size(0)*patch.size(1)*patch.size(2),patch.size(3),patch.size(4),patch.size(5))
 
             gram_mat = net(patch)
-            gram_mat = gram_mat.view(data.size(0),-1,args.patch_sim_group_nb,gram_mat.size(2),gram_mat.size(3))
-            gram_mat = gram_mat.permute(0,2,1,3,4)
+            #gram_mat = gram_mat.view(data.size(0),-1,args.patch_sim_group_nb,gram_mat.size(2),gram_mat.size(3))
+            gram_mat = gram_mat.view(data.size(0),-1,args.patch_sim_group_nb,gram_mat.size(2))
+            gram_mat = gram_mat.permute(0,2,1,3)
 
             distMap = gramDistMap(gram_mat,patchPerRow=origPatchSize[2])
 
@@ -420,7 +423,7 @@ class GramDistMap(torch.nn.Module):
 
         else:
             gram = gramBatch
-            gram = gram.reshape(gram.size(0),gram.size(1),gram.size(2),gram.size(3)*gram.size(4))
+            #gram = gram.reshape(gram.size(0),gram.size(1),gram.size(2),gram.size(3)*gram.size(4))
             gramNorm = torch.sqrt(torch.pow(gram*gram,2).sum(dim=-1))
             gramX = gram.unsqueeze(2)
             gramY = gram.unsqueeze(3)
@@ -432,7 +435,7 @@ class GramDistMap(torch.nn.Module):
         return distMat_mean
 
 class PatchSimCNN(torch.nn.Module):
-    def __init__(self,resnet,resType,pretr,nbGroup,reluOnSimple,**kwargs):
+    def __init__(self,resnet,resType,pretr,nbGroup,reluOnSimple,gramOrder,**kwargs):
         super(PatchSimCNN,self).__init__()
 
         self.resnet = resnet
@@ -450,6 +453,7 @@ class PatchSimCNN(torch.nn.Module):
             self.featMod = modelBuilder.buildFeatModel(resType, pretr, True, False,**kwargs)
 
         self.nbGroup = nbGroup
+        self.gramOrder = gramOrder
 
     def forward(self,x):
 
@@ -467,8 +471,9 @@ class PatchSimCNN(torch.nn.Module):
         featVolume = featVolume.unfold(1, featVolume.size(1)//self.nbGroup, featVolume.size(1)//self.nbGroup).permute(0,1,4,2,3)
         featVolume = featVolume.view(featVolume.size(0)*featVolume.size(1),featVolume.size(2),featVolume.size(3),featVolume.size(4))
 
-        gramMat = graham(featVolume)
-        gramMat = gramMat.view(origFeatSize[0],self.nbGroup,origFeatSize[1]//self.nbGroup,origFeatSize[1]//self.nbGroup)
+        gramMat = graham(featVolume,self.gramOrder)
+        #gramMat = gramMat.view(origFeatSize[0],self.nbGroup,origFeatSize[1]//self.nbGroup,origFeatSize[1]//self.nbGroup)
+        gramMat = gramMat.view(origFeatSize[0],self.nbGroup,gramMat.size(-1))
 
         return gramMat
 
@@ -686,9 +691,23 @@ def computeLoss(reconst_weight,reconst_loss_module,text_enc_weight,neighpred_wei
 
     return {"total_loss":total_loss,"loss":loss,"graham_loss":graham_loss,"simCLR_loss":simCLR_loss},totalSimPos,reconst
 
-def graham(feat):
+def graham(feat,gramOrder):
+
     feat = feat.reshape(feat.size(0),feat.size(1),feat.size(2)*feat.size(3))
-    gram = (feat.unsqueeze(2)*feat.unsqueeze(1)).sum(dim=-1)
+
+    if gramOrder == 1:
+        gram = feat.sum(dim=-1)
+    elif gramOrder == 2:
+        gram = (feat.unsqueeze(2)*feat.unsqueeze(1)).sum(dim=-1)
+        gram = gram.reshape(gram.size(0),gram.size(1)*gram.size(2))
+    elif gramOrder == 3:
+        featA = feat.unsqueeze(2).unsqueeze(3)
+        featB = feat.unsqueeze(1).unsqueeze(3)
+        featC = feat.unsqueeze(1).unsqueeze(2)
+        gram = (featA*featB*featC).sum(dim=-1)
+        gram = gram.reshape(gram.size(0),gram.size(1)*gram.size(2)*gram.size(3))
+    else:
+        raise ValueError("Unkown gram order :",gramOrder)
     return gram
 
 def grahamPxl(feat,kernel,stride):
