@@ -15,7 +15,7 @@ from models import resnet
 from models import pointnet2
 import torchvision
 import torch_geometric
-
+import skimage.feature
 import matplotlib.pyplot as plt
 plt.switch_backend('agg')
 
@@ -68,20 +68,43 @@ class DataParallelModel(nn.DataParallel):
 
 class Model(nn.Module):
 
-    def __init__(self, firstModel, secondModel,zoom=False):
+    def __init__(self, firstModel, secondModel,zoom=False,compute_edges=False,edge_sigma=2,pts_nb=256):
         super(Model, self).__init__()
         self.firstModel = firstModel
         self.secondModel = secondModel
         self.zoom = zoom
+        self.compute_edges = compute_edges
+        self.edge_sigma = edge_sigma
+        self.pts_nb = pts_nb
 
-    def forward(self, origImg):
-        visResDict = self.firstModel(origImg)
+    def forward(self, origImgBatch):
+        visResDict = self.firstModel(origImgBatch)
 
-        resDict = self.secondModel(visResDict["x"])
+        if self.compute_edges:
+            edgeTensBatch = []
+            for i in range(len(origImgBatch)):
+                edges_np = skimage.feature.canny(origImgBatch[i].detach().cpu().mean(dim=0).numpy(),sigma=self.edge_sigma)
+                edges_tens = torch.tensor(edges_np).unsqueeze(0)
+                edgeTensBatch.append(edges_tens)
+            edgeTensBatch = torch.cat(edgeTensBatch,dim=0)
+            edgesCoord = torch.nonzero(edgeTensBatch)
+
+            selEdgeCoordBatch = []
+            for i in range(len(origImgBatch)):
+                selEdgeCoord = edgesCoord[edgesCoord[:,0] == i]
+                res = torch_geometric.nn.fps(selEdgeCoord[:,1:].float(), selEdgeCoord[:,0],ratio=self.pts_nb/len(selEdgeCoord))
+                selEdgeCoordBatch.append(selEdgeCoord[res][:,1:].unsqueeze(0))
+            edges = torch.cat(selEdgeCoordBatch,dim=0).float()
+            edges /= (origImgBatch.size(-1)/visResDict["x"].size(-1))
+            edges = torch.clamp(edges,0,visResDict["x"].size(-1)-1)
+            resDict = self.secondModel(visResDict["x"],edges=edges.to(origImgBatch.device))
+        else:
+            resDict = self.secondModel(visResDict["x"])
+
         resDict = merge(visResDict,resDict)
 
         if self.zoom:
-            croppedImg,xMinCr,xMaxCr,yMinCr,yMaxCr = self.computeZoom(origImg,visResDict["x"],resDict)
+            croppedImg,xMinCr,xMaxCr,yMinCr,yMaxCr = self.computeZoom(origImgBatch,visResDict["x"],resDict)
             visResDict_zoom = self.firstModel(croppedImg)
             resDict_zoom = self.secondModel(visResDict_zoom["x"])
             resDict_zoom = merge(visResDict_zoom,resDict_zoom)
@@ -352,7 +375,7 @@ class TopkPointExtractor(nn.Module):
     def __init__(self, cuda, nbFeat, softCoord, softCoord_kerSize, softCoord_secOrder, point_nb, reconst, encoderChan, \
                  predictDepth, softcoord_shiftpred, furthestPointSampling, furthestPointSampling_nb_pts, dropout,
                  auxModel, \
-                 topkRandSamp, topkRSUnifWeight, topk_euclinorm,hasLinearProb,textEncod,neighbFeatPred):
+                 topkRandSamp, topkRSUnifWeight, topk_euclinorm,hasLinearProb,textEncod,neighbFeatPred,cannyedge,cannyedge_sigma):
 
         super(TopkPointExtractor, self).__init__()
 
@@ -419,45 +442,53 @@ class TopkPointExtractor(nn.Module):
         else:
             self.neighbFeat_mlp = None
 
-    def forward(self, featureMaps):
+        self.cannyedge = cannyedge
+        self.cannyedge_sigma = cannyedge_sigma
+
+    def forward(self, featureMaps,edges=None):
         retDict = {}
 
         # Because of zero padding, the border are very active, so we remove it.
-        featureMaps = featureMaps[:, :, 3:-3, 3:-3]
+        if not self.cannyedge:
+            featureMaps = featureMaps[:, :, 3:-3, 3:-3]
 
         if self.conv1x1:
             pointFeaturesMap = self.conv1x1(featureMaps)
         else:
             pointFeaturesMap = featureMaps
 
-        if self.topk_euclinorm:
-            x = torch.pow(pointFeaturesMap, 2).sum(dim=1, keepdim=True)
-        elif self.neighbFeatPred:
-            pred = self.neighbFeat_mlp(pointFeaturesMap.detach().permute(0,2,3,1)).permute(0,3,1,2)
-            x = neighb_pred_err(pred,pointFeaturesMap,retDict)
-            retDict["neighFeatPredErr"] = x
-        elif self.textEncod:
-            x = -computeTotalSim(pointFeaturesMap,dilation=1)
-        elif self.hasLinearProb:
-            x = torch.sigmoid(self.linearProb(pointFeaturesMap))
+        if not self.cannyedge:
+            if self.topk_euclinorm:
+                x = torch.pow(pointFeaturesMap, 2).sum(dim=1, keepdim=True)
+            elif self.neighbFeatPred:
+                pred = self.neighbFeat_mlp(pointFeaturesMap.detach().permute(0,2,3,1)).permute(0,3,1,2)
+                x = neighb_pred_err(pred,pointFeaturesMap,retDict)
+                retDict["neighFeatPredErr"] = x
+            elif self.textEncod:
+                x = -computeTotalSim(pointFeaturesMap,dilation=1)
+            elif self.hasLinearProb:
+                x = torch.sigmoid(self.linearProb(pointFeaturesMap))
+            else:
+                x = F.relu(pointFeaturesMap).sum(dim=1, keepdim=True)
+
+            retDict["featVolume"] = pointFeaturesMap
+            retDict["prob_map"] = x
+
+            flatX = x.view(x.size(0), -1)
+
+            if (not self.topkRandSamp) or (self.topkRandSamp and not self.training):
+                _, flatInds = torch.topk(flatX, self.point_extracted, dim=-1, largest=True)
+            else:
+                probs = self.topkRSUnifWeight * (1.0 / flatX.size(1)) + (1 - self.topkRSUnifWeight) * flatX / \
+                        flatX.max(dim=-1, keepdim=True)[0]
+                flatInds = torch.distributions.categorical.Categorical(probs=probs).sample(
+                    torch.tensor([self.point_extracted]))
+                flatInds = flatInds.permute(1, 0)
+
+            abs, ord = (flatInds % x.shape[-1], flatInds // x.shape[-1])
+
         else:
-            x = F.relu(pointFeaturesMap).sum(dim=1, keepdim=True)
-
-        retDict["featVolume"] = pointFeaturesMap
-        retDict["prob_map"] = x
-
-        flatX = x.view(x.size(0), -1)
-
-        if (not self.topkRandSamp) or (self.topkRandSamp and not self.training):
-            _, flatInds = torch.topk(flatX, self.point_extracted, dim=-1, largest=True)
-        else:
-            probs = self.topkRSUnifWeight * (1.0 / flatX.size(1)) + (1 - self.topkRSUnifWeight) * flatX / \
-                    flatX.max(dim=-1, keepdim=True)[0]
-            flatInds = torch.distributions.categorical.Categorical(probs=probs).sample(
-                torch.tensor([self.point_extracted]))
-            flatInds = flatInds.permute(1, 0)
-
-        abs, ord = (flatInds % x.shape[-1], flatInds // x.shape[-1])
+            abs,ord = edges[:,:,0],edges[:,:,1]
 
         if self.furthestPointSampling:
             points = torch.cat((abs.unsqueeze(-1), ord.unsqueeze(-1)), dim=-1).float()
@@ -487,14 +518,14 @@ class TopkPointExtractor(nn.Module):
             # Keeping only one channel (the three channels are just copies)
             retDict['pn_reconst'] = reconst[:, 0:1]
 
-        pointFeat = mapToList(pointFeaturesMap, abs, ord)
+        pointFeat = mapToList(pointFeaturesMap, abs.int(), ord.int())
 
         if self.predictDepth:
             depthMap = torch.tanh(self.conv1x1_depth(featureMaps)) * max(featureMaps.size(-2),
                                                                          featureMaps.size(-1)) // 10
             depth = mapToList(depthMap, abs, ord)
         else:
-            depth = torch.zeros(abs.size(0), abs.size(1), 1).to(x.device)
+            depth = torch.zeros(abs.size(0), abs.size(1), 1).to(featureMaps.device)
 
         if self.softcoord_shiftpred:
             xShiftMap, yShiftMap = torch.tanh(self.shiftpred_x(featureMaps)), torch.tanh(self.shiftpred_y(featureMaps))
@@ -759,7 +790,8 @@ class PointNet2(SecondModel):
                  topk_fps_nb_pts=64, \
                  topk_dropout=0, auxModel=False, topkRandSamp=False, topkRSUnifWeight=0, hasLinearProb=False,
                  use_baseline=False, \
-                 topk_euclinorm=True , reinf_linear_only=False, pn_clustering=False,  textEncod=False,neighbFeatPred=False):
+                 topk_euclinorm=True , reinf_linear_only=False, pn_clustering=False,  textEncod=False,neighbFeatPred=False,\
+                 cannyedge=False,cannyedge_sigma=2):
 
         super(PointNet2, self).__init__(nbFeat, classNb)
 
@@ -768,7 +800,8 @@ class PointNet2(SecondModel):
                                                 topk_softCoord_secOrder, point_nb, reconst, encoderChan, predictDepth, \
                                                 topk_softcoord_shiftpred, topk_fps, topk_fps_nb_pts, topk_dropout,
                                                 auxModel, \
-                                                topkRandSamp, topkRSUnifWeight, topk_euclinorm,hasLinearProb,textEncod,neighbFeatPred)
+                                                topkRandSamp, topkRSUnifWeight, topk_euclinorm,hasLinearProb,textEncod,neighbFeatPred,\
+                                                cannyedge,cannyedge_sigma)
         elif reinfExct:
             self.pointExtr = ReinforcePointExtractor(cuda, nbFeat, topk_softcoord, topk_softCoord_kerSize, \
                                                      topk_softCoord_secOrder, point_nb, reconst, encoderChan,
@@ -789,8 +822,8 @@ class PointNet2(SecondModel):
         if auxModel:
             self.auxModel = nn.Linear(nbFeat, classNb)
 
-    def forward(self, x):
-        retDict = self.pointExtr(x)
+    def forward(self, x,**kwargs):
+        retDict = self.pointExtr(x,**kwargs)
 
         if self.clustering:
             retDict = self.cluster_model(retDict)
@@ -888,14 +921,15 @@ def netBuilder(args):
                                 topkRSUnifWeight=args.pn_topk_rs_unif_weight,
                                 hasLinearProb=args.pn_has_linear_prob, use_baseline=args.pn_reinf_use_baseline, \
                                 topk_euclinorm=args.pn_topk_euclinorm, reinf_linear_only=args.pn_train_reinf_linear_only,
-                                pn_clustering=args.pn_clustering, textEncod=args.texture_encoding,neighbFeatPred=args.neigh_feat_pred)
+                                pn_clustering=args.pn_clustering, textEncod=args.texture_encoding,neighbFeatPred=args.neigh_feat_pred,\
+                                cannyedge=args.pn_cannyedge,cannyedge_sigma=args.pn_cannyedge_sigma)
 
     else:
         raise ValueError("Unknown temporal model type : ", args.second_mod)
 
     ############### Whole Model ##########################
 
-    net = Model(firstModel, secondModel,zoom=args.zoom)
+    net = Model(firstModel, secondModel,zoom=args.zoom,compute_edges=args.pn_cannyedge,edge_sigma=args.pn_cannyedge_sigma,pts_nb=args.pn_point_nb)
 
     if args.cuda:
         net.cuda()
@@ -1063,5 +1097,11 @@ def addArgs(argreader):
     argreader.parser.add_argument('--resnet_att_act_func', type=str, metavar='INT',
                                   help='For the \'resnetX_att\' feat models. The activation function for the attention weights. Can be "sigmoid", "relu" or "tanh+relu".')
 
+
+    argreader.parser.add_argument('--pn_cannyedge', type=args.str2bool, metavar='BOOL',
+                                  help='To use canny edge to extract points.')
+
+    argreader.parser.add_argument('--pn_cannyedge_sigma', type=float, metavar='FLOAT',
+                                  help='The sigma hyper-parameter of the canny edge detection.')
 
     return argreader
