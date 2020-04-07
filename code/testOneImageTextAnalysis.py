@@ -19,6 +19,7 @@ import imageio
 from skimage import img_as_ubyte
 import matplotlib.cm as cm
 import time
+import skimage.feature
 def main(argv=None):
     # Getting arguments from config file and command line
     # Building the arg reader
@@ -144,7 +145,6 @@ def main(argv=None):
             data,target =next(iter(trainLoader))
 
     gram_loss_module = buildModule(args.gram_matrix_weight > 0,GrahamLoss,args.cuda,args.multi_gpu)
-    reconst_loss_module = buildModule(args.reconst_weight > 0,ReconstLoss,args.cuda,args.multi_gpu)
     grahProbModule = GrahamProb()
     if args.multi_gpu:
         grahProbModule = torch.nn.DataParallel(grahProbModule)
@@ -178,7 +178,7 @@ def main(argv=None):
                     data = data.cuda()
                 retDict = net(data)
 
-            lossDict,prob_map,reconst = computeLoss(args.reconst_weight,reconst_loss_module,args.text_enc_weight, args.neigh_pred_weight,args.gram_matrix_weight,\
+            lossDict,prob_map,reconst = computeLoss(args.gram_matrix_weight,\
                                                                         args.gram_matrix_weight_threshold,gram_loss_module,simclrDict,\
                                                                         retDict,data,target,args.text_enc_pos_dil,args.text_enc_neg_dil,\
                                                                         args.text_env_margin,args.layer)
@@ -256,6 +256,8 @@ def main(argv=None):
 
             if not os.path.exists(os.path.join(args.patch_sim_out_path,"imgs")):
                 os.makedirs(os.path.join(args.patch_sim_out_path,"imgs"))
+            if not os.path.exists(os.path.join(args.patch_sim_out_path,"edges")):
+                os.makedirs(os.path.join(args.patch_sim_out_path,"edges"))
             if not os.path.exists(os.path.join(args.patch_sim_out_path,"simMaps")):
                 os.makedirs(os.path.join(args.patch_sim_out_path,"simMaps"))
             if not os.path.exists(os.path.join(args.patch_sim_out_path,"simMaps",args.model_id)):
@@ -278,6 +280,12 @@ def main(argv=None):
                 plt.imshow(img.detach().cpu().permute(1,2,0).numpy())
                 plt.subplots_adjust(left=0, right=1, top=1, bottom=0)
                 plt.savefig(os.path.join(args.patch_sim_out_path,"imgs","{}.png".format(i+args.data_batch_index*args.batch_size)))
+                plt.close()
+
+                plt.figure()
+                plt.imshow(skimage.feature.canny(img.detach().cpu().permute(1,2,0).numpy().mean(axis=-1),sigma=3))
+                plt.subplots_adjust(left=0, right=1, top=1, bottom=0)
+                plt.savefig(os.path.join(args.patch_sim_out_path,"edges","{}.png".format(i+args.data_batch_index*args.batch_size)))
                 plt.close()
 
                 mask = (distMap[i] != -1)
@@ -637,7 +645,7 @@ def computeTotalSim(features,dilRange=(1,6)):
 
     return totalSim
 
-def computeLoss(reconst_weight,reconst_loss_module,text_enc_weight,neighpred_weight,gram_matrix_weight,gram_thres,gram_loss_module,\
+def computeLoss(gram_matrix_weight,gram_thres,gram_loss_module,\
                 simclrDict,resDict, data, target,posDil,negDil,margin,layer):
 
     if layer<4:
@@ -645,20 +653,7 @@ def computeLoss(reconst_weight,reconst_loss_module,text_enc_weight,neighpred_wei
     else:
         features = resDict["features"]
 
-    totalSimPos = modelBuilder.computeTotalSim(features,posDil)
-    totalSimNeg = modelBuilder.computeTotalSim(features,negDil)
-
-    loss= -text_enc_weight*torch.max(totalSimPos.mean() - totalSimNeg.mean()+margin,0)[0]
-
-    if reconst_weight > 0:
-        reconst = resDict['reconst']
-        loss += reconst_weight * reconst_loss_module(reconst,data).mean()
-    else:
-        reconst = None
-
-    if neighpred_weight > 0:
-        error_map = resDict["neighFeatPredErr"]
-        loss += neighpred_weight*error_map.mean()
+    loss = 0
 
     graham_loss = 0
     if gram_matrix_weight != 0:
@@ -711,12 +706,9 @@ def graham(feat,gramOrder):
     return gram
 
 def grahamPxl(feat,kernel,stride):
-    #feat = feat.reshape(feat.size(0),feat.size(1),feat.size(2)*feat.size(3))
     gram = (feat.unsqueeze(2)*feat.unsqueeze(1))
     gram = gram.reshape(gram.size(0),gram.size(1)*gram.size(2),gram.size(3),gram.size(4))
-
     gram = torch.nn.functional.conv2d(gram,kernel,groups=feat.size(1)*feat.size(1),padding=(kernel.size(-1)-1)//2,stride=stride)
-
     return gram
 
 def mask_correlated_samples(args):
