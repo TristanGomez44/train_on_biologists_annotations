@@ -86,13 +86,25 @@ class Model(nn.Module):
                 edges_tens = torch.tensor(edges_np).unsqueeze(0)
                 edgeTensBatch.append(edges_tens)
             edgeTensBatch = torch.cat(edgeTensBatch,dim=0)
-            edgesCoord = torch.nonzero(edgeTensBatch)
+            edgesCoord = torch.nonzero(edgeTensBatch).to(origImgBatch.device)
 
             selEdgeCoordBatch = []
             for i in range(len(origImgBatch)):
                 selEdgeCoord = edgesCoord[edgesCoord[:,0] == i]
-                res = torch_geometric.nn.fps(selEdgeCoord[:,1:].float(), selEdgeCoord[:,0],ratio=self.pts_nb/len(selEdgeCoord))
-                selEdgeCoordBatch.append(selEdgeCoord[res][:,1:].unsqueeze(0))
+                if selEdgeCoord.size(0) > 0:
+                    if selEdgeCoord.size(0) < self.pts_nb:
+                        res = torch.randint(selEdgeCoord.size(0),size=(self.pts_nb,))
+                    else:
+                        res = torch_geometric.nn.fps(selEdgeCoord[:,1:].float(),ratio=self.pts_nb/selEdgeCoord.size(0))
+
+                    selEdgeCoordBatch.append(selEdgeCoord[res][:,1:].unsqueeze(0))
+                else:
+                    abs = torch.randint(origImgBatch.size(-1),size=(self.pts_nb,)).unsqueeze(1)
+                    ord = torch.randint(origImgBatch.size(-2),size=(self.pts_nb,)).unsqueeze(1)
+                    coord = torch.cat((abs,ord),dim=-1).to(origImgBatch.device)
+
+                    selEdgeCoordBatch.append(coord.unsqueeze(0))
+
             edges = torch.cat(selEdgeCoordBatch,dim=0).float()
             edges /= (origImgBatch.size(-1)/visResDict["x"].size(-1))
             edges = torch.clamp(edges,0,visResDict["x"].size(-1)-1)
@@ -430,26 +442,29 @@ def shiftFeat(where,features,dilation):
 
     mask = torch.ones_like(features)
 
-    if where=="top":
+    if where=="left":
         #x,y = 0,1
         padd = torch.zeros((features.size(0),features.size(1),features.size(2),dilation)).to(features.device)+0.0001
         featuresShift = torch.cat((features[:,:,:,dilation:],padd),dim=-1)
         maskShift = torch.cat((mask[:,:,:,dilation:],padd),dim=-1)
-    elif where=="bot":
+    elif where=="right":
         #x,y= 2,1
         padd = torch.zeros((features.size(0),features.size(1),features.size(2),dilation)).to(features.device)+0.0001
         featuresShift = torch.cat((padd,features[:,:,:,:-dilation]),dim=-1)
         maskShift = torch.cat((padd,mask[:,:,:,:-dilation]),dim=-1)
-    elif where=="left":
+    elif where=="bot":
         #x,y = 1,0
         padd = torch.zeros((features.size(0),features.size(1),dilation,features.size(3))).to(features.device)+0.0001
         featuresShift = torch.cat((padd,features[:,:,:-dilation,:]),dim=-2)
         maskShift = torch.cat((padd,mask[:,:,:-dilation,:]),dim=-2)
-    elif where=="right":
+    elif where=="top":
         #x,y = 1,2
         padd = torch.zeros((features.size(0),features.size(1),dilation,features.size(3))).to(features.device)+0.0001
         featuresShift = torch.cat((features[:,:,dilation:,:],padd),dim=-2)
         maskShift = torch.cat((mask[:,:,dilation:,:],padd),dim=-2)
+    elif where=="none":
+        featuresShift = features
+        maskShift = mask
     else:
         raise ValueError("Unkown position")
 
@@ -466,6 +481,20 @@ def applyDiffKer_CosSimi(direction,features,dilation=1):
     elif direction == "vertical":
         featuresShift1,maskShift1 = shiftFeat("top",features,dilation)
         featuresShift2,maskShift2 = shiftFeat("bot",features,dilation)
+    elif direction == "top":
+        featuresShift1,maskShift1 = shiftFeat("top",features,dilation)
+        featuresShift2,maskShift2 = shiftFeat("none",features,dilation)
+    elif direction == "bottom":
+        featuresShift1,maskShift1 = shiftFeat("bot",features,dilation)
+        featuresShift2,maskShift2 = shiftFeat("none",features,dilation)
+    elif direction == "left":
+        featuresShift1,maskShift1 = shiftFeat("left",features,dilation)
+        featuresShift2,maskShift2 = shiftFeat("none",features,dilation)
+    elif direction == "right":
+        featuresShift1,maskShift1 = shiftFeat("right",features,dilation)
+        featuresShift2,maskShift2 = shiftFeat("none",features,dilation)
+    else:
+        raise ValueError("Unknown direction : ",direction)
 
     diff = (featuresShift1*featuresShift2*maskShift1*maskShift2).sum(dim=1,keepdim=True)
     diff /= torch.sqrt(torch.pow(featuresShift1,2).sum(dim=1,keepdim=True))*torch.sqrt(torch.pow(featuresShift2,2).sum(dim=1,keepdim=True))
