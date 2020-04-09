@@ -430,6 +430,8 @@ class ResNetDecoder(nn.Module):
         x = self.bn1(x)
         x = self.conv1(x)
 
+        layerFeat["conv1"] = x
+
         if self.postLayerSizeReduce:
             x = self.upsample_x2(x)
 

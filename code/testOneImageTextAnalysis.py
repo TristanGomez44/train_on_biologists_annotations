@@ -20,6 +20,7 @@ from skimage import img_as_ubyte
 import matplotlib.cm as cm
 import time
 import skimage.feature
+import torch_cluster
 def main(argv=None):
     # Getting arguments from config file and command line
     # Building the arg reader
@@ -223,6 +224,9 @@ def main(argv=None):
 
     elif args.patch_sim:
         with torch.no_grad():
+
+            data = data.cuda() if args.cuda else data
+
             print("Start !")
             start = time.time()
 
@@ -232,6 +236,11 @@ def main(argv=None):
             kwargs = {"resnet":args.patch_sim_resnet,"resType":args.patch_sim_restype,"pretr":args.patch_sim_pretr_res,"nbGroup":args.patch_sim_group_nb,\
                         "reluOnSimple":args.patch_sim_relu_on_simple,"chan":args.resnet_chan,"gramOrder":args.patch_sim_gram_order}
             net = buildModule(True,PatchSimCNN,args.cuda,args.multi_gpu,kwargs)
+
+            kwargs = {}
+            cosimMap = buildModule(True,CosimMap,args.cuda,args.multi_gpu,kwargs)
+            kwargs = {"neighDist":1,"featMapSize":10,"batchSize":args.batch_size,"cuda":args.cuda}
+            graclus = buildModule(True,Graclus,args.cuda,args.multi_gpu,kwargs)
 
             patch = data.unfold(2, args.patch_size, args.patch_stride).unfold(3, args.patch_size, args.patch_stride).permute(0,2,3,1,4,5)
 
@@ -244,6 +253,10 @@ def main(argv=None):
             gram_mat = gram_mat.permute(0,2,1,3)
 
             distMap = gramDistMap(gram_mat,patchPerRow=origPatchSize[2])
+
+            distMapAgreg,feat = cosimMap(gram_mat)
+
+            gracMap = graclus(feat)
 
             print("End ",time.time()-start)
 
@@ -276,22 +289,17 @@ def main(argv=None):
 
                 img = (img-img.min())/(img.max()-img.min())
 
-                plt.figure(figsize=(10,10))
-                plt.imshow(img.detach().cpu().permute(1,2,0).numpy())
-                plt.subplots_adjust(left=0, right=1, top=1, bottom=0)
-                plt.savefig(os.path.join(args.patch_sim_out_path,"imgs","{}.png".format(i+args.data_batch_index*args.batch_size)))
-                plt.close()
+                plotImg(img.detach().cpu().permute(1,2,0).numpy(),os.path.join(args.patch_sim_out_path,"imgs","{}.png".format(i+args.data_batch_index*args.batch_size)))
 
-                plt.figure()
-                plt.imshow(skimage.feature.canny(img.detach().cpu().permute(1,2,0).numpy().mean(axis=-1),sigma=3))
-                plt.subplots_adjust(left=0, right=1, top=1, bottom=0)
-                plt.savefig(os.path.join(args.patch_sim_out_path,"edges","{}.png".format(i+args.data_batch_index*args.batch_size)))
-                plt.close()
+                edges = skimage.feature.canny(img.detach().cpu().permute(1,2,0).numpy().mean(axis=-1),sigma=3)
+                plotImg(edges,os.path.join(args.patch_sim_out_path,"edges","{}.png".format(i+args.data_batch_index*args.batch_size)))
+
+                plotImg(distMapAgreg[i][0][1:-1,1:-1].detach().cpu().numpy(),os.path.join(args.patch_sim_out_path,"simMaps",args.model_id,"{}".format(i+args.data_batch_index*args.batch_size),"agr.png"),'gray')
 
                 mask = (distMap[i] != -1)
                 distMap[i][mask] = (distMap[i][mask]-distMap[i][mask].min())/(distMap[i][mask].max()-distMap[i][mask].min())
 
-                #with imageio.get_writer("../vis/{}/points_{}_distmap_{}.gif".format(args.exp_id,args.model_id,i), mode='I',fps=1) as writer:
+
 
                 for l in range(origPatchSize[1]):
                     for m in range(origPatchSize[2]):
@@ -326,6 +334,8 @@ def main(argv=None):
                         #array = fig2data(fig)
                         cv2.imwrite(os.path.join(args.patch_sim_out_path,"simMaps",args.model_id,"{}".format(i+args.data_batch_index*args.batch_size),"{}_{}.png".format(m,l)),255*map)
                         #plt.close()
+
+
 
     else:
         with torch.no_grad():
@@ -393,6 +403,16 @@ def fig2data(fig):
     return buf
 
 
+def plotImg(img,path,cmap=None):
+    plt.figure(figsize=(10,10))
+    if cmap is None:
+        plt.imshow(img)
+    else:
+        plt.imshow(img,cmap)
+    plt.subplots_adjust(left=0, right=1, top=1, bottom=0)
+    plt.savefig(path)
+    plt.close()
+
 class GramDistMap(torch.nn.Module):
     def __init__(self,full_mode,kerSize,parralelMode):
         super(GramDistMap,self).__init__()
@@ -451,11 +471,12 @@ class PatchSimCNN(torch.nn.Module):
             self.filterSizes = [3,5,7,11,15,23,37,55]
             self.layers = torch.nn.ModuleList()
 
+            channelPerFilterSize = kwargs["chan"]//8
             for filterSize in self.filterSizes:
                 if reluOnSimple:
-                    layer = torch.nn.Sequential(torch.nn.Conv2d(3,64,filterSize,padding=(filterSize-1)//2),torch.nn.ReLU())
+                    layer = torch.nn.Sequential(torch.nn.Conv2d(3,channelPerFilterSize,filterSize,padding=(filterSize-1)//2),torch.nn.ReLU())
                 else:
-                    layer = torch.nn.Conv2d(3,64,filterSize,padding=(filterSize-1)//2)
+                    layer = torch.nn.Conv2d(3,channelPerFilterSize,filterSize,padding=(filterSize-1)//2)
                 self.layers.append(layer)
         else:
             self.featMod = modelBuilder.buildFeatModel(resType, pretr, True, False,**kwargs)
@@ -472,6 +493,7 @@ class PatchSimCNN(torch.nn.Module):
                 featList.append(layerFeat)
 
             featVolume = torch.cat(featList,dim=1)
+            featVolume = featVolume[:,torch.randperm(featVolume.size(1))]
         else:
             featVolume = self.featMod(x)["x"]
 
@@ -514,6 +536,7 @@ class PxlSimCNN(torch.nn.Module):
                 featList.append(layerFeat)
 
             featVolume = torch.cat(featList,dim=1)
+            featVolume = featVolume[:,torch.randperm(featVolume.size(1))]
         else:
             featVolume = self.featMod(x)["x"]
 
@@ -560,6 +583,128 @@ class PxlSimCNN(torch.nn.Module):
             raise ValueError("Unkown kernel type : ",type)
 
         return kernel
+
+class CosimMap(torch.nn.Module):
+    def __init__(self):
+        super(CosimMap,self).__init__()
+
+    def forward(self,x):
+
+        origSize = x.size()
+
+        #print(x.size())
+        #N x NbGroup x nbPatch x C
+        x = x.reshape(x.size(0)*x.size(1),x.size(2),x.size(3))
+        #print(x.size())
+        # (NxNbGroup) x nbPatch x C
+        x = x.permute(0,2,1)
+        #print(x.size())
+        # (NxNbGroup) x C x nbPatch
+        x = x.unsqueeze(-1)
+        #print(x.size())
+        # (NxNbGroup) x C x nbPatch x 1
+        #print(x.size(),np.sqrt(x.size(2)))
+        feat = x.reshape(x.size(0),x.size(1),int(np.sqrt(x.size(2))),int(np.sqrt(x.size(2))))
+        #print(x.size())
+        # (NxNbGroup) x C x sqrt(nbPatch) x sqrt(nbPatch)
+        x = modelBuilder.computeTotalSim(feat,1).unsqueeze(1)
+        #print(x.size())
+        # (NxNbGroup) x 1 x 1 x sqrt(nbPatch) x sqrt(nbPatch)
+        x = x.reshape(origSize[0],origSize[1],x.size(2),x.size(3),x.size(4))
+        #print(x.size())
+        # N x NbGroup x 1 x sqrt(nbPatch) x sqrt(nbPatch)
+        x = x.mean(dim=1)
+        #print(x.size())
+        # N x 1 x sqrt(nbPatch) x sqrt(nbPatch)
+        return x,feat
+
+class Graclus(torch.nn.Module):
+    def __init__(self,neighDist,featMapSize,batchSize,cuda):
+        super(Graclus,self).__init__()
+        self.neighDist = neighDist
+        self.featMapSize = featMapSize
+        self.batchSize = batchSize
+        ind = torch.arange(featMapSize)
+        neiInd = torch.arange(-self.neighDist,self.neighDist+1)
+
+        neiInd = ind.unsqueeze(1)+neiInd.unsqueeze(0)
+
+        ind = ind.unsqueeze(1).expand(featMapSize,neiInd.size(1))
+
+        ind = ind.reshape(-1)
+        neiInd = neiInd.reshape(-1)
+
+        #Assuming the input image is squarred
+        ind = ind.unsqueeze(1)*featMapSize+ind.unsqueeze(0)
+        neiInd = neiInd.unsqueeze(1)*featMapSize+neiInd.unsqueeze(0)
+
+        ind = ind.reshape(-1).unsqueeze(1)
+        neiInd = neiInd.reshape(-1).unsqueeze(1)
+
+        allInd = torch.cat((ind,neiInd),dim=1)
+
+        allInd = allInd[allInd[:,1] >= 0]
+        allInd = allInd[torch.abs((allInd[:,0]//featMapSize)-(allInd[:,1]//featMapSize))+torch.abs((allInd[:,0]%featMapSize)-(allInd[:,1]%featMapSize)) <= self.neighDist]
+        allInd = allInd[allInd[:,0] != allInd[:,1]]
+        allInd = allInd[allInd[:,1] <= featMapSize*featMapSize -1]
+
+        self.allInd = torch.cat(list(map(lambda x:x.unsqueeze(0),sorted(allInd,key=lambda x:x[0]))),dim=0)
+
+        #self.allInd = allInd[torch.argsort(allInd[:,0],dim=0)]
+        #for i in range(len(self.allInd)):
+        #    print(self.allInd[i])
+
+        print(self.allInd.size())
+
+        self.allInd = self.allInd.unsqueeze(0).expand(self.batchSize,self.allInd.size(0),2)
+        self.allInd = self.allInd + (torch.arange(self.batchSize)*featMapSize*featMapSize).unsqueeze(1).unsqueeze(1)
+        self.allInd = self.allInd.view(-1,2)
+
+        print(self.allInd.size())
+
+        self.allInd = self.allInd.cuda() if cuda else self.allInd
+
+    def forward(self,features):
+
+        allSim = []
+        for direction in ["top","left","right","bottom"]:
+
+            simMap = modelBuilder.applyDiffKer_CosSimi(direction,features,dilation=1)
+
+            if direction == "top":
+                simMap = simMap[:,:,:-1]
+            elif direction == "left":
+                simMap = simMap[:,:,:,:-1]
+            elif direction == "right":
+                simMap = simMap[:,:,:,1:]
+            else:
+                simMap = simMap[:,:,1:]
+
+            print("\t",simMap.size())
+            #Flatenning the map dimension
+            sim = simMap.reshape(simMap.size(0),simMap.size(1),simMap.size(2)*simMap.size(3))
+            print("\t",sim.size())
+
+            allSim.append(sim)
+
+        allSim = torch.cat(allSim,dim=1).permute(0,2,1)
+        print(allSim.size())
+        #Flatenning to go from four list of similarity to only one
+        allSim = allSim.reshape(allSim.size(0),allSim.size(1)*allSim.size(2))
+        print(allSim.size())
+        allSim = allSim.view(self.batchSize,-1,allSim.size(-1))
+        print(allSim.size())
+        allSim = allSim.mean(dim=1)
+        print(allSim.size())
+        allSim = allSim.view(-1)
+        print(allSim.size())
+
+        print("Starting cluster",self.allInd.size(),allSim.size())
+        clusters = torch_cluster.graclus_cluster(self.allInd[:,0],self.allInd[:,1],allSim)
+
+        clusters = clusters.view(self.batchSize,self.featMapSize,self.featMapSize)
+
+        return clusters
 
 def buildModule(cond,constr,cuda,multi_gpu,kwargs={}):
 
