@@ -197,36 +197,10 @@ class FirstModel(nn.Module):
     def forward(self, x):
         raise NotImplementedError
 
-class Bottleneck(nn.Module):
-    def __init__(self,inChan,encChan):
-        super(Bottleneck, self).__init__()
-        self.conv1x1_compr = nn.Conv2d(inChan,encChan,1)
-        self.conv1x1_decompr = nn.Conv2d(encChan,inChan,1)
-
-    def forward(self,x):
-        origFeatSize = (x.size(-2),x.size(-1))
-        comprFeat = self.conv1x1_compr(x)
-        decomprFeat = self.conv1x1_decompr(comprFeat)
-        retDict = {"features":comprFeat,"decomprFeat":decomprFeat}
-        return retDict
-
 class CNN2D(FirstModel):
 
-    def __init__(self, featModelName, pretrainedFeatMod=True, featMap=True, bigMaps=False, reconst=None,reconst_enc_chan=64,\
-                        contextFeat=False,contextMapFactor=8,contextGlobalInfoChan=8,**kwargs):
+    def __init__(self, featModelName, pretrainedFeatMod=True, featMap=True, bigMaps=False,**kwargs):
         super(CNN2D, self).__init__(featModelName, pretrainedFeatMod, featMap, bigMaps,**kwargs)
-
-        self.reconst = reconst
-        if self.reconst:
-            featNb = getResnetFeat(featModelName, kwargs["chan"])
-            self.bottleneck = Bottleneck(featNb,reconst_enc_chan)
-            self.decoder = resnet.ResNetDecoder(featNb,resnet.BasicBlockTranspose, [2, 2, 2, 2],layerSizeReduce=kwargs["layerSizeReduce"],
-                                                postLayerSizeReduce=kwargs["preLayerSizeReduce"],layersNb=getLayerNb(featModelName))
-
-        else:
-            self.decoder = None
-            self.bottleneck = None
-
 
     def forward(self, x):
         # N x C x H x L
@@ -234,14 +208,6 @@ class CNN2D(FirstModel):
 
         # N x C x H x L
         res = self.featMod(x)
-
-        if self.reconst:
-            bottleneckRetDict = self.bottleneck(res["x"])
-            res = merge(bottleneckRetDict,res,suffix="")
-
-            decodResDict = self.decoder(bottleneckRetDict["decomprFeat"])
-            res["reconst"] = decodResDict["x"]
-            res = merge(decodResDict,res,suffix="decod")
 
         # N x D
         if type(res) is dict:
@@ -667,9 +633,7 @@ def netBuilder(args):
 
         if not args.resnet_simple_att:
             CNNconst = CNN2D
-            kwargs = {"reconst":args.resnet_reconst,"reconst_enc_chan":args.resnet_reconst_enc_chan,\
-                        "contextFeat":args.resnet_reconst_context,"contextMapFactor":args.resnet_reconst_cont_fact,\
-                        "contextGlobalInfoChan":args.resnet_reconst_context_globalinfo_chan}
+            kwargs = {}
         else:
             CNNconst = CNN2D_simpleAttention
             kwargs = {"featMap": True, "topk": args.resnet_simple_att_topk,
@@ -815,19 +779,6 @@ def addArgs(argreader):
                                   help='Apply stride on every non 3x3 convolution')
     argreader.parser.add_argument('--resnet_replace_by_1x1', type=args.str2bool, metavar='NB',
                                   help='Replace the second 3x3 conv of BasicBlock by a 1x1 conv')
-    argreader.parser.add_argument('--resnet_reconst', type=args.str2bool, metavar='NB',
-                                  help='Output a reconstruction of the input using a resnet-18 like decoder. The weight of the corresponding term \
-                                  in the loss function must be set superior to 0 for the decoder to be trained.')
-    argreader.parser.add_argument('--resnet_reconst_enc_chan', type=int, metavar='NB',
-                                  help='For the resnet reconstruction. The number of channel the encoded representation has.')
-    argreader.parser.add_argument('--resnet_reconst_context', type=args.str2bool, metavar='NB',
-                                  help='For the resnet reconstruction. To add global info in the feature map using sub sampling.')
-
-    argreader.parser.add_argument('--resnet_reconst_cont_fact', type=int, metavar='NB',
-                                  help='For the resnet reconstruction using context. The scaling factor between the original feature map and the global info \
-                                  feature map. Set this to 8 to have global info feature map to be 8 times smaller than the input feature volume.')
-    argreader.parser.add_argument('--resnet_reconst_context_globalinfo_chan', type=int, metavar='NB',
-                                  help='For the resnet reconstruction with context. The number of channel used for the global information.')
 
     argreader.parser.add_argument('--resnet_att_chan', type=int, metavar='INT',
                                   help='For the \'resnetX_att\' feat models. The number of channels in the attention module.')
