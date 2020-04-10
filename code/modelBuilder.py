@@ -16,6 +16,8 @@ from models import pointnet2
 import torchvision
 import torch_geometric
 import skimage.feature
+import numpy as np
+import cv2
 import matplotlib.pyplot as plt
 plt.switch_backend('agg')
 
@@ -67,54 +69,28 @@ class DataParallelModel(nn.DataParallel):
 
 class Model(nn.Module):
 
-    def __init__(self, firstModel, secondModel,zoom=False,compute_edges=False,edge_sigma=2,pts_nb=256):
+    def __init__(self, firstModel, secondModel,zoom=False,passOrigImage=False,reducedImgSize=1):
         super(Model, self).__init__()
         self.firstModel = firstModel
         self.secondModel = secondModel
         self.zoom = zoom
-        self.compute_edges = compute_edges
-        self.edge_sigma = edge_sigma
-        self.pts_nb = pts_nb
+        self.passOrigImage = passOrigImage
+        self.reducedImgSize = reducedImgSize
 
     def forward(self, origImgBatch):
-        visResDict = self.firstModel(origImgBatch)
 
-        if self.compute_edges:
-            edgeTensBatch = []
-            for i in range(len(origImgBatch)):
-                edges_np = skimage.feature.canny(origImgBatch[i].detach().cpu().mean(dim=0).numpy(),sigma=self.edge_sigma)
-                edges_tens = torch.tensor(edges_np).unsqueeze(0)
-                edgeTensBatch.append(edges_tens)
-            edgeTensBatch = torch.cat(edgeTensBatch,dim=0)
-            edgesCoord = torch.nonzero(edgeTensBatch).to(origImgBatch.device)
-
-            selEdgeCoordBatch = []
-            for i in range(len(origImgBatch)):
-                selEdgeCoord = edgesCoord[edgesCoord[:,0] == i]
-                if selEdgeCoord.size(0) > 0:
-                    if selEdgeCoord.size(0) <= self.pts_nb:
-                        res = torch.randint(selEdgeCoord.size(0),size=(self.pts_nb,))
-                    else:
-                        try:
-                            res = torch_geometric.nn.fps(selEdgeCoord[:,1:].float(),ratio=self.pts_nb/selEdgeCoord.size(0))
-                        except AssertionError:
-                            print(self.pts_nb,selEdgeCoord.size(0),self.pts_nb/selEdgeCoord.size(0))
-                            sys.exit(0)
-
-                    selEdgeCoordBatch.append(selEdgeCoord[res][:,1:].unsqueeze(0))
-                else:
-                    abs = torch.randint(origImgBatch.size(-1),size=(self.pts_nb,)).unsqueeze(1)
-                    ord = torch.randint(origImgBatch.size(-2),size=(self.pts_nb,)).unsqueeze(1)
-                    coord = torch.cat((abs,ord),dim=-1).to(origImgBatch.device)
-
-                    selEdgeCoordBatch.append(coord.unsqueeze(0))
-
-            edges = torch.cat(selEdgeCoordBatch,dim=0).float()
-            edges /= (origImgBatch.size(-1)/visResDict["x"].size(-1))
-            edges = torch.clamp(edges,0,visResDict["x"].size(-1)-1)
-            resDict = self.secondModel(visResDict["x"],edges=edges.to(origImgBatch.device))
+        if self.reducedImgSize == origImgBatch.size(-1):
+            imgBatch = origImgBatch
         else:
-            resDict = self.secondModel(visResDict["x"])
+            imgBatch = F.interpolate(origImgBatch,size=(self.reducedImgSize,self.reducedImgSize))
+
+        visResDict = self.firstModel(imgBatch)
+
+        secModKwargs = {}
+        if self.passOrigImage:
+            secModKwargs["origImgBatch"] = origImgBatch
+
+        resDict = self.secondModel(visResDict["x"],**secModKwargs)
 
         resDict = merge(visResDict,resDict)
 
@@ -330,7 +306,7 @@ class TopkPointExtractor(nn.Module):
 
     def __init__(self, cuda, nbFeat,point_nb,encoderChan, \
                  furthestPointSampling, furthestPointSampling_nb_pts,\
-                 auxModel,topk_euclinorm,hasLinearProb,cannyedge,cannyedge_sigma):
+                 auxModel,topk_euclinorm,hasLinearProb,cannyedge,cannyedge_sigma,patchsim):
 
         super(TopkPointExtractor, self).__init__()
 
@@ -352,11 +328,18 @@ class TopkPointExtractor(nn.Module):
         self.cannyedge = cannyedge
         self.cannyedge_sigma = cannyedge_sigma
 
-    def forward(self, featureMaps,edges=None):
+        self.patchsim = patchsim
+        if self.patchsim:
+            self.patchSimCNN = PatchSimCNN("resnet9",False,4,chan=32)
+
+        if self.cannyedge and self.patchsim:
+            raise ValueError("cannyedge and patchsim can't be True at the same time.")
+
+    def forward(self, featureMaps,**kwargs):
         retDict = {}
 
         # Because of zero padding, the border are very active, so we remove it.
-        if not self.cannyedge:
+        if (not self.cannyedge) and (not self.patchsim):
             featureMaps = featureMaps[:, :, 3:-3, 3:-3]
 
         if self.conv1x1:
@@ -364,9 +347,13 @@ class TopkPointExtractor(nn.Module):
         else:
             pointFeaturesMap = featureMaps
 
-        if not self.cannyedge:
+        if (not self.cannyedge):
             if self.topk_euclinorm:
                 x = torch.pow(pointFeaturesMap, 2).sum(dim=1, keepdim=True)
+            elif self.patchsim:
+                distMap = -self.patchSimCNN(kwargs["origImgBatch"])
+                x = distMap
+                featureMaps = F.interpolate(featureMaps,size=(x.size(-2),x.size(-1)))
             elif self.hasLinearProb:
                 x = torch.sigmoid(self.linearProb(pointFeaturesMap))
             else:
@@ -381,8 +368,22 @@ class TopkPointExtractor(nn.Module):
 
             abs, ord = (flatInds % x.shape[-1], flatInds // x.shape[-1])
 
-        else:
+        elif self.cannyedge:
+            edges = computeEdges(kwargs["origImgBatch"],self.cannyedge_sigma,self.point_extracted,featureMaps.size(-1))
             abs,ord = edges[:,:,0],edges[:,:,1]
+
+        if self.furthestPointSampling:
+            points = torch.cat((abs.unsqueeze(-1), ord.unsqueeze(-1)), dim=-1).float()
+
+            exampleInds = torch.arange(points.size(0)).unsqueeze(1).expand(points.size(0), points.size(1)).reshape(
+                -1).to(points.device)
+            selectedPointInds = torch_geometric.nn.fps(points.view(-1, 2), exampleInds,
+                                                       ratio=self.furthestPointSampling_nb_pts / abs.size(1))
+            selectedPointInds = selectedPointInds.reshape(points.size(0), -1)
+            selectedPointInds = selectedPointInds % abs.size(1)
+
+            abs = abs[torch.arange(abs.size(0)).unsqueeze(1).long(), selectedPointInds.long()]
+            ord = ord[torch.arange(ord.size(0)).unsqueeze(1).long(), selectedPointInds.long()]
 
         pointFeat = mapToList(pointFeaturesMap, abs.int(), ord.int())
 
@@ -407,6 +408,41 @@ class TopkPointExtractor(nn.Module):
             self.absKerDict[device] = self.absKer.to(device)
             self.spatialWeightKerDict[device] = self.spatialWeightKer.to(device)
 
+def computeEdges(origImgBatch,sigma,pts_nb,featMapSize):
+    edgeTensBatch = []
+    for i in range(len(origImgBatch)):
+        edges_np = skimage.feature.canny(origImgBatch[i].detach().cpu().mean(dim=0).numpy(),sigma=self.edge_sigma)
+        edges_tens = torch.tensor(edges_np).unsqueeze(0)
+        edgeTensBatch.append(edges_tens)
+    edgeTensBatch = torch.cat(edgeTensBatch,dim=0)
+    edgesCoord = torch.nonzero(edgeTensBatch).to(origImgBatch.device)
+
+    selEdgeCoordBatch = []
+    for i in range(len(origImgBatch)):
+        selEdgeCoord = edgesCoord[edgesCoord[:,0] == i]
+        if selEdgeCoord.size(0) > 0:
+            if selEdgeCoord.size(0) <= self.pts_nb:
+                res = torch.randint(selEdgeCoord.size(0),size=(self.pts_nb,))
+            else:
+                try:
+                    res = torch_geometric.nn.fps(selEdgeCoord[:,1:].float(),ratio=self.pts_nb/selEdgeCoord.size(0))
+                except AssertionError:
+                    print(self.pts_nb,selEdgeCoord.size(0),self.pts_nb/selEdgeCoord.size(0))
+                    sys.exit(0)
+
+            selEdgeCoordBatch.append(selEdgeCoord[res][:,1:].unsqueeze(0))
+        else:
+            abs = torch.randint(origImgBatch.size(-1),size=(self.pts_nb,)).unsqueeze(1)
+            ord = torch.randint(origImgBatch.size(-2),size=(self.pts_nb,)).unsqueeze(1)
+            coord = torch.cat((abs,ord),dim=-1).to(origImgBatch.device)
+
+            selEdgeCoordBatch.append(coord.unsqueeze(0))
+
+    edges = torch.cat(selEdgeCoordBatch,dim=0).float()
+    edges /= (origImgBatch.size(-1)/featMapSize)
+    edges = torch.clamp(edges,0,featMapSize-1).to(origImgBatch.device)
+
+    return edges
 
 def shiftFeat(where,features,dilation):
 
@@ -467,7 +503,7 @@ def applyDiffKer_CosSimi(direction,features,dilation=1):
         raise ValueError("Unknown direction : ",direction)
 
     diff = (featuresShift1*featuresShift2*maskShift1*maskShift2).sum(dim=1,keepdim=True)
-    diff /= torch.sqrt(torch.pow(featuresShift1,2).sum(dim=1,keepdim=True))*torch.sqrt(torch.pow(featuresShift2,2).sum(dim=1,keepdim=True))
+    diff /= torch.sqrt(torch.pow(maskShift1*featuresShift1,2).sum(dim=1,keepdim=True))*torch.sqrt(torch.pow(maskShift2*featuresShift2,2).sum(dim=1,keepdim=True))
 
     return diff
 
@@ -476,6 +512,51 @@ def computeTotalSim(features,dilation):
     vertiDiff = applyDiffKer_CosSimi("vertical",features,dilation)
     totalDiff = (horizDiff + vertiDiff)/2
     return totalDiff
+
+class PatchSimCNN(torch.nn.Module):
+    def __init__(self,resType,pretr,nbGroup,**kwargs):
+        super(PatchSimCNN,self).__init__()
+
+        self.featMod = buildFeatModel(resType, pretr, True, False,**kwargs)
+        self.nbGroup = nbGroup
+
+    def forward(self,data):
+
+        patch = data.unfold(2, 10, 10).unfold(3, 10, 10).permute(0,2,3,1,4,5)
+        origPatchSize = patch.size()
+        patch = patch.reshape(patch.size(0)*patch.size(1)*patch.size(2),patch.size(3),patch.size(4),patch.size(5))
+
+        featVolume = self.featMod(patch)["x"]
+
+        origFeatVolSize = featVolume.size()
+        featVolume = featVolume.unfold(1, featVolume.size(1)//self.nbGroup, featVolume.size(1)//self.nbGroup).permute(0,1,4,2,3)
+        featVolume = featVolume.view(featVolume.size(0)*featVolume.size(1),featVolume.size(2),featVolume.size(3),featVolume.size(4))
+
+        featVolume = featVolume.reshape(featVolume.size(0),featVolume.size(1),featVolume.size(2)*featVolume.size(3))
+        feat = featVolume.sum(dim=-1)
+
+        feat = feat.view(origFeatVolSize[0],self.nbGroup,feat.size(-1))
+        feat = feat.view(data.size(0),-1,self.nbGroup,feat.size(2))
+        feat = feat.permute(0,2,1,3)
+
+        origFeatSize = feat.size()
+
+        #N x NbGroup x nbPatch x C
+        feat = feat.reshape(feat.size(0)*feat.size(1),feat.size(2),feat.size(3))
+        # (NxNbGroup) x nbPatch x C
+        feat = feat.permute(0,2,1)
+        # (NxNbGroup) x C x nbPatch
+        feat = feat.unsqueeze(-1)
+        # (NxNbGroup) x C x nbPatch x 1
+        feat = feat.reshape(feat.size(0),feat.size(1),int(np.sqrt(feat.size(2))),int(np.sqrt(feat.size(2))))
+        # (NxNbGroup) x C x sqrt(nbPatch) x sqrt(nbPatch)
+        simMap = computeTotalSim(feat,1).unsqueeze(1)
+        # (NxNbGroup) x 1 x 1 x sqrt(nbPatch) x sqrt(nbPatch)
+        simMap = simMap.reshape(origFeatSize[0],origFeatSize[1],simMap.size(2),simMap.size(3),simMap.size(4))
+        # N x NbGroup x 1 x sqrt(nbPatch) x sqrt(nbPatch)
+        simMap = simMap.mean(dim=1)
+        # N x 1 x sqrt(nbPatch) x sqrt(nbPatch)
+        return simMap
 
 class ReinforcePointExtractor(nn.Module):
 
@@ -564,7 +645,7 @@ class PointNet2(SecondModel):
                  point_nb=256,encoderChan=1,topk_fps=False,
                  topk_fps_nb_pts=64, auxModel=False,hasLinearProb=False,
                  use_baseline=False,topk_euclinorm=True,reinf_linear_only=False, pn_clustering=False,\
-                 cannyedge=False,cannyedge_sigma=2):
+                 cannyedge=False,cannyedge_sigma=2,patchsim=False):
 
         super(PointNet2, self).__init__(nbFeat, classNb)
 
@@ -572,7 +653,7 @@ class PointNet2(SecondModel):
             self.pointExtr = TopkPointExtractor(cuda, nbFeat,point_nb, encoderChan, \
                                                 topk_fps, topk_fps_nb_pts,auxModel, \
                                                 topk_euclinorm,hasLinearProb,\
-                                                cannyedge,cannyedge_sigma)
+                                                cannyedge,cannyedge_sigma,patchsim)
         elif reinfExct:
             self.pointExtr = ReinforcePointExtractor(cuda, nbFeat,point_nb,encoderChan,hasLinearProb, use_baseline, reinf_linear_only)
         else:
@@ -678,14 +759,15 @@ def netBuilder(args):
                                 auxModel=args.pn_aux_model, hasLinearProb=args.pn_has_linear_prob, use_baseline=args.pn_reinf_use_baseline, \
                                 topk_euclinorm=args.pn_topk_euclinorm, reinf_linear_only=args.pn_train_reinf_linear_only,
                                 pn_clustering=args.pn_clustering,\
-                                cannyedge=args.pn_cannyedge,cannyedge_sigma=args.pn_cannyedge_sigma)
+                                cannyedge=args.pn_cannyedge,cannyedge_sigma=args.pn_cannyedge_sigma,\
+                                patchsim=args.pn_patchsim)
 
     else:
         raise ValueError("Unknown temporal model type : ", args.second_mod)
 
     ############### Whole Model ##########################
 
-    net = Model(firstModel, secondModel,zoom=args.zoom,compute_edges=args.pn_cannyedge,edge_sigma=args.pn_cannyedge_sigma,pts_nb=args.pn_point_nb)
+    net = Model(firstModel, secondModel,zoom=args.zoom,passOrigImage=args.pn_cannyedge or args.pn_patchsim,reducedImgSize=args.reduced_img_size)
 
     if args.cuda:
         net.cuda()
@@ -790,8 +872,11 @@ def addArgs(argreader):
 
     argreader.parser.add_argument('--pn_cannyedge', type=args.str2bool, metavar='BOOL',
                                   help='To use canny edge to extract points.')
-
     argreader.parser.add_argument('--pn_cannyedge_sigma', type=float, metavar='FLOAT',
                                   help='The sigma hyper-parameter of the canny edge detection.')
+    argreader.parser.add_argument('--pn_patchsim', type=args.str2bool, metavar='BOOL',
+                                  help='To use patch similarity to extract points.')
+    argreader.parser.add_argument('--reduced_img_size', type=int, metavar='BOOL',
+                                  help="The size at which the image is reduced at the begining of the process")
 
     return argreader
