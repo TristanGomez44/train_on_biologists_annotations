@@ -90,6 +90,8 @@ def main(argv=None):
                                   help="Kernel type. Can be linear, squarred or constant.",default="linear")
     argreader.parser.add_argument('--patch_sim_gram_order', type=int,
                                   help="If 2, computes correlation between feature maps. If 1, computes average of feature maps.",default=1)
+    argreader.parser.add_argument('--patch_sim_knn_classes', type=int,
+                                  help="The number of classes when using k nearest neighbors.",default=10)
 
     argreader.parser.add_argument('--data_batch_index', type=int,
                                   help="The index of the batch to process first",default=0)
@@ -180,9 +182,9 @@ def main(argv=None):
                 retDict = net(data)
 
             lossDict,prob_map,reconst = computeLoss(args.gram_matrix_weight,\
-                                                                        args.gram_matrix_weight_threshold,gram_loss_module,simclrDict,\
-                                                                        retDict,data,target,args.text_enc_pos_dil,args.text_enc_neg_dil,\
-                                                                        args.text_env_margin,args.layer)
+                                                    args.gram_matrix_weight_threshold,gram_loss_module,simclrDict,\
+                                                    retDict,data,target,args.text_enc_pos_dil,args.text_enc_neg_dil,\
+                                                    args.text_env_margin,args.layer)
 
             total_loss,loss,graham_loss,simCLR_loss = lossDict["total_loss"],lossDict["loss"],lossDict["graham_loss"],lossDict["simCLR_loss"]
 
@@ -239,13 +241,15 @@ def main(argv=None):
 
             kwargs = {}
             cosimMap = buildModule(True,CosimMap,args.cuda,args.multi_gpu,kwargs)
-            kwargs = {"neighDist":1,"featMapSize":10,"batchSize":args.batch_size,"cuda":args.cuda}
-            graclus = buildModule(True,Graclus,args.cuda,args.multi_gpu,kwargs)
 
             patch = data.unfold(2, args.patch_size, args.patch_stride).unfold(3, args.patch_size, args.patch_stride).permute(0,2,3,1,4,5)
 
             origPatchSize = patch.size()
             patch = patch.reshape(patch.size(0)*patch.size(1)*patch.size(2),patch.size(3),patch.size(4),patch.size(5))
+
+            print(patch.size())
+            kwargs = {"K":args.patch_sim_knn_classes}
+            knn_map = buildModule(True,KNN_Map,args.cuda,args.multi_gpu,kwargs)
 
             gram_mat = net(patch)
             #gram_mat = gram_mat.view(data.size(0),-1,args.patch_sim_group_nb,gram_mat.size(2),gram_mat.size(3))
@@ -256,7 +260,7 @@ def main(argv=None):
 
             distMapAgreg,feat = cosimMap(gram_mat)
 
-            gracMap = graclus(feat)
+            #knnMap = knn_map(feat)
 
             print("End ",time.time()-start)
 
@@ -296,9 +300,10 @@ def main(argv=None):
 
                 plotImg(distMapAgreg[i][0][1:-1,1:-1].detach().cpu().numpy(),os.path.join(args.patch_sim_out_path,"simMaps",args.model_id,"{}".format(i+args.data_batch_index*args.batch_size),"agr.png"),'gray')
 
+                #plotImg(knnMap[i].detach().cpu().numpy(),os.path.join(args.patch_sim_out_path,"simMaps",args.model_id,"{}".format(i+args.data_batch_index*args.batch_size),"knn.png"),'plasma')
+
                 mask = (distMap[i] != -1)
                 distMap[i][mask] = (distMap[i][mask]-distMap[i][mask].min())/(distMap[i][mask].max()-distMap[i][mask].min())
-
 
 
                 for l in range(origPatchSize[1]):
@@ -335,7 +340,7 @@ def main(argv=None):
                         cv2.imwrite(os.path.join(args.patch_sim_out_path,"simMaps",args.model_id,"{}".format(i+args.data_batch_index*args.batch_size),"{}_{}.png".format(m,l)),255*map)
                         #plt.close()
 
-
+                
 
     else:
         with torch.no_grad():
@@ -618,93 +623,65 @@ class CosimMap(torch.nn.Module):
         # N x 1 x sqrt(nbPatch) x sqrt(nbPatch)
         return x,feat
 
-class Graclus(torch.nn.Module):
-    def __init__(self,neighDist,featMapSize,batchSize,cuda):
-        super(Graclus,self).__init__()
-        self.neighDist = neighDist
-        self.featMapSize = featMapSize
-        self.batchSize = batchSize
-        ind = torch.arange(featMapSize)
-        neiInd = torch.arange(-self.neighDist,self.neighDist+1)
+class KNN_Map(torch.nn.Module):
+    def __init__(self,K):
+        super(KNN_Map,self).__init__()
 
-        neiInd = ind.unsqueeze(1)+neiInd.unsqueeze(0)
-
-        ind = ind.unsqueeze(1).expand(featMapSize,neiInd.size(1))
-
-        ind = ind.reshape(-1)
-        neiInd = neiInd.reshape(-1)
-
-        #Assuming the input image is squarred
-        ind = ind.unsqueeze(1)*featMapSize+ind.unsqueeze(0)
-        neiInd = neiInd.unsqueeze(1)*featMapSize+neiInd.unsqueeze(0)
-
-        ind = ind.reshape(-1).unsqueeze(1)
-        neiInd = neiInd.reshape(-1).unsqueeze(1)
-
-        allInd = torch.cat((ind,neiInd),dim=1)
-
-        allInd = allInd[allInd[:,1] >= 0]
-        allInd = allInd[torch.abs((allInd[:,0]//featMapSize)-(allInd[:,1]//featMapSize))+torch.abs((allInd[:,0]%featMapSize)-(allInd[:,1]%featMapSize)) <= self.neighDist]
-        allInd = allInd[allInd[:,0] != allInd[:,1]]
-        allInd = allInd[allInd[:,1] <= featMapSize*featMapSize -1]
-
-        self.allInd = torch.cat(list(map(lambda x:x.unsqueeze(0),sorted(allInd,key=lambda x:x[0]))),dim=0)
-
-        #self.allInd = allInd[torch.argsort(allInd[:,0],dim=0)]
-        #for i in range(len(self.allInd)):
-        #    print(self.allInd[i])
-
-        print(self.allInd.size())
-
-        self.allInd = self.allInd.unsqueeze(0).expand(self.batchSize,self.allInd.size(0),2)
-        self.allInd = self.allInd + (torch.arange(self.batchSize)*featMapSize*featMapSize).unsqueeze(1).unsqueeze(1)
-        self.allInd = self.allInd.view(-1,2)
-
-        print(self.allInd.size())
-
-        self.allInd = self.allInd.cuda() if cuda else self.allInd
+        self.K = 10
 
     def forward(self,features):
 
-        allSim = []
-        for direction in ["top","left","right","bottom"]:
+        origSize = features.size()
+        features = features.permute(0,2,3,1)
+        features = features.reshape(features.size(0),features.size(1)*features.size(2),features.size(3))
 
-            simMap = modelBuilder.applyDiffKer_CosSimi(direction,features,dilation=1)
+        allCl = []
+        for i in range(len(features)):
+            feat = features[i]
+            print(i,len(features),feat.size(),feat.sum())
 
-            if direction == "top":
-                simMap = simMap[:,:,:-1]
-            elif direction == "left":
-                simMap = simMap[:,:,:,:-1]
-            elif direction == "right":
-                simMap = simMap[:,:,:,1:]
-            else:
-                simMap = simMap[:,:,1:]
+            cl,c = KMeans(feat,K=self.K,Niter=100,verbose=False)
 
-            print("\t",simMap.size())
-            #Flatenning the map dimension
-            sim = simMap.reshape(simMap.size(0),simMap.size(1),simMap.size(2)*simMap.size(3))
-            print("\t",sim.size())
+            allCl.append(cl.unsqueeze(0))
 
-            allSim.append(sim)
+        allCl = torch.cat(allCl,dim=0).reshape(origSize[0],origSize[2],origSize[3])
 
-        allSim = torch.cat(allSim,dim=1).permute(0,2,1)
-        print(allSim.size())
-        #Flatenning to go from four list of similarity to only one
-        allSim = allSim.reshape(allSim.size(0),allSim.size(1)*allSim.size(2))
-        print(allSim.size())
-        allSim = allSim.view(self.batchSize,-1,allSim.size(-1))
-        print(allSim.size())
-        allSim = allSim.mean(dim=1)
-        print(allSim.size())
-        allSim = allSim.view(-1)
-        print(allSim.size())
+        return allCl
 
-        print("Starting cluster",self.allInd.size(),allSim.size())
-        clusters = torch_cluster.graclus_cluster(self.allInd[:,0],self.allInd[:,1],allSim)
+def KMeans(x, K=10, Niter=10, verbose=True):
+    N, D = x.shape  # Number of samples, dimension of the ambient space
 
-        clusters = clusters.view(self.batchSize,self.featMapSize,self.featMapSize)
+    # K-means loop:
+    # - x  is the point cloud,
+    # - cl is the vector of class labels
+    # - c  is the cloud of cluster centroids
+    start = time.time()
+    c = x[:K, :].clone()  # Simplistic random initialization
+    x_i = x[:, None, :].clone().to(x.device)  # (Npoints, 1, D)
 
-        return clusters
+    print(x_i.size(),c.size())
+
+    for i in range(Niter):
+
+        c_j = c[None, :, :].clone().to(x.device)  # (1, Nclusters, D)
+        D_ij = ((x_i - c_j) ** 2).sum(-1)  # (Npoints, Nclusters) symbolic matrix of squared distances
+        cl = D_ij.argmin(dim=1).long().view(-1)  # Points -> Nearest cluster
+
+        Ncl = torch.bincount(cl).type(torch.float64)  # Class weights
+
+        print(x[:, 0].size(),c[:, 0].size(),cl.size(),Ncl)
+        for d in range(D):  # Compute the cluster centroids with torch.bincount:
+            c[:, d] = torch.bincount(cl, weights=x[:, d]) / Ncl
+
+    end = time.time()
+
+    if verbose:
+        print("K-means example with {:,} points in dimension {:,}, K = {:,}:".format(N, D, K))
+        print('Timing for {} iterations: {:.5f}s = {} x {:.5f}s\n'.format(
+                Niter, end - start, Niter, (end-start) / Niter))
+
+    return cl, c
+
 
 def buildModule(cond,constr,cuda,multi_gpu,kwargs={}):
 
