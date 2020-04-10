@@ -54,7 +54,8 @@ def plotPointsImageDataset(imgNb,redFact,plotDepth,args):
     points = np.concatenate(list(map(lambda x:np.load(x)[:imgNb][:,:,:][np.newaxis],pointPaths)),axis=0)
     points = np.transpose(points, axes=[1,0,2,3])
 
-    imgLoader = load_data.buildTestLoader(args,"val",normalize=False)
+    args.normalize_data = False
+    imgLoader = load_data.buildTestLoader(args,"val")
 
     batchNb = imgNb//args.val_batch_size
     totalImgNb = 0

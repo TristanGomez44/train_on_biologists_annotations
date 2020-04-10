@@ -98,7 +98,7 @@ def buildTrainLoader(args,transf=None,shuffle=True):
     return trainLoader, train_dataset
 
 
-def buildTestLoader(args, mode, normalize=True):
+def buildTestLoader(args, mode):
     datasetName = getattr(args, "dataset_{}".format(mode))
 
     resizedImgSize = 500 if args.big_images else 224
@@ -108,7 +108,7 @@ def buildTestLoader(args, mode, normalize=True):
     else:
         transf = transforms.Compose([transforms.Resize(resizedImgSize), transforms.CenterCrop(resizedImgSize), transforms.ToTensor()])
 
-    if normalize:
+    if args.normalize_data:
         normalizeFunc = transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
         transf = transforms.Compose([transf, normalizeFunc])
 
