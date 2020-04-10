@@ -92,10 +92,14 @@ class Model(nn.Module):
             for i in range(len(origImgBatch)):
                 selEdgeCoord = edgesCoord[edgesCoord[:,0] == i]
                 if selEdgeCoord.size(0) > 0:
-                    if selEdgeCoord.size(0) < self.pts_nb:
+                    if selEdgeCoord.size(0) <= self.pts_nb:
                         res = torch.randint(selEdgeCoord.size(0),size=(self.pts_nb,))
                     else:
-                        res = torch_geometric.nn.fps(selEdgeCoord[:,1:].float(),ratio=self.pts_nb/selEdgeCoord.size(0))
+                        try:
+                            res = torch_geometric.nn.fps(selEdgeCoord[:,1:].float(),ratio=self.pts_nb/selEdgeCoord.size(0))
+                        except AssertionError:
+                            print(self.pts_nb,selEdgeCoord.size(0),self.pts_nb/selEdgeCoord.size(0))
+                            sys.exit(0)
 
                     selEdgeCoordBatch.append(selEdgeCoord[res][:,1:].unsqueeze(0))
                 else:
