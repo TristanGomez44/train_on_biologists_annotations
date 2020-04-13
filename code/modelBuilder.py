@@ -17,7 +17,6 @@ import torchvision
 import torch_geometric
 import skimage.feature
 import numpy as np
-import cv2
 import matplotlib.pyplot as plt
 plt.switch_backend('agg')
 
@@ -134,10 +133,6 @@ class Model(nn.Module):
         maskedImage[mask] = origImg[mask]
 
         theta = torch.eye(3)[:2].unsqueeze(0).expand(x.size(0),-1,-1)
-        #theta = torch.zeros((x.size(0),2,3))
-        #theta[:,0,0] = (4*stds.max(dim=-1)[0])/imgSize[0]
-        #theta[:,1,1] = (4*stds.max(dim=-1)[0])/imgSize[0]
-        #theta[:,:,2] = (means - imgSize.unsqueeze(0)/2)/imgSize.unsqueeze(0)
 
         flowField = F.affine_grid(theta, origImg.size(),align_corners=False).to(x.device)
         croppedImg = F.grid_sample(maskedImage, flowField,align_corners=False,padding_mode='border')
@@ -411,7 +406,7 @@ class TopkPointExtractor(nn.Module):
 def computeEdges(origImgBatch,sigma,pts_nb,featMapSize):
     edgeTensBatch = []
     for i in range(len(origImgBatch)):
-        edges_np = skimage.feature.canny(origImgBatch[i].detach().cpu().mean(dim=0).numpy(),sigma=self.edge_sigma)
+        edges_np = skimage.feature.canny(origImgBatch[i].detach().cpu().mean(dim=0).numpy(),sigma=sigma)
         edges_tens = torch.tensor(edges_np).unsqueeze(0)
         edgeTensBatch.append(edges_tens)
     edgeTensBatch = torch.cat(edgeTensBatch,dim=0)
@@ -421,19 +416,19 @@ def computeEdges(origImgBatch,sigma,pts_nb,featMapSize):
     for i in range(len(origImgBatch)):
         selEdgeCoord = edgesCoord[edgesCoord[:,0] == i]
         if selEdgeCoord.size(0) > 0:
-            if selEdgeCoord.size(0) <= self.pts_nb:
-                res = torch.randint(selEdgeCoord.size(0),size=(self.pts_nb,))
+            if selEdgeCoord.size(0) <= pts_nb:
+                res = torch.randint(selEdgeCoord.size(0),size=(pts_nb,))
             else:
                 try:
-                    res = torch_geometric.nn.fps(selEdgeCoord[:,1:].float(),ratio=self.pts_nb/selEdgeCoord.size(0))
+                    res = torch_geometric.nn.fps(selEdgeCoord[:,1:].float(),ratio=pts_nb/selEdgeCoord.size(0))
                 except AssertionError:
-                    print(self.pts_nb,selEdgeCoord.size(0),self.pts_nb/selEdgeCoord.size(0))
+                    print(pts_nb,selEdgeCoord.size(0),pts_nb/selEdgeCoord.size(0))
                     sys.exit(0)
 
             selEdgeCoordBatch.append(selEdgeCoord[res][:,1:].unsqueeze(0))
         else:
-            abs = torch.randint(origImgBatch.size(-1),size=(self.pts_nb,)).unsqueeze(1)
-            ord = torch.randint(origImgBatch.size(-2),size=(self.pts_nb,)).unsqueeze(1)
+            abs = torch.randint(origImgBatch.size(-1),size=(pts_nb,)).unsqueeze(1)
+            ord = torch.randint(origImgBatch.size(-2),size=(pts_nb,)).unsqueeze(1)
             coord = torch.cat((abs,ord),dim=-1).to(origImgBatch.device)
 
             selEdgeCoordBatch.append(coord.unsqueeze(0))
@@ -502,14 +497,14 @@ def applyDiffKer_CosSimi(direction,features,dilation=1):
     else:
         raise ValueError("Unknown direction : ",direction)
 
-    diff = (featuresShift1*featuresShift2*maskShift1*maskShift2).sum(dim=1,keepdim=True)
-    diff /= torch.sqrt(torch.pow(maskShift1*featuresShift1,2).sum(dim=1,keepdim=True))*torch.sqrt(torch.pow(maskShift2*featuresShift2,2).sum(dim=1,keepdim=True))
+    sim = (featuresShift1*featuresShift2*maskShift1*maskShift2).sum(dim=1,keepdim=True)
+    sim /= torch.sqrt(torch.pow(maskShift1*featuresShift1,2).sum(dim=1,keepdim=True))*torch.sqrt(torch.pow(maskShift2*featuresShift2,2).sum(dim=1,keepdim=True))
 
-    return diff
+    return sim,featuresShift1,featuresShift2,maskShift1,maskShift2
 
 def computeTotalSim(features,dilation):
-    horizDiff = applyDiffKer_CosSimi("horizontal",features,dilation)
-    vertiDiff = applyDiffKer_CosSimi("vertical",features,dilation)
+    horizDiff,_,_,_,_ = applyDiffKer_CosSimi("horizontal",features,dilation)
+    vertiDiff,_,_,_,_ = applyDiffKer_CosSimi("vertical",features,dilation)
     totalDiff = (horizDiff + vertiDiff)/2
     return totalDiff
 
