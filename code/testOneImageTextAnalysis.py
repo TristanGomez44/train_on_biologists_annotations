@@ -21,6 +21,7 @@ import matplotlib.cm as cm
 import time
 import skimage.feature
 import torch_cluster
+from skimage import img_as_ubyte
 def main(argv=None):
     # Getting arguments from config file and command line
     # Building the arg reader
@@ -53,6 +54,9 @@ def main(argv=None):
                                   help="To run a small experiment with an untrained CNN",default=False)
     argreader.parser.add_argument('--patch_sim_resnet', type=str2bool,
                                   help="To use resnet for the patch similarity experiment",default=False)
+    argreader.parser.add_argument('--patch_sim_usemodel', type=str2bool,
+                                  help="Set this to False to compare directly pixels",default=True)
+
     argreader.parser.add_argument('--patch_sim_restype', type=str,
                                   help="The resnet to use",default="resnet18")
 
@@ -98,6 +102,12 @@ def main(argv=None):
 
     argreader.parser.add_argument('--patch_sim_neighsim_nb_iter', type=int,
                                   help="The number of times to apply neighbor similarity averaging ",default=1)
+    argreader.parser.add_argument('--patch_sim_neighsim_softmax', type=str2bool,
+                                  help="Whether or not to use softmax to weight neighbors",default=False)
+    argreader.parser.add_argument('--patch_sim_neighsim_softmax_fact', type=int,
+                                  help="Whether or not to use softmax to weight neighbors",default=1)
+    argreader.parser.add_argument('--patch_sim_neighsim_center', type=str2bool,
+                                  help="Whether or not to include the center point to compute the new feature",default=False)
 
     argreader = trainVal.addInitArgs(argreader)
     argreader = trainVal.addOptimArgs(argreader)
@@ -238,7 +248,7 @@ def main(argv=None):
             gramDistMap = buildModule(True,GramDistMap,args.cuda,args.multi_gpu,kwargs)
 
             kwargs = {"resnet":args.patch_sim_resnet,"resType":args.patch_sim_restype,"pretr":args.patch_sim_pretr_res,"nbGroup":args.patch_sim_group_nb,\
-                        "reluOnSimple":args.patch_sim_relu_on_simple,"chan":args.resnet_chan,"gramOrder":args.patch_sim_gram_order}
+                        "reluOnSimple":args.patch_sim_relu_on_simple,"chan":args.resnet_chan,"gramOrder":args.patch_sim_gram_order,"useModel":args.patch_sim_usemodel}
             net = buildModule(True,PatchSimCNN,args.cuda,args.multi_gpu,kwargs)
 
             kwargs = {}
@@ -250,7 +260,8 @@ def main(argv=None):
             patch = patch.reshape(patch.size(0)*patch.size(1)*patch.size(2),patch.size(3),patch.size(4),patch.size(5))
 
             print(patch.size())
-            kwargs = {"cuda":args.cuda,"groupNb":args.patch_sim_group_nb,"nbIter":args.patch_sim_neighsim_nb_iter}
+            kwargs = {"cuda":args.cuda,"groupNb":args.patch_sim_group_nb,"nbIter":args.patch_sim_neighsim_nb_iter,\
+                        "softmax":args.patch_sim_neighsim_softmax,"softmax_fact":args.patch_sim_neighsim_softmax_fact,"includeCenter":args.patch_sim_neighsim_center}
             neighSim = buildModule(True,NeighSim,args.cuda,args.multi_gpu,kwargs)
 
             gram_mat = net(patch)
@@ -262,7 +273,7 @@ def main(argv=None):
 
             distMapAgreg,feat = cosimMap(gram_mat)
 
-            distMapAgregNeigSimFeat = neighSim(feat)
+            neighSim = neighSim(feat)
 
             print("End ",time.time()-start)
 
@@ -287,6 +298,7 @@ def main(argv=None):
             #distMap = distMap.detach()
             #distMap = torch.nn.functional.interpolate(distMap, size=(data.size(-1),data.size(-2)))
             #distMap = distMap.cpu().numpy()
+            neighSim = neighSim.detach().cpu().numpy()
 
             for i,img in enumerate(data):
 
@@ -302,8 +314,13 @@ def main(argv=None):
 
                 plotImg(distMapAgreg[i][0][1:-1,1:-1].detach().cpu().numpy(),os.path.join(args.patch_sim_out_path,"simMaps",args.model_id,"{}".format(i+args.data_batch_index*args.batch_size),"agr.png"),'gray')
 
-                plotImg(distMapAgregNeigSimFeat[i][0].detach().cpu().numpy(),os.path.join(args.patch_sim_out_path,"simMaps",args.model_id,"{}".format(i+args.data_batch_index*args.batch_size),"neighSim.png"),'gray')
-
+                pathGif = os.path.join(args.patch_sim_out_path,"simMaps",args.model_id,str(i+args.data_batch_index*args.batch_size),"neighSim.gif")
+                with imageio.get_writer(pathGif,duration=1) as writer:
+                    neighSim[i] = 255*(neighSim[i]-neighSim[i].min())/(neighSim[i].max()-neighSim[i].min())
+                    for j in range(len(neighSim[i])):
+                        writer.append_data(img_as_ubyte(neighSim[i][j].astype("uint8")))
+                        pathPNG = os.path.join(args.patch_sim_out_path,"simMaps",args.model_id,str(i+args.data_batch_index*args.batch_size),"neighSim_step{}.png".format(len(neighSim[i])-1-j))
+                        plotImg(neighSim[i][j],pathPNG,cmap="gray")
                 #mask = (distMap[i] != -1)
                 #distMap[i][mask] = (distMap[i][mask]-distMap[i][mask].min())/(distMap[i][mask].max()-distMap[i][mask].min())
 
@@ -470,7 +487,7 @@ class GramDistMap(torch.nn.Module):
         return distMat_mean
 
 class PatchSimCNN(torch.nn.Module):
-    def __init__(self,resnet,resType,pretr,nbGroup,reluOnSimple,gramOrder,**kwargs):
+    def __init__(self,resnet,resType,pretr,nbGroup,reluOnSimple,gramOrder,useModel,**kwargs):
         super(PatchSimCNN,self).__init__()
 
         self.resnet = resnet
@@ -490,19 +507,22 @@ class PatchSimCNN(torch.nn.Module):
 
         self.nbGroup = nbGroup
         self.gramOrder = gramOrder
-
+        self.useModel = useModel
     def forward(self,x):
 
-        if not self.resnet:
-            featList = []
-            for i,layer in enumerate(self.layers):
-                layerFeat = layer(x)
-                featList.append(layerFeat)
+        if self.useModel:
+            if not self.resnet:
+                featList = []
+                for i,layer in enumerate(self.layers):
+                    layerFeat = layer(x)
+                    featList.append(layerFeat)
 
-            featVolume = torch.cat(featList,dim=1)
-            featVolume = featVolume[:,torch.randperm(featVolume.size(1))]
+                featVolume = torch.cat(featList,dim=1)
+                featVolume = featVolume[:,torch.randperm(featVolume.size(1))]
+            else:
+                featVolume = self.featMod(x)["x"]
         else:
-            featVolume = self.featMod(x)["x"]
+            featVolume = torch.nn.functional.adaptive_avg_pool2d(x,(3,3))
 
         origFeatSize = featVolume.size()
         featVolume = featVolume.unfold(1, featVolume.size(1)//self.nbGroup, featVolume.size(1)//self.nbGroup).permute(0,1,4,2,3)
@@ -549,22 +569,14 @@ class PxlSimCNN(torch.nn.Module):
 
         origFeatSize = featVolume.size()
 
-
-        print(featVolume.size())
         featVolume = featVolume.unfold(1, featVolume.size(1)//self.groupNb, featVolume.size(1)//self.groupNb).permute(0,1,4,2,3)
-        print(featVolume.size())
         featVolume = featVolume.view(featVolume.size(0)*featVolume.size(1),featVolume.size(2),featVolume.size(3),featVolume.size(4))
-        print(featVolume.size())
         if self.kernel is None:
             self.kernel = self.buildKernel(featVolume.size(1),self.kerType,featVolume.device)
         gramMatMap = grahamPxl(featVolume,self.kernel,self.stride)
-        print(gramMatMap.size())
         simMap = modelBuilder.computeTotalSim(gramMatMap,1)
-        print(simMap.size())
         simMap = simMap.reshape(x.size(0),self.groupNb,simMap.size(2),simMap.size(3))
-        print(simMap.size())
         simMap = simMap.mean(dim=1,keepdim=True)
-        print(simMap.size())
 
         return simMap
 
@@ -599,57 +611,60 @@ class CosimMap(torch.nn.Module):
 
         origSize = x.size()
 
-        #print(x.size())
         #N x NbGroup x nbPatch x C
         x = x.reshape(x.size(0)*x.size(1),x.size(2),x.size(3))
-        #print(x.size())
         # (NxNbGroup) x nbPatch x C
         x = x.permute(0,2,1)
-        #print(x.size())
         # (NxNbGroup) x C x nbPatch
         x = x.unsqueeze(-1)
-        #print(x.size())
         # (NxNbGroup) x C x nbPatch x 1
-        #print(x.size(),np.sqrt(x.size(2)))
         feat = x.reshape(x.size(0),x.size(1),int(np.sqrt(x.size(2))),int(np.sqrt(x.size(2))))
-        #print(x.size())
         # (NxNbGroup) x C x sqrt(nbPatch) x sqrt(nbPatch)
         x = modelBuilder.computeTotalSim(feat,1).unsqueeze(1)
-        #print(x.size())
         # (NxNbGroup) x 1 x 1 x sqrt(nbPatch) x sqrt(nbPatch)
         x = x.reshape(origSize[0],origSize[1],x.size(2),x.size(3),x.size(4))
-        #print(x.size())
         # N x NbGroup x 1 x sqrt(nbPatch) x sqrt(nbPatch)
         x = x.mean(dim=1)
-        #print(x.size())
         # N x 1 x sqrt(nbPatch) x sqrt(nbPatch)
         return x,feat
 
 class NeighSim(torch.nn.Module):
-    def __init__(self,cuda,groupNb,nbIter):
+    def __init__(self,cuda,groupNb,nbIter,softmax,softmax_fact,includeCenter):
         super(NeighSim,self).__init__()
 
-        self.sumKer = torch.ones((1,4,1,1))
+        self.includeCenter = includeCenter
+        if self.includeCenter:
+            self.directions = ["top","left","right","bottom","none"]
+        else:
+            self.directions = ["top","left","right","bottom"]
+        #self.directions = ["left"]
+
+        self.sumKer = torch.ones((1,len(self.directions),1,1))
         self.sumKer = self.sumKer.cuda() if cuda else self.sumKer
         self.groupNb = groupNb
         self.nbIter = nbIter
+        self.softmax = softmax
+        self.softmax_fact = softmax_fact
 
     def forward(self,features):
 
-        for i in range(self.nbIter):
+        simMap = modelBuilder.computeTotalSim(features,1)
+        simMapList = [simMap]
+        for j in range(self.nbIter):
 
             allSim = []
             allFeatShift = []
             allPondFeatShift = []
-            for direction in ["top","left","right","bottom"]:
+            for direction in self.directions:
                 sim,featuresShift1,_,maskShift1,_ = modelBuilder.applyDiffKer_CosSimi(direction,features,1)
                 allSim.append(sim*maskShift1)
                 allFeatShift.append(featuresShift1*maskShift1)
 
             allSim = torch.cat(allSim,dim=1)
-            allSim = torch.softmax(allSim,dim=1)
+            if self.softmax:
+                allSim = torch.softmax(self.softmax_fact*allSim,dim=1)
 
-            for i in range(4):
+            for i in range(len(self.directions)):
                 sim = allSim[:,i:i+1]
                 featuresShift1 = allFeatShift[i]
                 allPondFeatShift.append((sim*featuresShift1).unsqueeze(1))
@@ -660,14 +675,17 @@ class NeighSim(torch.nn.Module):
             avFeat /= simSum
             features = avFeat
 
-        simMap = modelBuilder.computeTotalSim(avFeat,1).unsqueeze(1)
+            simMap = modelBuilder.computeTotalSim(features,1)
+            simMapList.append(simMap)
 
-        simMap = simMap.reshape(simMap.size(0)//self.groupNb,self.groupNb,simMap.size(2),simMap.size(3),simMap.size(4))
+        simMapList = torch.cat(simMapList,dim=1).unsqueeze(1)
+
+        #simMap = modelBuilder.computeTotalSim(avFeat,1).unsqueeze(1)
+        simMapList = simMapList.reshape(simMapList.size(0)//self.groupNb,self.groupNb,self.nbIter+1,simMapList.size(3),simMapList.size(4))
         # N x NbGroup x 1 x sqrt(nbPatch) x sqrt(nbPatch)
-        simMap = simMap.mean(dim=1)
+        simMapList = simMapList.mean(dim=1)
         # N x 1 x sqrt(nbPatch) x sqrt(nbPatch)
-
-        return simMap
+        return simMapList
 
 def buildModule(cond,constr,cuda,multi_gpu,kwargs={}):
 
