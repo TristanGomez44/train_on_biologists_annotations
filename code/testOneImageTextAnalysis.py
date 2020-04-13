@@ -96,6 +96,8 @@ def main(argv=None):
     argreader.parser.add_argument('--data_batch_index', type=int,
                                   help="The index of the batch to process first",default=0)
 
+    argreader.parser.add_argument('--patch_sim_neighsim_nb_iter', type=int,
+                                  help="The number of times to apply neighbor similarity averaging ",default=1)
 
     argreader = trainVal.addInitArgs(argreader)
     argreader = trainVal.addOptimArgs(argreader)
@@ -248,19 +250,19 @@ def main(argv=None):
             patch = patch.reshape(patch.size(0)*patch.size(1)*patch.size(2),patch.size(3),patch.size(4),patch.size(5))
 
             print(patch.size())
-            kwargs = {"K":args.patch_sim_knn_classes}
-            knn_map = buildModule(True,KNN_Map,args.cuda,args.multi_gpu,kwargs)
+            kwargs = {"cuda":args.cuda,"groupNb":args.patch_sim_group_nb,"nbIter":args.patch_sim_neighsim_nb_iter}
+            neighSim = buildModule(True,NeighSim,args.cuda,args.multi_gpu,kwargs)
 
             gram_mat = net(patch)
             #gram_mat = gram_mat.view(data.size(0),-1,args.patch_sim_group_nb,gram_mat.size(2),gram_mat.size(3))
             gram_mat = gram_mat.view(data.size(0),-1,args.patch_sim_group_nb,gram_mat.size(2))
             gram_mat = gram_mat.permute(0,2,1,3)
 
-            distMap = gramDistMap(gram_mat,patchPerRow=origPatchSize[2])
+            #distMap = gramDistMap(gram_mat,patchPerRow=origPatchSize[2])
 
             distMapAgreg,feat = cosimMap(gram_mat)
 
-            #knnMap = knn_map(feat)
+            distMapAgregNeigSimFeat = neighSim(feat)
 
             print("End ",time.time()-start)
 
@@ -280,11 +282,11 @@ def main(argv=None):
             if not os.path.exists(os.path.join(args.patch_sim_out_path,"simMaps",args.model_id)):
                 os.makedirs(os.path.join(args.patch_sim_out_path,"simMaps",args.model_id))
 
-            if args.patch_size == args.patch_stride:
-                distMap = distMap[:,:,:,np.newaxis].reshape(distMap.shape[0],distMap.shape[1],origPatchSize[1],origPatchSize[2])
-            distMap = distMap.detach()
-            distMap = torch.nn.functional.interpolate(distMap, size=(data.size(-1),data.size(-2)))
-            distMap = distMap.cpu().numpy()
+            #if args.patch_size == args.patch_stride:
+            #    distMap = distMap[:,:,:,np.newaxis].reshape(distMap.shape[0],distMap.shape[1],origPatchSize[1],origPatchSize[2])
+            #distMap = distMap.detach()
+            #distMap = torch.nn.functional.interpolate(distMap, size=(data.size(-1),data.size(-2)))
+            #distMap = distMap.cpu().numpy()
 
             for i,img in enumerate(data):
 
@@ -300,12 +302,12 @@ def main(argv=None):
 
                 plotImg(distMapAgreg[i][0][1:-1,1:-1].detach().cpu().numpy(),os.path.join(args.patch_sim_out_path,"simMaps",args.model_id,"{}".format(i+args.data_batch_index*args.batch_size),"agr.png"),'gray')
 
-                #plotImg(knnMap[i].detach().cpu().numpy(),os.path.join(args.patch_sim_out_path,"simMaps",args.model_id,"{}".format(i+args.data_batch_index*args.batch_size),"knn.png"),'plasma')
+                plotImg(distMapAgregNeigSimFeat[i][0].detach().cpu().numpy(),os.path.join(args.patch_sim_out_path,"simMaps",args.model_id,"{}".format(i+args.data_batch_index*args.batch_size),"neighSim.png"),'gray')
 
-                mask = (distMap[i] != -1)
-                distMap[i][mask] = (distMap[i][mask]-distMap[i][mask].min())/(distMap[i][mask].max()-distMap[i][mask].min())
+                #mask = (distMap[i] != -1)
+                #distMap[i][mask] = (distMap[i][mask]-distMap[i][mask].min())/(distMap[i][mask].max()-distMap[i][mask].min())
 
-
+                '''
                 for l in range(origPatchSize[1]):
                     for m in range(origPatchSize[2]):
                         refPatchInd = l*origPatchSize[2]+m
@@ -339,8 +341,8 @@ def main(argv=None):
                         #array = fig2data(fig)
                         cv2.imwrite(os.path.join(args.patch_sim_out_path,"simMaps",args.model_id,"{}".format(i+args.data_batch_index*args.batch_size),"{}_{}.png".format(m,l)),255*map)
                         #plt.close()
+                '''
 
-                
 
     else:
         with torch.no_grad():
@@ -623,65 +625,49 @@ class CosimMap(torch.nn.Module):
         # N x 1 x sqrt(nbPatch) x sqrt(nbPatch)
         return x,feat
 
-class KNN_Map(torch.nn.Module):
-    def __init__(self,K):
-        super(KNN_Map,self).__init__()
+class NeighSim(torch.nn.Module):
+    def __init__(self,cuda,groupNb,nbIter):
+        super(NeighSim,self).__init__()
 
-        self.K = 10
+        self.sumKer = torch.ones((1,4,1,1))
+        self.sumKer = self.sumKer.cuda() if cuda else self.sumKer
+        self.groupNb = groupNb
+        self.nbIter = nbIter
 
     def forward(self,features):
 
-        origSize = features.size()
-        features = features.permute(0,2,3,1)
-        features = features.reshape(features.size(0),features.size(1)*features.size(2),features.size(3))
+        for i in range(self.nbIter):
 
-        allCl = []
-        for i in range(len(features)):
-            feat = features[i]
-            print(i,len(features),feat.size(),feat.sum())
+            allSim = []
+            allFeatShift = []
+            allPondFeatShift = []
+            for direction in ["top","left","right","bottom"]:
+                sim,featuresShift1,_,maskShift1,_ = modelBuilder.applyDiffKer_CosSimi(direction,features,1)
+                allSim.append(sim*maskShift1)
+                allFeatShift.append(featuresShift1*maskShift1)
 
-            cl,c = KMeans(feat,K=self.K,Niter=100,verbose=False)
+            allSim = torch.cat(allSim,dim=1)
+            allSim = torch.softmax(allSim,dim=1)
 
-            allCl.append(cl.unsqueeze(0))
+            for i in range(4):
+                sim = allSim[:,i:i+1]
+                featuresShift1 = allFeatShift[i]
+                allPondFeatShift.append((sim*featuresShift1).unsqueeze(1))
 
-        allCl = torch.cat(allCl,dim=0).reshape(origSize[0],origSize[2],origSize[3])
+            avFeat = torch.cat(allPondFeatShift,dim=1).sum(dim=1)
+            simSum = torch.nn.functional.conv2d(allSim,self.sumKer.to(allSim.device))
 
-        return allCl
+            avFeat /= simSum
+            features = avFeat
 
-def KMeans(x, K=10, Niter=10, verbose=True):
-    N, D = x.shape  # Number of samples, dimension of the ambient space
+        simMap = modelBuilder.computeTotalSim(avFeat,1).unsqueeze(1)
 
-    # K-means loop:
-    # - x  is the point cloud,
-    # - cl is the vector of class labels
-    # - c  is the cloud of cluster centroids
-    start = time.time()
-    c = x[:K, :].clone()  # Simplistic random initialization
-    x_i = x[:, None, :].clone().to(x.device)  # (Npoints, 1, D)
+        simMap = simMap.reshape(simMap.size(0)//self.groupNb,self.groupNb,simMap.size(2),simMap.size(3),simMap.size(4))
+        # N x NbGroup x 1 x sqrt(nbPatch) x sqrt(nbPatch)
+        simMap = simMap.mean(dim=1)
+        # N x 1 x sqrt(nbPatch) x sqrt(nbPatch)
 
-    print(x_i.size(),c.size())
-
-    for i in range(Niter):
-
-        c_j = c[None, :, :].clone().to(x.device)  # (1, Nclusters, D)
-        D_ij = ((x_i - c_j) ** 2).sum(-1)  # (Npoints, Nclusters) symbolic matrix of squared distances
-        cl = D_ij.argmin(dim=1).long().view(-1)  # Points -> Nearest cluster
-
-        Ncl = torch.bincount(cl).type(torch.float64)  # Class weights
-
-        print(x[:, 0].size(),c[:, 0].size(),cl.size(),Ncl)
-        for d in range(D):  # Compute the cluster centroids with torch.bincount:
-            c[:, d] = torch.bincount(cl, weights=x[:, d]) / Ncl
-
-    end = time.time()
-
-    if verbose:
-        print("K-means example with {:,} points in dimension {:,}, K = {:,}:".format(N, D, K))
-        print('Timing for {} iterations: {:.5f}s = {} x {:.5f}s\n'.format(
-                Niter, end - start, Niter, (end-start) / Niter))
-
-    return cl, c
-
+        return simMap
 
 def buildModule(cond,constr,cuda,multi_gpu,kwargs={}):
 
