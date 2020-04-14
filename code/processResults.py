@@ -42,6 +42,8 @@ from scipy.signal import argrelextrema
 import scipy.ndimage.filters as filters
 import scipy.ndimage.morphology as morphology
 
+import torchvision
+
 def plotPointsImageDataset(imgNb,redFact,plotDepth,args):
 
     cm = plt.get_cmap('plasma')
@@ -98,6 +100,42 @@ def plotPointsImageDataset(imgNb,redFact,plotDepth,args):
                     totalImgNb += 1
         if batchInd>=batchNb:
             break
+
+def plotPointsImageDatasetGrid(exp_id,imgNb,epochs,model_ids,reduction_fact_list,inverse_xy,args):
+
+    imgSize = 224
+
+    ptsImage = torch.zeros((imgSize,imgSize))
+    gridImage = None
+
+    args.normalize_data = False
+    args.val_batch_size = imgNb
+    imgLoader = load_data.buildTestLoader(args,"val")
+    imgBatch,_ = next(iter(imgLoader))
+
+    for i in range(imgNb):
+
+        if gridImage is None:
+            gridImage = imgBatch[i:i+1]
+        else:
+            gridImage = torch.cat((gridImage,imgBatch[i:i+1]),dim=0)
+
+        for j in range(len(model_ids)):
+
+            pts = (torch.tensor(np.load("../results/{}/points_{}_epoch{}_val.npy".format(exp_id,model_ids[j],epochs[j])))[i,:,:2]*reduction_fact_list[j]).long()
+
+            if inverse_xy[j]:
+                x,y = pts[:,0],pts[:,1]
+            else:
+                y,x = pts[:,0],pts[:,1]
+
+            ptsImageCopy = ptsImage.clone()
+            ptsImageCopy[y,x] = 1
+            ptsImageCopy = ptsImageCopy.unsqueeze(0).unsqueeze(0).expand(-1,3,-1,-1)
+
+            gridImage = torch.cat((gridImage,ptsImageCopy),dim=0)
+
+    torchvision.utils.save_image(gridImage, "../vis/{}/points_grid.png".format(exp_id), nrow=len(model_ids)+1,padding=5,pad_value=0.5)
 
 def plotProbMaps(imgNb,args,norm=False):
 
@@ -184,6 +222,14 @@ def main(argv=None):
     argreader.parser.add_argument('--plot_depth',type=str2bool,metavar="BOOL",help='For the --plot_points_image_dataset arg. Plots the depth instead of point feature norm.')
     argreader.parser.add_argument('--norm',type=str2bool,metavar="BOOL",help='For the --plot_prob_maps arg. Normalise each prob map.')
 
+    ######################################## GRID #################################################
+
+    argreader.parser.add_argument('--plot_points_image_dataset_grid',action="store_true",help='Same as --plot_points_image_dataset but plot only on image and for several model.')
+    argreader.parser.add_argument('--epoch_list',type=int,metavar="INT",nargs="*",help='The list of epochs at which to get the points.')
+    argreader.parser.add_argument('--model_ids',type=str,metavar="IDS",nargs="*",help='The list of model ids.')
+    argreader.parser.add_argument('--reduction_fact_list',type=float,metavar="INT",nargs="*",help='The list of reduction factor.')
+    argreader.parser.add_argument('--inverse_xy',type=str2bool,nargs="*",metavar="BOOL",help='To inverse x and y')
+
     argreader = load_data.addArgs(argreader)
 
     #Reading the comand line arg
@@ -194,6 +240,8 @@ def main(argv=None):
 
     if args.plot_points_image_dataset:
         plotPointsImageDataset(args.image_nb,args.reduction_fact,args.plot_depth,args)
+    if args.plot_points_image_dataset_grid:
+        plotPointsImageDatasetGrid(args.exp_id,args.image_nb,args.epoch_list,args.model_ids,args.reduction_fact_list,args.inverse_xy,args)
     if args.plot_prob_maps:
         plotProbMaps(args.image_nb,args,args.norm)
 
