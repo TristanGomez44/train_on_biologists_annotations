@@ -106,8 +106,15 @@ def main(argv=None):
                                   help="Whether or not to use softmax to weight neighbors",default=False)
     argreader.parser.add_argument('--patch_sim_neighsim_softmax_fact', type=int,
                                   help="Whether or not to use softmax to weight neighbors",default=1)
-    argreader.parser.add_argument('--patch_sim_neighsim_center', type=str2bool,
-                                  help="Whether or not to include the center point to compute the new feature",default=False)
+
+    argreader.parser.add_argument('--patch_sim_weight_by_neigsim', type=str2bool,
+                                  help="To weight a neighbor by similarity",default=True)
+    argreader.parser.add_argument('--patch_sim_update_rate_by_cossim', type=str2bool,
+                                  help="To define the update rate of the feature using the cossim map.",default=False)
+    argreader.parser.add_argument('--patch_sim_neighradius', type=int,
+                                  help="The radius of the neighborhood",default=1)
+
+
 
     argreader = trainVal.addInitArgs(argreader)
     argreader = trainVal.addOptimArgs(argreader)
@@ -261,7 +268,8 @@ def main(argv=None):
 
             print(patch.size())
             kwargs = {"cuda":args.cuda,"groupNb":args.patch_sim_group_nb,"nbIter":args.patch_sim_neighsim_nb_iter,\
-                        "softmax":args.patch_sim_neighsim_softmax,"softmax_fact":args.patch_sim_neighsim_softmax_fact,"includeCenter":args.patch_sim_neighsim_center}
+                        "softmax":args.patch_sim_neighsim_softmax,"softmax_fact":args.patch_sim_neighsim_softmax_fact,\
+                        "weightByNeigSim":args.patch_sim_weight_by_neigsim,"updateRateByCossim":args.patch_sim_update_rate_by_cossim,"neighRadius":args.patch_sim_neighradius}
             neighSim = buildModule(True,NeighSim,args.cuda,args.multi_gpu,kwargs)
 
             gram_mat = net(patch)
@@ -628,16 +636,23 @@ class CosimMap(torch.nn.Module):
         # N x 1 x sqrt(nbPatch) x sqrt(nbPatch)
         return x,feat
 
+def computeNeighborsCoord(neighRadius):
+
+    coord = torch.arange(neighRadius*2+1)-neighRadius
+
+    y = coord.unsqueeze(1).expand(coord.size(0),coord.size(0)).unsqueeze(-1)
+    x = coord.unsqueeze(0).expand(coord.size(0),coord.size(0)).unsqueeze(-1)
+
+    coord = torch.cat((x,y),dim=-1).view(coord.size(0)*coord.size(0),2)
+    coord = coord[~((coord[:,0] == 0)*(coord[:,1] == 0))]
+
+    return coord
+
 class NeighSim(torch.nn.Module):
-    def __init__(self,cuda,groupNb,nbIter,softmax,softmax_fact,includeCenter):
+    def __init__(self,cuda,groupNb,nbIter,softmax,softmax_fact,weightByNeigSim,updateRateByCossim,neighRadius):
         super(NeighSim,self).__init__()
 
-        self.includeCenter = includeCenter
-        if self.includeCenter:
-            self.directions = ["top","left","right","bottom","none"]
-        else:
-            self.directions = ["top","left","right","bottom"]
-        #self.directions = ["left"]
+        self.directions = computeNeighborsCoord(neighRadius)
 
         self.sumKer = torch.ones((1,len(self.directions),1,1))
         self.sumKer = self.sumKer.cuda() if cuda else self.sumKer
@@ -645,6 +660,12 @@ class NeighSim(torch.nn.Module):
         self.nbIter = nbIter
         self.softmax = softmax
         self.softmax_fact = softmax_fact
+
+        self.weightByNeigSim = weightByNeigSim
+        self.updateRateByCossim = updateRateByCossim
+
+        if not self.weightByNeigSim and self.softmax:
+            raise ValueError("Can't have weightByNeigSim=False and softmax=True")
 
     def forward(self,features):
 
@@ -656,12 +677,18 @@ class NeighSim(torch.nn.Module):
             allFeatShift = []
             allPondFeatShift = []
             for direction in self.directions:
-                sim,featuresShift1,_,maskShift1,_ = modelBuilder.applyDiffKer_CosSimi(direction,features,1)
-                allSim.append(sim*maskShift1)
+                if self.weightByNeigSim:
+                    sim,featuresShift1,_,maskShift1,_ = modelBuilder.applyDiffKer_CosSimi(direction,features,1)
+                    allSim.append(sim*maskShift1)
+                else:
+                    featuresShift1,maskShift1 = modelBuilder.shiftFeat(direction,features,1)
+                    allSim.append(maskShift1)
+
                 allFeatShift.append(featuresShift1*maskShift1)
 
             allSim = torch.cat(allSim,dim=1)
-            if self.softmax:
+
+            if self.weightByNeigSim and self.softmax:
                 allSim = torch.softmax(self.softmax_fact*allSim,dim=1)
 
             for i in range(len(self.directions)):
@@ -669,14 +696,19 @@ class NeighSim(torch.nn.Module):
                 featuresShift1 = allFeatShift[i]
                 allPondFeatShift.append((sim*featuresShift1).unsqueeze(1))
 
-            avFeat = torch.cat(allPondFeatShift,dim=1).sum(dim=1)
-            simSum = torch.nn.functional.conv2d(allSim,self.sumKer.to(allSim.device))
-
-            avFeat /= simSum
-            features = avFeat
-
             simMap = modelBuilder.computeTotalSim(features,1)
             simMapList.append(simMap)
+
+            newFeatures = torch.cat(allPondFeatShift,dim=1).sum(dim=1)
+            simSum = torch.nn.functional.conv2d(allSim,self.sumKer.to(allSim.device))
+            newFeatures /= simSum
+            if not self.updateRateByCossim:
+                features = 0.5*features+0.5*newFeatures
+            else:
+                min = simMap.min(dim=-1,keepdim=True)[0].min(dim=-1,keepdim=True)[0]
+                max = simMap.max(dim=-1,keepdim=True)[0].max(dim=-1,keepdim=True)[0]
+                normSimMap = (simMap-min)/(max-min)
+                features = (1-normSimMap)*features+normSimMap*newFeatures
 
         simMapList = torch.cat(simMapList,dim=1).unsqueeze(1)
 
