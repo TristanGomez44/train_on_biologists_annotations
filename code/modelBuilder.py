@@ -439,7 +439,27 @@ def computeEdges(origImgBatch,sigma,pts_nb,featMapSize):
 
     return edges
 
-def shiftFeat(where,features,dilation):
+def compositeShiftFeat(coord,features):
+
+    if coord[0] != 0:
+        if coord[0] > 0:
+            shiftFeatV,shiftMaskV = shiftFeat("top",features,coord[0])
+        else:
+            shiftFeatV,shiftMaskV = shiftFeat("bot",features,-coord[0])
+    else:
+        shiftFeatV,shiftMaskV = shiftFeat("none",features)
+
+    if coord[1] != 0:
+        if coord[1] > 0:
+            shiftFeatH,shiftMaskH = shiftFeat("right",shiftFeatV,coord[1])
+        else:
+            shiftFeatH,shiftMaskH = shiftFeat("left",shiftFeatV,-coord[1])
+    else:
+        shiftFeatH,shiftMaskH = shiftFeat("none",shiftFeatV)
+
+    return shiftFeatH,shiftMaskH*shiftMaskV
+
+def shiftFeat(where,features,dilation=None):
 
     mask = torch.ones_like(features)
 
@@ -480,29 +500,33 @@ def applyDiffKer_CosSimi(direction,features,dilation=1):
     origFeatSize = features.size()
     featNb = origFeatSize[1]
 
-    if direction == "horizontal":
-        featuresShift1,maskShift1 = shiftFeat("right",features,dilation)
-        featuresShift2,maskShift2 = shiftFeat("left",features,dilation)
-    elif direction == "vertical":
-        featuresShift1,maskShift1 = shiftFeat("top",features,dilation)
-        featuresShift2,maskShift2 = shiftFeat("bot",features,dilation)
-    elif direction == "top":
-        featuresShift1,maskShift1 = shiftFeat("top",features,dilation)
-        featuresShift2,maskShift2 = shiftFeat("none",features,dilation)
-    elif direction == "bottom":
-        featuresShift1,maskShift1 = shiftFeat("bot",features,dilation)
-        featuresShift2,maskShift2 = shiftFeat("none",features,dilation)
-    elif direction == "left":
-        featuresShift1,maskShift1 = shiftFeat("left",features,dilation)
-        featuresShift2,maskShift2 = shiftFeat("none",features,dilation)
-    elif direction == "right":
-        featuresShift1,maskShift1 = shiftFeat("right",features,dilation)
-        featuresShift2,maskShift2 = shiftFeat("none",features,dilation)
-    elif direction == "none":
-        featuresShift1,maskShift1 = shiftFeat("none",features,dilation)
-        featuresShift2,maskShift2 = shiftFeat("none",features,dilation)
+    if type(direction) is str:
+        if direction == "horizontal":
+            featuresShift1,maskShift1 = shiftFeat("right",features,dilation)
+            featuresShift2,maskShift2 = shiftFeat("left",features,dilation)
+        elif direction == "vertical":
+            featuresShift1,maskShift1 = shiftFeat("top",features,dilation)
+            featuresShift2,maskShift2 = shiftFeat("bot",features,dilation)
+        elif direction == "top":
+            featuresShift1,maskShift1 = shiftFeat("top",features,dilation)
+            featuresShift2,maskShift2 = shiftFeat("none",features)
+        elif direction == "bot":
+            featuresShift1,maskShift1 = shiftFeat("bot",features,dilation)
+            featuresShift2,maskShift2 = shiftFeat("none",features)
+        elif direction == "left":
+            featuresShift1,maskShift1 = shiftFeat("left",features,dilation)
+            featuresShift2,maskShift2 = shiftFeat("none",features)
+        elif direction == "right":
+            featuresShift1,maskShift1 = shiftFeat("right",features,dilation)
+            featuresShift2,maskShift2 = shiftFeat("none",features)
+        elif direction == "none":
+            featuresShift1,maskShift1 = shiftFeat("none",features)
+            featuresShift2,maskShift2 = shiftFeat("none",features)
+        else:
+            raise ValueError("Unknown direction : ",direction)
     else:
-        raise ValueError("Unknown direction : ",direction)
+        featuresShift1,maskShift1 = compositeShiftFeat(direction,features)
+        featuresShift2,maskShift2 = shiftFeat("none",features)
 
     sim = (featuresShift1*featuresShift2*maskShift1*maskShift2).sum(dim=1,keepdim=True)
     sim /= torch.sqrt(torch.pow(maskShift1*featuresShift1,2).sum(dim=1,keepdim=True))*torch.sqrt(torch.pow(maskShift2*featuresShift2,2).sum(dim=1,keepdim=True))
