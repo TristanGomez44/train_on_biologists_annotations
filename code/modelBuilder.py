@@ -301,7 +301,8 @@ class TopkPointExtractor(nn.Module):
 
     def __init__(self, cuda, nbFeat,point_nb,encoderChan, \
                  furthestPointSampling, furthestPointSampling_nb_pts,\
-                 auxModel,topk_euclinorm,hasLinearProb,cannyedge,cannyedge_sigma,patchsim):
+                 auxModel,topk_euclinorm,hasLinearProb,cannyedge,cannyedge_sigma,patchsim,\
+                 patchsim_patchsize,patchsim_neiSimRefin):
 
         super(TopkPointExtractor, self).__init__()
 
@@ -325,7 +326,8 @@ class TopkPointExtractor(nn.Module):
 
         self.patchsim = patchsim
         if self.patchsim:
-            self.patchSimCNN = PatchSimCNN("resnet9",False,4,chan=32)
+
+            self.patchSimCNN = PatchSimCNN("resnet9",False,4,chan=32,patchSize=patchsim_patchsize,neiSimRefin=patchsim_neiSimRefin)
 
         if self.cannyedge and self.patchsim:
             raise ValueError("cannyedge and patchsim can't be True at the same time.")
@@ -348,7 +350,7 @@ class TopkPointExtractor(nn.Module):
             elif self.patchsim:
                 distMap = -self.patchSimCNN(kwargs["origImgBatch"])
                 x = distMap
-                featureMaps = F.interpolate(featureMaps,size=(x.size(-2),x.size(-1)))
+                pointFeaturesMap = F.interpolate(pointFeaturesMap,size=(x.size(-2),x.size(-1)))
             elif self.hasLinearProb:
                 x = torch.sigmoid(self.linearProb(pointFeaturesMap))
             else:
@@ -540,15 +542,23 @@ def computeTotalSim(features,dilation):
     return totalDiff
 
 class PatchSimCNN(torch.nn.Module):
-    def __init__(self,resType,pretr,nbGroup,**kwargs):
+    def __init__(self,resType,pretr,nbGroup,patchSize,neiSimRefin,**kwargs):
         super(PatchSimCNN,self).__init__()
 
         self.featMod = buildFeatModel(resType, pretr, True, False,**kwargs)
         self.nbGroup = nbGroup
 
+        self.neiSimRefin = neiSimRefin
+        if not neiSimRefin is None:
+            self.refiner = NeighSim(neiSimRefin["cuda"],nbGroup,neiSimRefin["nbIter"],neiSimRefin["softmax"],neiSimRefin["softmax_fact"],\
+                                    neiSimRefin["weightByNeigSim"],neiSimRefin["neighRadius"])
+        else:
+            self.refiner = None
+
+        self.patchSize = patchSize
     def forward(self,data):
 
-        patch = data.unfold(2, 10, 10).unfold(3, 10, 10).permute(0,2,3,1,4,5)
+        patch = data.unfold(2, self.patchSize, self.patchSize).unfold(3, self.patchSize, self.patchSize).permute(0,2,3,1,4,5)
         origPatchSize = patch.size()
         patch = patch.reshape(patch.size(0)*patch.size(1)*patch.size(2),patch.size(3),patch.size(4),patch.size(5))
 
@@ -576,13 +586,95 @@ class PatchSimCNN(torch.nn.Module):
         # (NxNbGroup) x C x nbPatch x 1
         feat = feat.reshape(feat.size(0),feat.size(1),int(np.sqrt(feat.size(2))),int(np.sqrt(feat.size(2))))
         # (NxNbGroup) x C x sqrt(nbPatch) x sqrt(nbPatch)
-        simMap = computeTotalSim(feat,1).unsqueeze(1)
-        # (NxNbGroup) x 1 x 1 x sqrt(nbPatch) x sqrt(nbPatch)
-        simMap = simMap.reshape(origFeatSize[0],origFeatSize[1],simMap.size(2),simMap.size(3),simMap.size(4))
-        # N x NbGroup x 1 x sqrt(nbPatch) x sqrt(nbPatch)
-        simMap = simMap.mean(dim=1)
-        # N x 1 x sqrt(nbPatch) x sqrt(nbPatch)
+        if self.refiner is None:
+            simMap = computeTotalSim(feat,1).unsqueeze(1)
+            # (NxNbGroup) x 1 x 1 x sqrt(nbPatch) x sqrt(nbPatch)
+            simMap = simMap.reshape(origFeatSize[0],origFeatSize[1],simMap.size(2),simMap.size(3),simMap.size(4))
+            # N x NbGroup x 1 x sqrt(nbPatch) x sqrt(nbPatch)
+            simMap = simMap.mean(dim=1)
+            # N x 1 x sqrt(nbPatch) x sqrt(nbPatch)
+        else:
+            #The refiner returns the refined feature obtained at every iteration.
+            #We only want the last one
+            simMap = self.refiner(feat)[:,-1].unsqueeze(1)
+            # N x 1 x sqrt(nbPatch) x sqrt(nbPatch)
         return simMap
+
+def computeNeighborsCoord(neighRadius):
+
+    coord = torch.arange(neighRadius*2+1)-neighRadius
+
+    y = coord.unsqueeze(1).expand(coord.size(0),coord.size(0)).unsqueeze(-1)
+    x = coord.unsqueeze(0).expand(coord.size(0),coord.size(0)).unsqueeze(-1)
+
+    coord = torch.cat((x,y),dim=-1).view(coord.size(0)*coord.size(0),2)
+    coord = coord[~((coord[:,0] == 0)*(coord[:,1] == 0))]
+
+    return coord
+
+class NeighSim(torch.nn.Module):
+    def __init__(self,cuda,groupNb,nbIter,softmax,softmax_fact,weightByNeigSim,neighRadius):
+        super(NeighSim,self).__init__()
+
+        self.directions = computeNeighborsCoord(neighRadius)
+
+        self.sumKer = torch.ones((1,len(self.directions),1,1))
+        self.sumKer = self.sumKer.cuda() if cuda else self.sumKer
+        self.groupNb = groupNb
+        self.nbIter = nbIter
+        self.softmax = softmax
+        self.softmax_fact = softmax_fact
+        self.weightByNeigSim = weightByNeigSim
+
+        if not self.weightByNeigSim and self.softmax:
+            raise ValueError("Can't have weightByNeigSim=False and softmax=True")
+
+    def forward(self,features):
+
+        simMap = computeTotalSim(features,1)
+        simMapList = [simMap]
+        for j in range(self.nbIter):
+
+            allSim = []
+            allFeatShift = []
+            allPondFeatShift = []
+            for direction in self.directions:
+                if self.weightByNeigSim:
+                    sim,featuresShift1,_,maskShift1,_ = applyDiffKer_CosSimi(direction,features,1)
+                    allSim.append(sim*maskShift1)
+                else:
+                    featuresShift1,maskShift1 = shiftFeat(direction,features,1)
+                    allSim.append(maskShift1)
+
+                allFeatShift.append(featuresShift1*maskShift1)
+
+            allSim = torch.cat(allSim,dim=1)
+
+            if self.weightByNeigSim and self.softmax:
+                allSim = torch.softmax(self.softmax_fact*allSim,dim=1)
+
+            for i in range(len(self.directions)):
+                sim = allSim[:,i:i+1]
+                featuresShift1 = allFeatShift[i]
+                allPondFeatShift.append((sim*featuresShift1).unsqueeze(1))
+
+            simMap = computeTotalSim(features,1)
+            simMapList.append(simMap)
+
+            newFeatures = torch.cat(allPondFeatShift,dim=1).sum(dim=1)
+            simSum = torch.nn.functional.conv2d(allSim,self.sumKer.to(allSim.device))
+            newFeatures /= simSum
+            features = 0.5*features+0.5*newFeatures
+
+
+        simMapList = torch.cat(simMapList,dim=1).unsqueeze(1)
+
+        simMapList = simMapList.reshape(simMapList.size(0)//self.groupNb,self.groupNb,self.nbIter+1,simMapList.size(3),simMapList.size(4))
+        # N x NbGroup x 1 x sqrt(nbPatch) x sqrt(nbPatch)
+        simMapList = simMapList.mean(dim=1)
+        # N x 1 x sqrt(nbPatch) x sqrt(nbPatch)
+        return simMapList
+
 
 class ReinforcePointExtractor(nn.Module):
 
@@ -671,7 +763,7 @@ class PointNet2(SecondModel):
                  point_nb=256,encoderChan=1,topk_fps=False,
                  topk_fps_nb_pts=64, auxModel=False,hasLinearProb=False,
                  use_baseline=False,topk_euclinorm=True,reinf_linear_only=False, pn_clustering=False,\
-                 cannyedge=False,cannyedge_sigma=2,patchsim=False):
+                 cannyedge=False,cannyedge_sigma=2,patchsim=False,patchsim_patchsize=5,patchsim_neiSimRefin=None):
 
         super(PointNet2, self).__init__(nbFeat, classNb)
 
@@ -679,7 +771,7 @@ class PointNet2(SecondModel):
             self.pointExtr = TopkPointExtractor(cuda, nbFeat,point_nb, encoderChan, \
                                                 topk_fps, topk_fps_nb_pts,auxModel, \
                                                 topk_euclinorm,hasLinearProb,\
-                                                cannyedge,cannyedge_sigma,patchsim)
+                                                cannyedge,cannyedge_sigma,patchsim,patchsim_patchsize,patchsim_neiSimRefin)
         elif reinfExct:
             self.pointExtr = ReinforcePointExtractor(cuda, nbFeat,point_nb,encoderChan,hasLinearProb, use_baseline, reinf_linear_only)
         else:
@@ -778,6 +870,14 @@ def netBuilder(args):
             pn_model = pointnet2.EdgeNet(num_classes=args.class_nb,
                                          input_channels=args.pn_enc_chan if args.pn_topk else 3)
 
+        if args.pn_patchsim_neiref:
+            neiSimRefinDict = {"cuda":args.cuda,"nbIter":args.pn_patchsim_neiref_nbiter,"softmax":args.pn_patchsim_neiref_softm,\
+                            "softmax_fact":args.pn_patchsim_neiref_softmfact,"weightByNeigSim":args.pn_patchsim_neiref_weibysim,\
+                            "neighRadius":args.pn_patchsim_neiref_neirad}
+
+        else:
+            neiSimRefinDict = None
+
         secondModel = PointNet2(args.cuda, args.class_nb, nbFeat=nbFeat, pn_model=pn_model,\
                                 topk=args.pn_topk, reinfExct=args.pn_reinf, point_nb=args.pn_point_nb,
                                 encoderChan=args.pn_enc_chan, \
@@ -786,7 +886,7 @@ def netBuilder(args):
                                 topk_euclinorm=args.pn_topk_euclinorm, reinf_linear_only=args.pn_train_reinf_linear_only,
                                 pn_clustering=args.pn_clustering,\
                                 cannyedge=args.pn_cannyedge,cannyedge_sigma=args.pn_cannyedge_sigma,\
-                                patchsim=args.pn_patchsim)
+                                patchsim=args.pn_patchsim,patchsim_patchsize=args.pn_patchsim_patchsize,patchsim_neiSimRefin=neiSimRefinDict)
 
     else:
         raise ValueError("Unknown temporal model type : ", args.second_mod)
@@ -902,6 +1002,22 @@ def addArgs(argreader):
                                   help='The sigma hyper-parameter of the canny edge detection.')
     argreader.parser.add_argument('--pn_patchsim', type=args.str2bool, metavar='BOOL',
                                   help='To use patch similarity to extract points.')
+    argreader.parser.add_argument('--pn_patchsim_patchsize', type=int, metavar='BOOL',
+                                  help='The patch size.')
+
+    argreader.parser.add_argument('--pn_patchsim_neiref', type=args.str2bool, metavar='BOOL',
+                                  help='When using patch similarity, to refine results using neighbor similarity')
+    argreader.parser.add_argument('--pn_patchsim_neiref_nbiter', type=int, metavar='BOOL',
+                                  help='The number of iterations for neihbor refining')
+    argreader.parser.add_argument('--pn_patchsim_neiref_softm', type=args.str2bool, metavar='BOOL',
+                                  help='Whether to use softmax for neihbor refining')
+    argreader.parser.add_argument('--pn_patchsim_neiref_softmfact', type=int, metavar='BOOL',
+                                  help='The softmax temperature (lower give smoother) for neihbor refining')
+    argreader.parser.add_argument('--pn_patchsim_neiref_weibysim', type=args.str2bool, metavar='BOOL',
+                                  help='Whether to weight neighbors using similarity for neihbor refining')
+    argreader.parser.add_argument('--pn_patchsim_neiref_neirad', type=int, metavar='BOOL',
+                                  help='The radius of the neighborhood for neihbor refining')
+
     argreader.parser.add_argument('--reduced_img_size', type=int, metavar='BOOL',
                                   help="The size at which the image is reduced at the begining of the process")
 
