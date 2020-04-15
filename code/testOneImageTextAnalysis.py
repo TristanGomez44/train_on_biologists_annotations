@@ -712,11 +712,10 @@ class NeighSim(torch.nn.Module):
 
         simMapList = torch.cat(simMapList,dim=1).unsqueeze(1)
 
-        #simMap = modelBuilder.computeTotalSim(avFeat,1).unsqueeze(1)
         simMapList = simMapList.reshape(simMapList.size(0)//self.groupNb,self.groupNb,self.nbIter+1,simMapList.size(3),simMapList.size(4))
-        # N x NbGroup x 1 x sqrt(nbPatch) x sqrt(nbPatch)
+        # N x NbGroup x nbIter x sqrt(nbPatch) x sqrt(nbPatch)
         simMapList = simMapList.mean(dim=1)
-        # N x 1 x sqrt(nbPatch) x sqrt(nbPatch)
+        # N x nbIter x sqrt(nbPatch) x sqrt(nbPatch)
         return simMapList
 
 def buildModule(cond,constr,cuda,multi_gpu,kwargs={}):
