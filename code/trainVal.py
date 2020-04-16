@@ -281,8 +281,7 @@ def writeSummaries(metrDict, sampleNb, writer, epoch, mode, model_id, exp_id):
 
     return metrDict
 
-
-def get_OptimConstructor_And_Kwargs(optimStr, momentum):
+def getOptim_and_Scheduler(optimStr, lr,momentum,weightDecay,useScheduler,maxEpoch,lastEpoch,net):
     '''Return the apropriate constructor and keyword dictionnary for the choosen optimiser
     Args:
         optimStr (str): the name of the optimiser. Can be \'AMSGrad\', \'SGD\' or \'Adam\'.
@@ -294,17 +293,23 @@ def get_OptimConstructor_And_Kwargs(optimStr, momentum):
     if optimStr != "AMSGrad":
         optimConst = getattr(torch.optim, optimStr)
         if optimStr == "SGD":
-            kwargs = {'momentum': momentum}
+            kwargs = {'lr':lr,'momentum': momentum,"weight_decay":weightDecay}
         elif optimStr == "Adam":
-            kwargs = {}
+            kwargs = {'lr':lr}
         else:
             raise ValueError("Unknown optimisation algorithm : {}".format(args.optim))
     else:
         optimConst = torch.optim.Adam
-        kwargs = {'amsgrad': True}
+        kwargs = {'lr':lr,'amsgrad': True}
 
-    return optimConst, kwargs
+    optim = optimConst(net.parameters(), **kwargs)
 
+    if useScheduler:
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optim, maxEpoch,last_epoch=lastEpoch)
+    else:
+        scheduler = None
+
+    return optim, scheduler
 
 def initialize_Net_And_EpochNumber(net, exp_id, model_id, cuda, start_mode, init_path, strict, init_pn_path):
     '''Initialize a network
@@ -452,10 +457,15 @@ def addInitArgs(argreader):
 
 
 def addOptimArgs(argreader):
-    argreader.parser.add_argument('--lr', type=args.str2FloatList, metavar='LR',
-                                  help='learning rate (it can be a schedule : --lr 0.01,0.001,0.0001)')
+    argreader.parser.add_argument('--lr', type=float, metavar='LR',
+                                  help='learning rate')
     argreader.parser.add_argument('--momentum', type=float, metavar='M',
                                   help='SGD momentum')
+    argreader.parser.add_argument('--weight_decay', type=float, metavar='M',
+                                  help='Weight decay')
+    argreader.parser.add_argument('--use_scheduler', type=args.str2bool, metavar='M',
+                                  help='To use a learning rate scheduler')
+
     argreader.parser.add_argument('--optim', type=str, metavar='OPTIM',
                                   help='the optimizer to use (default: \'SGD\')')
     return argreader
@@ -535,18 +545,10 @@ def run(args):
     kwargsVal['loader'] = valLoader
     kwargsVal["metricEarlyStop"] = args.metric_early_stop
 
-    # Getting the contructor and the kwargs for the choosen optimizer
-    optimConst, kwargsOpti = get_OptimConstructor_And_Kwargs(args.optim, args.momentum)
     startEpoch = initialize_Net_And_EpochNumber(net, args.exp_id, args.model_id, args.cuda, args.start_mode,
                                                 args.init_path, args.strict_init, args.init_pn_path)
 
-    # If no learning rate is schedule is indicated (i.e. there's only one learning rate),
-    # the args.lr argument will be a float and not a float list.
-    # Converting it to a list with one element makes the rest of processing easier
-    if type(args.lr) is float:
-        args.lr = [args.lr]
-
-    lrCounter = 0
+    kwargsTr["optim"],scheduler = getOptim_and_Scheduler(args.optim, args.lr,args.momentum,args.weight_decay,args.use_scheduler,args.epochs,-1,net)
 
     epoch = startEpoch
     bestEpoch, worseEpochNb = getBestEpochInd_and_WorseEpochNb(args.start_mode, args.exp_id, args.model_id, epoch)
@@ -560,14 +562,14 @@ def run(args):
 
     while epoch < args.epochs + 1 and worseEpochNb < args.max_worse_epoch_nb:
 
-        kwargsOpti, kwargsTr, lrCounter = update.updateLR_and_Optim(epoch, args.epochs, args.lr, startEpoch, kwargsOpti,
-                                                                    kwargsTr, lrCounter, net, optimConst)
-
         kwargsTr["epoch"], kwargsVal["epoch"] = epoch, epoch
         kwargsTr["model"], kwargsVal["model"] = net, net
 
         if not args.no_train:
             trainFunc(**kwargsTr)
+            if not scheduler is None:
+                writer.add_scalars("LR", {args.model_id: scheduler.get_lr()}, epoch)
+                scheduler.step()
         else:
             if not args.no_val:
                 net.load_state_dict(torch.load(
@@ -583,6 +585,7 @@ def run(args):
                                                                             isBetter, worseEpochNb)
 
         epoch += 1
+
     if args.run_test:
         testFunc = valFunc
 
@@ -601,7 +604,6 @@ def run(args):
         with torch.no_grad():
             testFunc(**kwargsTest)
 
-
 def updateSeedAndNote(args):
     if args.start_mode == "auto" and len(
             glob.glob("../models/{}/model{}_epoch*".format(args.exp_id, args.model_id))) > 0:
@@ -613,7 +615,6 @@ def updateSeedAndNote(args):
         startEpoch = utils.findLastNumbers(init_path)
         args.note += ";s{} at {}".format(args.seed, startEpoch)
     return args
-
 
 def main(argv=None):
     # Getting arguments from config file and command line
