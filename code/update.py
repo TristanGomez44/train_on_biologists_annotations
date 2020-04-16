@@ -29,20 +29,7 @@ def get_gpu_memory_map():
     gpu_memory_map = dict(zip(range(len(gpu_memory)), gpu_memory))
     return gpu_memory_map
 
-def updateLR_and_Optim(epoch,maxEpoch,lr,startEpoch,kwargsOpti,kwargsTr,lrCounter,net,optimConst):
-    #This condition determines when the learning rate should be updated (to follow the learning rate schedule)
-    #The optimiser have to be rebuilt every time the learning rate is updated
-    if (epoch-1) % ((maxEpoch + 1)//len(lr)) == 0 or epoch==startEpoch:
 
-        kwargsOpti['lr'] = lr[lrCounter]
-        optim = optimConst(net.parameters(), **kwargsOpti)
-
-        kwargsTr["optim"] = optim
-
-        if lrCounter<len(lr)-1:
-            lrCounter += 1
-
-    return kwargsOpti,kwargsTr,lrCounter
 def updateBestModel(metricVal,bestMetricVal,exp_id,model_id,bestEpoch,epoch,net,isBetter,worseEpochNb):
 
     if isBetter(metricVal,bestMetricVal):
