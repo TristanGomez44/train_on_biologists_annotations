@@ -594,9 +594,7 @@ class PatchSimCNN(torch.nn.Module):
             simMap = simMap.mean(dim=1)
             # N x 1 x sqrt(nbPatch) x sqrt(nbPatch)
         else:
-            #The refiner returns the refined feature obtained at every iteration.
-            #We only want the last one
-            simMap = self.refiner(feat)[:,-1].unsqueeze(1)
+            simMap = self.refiner(feat)
             # N x 1 x sqrt(nbPatch) x sqrt(nbPatch)
         return simMap
 
@@ -632,7 +630,7 @@ class NeighSim(torch.nn.Module):
     def forward(self,features):
 
         simMap = computeTotalSim(features,1)
-        simMapList = [simMap]
+        #simMapList = [simMap]
         for j in range(self.nbIter):
 
             allSim = []
@@ -658,22 +656,22 @@ class NeighSim(torch.nn.Module):
                 featuresShift1 = allFeatShift[i]
                 allPondFeatShift.append((sim*featuresShift1).unsqueeze(1))
 
-            simMap = computeTotalSim(features,1)
-            simMapList.append(simMap)
-
             newFeatures = torch.cat(allPondFeatShift,dim=1).sum(dim=1)
             simSum = torch.nn.functional.conv2d(allSim,self.sumKer.to(allSim.device))
             newFeatures /= simSum
             features = 0.5*features+0.5*newFeatures
 
+        simMap = computeTotalSim(features,1)            
 
-        simMapList = torch.cat(simMapList,dim=1).unsqueeze(1)
+        simMap = simMap.unsqueeze(1)
 
-        simMapList = simMapList.reshape(simMapList.size(0)//self.groupNb,self.groupNb,self.nbIter+1,simMapList.size(3),simMapList.size(4))
+        simMap = simMap.reshape(simMap.size(0)//self.groupNb,self.groupNb,1,simMap.size(3),simMap.size(4))
         # N x NbGroup x 1 x sqrt(nbPatch) x sqrt(nbPatch)
-        simMapList = simMapList.mean(dim=1)
+        simMap = simMap.mean(dim=1)
         # N x 1 x sqrt(nbPatch) x sqrt(nbPatch)
-        return simMapList
+
+
+        return simMap
 
 
 class ReinforcePointExtractor(nn.Module):
