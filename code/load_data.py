@@ -14,7 +14,7 @@ import args
 import utils
 import torch.distributed as dist
 from random import Random
-
+import albumentations
 
 class Partition(object):
 
@@ -58,6 +58,18 @@ def buildTrainLoader(args,transf=None,shuffle=True):
         if args.old_preprocess:
             transf = transforms.Compose(
                 [transforms.RandomResizedCrop(resizedImgSize), transforms.RandomHorizontalFlip(), transforms.ToTensor()])
+        elif args.moredataaug_preprocess:
+
+            albTransfFunc = albumentations.Compose([
+                albumentations.augmentations.transforms.GaussNoise(var_limit=(10.0, 100.0)),
+                albumentations.augmentations.transforms.GaussianBlur(blur_limit=10)])
+
+            transf = transforms.Compose(
+                [transforms.RandomResizedCrop(resizedImgSize, scale=(0.2, 1.0)),
+                transforms.RandomHorizontalFlip(),
+                torchvision.transforms.ColorJitter(brightness=0.1, contrast=0.1, saturation=0.1, hue=0.1),
+                torchvision.transforms.Lambda(lambda x:albTransfFunc(image=np.asarray(x))["image"]),
+                transforms.ToTensor()])
         else:
             transf = transforms.Compose([transforms.Resize(resizedImgSize), transforms.RandomCrop(resizedImgSize, padding=0, pad_if_needed=True),
                                          transforms.RandomHorizontalFlip(), transforms.ToTensor()])
@@ -169,6 +181,9 @@ def addArgs(argreader):
 
     argreader.parser.add_argument('--old_preprocess', type=args.str2bool, metavar='S',
                                   help='To use the old images pre-processor.')
+    argreader.parser.add_argument('--moredataaug_preprocess', type=args.str2bool, metavar='S',
+                                  help='To apply color jitter and random rotation along random resized crop and horizontal flip')
+
     argreader.parser.add_argument('--big_images', type=args.str2bool, metavar='S',
                                   help='To resize the images to 500 pixels instead of 224')
     argreader.parser.add_argument('--normalize_data', type=args.str2bool, metavar='S',
