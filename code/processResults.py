@@ -198,6 +198,102 @@ def plotProbMaps(imgNb,args,norm=False):
         if batchInd>=batchNb:
             break
 
+def listBestPred(exp_id):
+
+    bestPaths = sorted(glob.glob("../models/{}/*best*".format(exp_id)))
+    bestPredPaths = []
+    for path in bestPaths:
+
+        bestEpoch = utils.findNumbers(os.path.basename(path).split("best")[-1])
+        #Removing the last character because it is a "_"
+        model_id = os.path.basename(path).split("best")[0][:-1].replace("model","")
+
+        bestPredPath = "../results/{}/{}_epoch{}.csv".format(exp_id,model_id,bestEpoch)
+
+        if os.path.exists(bestPredPath):
+            bestPredPaths.append(bestPredPath)
+        else:
+            print("file {} does not exist".format(bestPredPath))
+
+    with open("../results/{}/bestPred.txt".format(exp_id),"w") as text_file:
+        for path in bestPredPaths:
+            print(path,file=text_file)
+
+def findHardImage(exp_id,dataset_size,threshold,datasetName,trainProp,nbClass):
+
+    allBestPredLists = sorted(glob.glob("../results/{}/bestPred_*".format(exp_id)))
+
+    allAccuracy = []
+    allClassErr = []
+
+    for bestPredList in allBestPredLists:
+        bestPredList = np.genfromtxt(bestPredList,dtype=str)
+
+        for i,bestPred in enumerate(bestPredList):
+            label = np.genfromtxt(bestPred,delimiter=",")[1:,0]
+
+            if len(label) == dataset_size:
+                bestPred = np.genfromtxt(bestPred,delimiter=",")[1:,1:].argmax(axis=1)
+                accuracy = (label==bestPred)
+
+                if accuracy.mean() >= threshold:
+                    allAccuracy.append(accuracy[np.newaxis])
+
+                    classErr = np.zeros(nbClass)
+
+                    for i in range(nbClass):
+                        classErr[i] = ((label==i)*(bestPred!=i)).sum()
+                    allClassErr.append(classErr[np.newaxis])
+
+    print("Nb models :",len(allAccuracy))
+    allAccuracy = np.concatenate(allAccuracy,axis=0)
+    allAccuracy = allAccuracy.mean(axis=0)
+    sortedInds = np.argsort(allAccuracy)
+
+    plt.figure()
+    plt.ylabel("Proportion of models to answer correctly")
+    plt.xlabel("Image index")
+    plt.plot(np.arange(len(allAccuracy))/len(allAccuracy),allAccuracy[sortedInds])
+    plt.savefig("../vis/{}/failCases.png".format(exp_id))
+    plt.close()
+
+    test_dataset = torchvision.datasets.ImageFolder("../data/{}".format(datasetName))
+
+    np.random.seed(1)
+    torch.manual_seed(1)
+
+    totalLength = len(test_dataset)
+    _, test_dataset = torch.utils.data.random_split(test_dataset, [int(totalLength * trainProp),
+                                                                   totalLength - int(totalLength * trainProp)])
+
+    printImage("../vis/{}/failCases/".format(exp_id),sortedInds[:20],test_dataset)
+    printImage("../vis/{}/sucessCases/".format(exp_id),sortedInds[-20:],test_dataset)
+
+    allClassErr = np.concatenate(allClassErr,axis=0).mean(axis=0)
+    plt.figure()
+    plt.plot(allClassErr)
+    plt.xlabel("Class index")
+    plt.ylabel("Average error number")
+    plt.savefig("../vis/{}/classErr.png".format(exp_id))
+    plt.close()
+
+    ratioList = []
+    for i in range(len(sortedInds)):
+        shape = test_dataset.__getitem__(i)[0].size
+        ratio = shape[0]/shape[1]
+        ratioList.append(ratio)
+    plt.figure()
+    plt.plot(ratioList,allAccuracy,"*")
+    plt.savefig("../vis/{}/ratioAcc.png".format(exp_id))
+
+
+def printImage(path,indexs,test_dataset):
+    if not os.path.exists(path):
+        os.makedirs(path)
+    for index in indexs:
+        image = test_dataset.__getitem__(index)[0]
+        image.save(path+"/{}.png".format(index))
+
 def main(argv=None):
 
     #Getting arguments from config file and command line
@@ -230,6 +326,15 @@ def main(argv=None):
     argreader.parser.add_argument('--reduction_fact_list',type=float,metavar="INT",nargs="*",help='The list of reduction factor.')
     argreader.parser.add_argument('--inverse_xy',type=str2bool,nargs="*",metavar="BOOL",help='To inverse x and y')
 
+    ######################################## Find failure cases #########################################""
+
+    argreader.parser.add_argument('--list_best_pred',action="store_true",help='To create a file listing the prediction for all models at their best epoch')
+    argreader.parser.add_argument('--find_hard_image',action="store_true",help='To find the hard image indexs')
+    argreader.parser.add_argument('--dataset_size',type=int,metavar="INT",help='Size of the dataset (not the whole dataset, but the concerned part)')
+    argreader.parser.add_argument('--threshold',type=float,metavar="INT",help='Accuracy threshold above which a model is taken into account')
+    argreader.parser.add_argument('--dataset_name',type=str,metavar="NAME",help='Name of the dataset')
+    argreader.parser.add_argument('--nb_class',type=int,metavar="NAME",help='Nb of big classes')
+
     argreader = load_data.addArgs(argreader)
 
     #Reading the comand line arg
@@ -244,6 +349,9 @@ def main(argv=None):
         plotPointsImageDatasetGrid(args.exp_id,args.image_nb,args.epoch_list,args.model_ids,args.reduction_fact_list,args.inverse_xy,args)
     if args.plot_prob_maps:
         plotProbMaps(args.image_nb,args,args.norm)
-
+    if args.list_best_pred:
+        listBestPred(args.exp_id)
+    if args.find_hard_image:
+        findHardImage(args.exp_id,args.dataset_size,args.threshold,args.dataset_name,args.train_prop,args.nb_class)
 if __name__ == "__main__":
     main()
