@@ -100,7 +100,10 @@ class EdgeNet(torch.nn.Module):
 
     def forward(self,x,pos,batch):
 
-        x = torch.cat((x,pos),dim=-1)
+        if x is None:
+            x = pos
+        else:
+            x = torch.cat((x,pos),dim=-1)
 
         #in_chan
         x1 = self.dynEdgeConv1(x,batch)

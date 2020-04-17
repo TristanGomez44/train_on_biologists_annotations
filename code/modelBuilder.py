@@ -302,14 +302,15 @@ class TopkPointExtractor(nn.Module):
     def __init__(self, cuda, nbFeat,point_nb,encoderChan, \
                  furthestPointSampling, furthestPointSampling_nb_pts,\
                  auxModel,topk_euclinorm,hasLinearProb,cannyedge,cannyedge_sigma,patchsim,\
-                 patchsim_patchsize,patchsim_neiSimRefin):
+                 patchsim_patchsize,patchsim_neiSimRefin,no_feat):
 
         super(TopkPointExtractor, self).__init__()
 
-        if nbFeat != encoderChan:
-            self.conv1x1 = nn.Conv2d(nbFeat, encoderChan, kernel_size=1, stride=1)
-        else:
+        if nbFeat == encoderChan or encoderChan == 0:
             self.conv1x1 = None
+        else:
+            self.conv1x1 = nn.Conv2d(nbFeat, encoderChan, kernel_size=1, stride=1)
+
         self.point_extracted = point_nb
         self.furthestPointSampling = furthestPointSampling
         self.furthestPointSampling_nb_pts = furthestPointSampling_nb_pts
@@ -331,6 +332,8 @@ class TopkPointExtractor(nn.Module):
 
         if self.cannyedge and self.patchsim:
             raise ValueError("cannyedge and patchsim can't be True at the same time.")
+
+        self.no_feat = no_feat
 
     def forward(self, featureMaps,**kwargs):
         retDict = {}
@@ -382,17 +385,26 @@ class TopkPointExtractor(nn.Module):
             abs = abs[torch.arange(abs.size(0)).unsqueeze(1).long(), selectedPointInds.long()]
             ord = ord[torch.arange(ord.size(0)).unsqueeze(1).long(), selectedPointInds.long()]
 
-        pointFeat = mapToList(pointFeaturesMap, abs.int(), ord.int())
-
         depth = torch.zeros(abs.size(0), abs.size(1), 1).to(featureMaps.device)
+
+        if self.no_feat:
+            pointFeat = None
+        else:
+            pointFeat = mapToList(pointFeaturesMap, abs.int(), ord.int())
 
         abs, ord = abs.unsqueeze(-1).float(), ord.unsqueeze(-1).float()
         points = torch.cat((abs, ord, depth), dim=-1).float()
-        retDict['points'] = torch.cat((abs, ord, depth, pointFeat), dim=-1).float()
+
         retDict["batch"] = torch.arange(points.size(0)).unsqueeze(1).expand(points.size(0), points.size(1)).reshape(
             -1).to(points.device)
         retDict["pos"] = points.reshape(points.size(0) * points.size(1), points.size(2))
-        retDict["pointfeatures"] = pointFeat.reshape(pointFeat.size(0) * pointFeat.size(1), pointFeat.size(2))
+
+        if self.no_feat:
+            retDict['points'] = torch.cat((abs, ord, depth), dim=-1).float()
+            retDict["pointfeatures"] = None
+        else:
+            retDict['points'] = torch.cat((abs, ord, depth, pointFeat), dim=-1).float()
+            retDict["pointfeatures"] = pointFeat.reshape(pointFeat.size(0) * pointFeat.size(1), pointFeat.size(2))
 
         if self.auxModel:
             retDict["auxFeat"] = featureMaps.mean(dim=-1).mean(dim=-1)
@@ -661,7 +673,7 @@ class NeighSim(torch.nn.Module):
             newFeatures /= simSum
             features = 0.5*features+0.5*newFeatures
 
-        simMap = computeTotalSim(features,1)            
+        simMap = computeTotalSim(features,1)
 
         simMap = simMap.unsqueeze(1)
 
@@ -761,7 +773,8 @@ class PointNet2(SecondModel):
                  point_nb=256,encoderChan=1,topk_fps=False,
                  topk_fps_nb_pts=64, auxModel=False,hasLinearProb=False,
                  use_baseline=False,topk_euclinorm=True,reinf_linear_only=False, pn_clustering=False,\
-                 cannyedge=False,cannyedge_sigma=2,patchsim=False,patchsim_patchsize=5,patchsim_neiSimRefin=None):
+                 cannyedge=False,cannyedge_sigma=2,patchsim=False,patchsim_patchsize=5,patchsim_neiSimRefin=None,\
+                 no_feat=False):
 
         super(PointNet2, self).__init__(nbFeat, classNb)
 
@@ -769,7 +782,7 @@ class PointNet2(SecondModel):
             self.pointExtr = TopkPointExtractor(cuda, nbFeat,point_nb, encoderChan, \
                                                 topk_fps, topk_fps_nb_pts,auxModel, \
                                                 topk_euclinorm,hasLinearProb,\
-                                                cannyedge,cannyedge_sigma,patchsim,patchsim_patchsize,patchsim_neiSimRefin)
+                                                cannyedge,cannyedge_sigma,patchsim,patchsim_patchsize,patchsim_neiSimRefin,no_feat)
         elif reinfExct:
             self.pointExtr = ReinforcePointExtractor(cuda, nbFeat,point_nb,encoderChan,hasLinearProb, use_baseline, reinf_linear_only)
         else:
@@ -861,12 +874,22 @@ def netBuilder(args):
     if args.second_mod == "linear":
         secondModel = LinearSecondModel(nbFeat, args.class_nb, args.dropout)
     elif args.second_mod == "pointnet2" or args.second_mod == "edgenet":
+
+        def computeEncChan(pn_enc_chan,pn_topk_no_feat):
+            if pn_topk_no_feat:
+                pointnetInputChannels = 0
+            elif pn_enc_chan == 0:
+                pointnetInputChannels = nbFeat
+            else:
+                pointnetInputChannels = pn_enc_chan
+            return pointnetInputChannels
+
+        pointnetInputChannels = computeEncChan(args.pn_enc_chan,args.pn_topk_no_feat)
+
         if args.second_mod == "pointnet2":
-            pn_model = pointnet2.Net(num_classes=args.class_nb,
-                                     input_channels=args.pn_enc_chan if args.pn_topk or args.pn_reinf else 0)
+            pn_model = pointnet2.Net(num_classes=args.class_nb,input_channels=pointnetInputChannels)
         else:
-            pn_model = pointnet2.EdgeNet(num_classes=args.class_nb,
-                                         input_channels=args.pn_enc_chan if args.pn_topk else 3)
+            pn_model = pointnet2.EdgeNet(num_classes=args.class_nb,input_channels=pointnetInputChannels)
 
         if args.pn_patchsim_neiref:
             neiSimRefinDict = {"cuda":args.cuda,"nbIter":args.pn_patchsim_neiref_nbiter,"softmax":args.pn_patchsim_neiref_softm,\
@@ -884,7 +907,8 @@ def netBuilder(args):
                                 topk_euclinorm=args.pn_topk_euclinorm, reinf_linear_only=args.pn_train_reinf_linear_only,
                                 pn_clustering=args.pn_clustering,\
                                 cannyedge=args.pn_cannyedge,cannyedge_sigma=args.pn_cannyedge_sigma,\
-                                patchsim=args.pn_patchsim,patchsim_patchsize=args.pn_patchsim_patchsize,patchsim_neiSimRefin=neiSimRefinDict)
+                                patchsim=args.pn_patchsim,patchsim_patchsize=args.pn_patchsim_patchsize,patchsim_neiSimRefin=neiSimRefinDict,\
+                                no_feat=args.pn_topk_no_feat)
 
     else:
         raise ValueError("Unknown temporal model type : ", args.second_mod)
@@ -1018,5 +1042,10 @@ def addArgs(argreader):
 
     argreader.parser.add_argument('--reduced_img_size', type=int, metavar='BOOL',
                                   help="The size at which the image is reduced at the begining of the process")
+    argreader.parser.add_argument('--pn_topk_no_feat', type=args.str2bool, metavar='BOOL',
+                                  help="Set to True to not pass the point features to the pointnet model and only the ")
+
+
+
 
     return argreader
