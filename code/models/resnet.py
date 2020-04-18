@@ -258,7 +258,7 @@ class ResNet(nn.Module):
 
         return nn.Sequential(*layers)
 
-    def forward(self, x):
+    def forward(self,x,returnLayer="last"):
 
         retDict = {}
         x = self.conv1(x)
@@ -271,15 +271,17 @@ class ResNet(nn.Module):
 
         layerFeat = {}
 
-        for i in range(1,self.layersNb+1):
-            x = getattr(self,"layer{}".format(i))(x)
+        lastLayer = self.layersNb if returnLayer=="last" else int(returnLayer)
 
+        for i in range(1,lastLayer+1):
+            x = getattr(self,"layer{}".format(i))(x)
             if self.attention and not self.multiModel:
                 attWeights = getattr(self,"att_{}".format(i))(x)
                 attWeightsDict[i] = attWeights
                 x = x*attWeights
 
             layerFeat[i] = x
+
         if self.multiModel:
             scores = None
             for i in range(self.layersNb,0,-1):
