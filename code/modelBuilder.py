@@ -302,7 +302,7 @@ class TopkPointExtractor(nn.Module):
     def __init__(self, cuda, nbFeat,point_nb,encoderChan, \
                  furthestPointSampling, furthestPointSampling_nb_pts,\
                  auxModel,topk_euclinorm,hasLinearProb,cannyedge,cannyedge_sigma,patchsim,\
-                 patchsim_patchsize,patchsim_neiSimRefin,no_feat,patchsim_mod):
+                 patchsim_patchsize,patchsim_neiSimRefin,no_feat,patchsim_mod,norm_points):
 
         super(TopkPointExtractor, self).__init__()
 
@@ -334,7 +334,7 @@ class TopkPointExtractor(nn.Module):
             raise ValueError("cannyedge and patchsim can't be True at the same time.")
 
         self.no_feat = no_feat
-
+        self.norm_points = norm_points
     def forward(self, featureMaps,**kwargs):
         retDict = {}
 
@@ -408,6 +408,9 @@ class TopkPointExtractor(nn.Module):
 
         if self.auxModel:
             retDict["auxFeat"] = featureMaps.mean(dim=-1).mean(dim=-1)
+
+        if self.norm_points:
+            retDict["pos"] = (2*retDict["pos"]/(x.size(-1)-1))-1
         return retDict
 
     def updateDict(self, device):
@@ -777,7 +780,7 @@ class PointNet2(SecondModel):
                  topk_fps_nb_pts=64, auxModel=False,hasLinearProb=False,
                  use_baseline=False,topk_euclinorm=True,reinf_linear_only=False, pn_clustering=False,\
                  cannyedge=False,cannyedge_sigma=2,patchsim=False,patchsim_patchsize=5,patchsim_neiSimRefin=None,\
-                 no_feat=False,patchsim_mod=None):
+                 no_feat=False,patchsim_mod=None,norm_points=False):
 
         super(PointNet2, self).__init__(nbFeat, classNb)
 
@@ -786,7 +789,7 @@ class PointNet2(SecondModel):
                                                 topk_fps, topk_fps_nb_pts,auxModel, \
                                                 topk_euclinorm,hasLinearProb,\
                                                 cannyedge,cannyedge_sigma,patchsim,patchsim_patchsize,patchsim_neiSimRefin,no_feat,\
-                                                patchsim_mod)
+                                                patchsim_mod,norm_points)
         elif reinfExct:
             self.pointExtr = ReinforcePointExtractor(cuda, nbFeat,point_nb,encoderChan,hasLinearProb, use_baseline, reinf_linear_only)
         else:
@@ -806,6 +809,7 @@ class PointNet2(SecondModel):
 
         if self.clustering:
             retDict = self.cluster_model(retDict)
+
         x = self.pn2(retDict['pointfeatures'], retDict['pos'], retDict['batch'])
         retDict['pred'] = x
 
@@ -912,7 +916,8 @@ def netBuilder(args):
                                 pn_clustering=args.pn_clustering,\
                                 cannyedge=args.pn_cannyedge,cannyedge_sigma=args.pn_cannyedge_sigma,\
                                 patchsim=args.pn_patchsim,patchsim_patchsize=args.pn_patchsim_patchsize,patchsim_neiSimRefin=neiSimRefinDict,\
-                                no_feat=args.pn_topk_no_feat,patchsim_mod=None if args.pn_patchsim_randmod else firstModel.featMod)
+                                no_feat=args.pn_topk_no_feat,patchsim_mod=None if args.pn_patchsim_randmod else firstModel.featMod,\
+                                norm_points=args.norm_points)
 
     else:
         raise ValueError("Unknown temporal model type : ", args.second_mod)
@@ -1050,6 +1055,9 @@ def addArgs(argreader):
                                   help="Set to True to not pass the point features to the pointnet model and only the point position")
     argreader.parser.add_argument('--pn_patchsim_randmod', type=args.str2bool, metavar='BOOL',
                                   help="To use a random resnet9 to extract key points instead of the feature extractor being trained.")
+
+    argreader.parser.add_argument('--norm_points', type=args.str2bool, metavar='BOOL',
+                                  help="To normalize the points before passing them to pointnet")
 
 
 
