@@ -302,7 +302,7 @@ class TopkPointExtractor(nn.Module):
     def __init__(self, cuda, nbFeat,point_nb,encoderChan, \
                  furthestPointSampling, furthestPointSampling_nb_pts,\
                  auxModel,topk_euclinorm,hasLinearProb,cannyedge,cannyedge_sigma,patchsim,\
-                 patchsim_patchsize,patchsim_neiSimRefin,no_feat,patchsim_mod,norm_points):
+                 patchsim_patchsize,patchsim_groupNb,patchsim_neiSimRefin,no_feat,patchsim_mod,norm_points):
 
         super(TopkPointExtractor, self).__init__()
 
@@ -327,7 +327,7 @@ class TopkPointExtractor(nn.Module):
 
         self.patchsim = patchsim
         if self.patchsim:
-            self.patchSimCNN = PatchSimCNN("resnet9",False,4,chan=32,patchSize=patchsim_patchsize,neiSimRefin=patchsim_neiSimRefin,featMod=patchsim_mod)
+            self.patchSimCNN = PatchSimCNN("resnet9",False,patchsim_groupNb,chan=32,patchSize=patchsim_patchsize,neiSimRefin=patchsim_neiSimRefin,featMod=patchsim_mod)
             self.patchSim_useAllLayers = (patchsim_mod is None)
 
         if self.cannyedge and self.patchsim:
@@ -410,7 +410,10 @@ class TopkPointExtractor(nn.Module):
             retDict["auxFeat"] = featureMaps.mean(dim=-1).mean(dim=-1)
 
         if self.norm_points:
-            retDict["pos"] = (2*retDict["pos"]/(x.size(-1)-1))-1
+            if self.cannyedge:
+                retDict["pos"] = (2*retDict["pos"]/(featureMaps.size(-1)-1))-1
+            else:
+                retDict["pos"] = (2*retDict["pos"]/(x.size(-1)-1))-1
         return retDict
 
     def updateDict(self, device):
@@ -779,7 +782,7 @@ class PointNet2(SecondModel):
                  point_nb=256,encoderChan=1,topk_fps=False,
                  topk_fps_nb_pts=64, auxModel=False,hasLinearProb=False,
                  use_baseline=False,topk_euclinorm=True,reinf_linear_only=False, pn_clustering=False,\
-                 cannyedge=False,cannyedge_sigma=2,patchsim=False,patchsim_patchsize=5,patchsim_neiSimRefin=None,\
+                 cannyedge=False,cannyedge_sigma=2,patchsim=False,patchsim_patchsize=5,patchsim_groupNb=4,patchsim_neiSimRefin=None,\
                  no_feat=False,patchsim_mod=None,norm_points=False):
 
         super(PointNet2, self).__init__(nbFeat, classNb)
@@ -788,7 +791,7 @@ class PointNet2(SecondModel):
             self.pointExtr = TopkPointExtractor(cuda, nbFeat,point_nb, encoderChan, \
                                                 topk_fps, topk_fps_nb_pts,auxModel, \
                                                 topk_euclinorm,hasLinearProb,\
-                                                cannyedge,cannyedge_sigma,patchsim,patchsim_patchsize,patchsim_neiSimRefin,no_feat,\
+                                                cannyedge,cannyedge_sigma,patchsim,patchsim_patchsize,patchsim_groupNb,patchsim_neiSimRefin,no_feat,\
                                                 patchsim_mod,norm_points)
         elif reinfExct:
             self.pointExtr = ReinforcePointExtractor(cuda, nbFeat,point_nb,encoderChan,hasLinearProb, use_baseline, reinf_linear_only)
@@ -915,7 +918,7 @@ def netBuilder(args):
                                 topk_euclinorm=args.pn_topk_euclinorm, reinf_linear_only=args.pn_train_reinf_linear_only,
                                 pn_clustering=args.pn_clustering,\
                                 cannyedge=args.pn_cannyedge,cannyedge_sigma=args.pn_cannyedge_sigma,\
-                                patchsim=args.pn_patchsim,patchsim_patchsize=args.pn_patchsim_patchsize,patchsim_neiSimRefin=neiSimRefinDict,\
+                                patchsim=args.pn_patchsim,patchsim_patchsize=args.pn_patchsim_patchsize,patchsim_groupNb=args.pn_patchsim_groupnb,patchsim_neiSimRefin=neiSimRefinDict,\
                                 no_feat=args.pn_topk_no_feat,patchsim_mod=None if args.pn_patchsim_randmod else firstModel.featMod,\
                                 norm_points=args.norm_points)
 
@@ -1035,6 +1038,8 @@ def addArgs(argreader):
                                   help='To use patch similarity to extract points.')
     argreader.parser.add_argument('--pn_patchsim_patchsize', type=int, metavar='BOOL',
                                   help='The patch size.')
+    argreader.parser.add_argument('--pn_patchsim_groupnb', type=int, metavar='BOOL',
+                                  help='The number of groups of features.')
 
     argreader.parser.add_argument('--pn_patchsim_neiref', type=args.str2bool, metavar='BOOL',
                                   help='When using patch similarity, to refine results using neighbor similarity')
