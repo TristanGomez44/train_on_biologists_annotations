@@ -302,7 +302,7 @@ class TopkPointExtractor(nn.Module):
     def __init__(self, cuda, nbFeat,point_nb,encoderChan, \
                  furthestPointSampling, furthestPointSampling_nb_pts,\
                  auxModel,topk_euclinorm,hasLinearProb,cannyedge,cannyedge_sigma,patchsim,\
-                 patchsim_patchsize,patchsim_groupNb,patchsim_neiSimRefin,no_feat,patchsim_mod,norm_points):
+                 patchsim_patchsize,patchsim_groupNb,patchsim_neiSimRefin,no_feat,patchsim_mod,norm_points,sagpool,sagpool_pts_nb):
 
         super(TopkPointExtractor, self).__init__()
 
@@ -314,6 +314,14 @@ class TopkPointExtractor(nn.Module):
         self.point_extracted = point_nb
         self.furthestPointSampling = furthestPointSampling
         self.furthestPointSampling_nb_pts = furthestPointSampling_nb_pts
+        self.sagpool = sagpool
+
+        if self.sagpool:
+            #self.sagpoolModule = torch_geometric.nn.SAGPooling(in_channels=encoderChan if self.conv1x1 else nbFeat, ratio=sagpool_pts_nb/point_nb)
+            self.sagpoolModule = pointnet2.SAModule(1, 0.2, pointnet2.MLP([encoderChan+3 if self.conv1x1 else nbFeat+3,64,1]))
+        else:
+            self.sagpoolModule = None
+
         self.topk_euclinorm = topk_euclinorm
 
         self.auxModel = auxModel
@@ -414,6 +422,11 @@ class TopkPointExtractor(nn.Module):
                 retDict["pos"] = (2*retDict["pos"]/(featureMaps.size(-1)-1))-1
             else:
                 retDict["pos"] = (2*retDict["pos"]/(x.size(-1)-1))-1
+
+        if self.sagpool:
+            nodeWeight,pos,batch = self.sagpoolModule(retDict['pointfeatures'],retDict["pos"],retDict["batch"])
+            retDict["pointfeatures"] = nodeWeight*retDict["pointfeatures"]
+            
         return retDict
 
     def updateDict(self, device):
@@ -783,7 +796,7 @@ class PointNet2(SecondModel):
                  topk_fps_nb_pts=64, auxModel=False,hasLinearProb=False,
                  use_baseline=False,topk_euclinorm=True,reinf_linear_only=False, pn_clustering=False,\
                  cannyedge=False,cannyedge_sigma=2,patchsim=False,patchsim_patchsize=5,patchsim_groupNb=4,patchsim_neiSimRefin=None,\
-                 no_feat=False,patchsim_mod=None,norm_points=False):
+                 no_feat=False,patchsim_mod=None,norm_points=False,topk_sagpool=False,topk_sagpool_pts_nb=64):
 
         super(PointNet2, self).__init__(nbFeat, classNb)
 
@@ -792,7 +805,7 @@ class PointNet2(SecondModel):
                                                 topk_fps, topk_fps_nb_pts,auxModel, \
                                                 topk_euclinorm,hasLinearProb,\
                                                 cannyedge,cannyedge_sigma,patchsim,patchsim_patchsize,patchsim_groupNb,patchsim_neiSimRefin,no_feat,\
-                                                patchsim_mod,norm_points)
+                                                patchsim_mod,norm_points,topk_sagpool,topk_sagpool_pts_nb)
         elif reinfExct:
             self.pointExtr = ReinforcePointExtractor(cuda, nbFeat,point_nb,encoderChan,hasLinearProb, use_baseline, reinf_linear_only)
         else:
@@ -920,7 +933,7 @@ def netBuilder(args):
                                 cannyedge=args.pn_cannyedge,cannyedge_sigma=args.pn_cannyedge_sigma,\
                                 patchsim=args.pn_patchsim,patchsim_patchsize=args.pn_patchsim_patchsize,patchsim_groupNb=args.pn_patchsim_groupnb,patchsim_neiSimRefin=neiSimRefinDict,\
                                 no_feat=args.pn_topk_no_feat,patchsim_mod=None if args.pn_patchsim_randmod else firstModel.featMod,\
-                                norm_points=args.norm_points)
+                                norm_points=args.norm_points,topk_sagpool=args.pn_topk_sagpool,topk_sagpool_pts_nb=args.pn_topk_sagpool_pts_nb)
 
     else:
         raise ValueError("Unknown temporal model type : ", args.second_mod)
@@ -1064,7 +1077,10 @@ def addArgs(argreader):
     argreader.parser.add_argument('--norm_points', type=args.str2bool, metavar='BOOL',
                                   help="To normalize the points before passing them to pointnet")
 
-
+    argreader.parser.add_argument('--pn_topk_sagpool', type=args.str2bool, metavar='BOOL',
+                                  help="To use SAG pooling to reduce the number of points that will be passed to pointnet.")
+    argreader.parser.add_argument('--pn_topk_sagpool_pts_nb', type=int, metavar='BOOL',
+                                  help="The number of point to keep after sagpooling")
 
 
 
