@@ -106,7 +106,9 @@ def catIntermediateVariables(visualDict,intermVarDict,nbVideos, save_all):
     if save_all:
         intermVarDict["fullAttMap"] = catMap(visualDict,intermVarDict["fullAttMap"],key="attMaps")
         intermVarDict["fullFeatMapSeq"] = catMap(visualDict,intermVarDict["fullFeatMapSeq"],key="features")
-        intermVarDict["fullPointsSeq"] = catPointsSeq(visualDict,intermVarDict["fullPointsSeq"])
+        intermVarDict["fullPointsSeq"] = catPointsSeq(visualDict,intermVarDict["fullPointsSeq"],key="points")
+        intermVarDict["fullPointsWeightSeq"] = catPointsSeq(visualDict,intermVarDict["fullPointsWeightSeq"],key="pointWeights")
+
         if nbVideos < 6:
             intermVarDict["fullPNReconstSeq"] = catMap(visualDict,intermVarDict["fullPNReconstSeq"],key="pn_reconst")
         intermVarDict["fullProbMap"] = catMap(visualDict,intermVarDict["fullProbMap"],key="prob_map")
@@ -117,23 +119,25 @@ def catIntermediateVariables(visualDict,intermVarDict,nbVideos, save_all):
 def saveIntermediateVariables(intermVarDict,exp_id,model_id,epoch,mode="val",save_all=True):
     if save_all:
         intermVarDict["fullAttMap"] = saveMap(intermVarDict["fullAttMap"],exp_id,model_id,epoch,mode,key="attMaps")
-        intermVarDict["fullPointsSeq"] =  savePointsSeq(intermVarDict["fullPointsSeq"],exp_id,model_id,epoch,mode)
+        intermVarDict["fullPointsSeq"] =  savePointsSeq(intermVarDict["fullPointsSeq"],exp_id,model_id,epoch,mode,key="points")
+        intermVarDict["fullPointsWeightSeq"] =  savePointsSeq(intermVarDict["fullPointsWeightSeq"],exp_id,model_id,epoch,mode,key="pointWeights")
+
         intermVarDict["fullPNReconstSeq"] = saveMap(intermVarDict["fullPNReconstSeq"],exp_id,model_id,epoch,mode,key="pn_reconst")
         intermVarDict["fullProbMap"] = saveMap(intermVarDict["fullProbMap"],exp_id,model_id,epoch,mode,key="prob_map")
         intermVarDict["fullReconstSeq"] = saveMap(intermVarDict["fullReconstSeq"],exp_id,model_id,epoch,mode,key="reconst")
     return intermVarDict
 
-def catPointsSeq(visualDict,fullPointsSeq):
-    if "points" in visualDict.keys():
+def catPointsSeq(visualDict,fullPointsSeq,key="points"):
+    if key in visualDict.keys():
         if fullPointsSeq is None:
-            fullPointsSeq = visualDict["points"].cpu()
+            fullPointsSeq = visualDict[key].cpu()
         else:
-            fullPointsSeq = torch.cat((fullPointsSeq,visualDict["points"].cpu()),dim=0)
+            fullPointsSeq = torch.cat((fullPointsSeq,visualDict[key].cpu()),dim=0)
     return fullPointsSeq
 
-def savePointsSeq(fullPointsSeq,exp_id,model_id,epoch,mode):
+def savePointsSeq(fullPointsSeq,exp_id,model_id,epoch,mode,key="points"):
     if not fullPointsSeq is None:
-        np.save("../results/{}/points_{}_epoch{}_{}.npy".format(exp_id,model_id,epoch,mode),fullPointsSeq.numpy())
+        np.save("../results/{}/{}_{}_epoch{}_{}.npy".format(exp_id,key,model_id,epoch,mode),fullPointsSeq.numpy())
         fullPointsSeq = None
     return fullPointsSeq
 

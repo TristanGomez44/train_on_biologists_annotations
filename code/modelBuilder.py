@@ -426,7 +426,7 @@ class TopkPointExtractor(nn.Module):
         if self.sagpool:
             nodeWeight,pos,batch = self.sagpoolModule(retDict['pointfeatures'],retDict["pos"],retDict["batch"])
             retDict["pointfeatures"] = nodeWeight*retDict["pointfeatures"]
-            
+            retDict["pointWeights"] = nodeWeight.unsqueeze(0).reshape(featureMaps.size(0),nodeWeight.size(0))
         return retDict
 
     def updateDict(self, device):
