@@ -265,8 +265,9 @@ def writeSummaries(metrDict, sampleNb, writer, epoch, mode, model_id, exp_id):
         metrDict[metric] /= sampleNb
 
     for metric in metrDict:
-        if metric == "Accuracy_aux":
-            writer.add_scalars("Accuracy", {model_id + "_aux" + "_" + mode: metrDict[metric]}, epoch)
+        if metric.find("Accuracy_") != -1:
+            suffix = metric[metric.find("_"):]
+            writer.add_scalars("Accuracy", {model_id + suffix + "_" + mode: metrDict[metric]}, epoch)
         else:
             writer.add_scalars(metric, {model_id + "_" + mode: metrDict[metric]}, epoch)
 

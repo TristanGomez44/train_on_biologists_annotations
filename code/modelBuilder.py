@@ -302,7 +302,8 @@ class TopkPointExtractor(nn.Module):
     def __init__(self, cuda, nbFeat,point_nb,encoderChan, \
                  furthestPointSampling, furthestPointSampling_nb_pts,\
                  auxModel,topk_euclinorm,hasLinearProb,cannyedge,cannyedge_sigma,patchsim,\
-                 patchsim_patchsize,patchsim_groupNb,patchsim_neiSimRefin,no_feat,patchsim_mod,norm_points,sagpool,sagpool_pts_nb):
+                 patchsim_patchsize,patchsim_groupNb,patchsim_neiSimRefin,no_feat,patchsim_mod,norm_points,sagpool,sagpool_pts_nb,\
+                 bottomK=False):
 
         super(TopkPointExtractor, self).__init__()
 
@@ -343,36 +344,39 @@ class TopkPointExtractor(nn.Module):
 
         self.no_feat = no_feat
         self.norm_points = norm_points
-    def forward(self, featureMaps,**kwargs):
+        self.bottomK = bottomK
+    def forward(self, featureMaps,pointFeaturesMap=None,x=None,**kwargs):
         retDict = {}
 
         # Because of zero padding, the border are very active, so we remove it.
-        if (not self.cannyedge) and (not self.patchsim):
-            featureMaps = featureMaps[:, :, 3:-3, 3:-3]
+        if pointFeaturesMap is None:
+            if (not self.cannyedge) and (not self.patchsim):
+                featureMaps = featureMaps[:, :, 3:-3, 3:-3]
 
-        if self.conv1x1:
-            pointFeaturesMap = self.conv1x1(featureMaps)
-        else:
-            pointFeaturesMap = featureMaps
+            if self.conv1x1:
+                pointFeaturesMap = self.conv1x1(featureMaps)
+            else:
+                pointFeaturesMap = featureMaps
 
         if (not self.cannyedge):
-            if self.topk_euclinorm:
-                x = torch.pow(pointFeaturesMap, 2).sum(dim=1, keepdim=True)
-            elif self.patchsim:
-                distMap = -self.patchSimCNN(kwargs["origImgBatch"],returnLayer="last" if self.patchSim_useAllLayers else '2')
-                x = distMap
-                pointFeaturesMap = F.interpolate(pointFeaturesMap,size=(x.size(-2),x.size(-1)))
-            elif self.hasLinearProb:
-                x = torch.sigmoid(self.linearProb(pointFeaturesMap))
-            else:
-                x = F.relu(pointFeaturesMap).sum(dim=1, keepdim=True)
+            if x is None:
+                if self.topk_euclinorm:
+                    x = torch.pow(pointFeaturesMap, 2).sum(dim=1, keepdim=True)
+                elif self.patchsim:
+                    distMap = -self.patchSimCNN(kwargs["origImgBatch"],returnLayer="last" if self.patchSim_useAllLayers else '2')
+                    x = distMap
+                    pointFeaturesMap = F.interpolate(pointFeaturesMap,size=(x.size(-2),x.size(-1)))
+                elif self.hasLinearProb:
+                    x = torch.sigmoid(self.linearProb(pointFeaturesMap))
+                else:
+                    x = F.relu(pointFeaturesMap).sum(dim=1, keepdim=True)
 
             retDict["featVolume"] = pointFeaturesMap
             retDict["prob_map"] = x
 
             flatX = x.view(x.size(0), -1)
 
-            _, flatInds = torch.topk(flatX, self.point_extracted, dim=-1, largest=True)
+            _, flatInds = torch.topk(flatX, self.point_extracted, dim=-1, largest=not self.bottomK)
 
             abs, ord = (flatInds % x.shape[-1], flatInds // x.shape[-1])
 
@@ -383,10 +387,8 @@ class TopkPointExtractor(nn.Module):
         if self.furthestPointSampling:
             points = torch.cat((abs.unsqueeze(-1), ord.unsqueeze(-1)), dim=-1).float()
 
-            exampleInds = torch.arange(points.size(0)).unsqueeze(1).expand(points.size(0), points.size(1)).reshape(
-                -1).to(points.device)
-            selectedPointInds = torch_geometric.nn.fps(points.view(-1, 2), exampleInds,
-                                                       ratio=self.furthestPointSampling_nb_pts / abs.size(1))
+            exampleInds = torch.arange(points.size(0)).unsqueeze(1).expand(points.size(0), points.size(1)).reshape(-1).to(points.device)
+            selectedPointInds = torch_geometric.nn.fps(points.view(-1, 2), exampleInds,ratio=self.furthestPointSampling_nb_pts / abs.size(1))
             selectedPointInds = selectedPointInds.reshape(points.size(0), -1)
             selectedPointInds = selectedPointInds % abs.size(1)
 
@@ -403,8 +405,7 @@ class TopkPointExtractor(nn.Module):
         abs, ord = abs.unsqueeze(-1).float(), ord.unsqueeze(-1).float()
         points = torch.cat((abs, ord, depth), dim=-1).float()
 
-        retDict["batch"] = torch.arange(points.size(0)).unsqueeze(1).expand(points.size(0), points.size(1)).reshape(
-            -1).to(points.device)
+        retDict["batch"] = torch.arange(points.size(0)).unsqueeze(1).expand(points.size(0), points.size(1)).reshape(-1).to(points.device)
         retDict["pos"] = points.reshape(points.size(0) * points.size(1), points.size(2))
 
         if self.no_feat:
@@ -453,11 +454,7 @@ def computeEdges(origImgBatch,sigma,pts_nb,featMapSize):
             if selEdgeCoord.size(0) <= pts_nb:
                 res = torch.randint(selEdgeCoord.size(0),size=(pts_nb,))
             else:
-                try:
-                    res = torch_geometric.nn.fps(selEdgeCoord[:,1:].float(),ratio=pts_nb/selEdgeCoord.size(0))
-                except AssertionError:
-                    print(pts_nb,selEdgeCoord.size(0),pts_nb/selEdgeCoord.size(0))
-                    sys.exit(0)
+                res = torch_geometric.nn.fps(selEdgeCoord[:,1:].float(),ratio=pts_nb/selEdgeCoord.size(0))
 
             selEdgeCoordBatch.append(selEdgeCoord[res][:,1:].unsqueeze(0))
         else:
@@ -708,7 +705,6 @@ class NeighSim(torch.nn.Module):
 
         return simMap
 
-
 class ReinforcePointExtractor(nn.Module):
 
     def __init__(self, cuda, nbFeat, point_nb, encoderChan, hasLinearProb, use_baseline, reinf_linear_only):
@@ -797,7 +793,8 @@ class PointNet2(SecondModel):
                  topk_fps_nb_pts=64, auxModel=False,hasLinearProb=False,
                  use_baseline=False,topk_euclinorm=True,reinf_linear_only=False, pn_clustering=False,\
                  cannyedge=False,cannyedge_sigma=2,patchsim=False,patchsim_patchsize=5,patchsim_groupNb=4,patchsim_neiSimRefin=None,\
-                 no_feat=False,patchsim_mod=None,norm_points=False,topk_sagpool=False,topk_sagpool_pts_nb=64):
+                 no_feat=False,patchsim_mod=None,norm_points=False,topk_sagpool=False,topk_sagpool_pts_nb=64,\
+                 pureTextModel=False,pureTextPtsNbFact=4,pureText_pn_model=None):
 
         super(PointNet2, self).__init__(nbFeat, classNb)
 
@@ -821,14 +818,33 @@ class PointNet2(SecondModel):
         if auxModel:
             self.auxModel = nn.Linear(nbFeat, classNb)
 
-    def forward(self, x,**kwargs):
-        retDict = self.pointExtr(x,**kwargs)
+        if pureTextModel:
+            finalPtsNb = point_nb if not topk_fps else topk_fps_nb_pts
+            self.pureText_pointExtr = TopkPointExtractor(cuda, nbFeat,finalPtsNb*pureTextPtsNbFact, encoderChan, \
+                                                True, finalPtsNb,auxModel, \
+                                                topk_euclinorm,hasLinearProb,\
+                                                cannyedge,cannyedge_sigma,patchsim,patchsim_patchsize,patchsim_groupNb,patchsim_neiSimRefin,no_feat,\
+                                                patchsim_mod,norm_points,topk_sagpool,topk_sagpool_pts_nb,bottomK=True)
+        else:
+            self.pureText_pointExtr = None
+        self.pureText_pn_model = pureText_pn_model
+
+    def forward(self, featureMaps,**kwargs):
+        retDict = self.pointExtr(featureMaps,**kwargs)
 
         if self.clustering:
             retDict = self.cluster_model(retDict)
 
-        x = self.pn2(retDict['pointfeatures'], retDict['pos'], retDict['batch'])
-        retDict['pred'] = x
+        pred = self.pn2(retDict['pointfeatures'], retDict['pos'], retDict['batch'])
+
+        if self.pureText_pointExtr:
+            puretext_retDict = self.pureText_pointExtr(featureMaps,pointFeaturesMap=retDict["featVolume"],x=retDict["prob_map"],**kwargs)
+            puretext_pred = self.pureText_pn_model(puretext_retDict['pointfeatures'], puretext_retDict['pos'], puretext_retDict['batch'])
+            retDict["puretext_pred"] = puretext_pred
+            retDict["struct_pred"] = pred
+            retDict['pred'] = 0.5*pred+0.5*puretext_pred
+        else:
+            retDict['pred'] = pred
 
         if self.auxModel:
             retDict["auxPred"] = self.auxModel(retDict['auxFeat'])
@@ -912,9 +928,13 @@ def netBuilder(args):
         pointnetInputChannels = computeEncChan(args.pn_enc_chan,args.pn_topk_no_feat)
 
         if args.second_mod == "pointnet2":
-            pn_model = pointnet2.Net(num_classes=args.class_nb,input_channels=pointnetInputChannels)
+            const = pointnet2.Net
         else:
-            pn_model = pointnet2.EdgeNet(num_classes=args.class_nb,input_channels=pointnetInputChannels)
+            const = pointnet2.EdgeNet
+
+        pn_model = const(num_classes=args.class_nb,input_channels=pointnetInputChannels)
+        if args.pn_topk_puretext:
+            pureText_pn_model = const(num_classes=args.class_nb,input_channels=pointnetInputChannels)
 
         if args.pn_patchsim_neiref:
             neiSimRefinDict = {"cuda":args.cuda,"nbIter":args.pn_patchsim_neiref_nbiter,"softmax":args.pn_patchsim_neiref_softm,\
@@ -934,8 +954,8 @@ def netBuilder(args):
                                 cannyedge=args.pn_cannyedge,cannyedge_sigma=args.pn_cannyedge_sigma,\
                                 patchsim=args.pn_patchsim,patchsim_patchsize=args.pn_patchsim_patchsize,patchsim_groupNb=args.pn_patchsim_groupnb,patchsim_neiSimRefin=neiSimRefinDict,\
                                 no_feat=args.pn_topk_no_feat,patchsim_mod=None if args.pn_patchsim_randmod else firstModel.featMod,\
-                                norm_points=args.norm_points,topk_sagpool=args.pn_topk_sagpool,topk_sagpool_pts_nb=args.pn_topk_sagpool_pts_nb)
-
+                                norm_points=args.norm_points,topk_sagpool=args.pn_topk_sagpool,topk_sagpool_pts_nb=args.pn_topk_sagpool_pts_nb,\
+                                pureTextModel=args.pn_topk_puretext,pureTextPtsNbFact=args.pn_topk_puretext_pts_nb_fact,pureText_pn_model=pureText_pn_model)
     else:
         raise ValueError("Unknown temporal model type : ", args.second_mod)
 
@@ -1082,6 +1102,11 @@ def addArgs(argreader):
                                   help="To use SAG pooling to reduce the number of points that will be passed to pointnet.")
     argreader.parser.add_argument('--pn_topk_sagpool_pts_nb', type=int, metavar='BOOL',
                                   help="The number of point to keep after sagpooling")
+
+    argreader.parser.add_argument('--pn_topk_puretext', type=args.str2bool, metavar='BOOL',
+                                  help="To use a second topk model that will takes as input the bottom K pixels intead of the topk")
+    argreader.parser.add_argument('--pn_topk_puretext_pts_nb_fact', type=int, metavar='INT',
+                                  help="The factor between the number of point first selected by pure texture model and the number of points extracted by the topk model.")
 
 
 
