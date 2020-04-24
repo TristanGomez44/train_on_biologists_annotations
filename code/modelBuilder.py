@@ -887,13 +887,13 @@ def netBuilder(args):
             kwargs = {}
         else:
             CNNconst = CNN2D_simpleAttention
-            kwargs = {"featMap": True, "topk": args.resnet_simple_att_topk,
+            kwargs = {"topk": args.resnet_simple_att_topk,
                       "topk_pxls_nb": args.resnet_simple_att_topk_pxls_nb,
                       "topk_enc_chan":args.resnet_simple_att_topk_enc_chan}
             if args.resnet_simple_att_topk_enc_chan != -1:
                 nbFeat = args.resnet_simple_att_topk_enc_chan
 
-        firstModel = CNNconst(args.first_mod, args.pretrained_visual, chan=args.resnet_chan, stride=args.resnet_stride,
+        firstModel = CNNconst(args.first_mod, args.pretrained_visual, featMap=True,chan=args.resnet_chan, stride=args.resnet_stride,
                               dilation=args.resnet_dilation, \
                               attChan=args.resnet_att_chan, attBlockNb=args.resnet_att_blocks_nb,
                               attActFunc=args.resnet_att_act_func, \
@@ -903,6 +903,7 @@ def netBuilder(args):
                               preLayerSizeReduce=args.resnet_prelay_size_reduce, \
                               applyStrideOnAll=args.resnet_apply_stride_on_all, \
                               replaceBy1x1=args.resnet_replace_by_1x1,\
+                              reluOnLast=args.relu_on_last_layer,
                               **kwargs)
     else:
         raise ValueError("Unknown visual model type : ", args.first_mod)
@@ -1108,6 +1109,8 @@ def addArgs(argreader):
     argreader.parser.add_argument('--pn_topk_puretext_pts_nb_fact', type=int, metavar='INT',
                                   help="The factor between the number of point first selected by pure texture model and the number of points extracted by the topk model.")
 
+    argreader.parser.add_argument('--relu_on_last_layer', type=args.str2bool, metavar='BOOL',
+                                  help="To apply relu on the last layer of the feature extractor.")
 
 
     return argreader
