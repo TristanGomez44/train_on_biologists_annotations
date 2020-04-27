@@ -43,6 +43,7 @@ import scipy.ndimage.filters as filters
 import scipy.ndimage.morphology as morphology
 
 import torchvision
+import torch_cluster
 
 def plotPointsImageDataset(imgNb,redFact,plotDepth,args):
 
@@ -105,16 +106,17 @@ def plotPointsImageDatasetGrid(exp_id,imgNb,epochs,model_ids,reduction_fact_list
 
     imgSize = 224
 
-    ptsImage = torch.zeros((imgSize,imgSize))
+    ptsImage = torch.zeros((3,imgSize,imgSize))
     gridImage = None
 
     args.normalize_data = False
     args.val_batch_size = imgNb
     imgLoader = load_data.buildTestLoader(args,"val")
     imgBatch,_ = next(iter(imgLoader))
+    cm = plt.get_cmap('plasma')
 
     for i in range(imgNb):
-
+        print("Img",i)
         if gridImage is None:
             gridImage = imgBatch[i:i+1]
         else:
@@ -122,7 +124,9 @@ def plotPointsImageDatasetGrid(exp_id,imgNb,epochs,model_ids,reduction_fact_list
 
         for j in range(len(model_ids)):
 
-            pts = (torch.tensor(np.load("../results/{}/points_{}_epoch{}_val.npy".format(exp_id,model_ids[j],epochs[j])))[i,:,:2]*reduction_fact_list[j]).long()
+            pts = torch.tensor(np.load("../results/{}/points_{}_epoch{}_val.npy".format(exp_id,model_ids[j],epochs[j])))[i,:,:2]
+
+            pts = (pts*reduction_fact_list[j]).long()
 
             if inverse_xy[j]:
                 x,y = pts[:,0],pts[:,1]
@@ -130,8 +134,17 @@ def plotPointsImageDatasetGrid(exp_id,imgNb,epochs,model_ids,reduction_fact_list
                 y,x = pts[:,0],pts[:,1]
 
             ptsImageCopy = ptsImage.clone()
-            ptsImageCopy[y,x] = 1
-            ptsImageCopy = ptsImageCopy.unsqueeze(0).unsqueeze(0).expand(-1,3,-1,-1)
+
+            if os.path.exists("../results/{}/pointWeights_{}_epoch{}_val.npy".format(exp_id,model_ids[j],epochs[j])):
+                ptsWeights = np.load("../results/{}/pointWeights_{}_epoch{}_val.npy".format(exp_id,model_ids[j],epochs[j]))[i]
+
+                ptsWeights = cm(ptsWeights/ptsWeights.max())[:,:3]
+
+                ptsImageCopy[:,y,x] =  torch.tensor(ptsWeights).permute(1,0).float()
+            else:
+                ptsImageCopy[:,y,x] = 1
+
+            ptsImageCopy = ptsImageCopy.unsqueeze(0)
 
             gridImage = torch.cat((gridImage,ptsImageCopy),dim=0)
 
