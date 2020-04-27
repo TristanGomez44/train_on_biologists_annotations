@@ -248,9 +248,6 @@ def main(argv=None):
 
             data = data.cuda() if args.cuda else data
 
-            print("Start !")
-            start = time.time()
-
             kwargs = {"full_mode":args.patch_sim_full,"kerSize":args.patch_sim_neig_mode_ker_size,"parralelMode":args.patch_sim_paral_mode}
             gramDistMap = buildModule(True,GramDistMap,args.cuda,args.multi_gpu,kwargs)
 
@@ -266,7 +263,6 @@ def main(argv=None):
             origPatchSize = patch.size()
             patch = patch.reshape(patch.size(0)*patch.size(1)*patch.size(2),patch.size(3),patch.size(4),patch.size(5))
 
-            print(patch.size())
             kwargs = {"cuda":args.cuda,"groupNb":args.patch_sim_group_nb,"nbIter":args.patch_sim_neighsim_nb_iter,\
                         "softmax":args.patch_sim_neighsim_softmax,"softmax_fact":args.patch_sim_neighsim_softmax_fact,\
                         "weightByNeigSim":args.patch_sim_weight_by_neigsim,"updateRateByCossim":args.patch_sim_update_rate_by_cossim,"neighRadius":args.patch_sim_neighradius}
@@ -280,6 +276,9 @@ def main(argv=None):
             #distMap = gramDistMap(gram_mat,patchPerRow=origPatchSize[2])
 
             distMapAgreg,feat = cosimMap(gram_mat)
+
+            print("Start !")
+            start = time.time()
 
             neighSim = neighSim(feat)
 
@@ -669,13 +668,18 @@ class NeighSim(torch.nn.Module):
 
     def forward(self,features):
 
+        startime = time.time()
         simMap = modelBuilder.computeTotalSim(features,1)
         simMapList = [simMap]
         for j in range(self.nbIter):
+            print("\t\t Iter",j)
+            startime = time.time()
 
             allSim = []
             allFeatShift = []
             allPondFeatShift = []
+            print("\t\t\t Feat comp",end="")
+            startime = time.time()
             for direction in self.directions:
                 if self.weightByNeigSim:
                     sim,featuresShift1,_,maskShift1,_ = modelBuilder.applyDiffKer_CosSimi(direction,features,1)
@@ -683,39 +687,54 @@ class NeighSim(torch.nn.Module):
                 else:
                     featuresShift1,maskShift1 = modelBuilder.shiftFeat(direction,features,1)
                     allSim.append(maskShift1)
-
                 allFeatShift.append(featuresShift1*maskShift1)
-
             allSim = torch.cat(allSim,dim=1)
+            print(" {}".format(time.time()-startime))
 
             if self.weightByNeigSim and self.softmax:
                 allSim = torch.softmax(self.softmax_fact*allSim,dim=1)
+
+            print("\t\t\t Feat pond",end="")
+            startime = time.time()
 
             for i in range(len(self.directions)):
                 sim = allSim[:,i:i+1]
                 featuresShift1 = allFeatShift[i]
                 allPondFeatShift.append((sim*featuresShift1).unsqueeze(1))
+            newFeatures = torch.cat(allPondFeatShift,dim=1).sum(dim=1)
+
+            #origSize = allFeatShift[0].size()
+            #allFeatShift = torch.cat(allFeatShift,dim=0).unsqueeze(0).reshape(features.size(0),len(self.directions),origSize[1],origSize[2],origSize[3])
+            #allPondFeatShift = allFeatShift*allSim.unsqueeze(2)
+            #newFeatures = allPondFeatShift.sum(dim=1)
+
+            print(" {}".format(time.time()-startime))
 
             simMap = modelBuilder.computeTotalSim(features,1)
             simMapList.append(simMap)
 
-            newFeatures = torch.cat(allPondFeatShift,dim=1).sum(dim=1)
             simSum = torch.nn.functional.conv2d(allSim,self.sumKer.to(allSim.device))
             newFeatures /= simSum
             if not self.updateRateByCossim:
-                features = 0.5*features+0.5*newFeatures
+                features = newFeatures
             else:
                 min = simMap.min(dim=-1,keepdim=True)[0].min(dim=-1,keepdim=True)[0]
                 max = simMap.max(dim=-1,keepdim=True)[0].max(dim=-1,keepdim=True)[0]
                 normSimMap = (simMap-min)/(max-min)
                 features = (1-normSimMap)*features+normSimMap*newFeatures
 
+            print("\t\t {}".format(time.time()-startime))
+
+        print("\t End ",end="")
+        startime = time.time()
         simMapList = torch.cat(simMapList,dim=1).unsqueeze(1)
 
         simMapList = simMapList.reshape(simMapList.size(0)//self.groupNb,self.groupNb,self.nbIter+1,simMapList.size(3),simMapList.size(4))
         # N x NbGroup x nbIter x sqrt(nbPatch) x sqrt(nbPatch)
         simMapList = simMapList.mean(dim=1)
         # N x nbIter x sqrt(nbPatch) x sqrt(nbPatch)
+
+        print("\t {}".format(time.time()-startime))
         return simMapList
 
 def buildModule(cond,constr,cuda,multi_gpu,kwargs={}):
