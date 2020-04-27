@@ -691,7 +691,7 @@ class NeighSim(torch.nn.Module):
             newFeatures = torch.cat(allPondFeatShift,dim=1).sum(dim=1)
             simSum = torch.nn.functional.conv2d(allSim,self.sumKer.to(allSim.device))
             newFeatures /= simSum
-            features = 0.5*features+0.5*newFeatures
+            features = newFeatures
 
         simMap = computeTotalSim(features,1)
 
