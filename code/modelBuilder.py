@@ -757,8 +757,7 @@ class ReinforcePointExtractor(nn.Module):
         abs, ord = abs.unsqueeze(-1).float(), ord.unsqueeze(-1).float()
         points = torch.cat((abs, ord, depth), dim=-1).float()
         retDict['points'] = torch.cat((abs, ord, depth, pointFeat), dim=-1).float()
-        retDict["batch"] = torch.arange(points.size(0)).unsqueeze(1).expand(points.size(0), points.size(1)).reshape(
-            -1).to(points.device)
+        retDict["batch"] = torch.arange(points.size(0)).unsqueeze(1).expand(points.size(0), points.size(1)).reshape(-1).to(points.device)
         retDict["pos"] = points.reshape(points.size(0) * points.size(1), points.size(2))
         retDict["pointfeatures"] = pointFeat.reshape(pointFeat.size(0) * pointFeat.size(1), pointFeat.size(2))
         retDict["probs"] = probs
@@ -794,9 +793,11 @@ class PointNet2(SecondModel):
                  use_baseline=False,topk_euclinorm=True,reinf_linear_only=False, pn_clustering=False,\
                  cannyedge=False,cannyedge_sigma=2,patchsim=False,patchsim_patchsize=5,patchsim_groupNb=4,patchsim_neiSimRefin=None,\
                  no_feat=False,patchsim_mod=None,norm_points=False,topk_sagpool=False,topk_sagpool_pts_nb=64,\
-                 pureTextModel=False,pureTextPtsNbFact=4,pureText_pn_model=None):
+                 pureTextModel=False,pureTextPtsNbFact=4):
 
         super(PointNet2, self).__init__(nbFeat, classNb)
+
+        self.point_nb = point_nb
 
         if topk:
             self.pointExtr = TopkPointExtractor(cuda, nbFeat,point_nb, encoderChan, \
@@ -827,7 +828,7 @@ class PointNet2(SecondModel):
                                                 patchsim_mod,norm_points,topk_sagpool,topk_sagpool_pts_nb,bottomK=True)
         else:
             self.pureText_pointExtr = None
-        self.pureText_pn_model = pureText_pn_model
+
 
     def forward(self, featureMaps,**kwargs):
         retDict = self.pointExtr(featureMaps,**kwargs)
@@ -835,16 +836,32 @@ class PointNet2(SecondModel):
         if self.clustering:
             retDict = self.cluster_model(retDict)
 
-        pred = self.pn2(retDict['pointfeatures'], retDict['pos'], retDict['batch'])
-
         if self.pureText_pointExtr:
             puretext_retDict = self.pureText_pointExtr(featureMaps,pointFeaturesMap=retDict["featVolume"],x=retDict["prob_map"],**kwargs)
-            puretext_pred = self.pureText_pn_model(puretext_retDict['pointfeatures'], puretext_retDict['pos'], puretext_retDict['batch'])
-            retDict["puretext_pred"] = puretext_pred
-            retDict["struct_pred"] = pred
-            retDict['pred'] = 0.5*pred+0.5*puretext_pred
-        else:
-            retDict['pred'] = pred
+            #puretext_pred = self.pureText_pn_model(puretext_retDict['pointfeatures'], puretext_retDict['pos'], puretext_retDict['batch'])
+            #retDict["puretext_pred"] = puretext_pred
+            #retDict["struct_pred"] = pred
+            #retDict['pred'] = 0.5*pred+0.5*
+
+            #retDict['points_puretext'] = torch.cat((puretext_retDict["pos"].reshape(featureMaps.size(0),self.point_nb,-1),\
+            #                              puretext_retDict["pointfeatures"].reshape(featureMaps.size(0),self.point_nb,-1)),dim=2)
+
+            retDict = merge(puretext_retDict,retDict,suffix="puretext")
+
+            #torch.cat((abs, ord, depth, pointFeat), dim=-1).float()
+
+            #Adding feature to indicate if point comes from texture border or center
+            indicator = torch.ones(featureMaps.size(0)*self.point_nb,1).to(featureMaps.device)
+            puretext_retDict['pointfeatures'] = torch.cat((puretext_retDict['pointfeatures'],indicator),dim=-1)
+            retDict['pointfeatures'] = torch.cat((retDict['pointfeatures'],-indicator),dim=-1)
+
+            #Merging the two point clouds
+            retDict['pointfeatures'] = torch.cat((retDict['pointfeatures'],puretext_retDict['pointfeatures']),dim=0)
+            retDict['pos'] = torch.cat((retDict['pos'],puretext_retDict["pos"]),dim=0)
+            retDict['batch'] = torch.cat((retDict['batch'],puretext_retDict["batch"]),dim=0)
+
+        pred = self.pn2(retDict['pointfeatures'], retDict['pos'], retDict['batch'])
+        retDict['pred'] = pred
 
         if self.auxModel:
             retDict["auxPred"] = self.auxModel(retDict['auxFeat'])
@@ -875,6 +892,19 @@ def getResnetFeat(backbone_name, backbone_inplanes):
     else:
         raise ValueError("Unkown backbone : {}".format(backbone_name))
     return nbFeat
+
+def computeEncChan(pn_enc_chan,pn_topk_no_feat,pn_topk_puretext):
+    if pn_topk_no_feat:
+        pointnetInputChannels = 0
+    elif pn_enc_chan == 0:
+        pointnetInputChannels = nbFeat
+    else:
+        pointnetInputChannels = pn_enc_chan
+
+    if pn_topk_puretext:
+        pointnetInputChannels += 1
+
+    return pointnetInputChannels
 
 
 def netBuilder(args):
@@ -917,16 +947,7 @@ def netBuilder(args):
         secondModel = LinearSecondModel(nbFeat, args.class_nb, args.dropout)
     elif args.second_mod == "pointnet2" or args.second_mod == "edgenet":
 
-        def computeEncChan(pn_enc_chan,pn_topk_no_feat):
-            if pn_topk_no_feat:
-                pointnetInputChannels = 0
-            elif pn_enc_chan == 0:
-                pointnetInputChannels = nbFeat
-            else:
-                pointnetInputChannels = pn_enc_chan
-            return pointnetInputChannels
-
-        pointnetInputChannels = computeEncChan(args.pn_enc_chan,args.pn_topk_no_feat)
+        pointnetInputChannels = computeEncChan(args.pn_enc_chan,args.pn_topk_no_feat,args.pn_topk_puretext)
 
         if args.second_mod == "pointnet2":
             const = pointnet2.Net
@@ -934,8 +955,6 @@ def netBuilder(args):
             const = pointnet2.EdgeNet
 
         pn_model = const(num_classes=args.class_nb,input_channels=pointnetInputChannels)
-        if args.pn_topk_puretext:
-            pureText_pn_model = const(num_classes=args.class_nb,input_channels=pointnetInputChannels)
 
         if args.pn_patchsim_neiref:
             neiSimRefinDict = {"cuda":args.cuda,"nbIter":args.pn_patchsim_neiref_nbiter,"softmax":args.pn_patchsim_neiref_softm,\
@@ -956,7 +975,7 @@ def netBuilder(args):
                                 patchsim=args.pn_patchsim,patchsim_patchsize=args.pn_patchsim_patchsize,patchsim_groupNb=args.pn_patchsim_groupnb,patchsim_neiSimRefin=neiSimRefinDict,\
                                 no_feat=args.pn_topk_no_feat,patchsim_mod=None if args.pn_patchsim_randmod else firstModel.featMod,\
                                 norm_points=args.norm_points,topk_sagpool=args.pn_topk_sagpool,topk_sagpool_pts_nb=args.pn_topk_sagpool_pts_nb,\
-                                pureTextModel=args.pn_topk_puretext,pureTextPtsNbFact=args.pn_topk_puretext_pts_nb_fact,pureText_pn_model=pureText_pn_model)
+                                pureTextModel=args.pn_topk_puretext,pureTextPtsNbFact=args.pn_topk_puretext_pts_nb_fact)
     else:
         raise ValueError("Unknown temporal model type : ", args.second_mod)
 

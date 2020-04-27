@@ -181,7 +181,8 @@ def epochImgEval(model, log_interval, loader, epoch, args, writer, metricEarlySt
     allOut = None
     allGT = None
     intermVarDict = {"fullAttMap": None, "fullFeatMapSeq": None, "fullAffTransSeq": None, "fullPointsSeq": None,"fullPointsWeightSeq":None,
-                     "fullPNReconstSeq": None,"fullProbMap":None,"fullReconstSeq":None}
+                     "fullPointsSeq_pureText": None,"fullPointsWeightSeq_pureText":None,"fullPNReconstSeq": None,"fullProbMap":None,\
+                     "fullReconstSeq":None}
 
     for batch_idx, (data, target) in enumerate(loader):
 
