@@ -312,27 +312,39 @@ def efficiencyPlot(exp_id,model_ids,epoch_list):
     if not os.path.exists("../vis/{}/".format(exp_id)):
         os.makedirs("../vis/{}/".format(exp_id))
 
-    plt.figure()
-    latList = []
-    accList = []
-
     for i in range(len(model_ids)):
-        latency =np.genfromtxt("../results/{}/latency_{}_epoch{}.csv".format(exp_id,model_ids[i],epoch_list[i]),delimiter=",")[1:-1,0].mean()
         accuracy = np.genfromtxt("../results/{}/model{}_epoch{}_metrics_test.csv".format(exp_id,model_ids[i],epoch_list[i]),dtype=str)[1,0]
-
         if accuracy.find("tensor") != -1:
             accuracy = float(accuracy.replace("tensor","").replace(",","").replace("(",""))
 
-        latList.append(latency)
-        accList.append(accuracy)
+        if os.path.exists("../results/{}/latency_{}_epoch{}.csv".format(exp_id,model_ids[i],epoch_list[i])):
+            latency =np.genfromtxt("../results/{}/latency_{}_epoch{}.csv".format(exp_id,model_ids[i],epoch_list[i]),delimiter=",")[1:-1,0].mean()
+            plt.figure(0)
+            plt.plot(latency,accuracy,"*",label=model_ids[i])
 
-        plt.plot(latency,accuracy,"*",label=model_ids[i])
+        if os.path.exists("../models/{}/model{}_best_epoch{}".format(exp_id,model_ids[i],epoch_list[i])):
+            weights = torch.load("../models/{}/model{}_best_epoch{}".format(exp_id,model_ids[i],epoch_list[i]),map_location=torch.device('cpu'))
+            totalElem = 0
+            for key in weights:
+                totalElem += weights[key].numel()
 
+            plt.figure(1)
+            plt.plot(totalElem,accuracy,"*",label=model_ids[i])
+
+    plt.figure(0)
     plt.legend()
     plt.xlabel("Latency (seconds)")
     plt.ylabel("Accuracy")
     plt.ylim(0,1)
     plt.savefig("../vis/{}/acc_vs_lat.png".format(exp_id))
+
+    plt.figure(1)
+    plt.legend()
+    plt.xlabel("Parameter number")
+    plt.ylabel("Accuracy")
+    plt.ylim(0,1)
+    plt.savefig("../vis/{}/acc_vs_paramNb.png".format(exp_id))
+
 
 def main(argv=None):
 
