@@ -307,6 +307,33 @@ def printImage(path,indexs,test_dataset):
         image = test_dataset.__getitem__(index)[0]
         image.save(path+"/{}.png".format(index))
 
+def efficiencyPlot(exp_id,model_ids,epoch_list):
+
+    if not os.path.exists("../vis/{}/".format(exp_id)):
+        os.makedirs("../vis/{}/".format(exp_id))
+
+    plt.figure()
+    latList = []
+    accList = []
+
+    for i in range(len(model_ids)):
+        latency =np.genfromtxt("../results/{}/latency_{}_epoch{}.csv".format(exp_id,model_ids[i],epoch_list[i]),delimiter=",")[1:-1,0].mean()
+        accuracy = np.genfromtxt("../results/{}/model{}_epoch{}_metrics_test.csv".format(exp_id,model_ids[i],epoch_list[i]),dtype=str)[1,0]
+
+        if accuracy.find("tensor") != -1:
+            accuracy = float(accuracy.replace("tensor","").replace(",","").replace("(",""))
+
+        latList.append(latency)
+        accList.append(accuracy)
+
+        plt.plot(latency,accuracy,"*",label=model_ids[i])
+
+    plt.legend()
+    plt.xlabel("Latency (seconds)")
+    plt.ylabel("Accuracy")
+    plt.ylim(0,1)
+    plt.savefig("../vis/{}/acc_vs_lat.png".format(exp_id))
+
 def main(argv=None):
 
     #Getting arguments from config file and command line
@@ -348,6 +375,10 @@ def main(argv=None):
     argreader.parser.add_argument('--dataset_name',type=str,metavar="NAME",help='Name of the dataset')
     argreader.parser.add_argument('--nb_class',type=int,metavar="NAME",help='Nb of big classes')
 
+    ####################################### Efficiency plot #########################################"""
+
+    argreader.parser.add_argument('--efficiency_plot',action="store_true",help='to plot accuracy vs latency/model size. --exp_id, --model_ids and --epoch_list must be set.')
+
     argreader = load_data.addArgs(argreader)
 
     #Reading the comand line arg
@@ -366,5 +397,7 @@ def main(argv=None):
         listBestPred(args.exp_id)
     if args.find_hard_image:
         findHardImage(args.exp_id,args.dataset_size,args.threshold,args.dataset_name,args.train_prop,args.nb_class)
+    if args.efficiency_plot:
+        efficiencyPlot(args.exp_id,args.model_ids,args.epoch_list)
 if __name__ == "__main__":
     main()
