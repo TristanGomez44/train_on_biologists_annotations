@@ -35,6 +35,8 @@ from torch.multiprocessing import Process
 import time
 
 
+
+
 def epochSeqTr(model, optim, log_interval, loader, epoch, args, writer, **kwargs):
     ''' Train a model during one epoch
 
@@ -589,22 +591,38 @@ def run(args):
         epoch += 1
 
     if args.run_test:
-        testFunc = valFunc
 
-        kwargsTest = kwargsVal
-        kwargsTest["mode"] = "test"
+        if os.path.exists("../results/{}/test_done.txt".format(args.exp_id)):
+            test_done = np.genfromtxt("../results/{}/test_done.txt".format(args.exp_id),delimiter=",",dtype=str)
 
-        testLoader = load_data.buildTestLoader(args, "test")
+            if len(test_done.shape) == 1:
+                test_done = test_done[np.newaxis]
+        else:
+            test_done = None
 
-        kwargsTest['loader'] = testLoader
+        alreadyDone = (test_done==np.array([args.model_id,str(bestEpoch)])).any()
 
-        net.load_state_dict(torch.load("../models/{}/model{}_epoch{}".format(args.exp_id, args.model_id, bestEpoch),
-                                       map_location="cpu" if not args.cuda else None))
-        kwargsTest["model"] = net
-        kwargsTest["epoch"] = bestEpoch
+        if (test_done is None) or (alreadyDone and args.do_test_again) or (not alreadyDone):
 
-        with torch.no_grad():
-            testFunc(**kwargsTest)
+            testFunc = valFunc
+
+            kwargsTest = kwargsVal
+            kwargsTest["mode"] = "test"
+
+            testLoader = load_data.buildTestLoader(args, "test")
+
+            kwargsTest['loader'] = testLoader
+
+            net.load_state_dict(torch.load("../models/{}/model{}_epoch{}".format(args.exp_id, args.model_id, bestEpoch),
+                                           map_location="cpu" if not args.cuda else None))
+            kwargsTest["model"] = net
+            kwargsTest["epoch"] = bestEpoch
+
+            with torch.no_grad():
+                testFunc(**kwargsTest)
+
+            with open("../results/{}/test_done.txt".format(args.exp_id),"a") as text_file:
+                print("{},{}".format(args.model_id,bestEpoch),file=text_file)
 
 def updateSeedAndNote(args):
     if args.start_mode == "auto" and len(
@@ -634,6 +652,7 @@ def main(argv=None):
                                   help="Whether to save network weights at each epoch.")
 
     argreader.parser.add_argument('--no_val', type=str2bool, help='To not compute the validation')
+    argreader.parser.add_argument('--do_test_again', type=str2bool, help='Does the test evaluation even if it has already been done')
 
     argreader = addInitArgs(argreader)
     argreader = addOptimArgs(argreader)
