@@ -72,7 +72,7 @@ class ArgReader():
         defaults = {}
 
         if args.conf_file:
-            config = configparser.SafeConfigParser()
+            config = configparser.ConfigParser()
             config.read([args.conf_file])
             defaults.update(dict(config.items("default")))
 
@@ -118,9 +118,6 @@ class ArgReader():
                             help='the id of the experience')
         self.parser.add_argument('--seed', type=int, metavar='S',help='Seed used to initialise the random number generator.')
 
-        self.parser.add_argument('--video_mode', type=str2bool,metavar='BIDIR',
-                            help='Indicates that videos will be processed, and not isolated images. Set this to True if you want to process \
-                                the embryo videos. For a regular image classification dataset, set this to False')
 
         self.args = None
 
@@ -132,7 +129,7 @@ class ArgReader():
     def writeConfigFile(self,filePath):
         """ Writes a config file containing all the arguments and their values"""
 
-        config = configparser.SafeConfigParser()
+        config = configparser.ConfigParser()
         config.add_section('default')
 
         for k, v in  vars(self.args).items():
