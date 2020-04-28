@@ -72,13 +72,12 @@ def epochSeqTr(model, optim, log_interval, loader, epoch, args, writer, **kwargs
         if args.cuda:
             data, target = data.cuda(), target.cuda()
 
-        with torch.autograd.detect_anomaly():
-            resDict = model(data)
-            output = resDict["pred"]
+        resDict = model(data)
+        output = resDict["pred"]
 
-            loss = computeLoss(args, output, target, resDict, data)
+        loss = computeLoss(args, output, target, resDict, data)
 
-            loss.backward()
+        loss.backward()
 
         if args.distributed:
             average_gradients(model)
@@ -383,7 +382,6 @@ def initialize_Net_And_EpochNumber(net, exp_id, model_id, cuda, start_mode, init
 
         # Checking if the key of the model start with "module."
         startsWithModule = (list(net.state_dict().keys())[0].find("module.") == 0)
-        print(startsWithModule)
 
         if startsWithModule:
             paramsFormated = {}
@@ -437,8 +435,10 @@ def initialize_Net_And_EpochNumber(net, exp_id, model_id, cuda, start_mode, init
         # Depending on the pytorch version the load_state_dict() method can return the list of missing and unexpected parameters keys or nothing
         if not res is None:
             missingKeys, unexpectedKeys = res
-            print("missing keys", missingKeys)
-            print("unexpected keys", unexpectedKeys)
+            if len(missingKeys) > 0:
+                print("missing keys", missingKeys)
+            if len(unexpectedKeys) > 0:
+                print("unexpected keys", unexpectedKeys)
 
         # Start epoch is 1 if strict if false because strict=False means that it is another model which is being trained
         if strict:
@@ -496,11 +496,6 @@ def addOptimArgs(argreader):
 
 
 def addValArgs(argreader):
-    argreader.parser.add_argument('--train_step_to_ignore', type=int, metavar='LMAX',
-                                  help='Number of steps that will be ignored at the begining and at the end of the training sequence for binary cross entropy computation')
-
-    argreader.parser.add_argument('--val_l_temp', type=int, metavar='LMAX',
-                                  help='Length of sequences for computation of scores when using a CNN temp model.')
 
     argreader.parser.add_argument('--metric_early_stop', type=str, metavar='METR',
                                   help='The metric to use to choose the best model')
@@ -511,8 +506,6 @@ def addValArgs(argreader):
     argreader.parser.add_argument('--run_test', type=args.str2bool, metavar='NB',
                                   help='Evaluate the model on the test set')
 
-    argreader.parser.add_argument('--compute_metrics_during_eval', type=args.str2bool, metavar='BOOL',
-                                  help='If false, the metrics will not be computed during validation, but the scores produced by the models will still be saved')
 
 
     return argreader
@@ -526,8 +519,6 @@ def addLossTermArgs(argreader):
     argreader.parser.add_argument('--zoom_nll_weight', type=float, metavar='FLOAT',
                                   help='The weight of the negative log-likelihood term in the loss function for the zoom model (when using a model that generates points).')
 
-    argreader.parser.add_argument('--pn_reconst_weight', type=float, metavar='FLOAT',
-                                  help='The weight of the reconstruction term in the loss function when using a pn-topk model.')
     argreader.parser.add_argument('--pn_reinf_weight', type=float, metavar='FLOAT',
                                   help='The weight of the reinforcement term in the loss function when using a reinforcement learning.')
     argreader.parser.add_argument('--pn_reinf_weight_baseline', type=float, metavar='FLOAT',
@@ -584,33 +575,34 @@ def run(args):
         bestMetricVal = np.inf
         isBetter = lambda x, y: x < y
 
-    while epoch < args.epochs + 1 and worseEpochNb < args.max_worse_epoch_nb:
+    if not args.only_test:
+        while epoch < args.epochs + 1 and worseEpochNb < args.max_worse_epoch_nb:
 
-        kwargsTr["epoch"], kwargsVal["epoch"] = epoch, epoch
-        kwargsTr["model"], kwargsVal["model"] = net, net
+            kwargsTr["epoch"], kwargsVal["epoch"] = epoch, epoch
+            kwargsTr["model"], kwargsVal["model"] = net, net
 
-        if not args.no_train:
-            trainFunc(**kwargsTr)
-            if not scheduler is None:
-                writer.add_scalars("LR", {args.model_id: scheduler.get_lr()}, epoch)
-                scheduler.step()
-        else:
+            if not args.no_train:
+                trainFunc(**kwargsTr)
+                if not scheduler is None:
+                    writer.add_scalars("LR", {args.model_id: scheduler.get_lr()}, epoch)
+                    scheduler.step()
+            else:
+                if not args.no_val:
+                    net.load_state_dict(torch.load(
+                        "../models/{}/model{}_epoch{}".format(args.exp_id_no_train, args.model_id_no_train, epoch),
+                        map_location="cpu" if not args.cuda else None))
+
             if not args.no_val:
-                net.load_state_dict(torch.load(
-                    "../models/{}/model{}_epoch{}".format(args.exp_id_no_train, args.model_id_no_train, epoch),
-                    map_location="cpu" if not args.cuda else None))
+                with torch.no_grad():
+                    metricVal = valFunc(**kwargsVal)
 
-        if not args.no_val:
-            with torch.no_grad():
-                metricVal = valFunc(**kwargsVal)
+                bestEpoch, bestMetricVal, worseEpochNb = update.updateBestModel(metricVal, bestMetricVal, args.exp_id,
+                                                                                args.model_id, bestEpoch, epoch, net,
+                                                                                isBetter, worseEpochNb)
 
-            bestEpoch, bestMetricVal, worseEpochNb = update.updateBestModel(metricVal, bestMetricVal, args.exp_id,
-                                                                            args.model_id, bestEpoch, epoch, net,
-                                                                            isBetter, worseEpochNb)
+            epoch += 1
 
-        epoch += 1
-
-    if args.run_test:
+    if args.run_test or args.only_test:
 
         if os.path.exists("../results/{}/test_done.txt".format(args.exp_id)):
             test_done = np.genfromtxt("../results/{}/test_done.txt".format(args.exp_id),delimiter=",",dtype=str)
@@ -633,7 +625,7 @@ def run(args):
 
             kwargsTest['loader'] = testLoader
 
-            net.load_state_dict(torch.load("../models/{}/model{}_epoch{}".format(args.exp_id, args.model_id, bestEpoch),
+            net.load_state_dict(torch.load("../models/{}/model{}_best_epoch{}".format(args.exp_id, args.model_id, bestEpoch),
                                            map_location="cpu" if not args.cuda else None))
             kwargsTest["model"] = net
             kwargsTest["epoch"] = bestEpoch
@@ -672,6 +664,8 @@ def main(argv=None):
                                   help="Whether to save network weights at each epoch.")
 
     argreader.parser.add_argument('--no_val', type=str2bool, help='To not compute the validation')
+    argreader.parser.add_argument('--only_test', type=str2bool, help='To only compute the test')
+
     argreader.parser.add_argument('--do_test_again', type=str2bool, help='Does the test evaluation even if it has already been done')
     argreader.parser.add_argument('--compute_latency', type=str2bool, help='To write in a file the latency at each forward pass.')
 
