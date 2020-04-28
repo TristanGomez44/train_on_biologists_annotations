@@ -186,6 +186,14 @@ def epochImgEval(model, log_interval, loader, epoch, args, writer, metricEarlySt
                      "fullPointsSeq_pureText": None,"fullPointsWeightSeq_pureText":None,"fullPNReconstSeq": None,"fullProbMap":None,\
                      "fullReconstSeq":None}
 
+    compute_latency = args.compute_latency and mode == "test"
+
+    if compute_latency:
+        latency_list=[]
+        batchSize_list = []
+    else:
+        latency_list,batchSize_list =None,None
+
     for batch_idx, (data, target) in enumerate(loader):
 
         if (batch_idx % log_interval == 0):
@@ -196,11 +204,17 @@ def epochImgEval(model, log_interval, loader, epoch, args, writer, metricEarlySt
             data, target = data.cuda(), target.cuda()
 
         # Computing predictions
-        resDict = model(data)
+        if compute_latency:
+            lat_start_time = time.time()
+            resDict = model(data)
+            latency_list.append(time.time()-lat_start_time)
+            batchSize_list.append(data.size(0))
+        else:
+            resDict = model(data)
+
         output = resDict["pred"]
 
         # Loss
-
         loss = computeLoss(args, output, target, resDict, data)
 
         # Other variables produced by the net
@@ -225,6 +239,12 @@ def epochImgEval(model, log_interval, loader, epoch, args, writer, metricEarlySt
     writeSummaries(metrDict, validBatch, writer, epoch, mode, args.model_id, args.exp_id)
     intermVarDict = update.saveIntermediateVariables(intermVarDict, args.exp_id, args.model_id, epoch, mode,
                                                      args.save_all)
+
+    if compute_latency:
+        latency_list = np.array(latency_list)[:,np.newaxis]
+        batchSize_list = np.array(batchSize_list)[:,np.newaxis]
+        latency_list = np.concatenate((latency_list,batchSize_list),axis=1)
+        np.savetxt("../results/{}/latency_{}_epoch{}.csv".format(args.exp_id,args.model_id,epoch),latency_list,header="latency,batch_size",delimiter=",")
 
     if args.debug:
         totalTime = time.time() - start_time
@@ -653,6 +673,7 @@ def main(argv=None):
 
     argreader.parser.add_argument('--no_val', type=str2bool, help='To not compute the validation')
     argreader.parser.add_argument('--do_test_again', type=str2bool, help='Does the test evaluation even if it has already been done')
+    argreader.parser.add_argument('--compute_latency', type=str2bool, help='To write in a file the latency at each forward pass.')
 
     argreader = addInitArgs(argreader)
     argreader = addOptimArgs(argreader)
