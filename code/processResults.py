@@ -318,7 +318,10 @@ def efficiencyPlot(exp_id,model_ids,epoch_list):
             accuracy = float(accuracy.replace("tensor","").replace(",","").replace("(",""))
 
         if os.path.exists("../results/{}/latency_{}_epoch{}.csv".format(exp_id,model_ids[i],epoch_list[i])):
-            latency =np.genfromtxt("../results/{}/latency_{}_epoch{}.csv".format(exp_id,model_ids[i],epoch_list[i]),delimiter=",")[1:-1,0].mean()
+            latency_and_batchsize =np.genfromtxt("../results/{}/latency_{}_epoch{}.csv".format(exp_id,model_ids[i],epoch_list[i]),delimiter=",")
+            latency = latency_and_batchsize[1:-1,0].mean()
+            latency /= latency_and_batchsize[1,1]
+
             plt.figure(0)
             plt.plot(latency,accuracy,"*",label=model_ids[i])
 
