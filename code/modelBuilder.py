@@ -416,7 +416,7 @@ class TopkPointExtractor(nn.Module):
             retDict["pointfeatures"] = pointFeat.reshape(pointFeat.size(0) * pointFeat.size(1), pointFeat.size(2))
 
         if self.auxModel:
-            retDict["auxFeat"] = featureMaps.mean(dim=-1).mean(dim=-1)
+            retDict["auxFeat"] = F.relu(featureMaps).mean(dim=-1).mean(dim=-1)
 
         if self.norm_points:
             if self.cannyedge:
@@ -893,7 +893,7 @@ def getResnetFeat(backbone_name, backbone_inplanes):
         raise ValueError("Unkown backbone : {}".format(backbone_name))
     return nbFeat
 
-def computeEncChan(pn_enc_chan,pn_topk_no_feat,pn_topk_puretext):
+def computeEncChan(nbFeat,pn_enc_chan,pn_topk_no_feat,pn_topk_puretext):
     if pn_topk_no_feat:
         pointnetInputChannels = 0
     elif pn_enc_chan == 0:
@@ -947,7 +947,7 @@ def netBuilder(args):
         secondModel = LinearSecondModel(nbFeat, args.class_nb, args.dropout)
     elif args.second_mod == "pointnet2" or args.second_mod == "edgenet":
 
-        pointnetInputChannels = computeEncChan(args.pn_enc_chan,args.pn_topk_no_feat,args.pn_topk_puretext)
+        pointnetInputChannels = computeEncChan(nbFeat,args.pn_enc_chan,args.pn_topk_no_feat,args.pn_topk_puretext)
 
         if args.second_mod == "pointnet2":
             const = pointnet2.Net
