@@ -302,8 +302,8 @@ class TopkPointExtractor(nn.Module):
     def __init__(self, cuda, nbFeat,point_nb,encoderChan, \
                  furthestPointSampling, furthestPointSampling_nb_pts,\
                  auxModel,topk_euclinorm,hasLinearProb,cannyedge,cannyedge_sigma,patchsim,\
-                 patchsim_patchsize,patchsim_groupNb,patchsim_neiSimRefin,no_feat,patchsim_mod,norm_points,sagpool,sagpool_pts_nb,\
-                 bottomK=False):
+                 patchsim_patchsize,patchsim_groupNb,patchsim_neiSimRefin,no_feat,patchsim_mod,norm_points,sagpool,\
+                 sagpool_drop,sagpool_drop_ratio,bottomK):
 
         super(TopkPointExtractor, self).__init__()
 
@@ -345,6 +345,9 @@ class TopkPointExtractor(nn.Module):
         self.no_feat = no_feat
         self.norm_points = norm_points
         self.bottomK = bottomK
+        self.sagpool_drop = sagpool_drop
+        self.sagpool_drop_ratio = sagpool_drop_ratio
+
     def forward(self, featureMaps,pointFeaturesMap=None,x=None,**kwargs):
         retDict = {}
 
@@ -427,8 +430,27 @@ class TopkPointExtractor(nn.Module):
         if self.sagpool:
             nodeWeight,pos,batch = self.sagpoolModule(retDict['pointfeatures'],retDict["pos"],retDict["batch"])
             nodeWeight = torch.sigmoid(nodeWeight)
+            ptsNb = nodeWeight.size(0)//featureMaps.size(0)
+
+            if self.sagpool_drop:
+
+                ptsNb_afterpool = int(ptsNb*self.sagpool_drop_ratio)
+
+                nodeWeight = nodeWeight.reshape(featureMaps.size(0),ptsNb)
+                retDict["pointfeatures"] = retDict["pointfeatures"].unsqueeze(0).reshape(featureMaps.size(0),ptsNb,-1)
+                retDict["pos"] = retDict["pos"].unsqueeze(0).reshape(featureMaps.size(0),ptsNb,-1)
+                retDict["batch"] = retDict["batch"].unsqueeze(0).reshape(featureMaps.size(0),ptsNb)
+
+                nodeWeight, flatInds = torch.topk(nodeWeight, int(nodeWeight.size(1)*self.sagpool_drop_ratio), dim=-1, largest=True)
+
+                nodeWeight = nodeWeight.reshape(featureMaps.size(0)*ptsNb_afterpool).unsqueeze(1)
+                retDict["pointfeatures"] = retDict["pointfeatures"].reshape(featureMaps.size(0)*ptsNb_afterpool,-1)
+                retDict["pos"] = retDict["pos"].reshape(featureMaps.size(0)*ptsNb_afterpool,-1)
+                retDict["batch"] = retDict["batch"].reshape(featureMaps.size(0)*ptsNb_afterpool)
+
             retDict["pointfeatures"] = nodeWeight*retDict["pointfeatures"]
             retDict["pointWeights"] = nodeWeight.unsqueeze(0).reshape(featureMaps.size(0),nodeWeight.size(0)//featureMaps.size(0))
+
         return retDict
 
     def updateDict(self, device):
@@ -792,7 +814,7 @@ class PointNet2(SecondModel):
                  topk_fps_nb_pts=64, auxModel=False,hasLinearProb=False,
                  use_baseline=False,topk_euclinorm=True,reinf_linear_only=False, pn_clustering=False,\
                  cannyedge=False,cannyedge_sigma=2,patchsim=False,patchsim_patchsize=5,patchsim_groupNb=4,patchsim_neiSimRefin=None,\
-                 no_feat=False,patchsim_mod=None,norm_points=False,topk_sagpool=False,topk_sagpool_pts_nb=64,\
+                 no_feat=False,patchsim_mod=None,norm_points=False,topk_sagpool=False,topk_sagpool_drop=False,topk_sagpool_drop_ratio=0.5,\
                  pureTextModel=False,pureTextPtsNbFact=4):
 
         super(PointNet2, self).__init__(nbFeat, classNb)
@@ -804,7 +826,7 @@ class PointNet2(SecondModel):
                                                 topk_fps, topk_fps_nb_pts,auxModel, \
                                                 topk_euclinorm,hasLinearProb,\
                                                 cannyedge,cannyedge_sigma,patchsim,patchsim_patchsize,patchsim_groupNb,patchsim_neiSimRefin,no_feat,\
-                                                patchsim_mod,norm_points,topk_sagpool,topk_sagpool_pts_nb)
+                                                patchsim_mod,norm_points,topk_sagpool,topk_sagpool_drop,topk_sagpool_drop_ratio,False)
         elif reinfExct:
             self.pointExtr = ReinforcePointExtractor(cuda, nbFeat,point_nb,encoderChan,hasLinearProb, use_baseline, reinf_linear_only)
         else:
@@ -825,7 +847,7 @@ class PointNet2(SecondModel):
                                                 True, finalPtsNb,auxModel, \
                                                 topk_euclinorm,hasLinearProb,\
                                                 cannyedge,cannyedge_sigma,patchsim,patchsim_patchsize,patchsim_groupNb,patchsim_neiSimRefin,no_feat,\
-                                                patchsim_mod,norm_points,topk_sagpool,topk_sagpool_pts_nb,bottomK=True)
+                                                patchsim_mod,norm_points,topk_sagpool,topk_sagpool_drop,topk_sagpool_drop_ratio,False)
         else:
             self.pureText_pointExtr = None
 
@@ -906,7 +928,6 @@ def computeEncChan(nbFeat,pn_enc_chan,pn_topk_no_feat,pn_topk_puretext):
 
     return pointnetInputChannels
 
-
 def netBuilder(args):
     ############### Visual Model #######################
     if args.first_mod.find("resnet") != -1:
@@ -974,7 +995,8 @@ def netBuilder(args):
                                 cannyedge=args.pn_cannyedge,cannyedge_sigma=args.pn_cannyedge_sigma,\
                                 patchsim=args.pn_patchsim,patchsim_patchsize=args.pn_patchsim_patchsize,patchsim_groupNb=args.pn_patchsim_groupnb,patchsim_neiSimRefin=neiSimRefinDict,\
                                 no_feat=args.pn_topk_no_feat,patchsim_mod=None if args.pn_patchsim_randmod else firstModel.featMod,\
-                                norm_points=args.norm_points,topk_sagpool=args.pn_topk_sagpool,topk_sagpool_pts_nb=args.pn_topk_sagpool_pts_nb,\
+                                norm_points=args.norm_points,topk_sagpool=args.pn_topk_sagpool,topk_sagpool_drop=args.pn_topk_sagpool_drop,\
+                                topk_sagpool_drop_ratio=args.pn_topk_sagpool_drop_ratio,\
                                 pureTextModel=args.pn_topk_puretext,pureTextPtsNbFact=args.pn_topk_puretext_pts_nb_fact)
     else:
         raise ValueError("Unknown temporal model type : ", args.second_mod)
@@ -1120,8 +1142,10 @@ def addArgs(argreader):
 
     argreader.parser.add_argument('--pn_topk_sagpool', type=args.str2bool, metavar='BOOL',
                                   help="To use SAG pooling to reduce the number of points that will be passed to pointnet.")
-    argreader.parser.add_argument('--pn_topk_sagpool_pts_nb', type=int, metavar='BOOL',
-                                  help="The number of point to keep after sagpooling")
+    argreader.parser.add_argument('--pn_topk_sagpool_drop', type=args.str2bool, metavar='BOOL',
+                                  help="To drop points which given weights are low.")
+    argreader.parser.add_argument('--pn_topk_sagpool_drop_ratio', type=float, metavar='BOOL',
+                                  help="The ratio of points dropped.")
 
     argreader.parser.add_argument('--pn_topk_puretext', type=args.str2bool, metavar='BOOL',
                                   help="To use a second topk model that will takes as input the bottom K pixels intead of the topk")
