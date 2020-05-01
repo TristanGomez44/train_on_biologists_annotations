@@ -19,6 +19,7 @@ import skimage.feature
 import numpy as np
 import matplotlib.pyplot as plt
 plt.switch_backend('agg')
+import cv2
 
 _EPSILON = 10e-7
 
@@ -301,7 +302,7 @@ class TopkPointExtractor(nn.Module):
 
     def __init__(self, cuda, nbFeat,point_nb,encoderChan, \
                  furthestPointSampling, furthestPointSampling_nb_pts,\
-                 auxModel,topk_euclinorm,hasLinearProb,cannyedge,cannyedge_sigma,patchsim,\
+                 auxModel,topk_euclinorm,hasLinearProb,cannyedge,cannyedge_sigma,orbedge,patchsim,\
                  patchsim_patchsize,patchsim_groupNb,patchsim_neiSimRefin,no_feat,patchsim_mod,norm_points,sagpool,\
                  sagpool_drop,sagpool_drop_ratio,bottomK):
 
@@ -333,13 +334,14 @@ class TopkPointExtractor(nn.Module):
 
         self.cannyedge = cannyedge
         self.cannyedge_sigma = cannyedge_sigma
+        self.orbedge = orbedge
 
         self.patchsim = patchsim
         if self.patchsim:
             self.patchSimCNN = PatchSimCNN("resnet9",False,patchsim_groupNb,chan=32,patchSize=patchsim_patchsize,neiSimRefin=patchsim_neiSimRefin,featMod=patchsim_mod)
             self.patchSim_useAllLayers = (patchsim_mod is None)
 
-        if self.cannyedge and self.patchsim:
+        if (self.cannyedge or self.orbedge) and self.patchsim:
             raise ValueError("cannyedge and patchsim can't be True at the same time.")
 
         self.no_feat = no_feat
@@ -353,7 +355,7 @@ class TopkPointExtractor(nn.Module):
 
         # Because of zero padding, the border are very active, so we remove it.
         if pointFeaturesMap is None:
-            if (not self.cannyedge) and (not self.patchsim):
+            if (not self.cannyedge) and (not self.orbedge) and (not self.patchsim):
                 featureMaps = featureMaps[:, :, 3:-3, 3:-3]
 
             if self.conv1x1:
@@ -361,7 +363,7 @@ class TopkPointExtractor(nn.Module):
             else:
                 pointFeaturesMap = featureMaps
 
-        if (not self.cannyedge):
+        if (not self.cannyedge) and (not self.orbedge):
             if x is None:
                 if self.topk_euclinorm:
                     x = torch.pow(pointFeaturesMap, 2).sum(dim=1, keepdim=True)
@@ -383,9 +385,9 @@ class TopkPointExtractor(nn.Module):
 
             abs, ord = (flatInds % x.shape[-1], flatInds // x.shape[-1])
 
-        elif self.cannyedge:
-            edges = computeEdges(kwargs["origImgBatch"],self.cannyedge_sigma,self.point_extracted,featureMaps.size(-1))
-            abs,ord = edges[:,:,0],edges[:,:,1]
+        else:
+            edges = computeEdges(kwargs["origImgBatch"],self.cannyedge_sigma,self.point_extracted,featureMaps.size(-1),self.orbedge,self.point_extracted)
+            ord, abs = edges[:,:,0],edges[:,:,1]
 
         if self.furthestPointSampling:
             points = torch.cat((abs.unsqueeze(-1), ord.unsqueeze(-1)), dim=-1).float()
@@ -460,7 +462,21 @@ class TopkPointExtractor(nn.Module):
             self.absKerDict[device] = self.absKer.to(device)
             self.spatialWeightKerDict[device] = self.spatialWeightKer.to(device)
 
-def computeEdges(origImgBatch,sigma,pts_nb,featMapSize):
+def computeORB(origImgBatch,nbPoints):
+    kpsCoord_list = []
+    for i in range(len(origImgBatch)):
+        img_np= origImgBatch[i].detach().cpu().permute(1,2,0).numpy()
+        kps, _ = cv2.ORB_create(nfeatures=1500).detectAndCompute(img_np, None)
+        if len(kps) > 0:
+            kpsCoord = np.concatenate([np.concatenate((np.array(i)[np.newaxis,np.newaxis],np.array(kp.pt)[::-1][np.newaxis]),axis=-1) for kp in kps],axis=0)
+            kpsCoord_list.append(torch.tensor(kpsCoord))
+    if len(kpsCoord_list):
+        kpsCoord = torch.cat(kpsCoord_list,dim=0)
+    else:
+        kpsCoord = torch.zeros(0,3)
+    return kpsCoord.to(origImgBatch.device).long()
+
+def computeCanny(origImgBatch,sigma):
     edgeTensBatch = []
     for i in range(len(origImgBatch)):
         edges_np = skimage.feature.canny(origImgBatch[i].detach().cpu().mean(dim=0).numpy(),sigma=sigma)
@@ -468,6 +484,13 @@ def computeEdges(origImgBatch,sigma,pts_nb,featMapSize):
         edgeTensBatch.append(edges_tens)
     edgeTensBatch = torch.cat(edgeTensBatch,dim=0)
     edgesCoord = torch.nonzero(edgeTensBatch).to(origImgBatch.device)
+    return edgesCoord
+
+def computeEdges(origImgBatch,sigma,pts_nb,featMapSize,orbedge,nbPoints):
+
+    kpFunc = (lambda x:computeCanny(x,sigma)) if not orbedge else (lambda x:computeORB(x,nbPoints))
+
+    edgesCoord = kpFunc(origImgBatch)
 
     selEdgeCoordBatch = []
     for i in range(len(origImgBatch)):
@@ -813,7 +836,7 @@ class PointNet2(SecondModel):
                  point_nb=256,encoderChan=1,topk_fps=False,
                  topk_fps_nb_pts=64, auxModel=False,hasLinearProb=False,
                  use_baseline=False,topk_euclinorm=True,reinf_linear_only=False, pn_clustering=False,\
-                 cannyedge=False,cannyedge_sigma=2,patchsim=False,patchsim_patchsize=5,patchsim_groupNb=4,patchsim_neiSimRefin=None,\
+                 cannyedge=False,cannyedge_sigma=2,orbedge=False,patchsim=False,patchsim_patchsize=5,patchsim_groupNb=4,patchsim_neiSimRefin=None,\
                  no_feat=False,patchsim_mod=None,norm_points=False,topk_sagpool=False,topk_sagpool_drop=False,topk_sagpool_drop_ratio=0.5,\
                  pureTextModel=False,pureTextPtsNbFact=4):
 
@@ -825,7 +848,7 @@ class PointNet2(SecondModel):
             self.pointExtr = TopkPointExtractor(cuda, nbFeat,point_nb, encoderChan, \
                                                 topk_fps, topk_fps_nb_pts,auxModel, \
                                                 topk_euclinorm,hasLinearProb,\
-                                                cannyedge,cannyedge_sigma,patchsim,patchsim_patchsize,patchsim_groupNb,patchsim_neiSimRefin,no_feat,\
+                                                cannyedge,cannyedge_sigma,orbedge,patchsim,patchsim_patchsize,patchsim_groupNb,patchsim_neiSimRefin,no_feat,\
                                                 patchsim_mod,norm_points,topk_sagpool,topk_sagpool_drop,topk_sagpool_drop_ratio,False)
         elif reinfExct:
             self.pointExtr = ReinforcePointExtractor(cuda, nbFeat,point_nb,encoderChan,hasLinearProb, use_baseline, reinf_linear_only)
@@ -992,7 +1015,7 @@ def netBuilder(args):
                                 auxModel=args.pn_aux_model, hasLinearProb=args.pn_has_linear_prob, use_baseline=args.pn_reinf_use_baseline, \
                                 topk_euclinorm=args.pn_topk_euclinorm, reinf_linear_only=args.pn_train_reinf_linear_only,
                                 pn_clustering=args.pn_clustering,\
-                                cannyedge=args.pn_cannyedge,cannyedge_sigma=args.pn_cannyedge_sigma,\
+                                cannyedge=args.pn_cannyedge,cannyedge_sigma=args.pn_cannyedge_sigma,orbedge=args.pn_orbedge,\
                                 patchsim=args.pn_patchsim,patchsim_patchsize=args.pn_patchsim_patchsize,patchsim_groupNb=args.pn_patchsim_groupnb,patchsim_neiSimRefin=neiSimRefinDict,\
                                 no_feat=args.pn_topk_no_feat,patchsim_mod=None if args.pn_patchsim_randmod else firstModel.featMod,\
                                 norm_points=args.norm_points,topk_sagpool=args.pn_topk_sagpool,topk_sagpool_drop=args.pn_topk_sagpool_drop,\
@@ -1003,7 +1026,7 @@ def netBuilder(args):
 
     ############### Whole Model ##########################
 
-    net = Model(firstModel, secondModel,zoom=args.zoom,passOrigImage=args.pn_cannyedge or args.pn_patchsim,reducedImgSize=args.reduced_img_size)
+    net = Model(firstModel, secondModel,zoom=args.zoom,passOrigImage=args.pn_cannyedge or args.pn_patchsim or args.pn_orbedge,reducedImgSize=args.reduced_img_size)
 
     if args.cuda:
         net.cuda()
@@ -1110,6 +1133,10 @@ def addArgs(argreader):
                                   help='To use canny edge to extract points.')
     argreader.parser.add_argument('--pn_cannyedge_sigma', type=float, metavar='FLOAT',
                                   help='The sigma hyper-parameter of the canny edge detection.')
+    argreader.parser.add_argument('--pn_orbedge', type=args.str2bool, metavar='BOOL',
+                                  help='To use ORB to extract points.')
+
+
     argreader.parser.add_argument('--pn_patchsim', type=args.str2bool, metavar='BOOL',
                                   help='To use patch similarity to extract points.')
     argreader.parser.add_argument('--pn_patchsim_patchsize', type=int, metavar='BOOL',
