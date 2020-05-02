@@ -192,12 +192,10 @@ class CNN2D_simpleAttention(FirstModel):
 
     def __init__(self, featModelName, pretrainedFeatMod=True, featMap=True, bigMaps=False, chan=64, attBlockNb=2,
                  attChan=16, \
-                 topk=False, topk_pxls_nb=256, topk_enc_chan=64,**kwargs):
+                 topk=False, topk_pxls_nb=256, topk_enc_chan=64,inFeat=512,**kwargs):
 
         super(CNN2D_simpleAttention, self).__init__(featModelName, pretrainedFeatMod, featMap, bigMaps, **kwargs)
         self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
-
-        inFeat = getResnetFeat(featModelName, chan)
 
         attention = []
         for i in range(attBlockNb):
@@ -304,7 +302,7 @@ class TopkPointExtractor(nn.Module):
                  furthestPointSampling, furthestPointSampling_nb_pts,\
                  auxModel,topk_euclinorm,hasLinearProb,cannyedge,cannyedge_sigma,orbedge,patchsim,\
                  patchsim_patchsize,patchsim_groupNb,patchsim_neiSimRefin,no_feat,patchsim_mod,norm_points,sagpool,\
-                 sagpool_drop,sagpool_drop_ratio,bottomK):
+                 sagpool_drop,sagpool_drop_ratio,bottomK,multiLevelFeat,multiLevelFeat_outChan):
 
         super(TopkPointExtractor, self).__init__()
 
@@ -870,7 +868,8 @@ class PointNet2(SecondModel):
                                                 True, finalPtsNb,auxModel, \
                                                 topk_euclinorm,hasLinearProb,\
                                                 cannyedge,cannyedge_sigma,patchsim,patchsim_patchsize,patchsim_groupNb,patchsim_neiSimRefin,no_feat,\
-                                                patchsim_mod,norm_points,topk_sagpool,topk_sagpool_drop,topk_sagpool_drop_ratio,False)
+                                                patchsim_mod,norm_points,topk_sagpool,topk_sagpool_drop,topk_sagpool_drop_ratio,False,\
+                                                multiLevelFeat,multiLevelFeat_outChan)
         else:
             self.pureText_pointExtr = None
 
@@ -954,14 +953,19 @@ def computeEncChan(nbFeat,pn_enc_chan,pn_topk_no_feat,pn_topk_puretext):
 def netBuilder(args):
     ############### Visual Model #######################
     if args.first_mod.find("resnet") != -1:
-        nbFeat = getResnetFeat(args.first_mod, args.resnet_chan)
+
+        if not args.multi_level_feat:
+            nbFeat = getResnetFeat(args.first_mod, args.resnet_chan)
+        else:
+            nbFeat = args.multi_level_feat_outchan
 
         if not args.resnet_simple_att:
             CNNconst = CNN2D
             kwargs = {}
         else:
             CNNconst = CNN2D_simpleAttention
-            kwargs = {"topk": args.resnet_simple_att_topk,
+            kwargs = {"inFeat":nbFeat,
+                      "topk": args.resnet_simple_att_topk,
                       "topk_pxls_nb": args.resnet_simple_att_topk_pxls_nb,
                       "topk_enc_chan":args.resnet_simple_att_topk_enc_chan}
             if args.resnet_simple_att_topk_enc_chan != -1:
@@ -971,13 +975,14 @@ def netBuilder(args):
                               dilation=args.resnet_dilation, \
                               attChan=args.resnet_att_chan, attBlockNb=args.resnet_att_blocks_nb,
                               attActFunc=args.resnet_att_act_func, \
-                              multiModel=args.resnet_multi_model, \
-                              multiModSparseConst=args.resnet_multi_model_sparse_const, num_classes=args.class_nb, \
+                              num_classes=args.class_nb, \
                               layerSizeReduce=args.resnet_layer_size_reduce,
                               preLayerSizeReduce=args.resnet_prelay_size_reduce, \
                               applyStrideOnAll=args.resnet_apply_stride_on_all, \
                               replaceBy1x1=args.resnet_replace_by_1x1,\
                               reluOnLast=args.relu_on_last_layer,
+                              multiLevelFeat=args.multi_level_feat,\
+                              multiLev_outChan=args.multi_level_feat_outchan,\
                               **kwargs)
     else:
         raise ValueError("Unknown visual model type : ", args.first_mod)
@@ -1097,12 +1102,7 @@ def addArgs(argreader):
                                   help='The stride for the visual model when resnet is used')
     argreader.parser.add_argument('--resnet_dilation', type=int, metavar='INT',
                                   help='The dilation for the visual model when resnet is used')
-    argreader.parser.add_argument('--resnet_multi_model', type=args.str2bool, metavar='INT',
-                                  help='To apply average pooling and a dense layer to each feature map. This leads to one model \
-                        per scale. The final scores is the average of the scores provided by each model.')
-    argreader.parser.add_argument('--resnet_multi_model_sparse_const', type=args.str2bool, metavar='INT',
-                                  help='For the resnet attention block. Forces the attention map of higher resolution to be sparsier \
-                        than the lower resolution attention maps.')
+
     argreader.parser.add_argument('--resnet_layer_size_reduce', type=args.str2bool, metavar='INT',
                                   help='To apply a stride of 2 in the layer 2,3 and 4 when the resnet model is used.')
     argreader.parser.add_argument('--resnet_prelay_size_reduce', type=args.str2bool, metavar='INT',
@@ -1182,5 +1182,9 @@ def addArgs(argreader):
     argreader.parser.add_argument('--relu_on_last_layer', type=args.str2bool, metavar='BOOL',
                                   help="To apply relu on the last layer of the feature extractor.")
 
+    argreader.parser.add_argument('--multi_level_feat', type=args.str2bool, metavar='BOOL',
+                                  help="To extract multi-level features by combining features maps at every layers.")
+    argreader.parser.add_argument('--multi_level_feat_outchan', type=int, metavar='BOOL',
+                                  help="The number of channels of the multi level feature maps.")
 
     return argreader

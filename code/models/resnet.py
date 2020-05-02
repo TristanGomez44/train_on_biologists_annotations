@@ -140,11 +140,32 @@ class TanHPlusRelu(nn.Module):
     def forward(self,x):
         return self.relu(self.tanh(x))
 
+class MultiLevelFeat(nn.Module):
+
+    def __init__(self,chan,outChan):
+        super(MultiLevelFeat, self).__init__()
+
+        self.multLev_conv1x1_1 = conv1x1(chan,outChan)
+        self.multLev_conv1x1_2 = conv1x1(chan*2,outChan)
+        self.multLev_conv1x1_3 = conv1x1(chan*4,outChan)
+        self.multLev_conv1x1_4 = conv1x1(chan*8,outChan)
+
+    def forward(self,featMaps):
+
+        maps1 = self.multLev_conv1x1_1(featMaps[1])
+        maps2 = interpo(self.multLev_conv1x1_2(featMaps[2]),(maps1.size(-2),maps1.size(-1)))
+        maps3 = interpo(self.multLev_conv1x1_3(featMaps[3]),(maps1.size(-2),maps1.size(-1)))
+        maps4 = interpo(self.multLev_conv1x1_4(featMaps[4]),(maps1.size(-2),maps1.size(-1)))
+
+        maps = (maps1+maps2+maps3+maps4)/4
+
+        return maps
+
 class ResNet(nn.Module):
 
     def __init__(self, block, layers, num_classes=1000, zero_init_residual=False, norm_layer=None,maxPoolKer=(3,3),maxPoolPad=(1,1),stride=(2,2),\
                     featMap=False,chan=64,inChan=3,dilation=1,layerSizeReduce=True,preLayerSizeReduce=True,layersNb=4,attention=False,attChan=16,attBlockNb=1,\
-                    attActFunc="sigmoid",multiModel=False,multiModSparseConst=False,applyStrideOnAll=False,replaceBy1x1=False,reluOnLast=False):
+                    attActFunc="sigmoid",applyStrideOnAll=False,replaceBy1x1=False,reluOnLast=False,multiLevelFeat=False,multiLev_outChan=64):
 
         super(ResNet, self).__init__()
         if norm_layer is None:
@@ -162,8 +183,6 @@ class ResNet(nn.Module):
 
         self.nbLayers = len(layers)
 
-        self.multiModel = multiModel
-        self.multiModSparseConst = multiModSparseConst
         self.replaceBy1x1 = replaceBy1x1
         #All layers are built but they will not necessarily be used
         self.layer1 = self._make_layer(block, chan*1, layers[0], stride=1,norm_layer=norm_layer,reluOnLast=reluOnLast if self.nbLayers==1 else True,\
@@ -203,6 +222,10 @@ class ResNet(nn.Module):
 
         self.featMap = featMap
 
+        self.multiLevelFeat = multiLevelFeat
+        if self.multiLevelFeat:
+            self.multiLevMod = MultiLevelFeat(chan,multiLev_outChan)
+
         self.attention = attention
         if attention:
             self.inplanes = attChan
@@ -227,12 +250,6 @@ class ResNet(nn.Module):
             self.att_2 = nn.Sequential(self.att_conv1x1_2,self.att2,self.att_final_conv1x1,actFuncConstructor())
             self.att_3 = nn.Sequential(self.att_conv1x1_3,self.att3,self.att_final_conv1x1,actFuncConstructor())
             self.att_4 = nn.Sequential(self.att_conv1x1_4,self.att4,self.att_final_conv1x1,actFuncConstructor())
-
-        if multiModel:
-            self.fc1 = nn.Linear(chan*(2**(1-1)) * block.expansion, num_classes)
-            self.fc2 = nn.Linear(chan*(2**(2-1)) * block.expansion, num_classes)
-            self.fc3 = nn.Linear(chan*(2**(3-1)) * block.expansion, num_classes)
-            self.fc4 = nn.Linear(chan*(2**(4-1)) * block.expansion, num_classes)
 
     def _make_layer(self, block, planes, blocks, stride=1, norm_layer=None,reluOnLast=False,dilation=1,applyStrideOnAll=False,replaceBy1x1=False):
 
@@ -270,42 +287,32 @@ class ResNet(nn.Module):
             attWeightsDict = {}
 
         layerFeat = {}
-
+        multiLevelFeat = {}
         lastLayer = self.layersNb if returnLayer=="last" else int(returnLayer)
 
         for i in range(1,lastLayer+1):
             x = getattr(self,"layer{}".format(i))(x)
-            if self.attention and not self.multiModel:
+            if self.attention:
                 attWeights = getattr(self,"att_{}".format(i))(x)
                 attWeightsDict[i] = attWeights
                 x = x*attWeights
 
             layerFeat[i] = x
 
-        if self.multiModel:
-            scores = None
-            for i in range(self.layersNb,0,-1):
-                if self.attention:
-                    attWeights = getattr(self,"att_{}".format(i))(layerFeat[i])
-                    attWeights = attWeights*interpo(attWeightsDict[i+1], size=(attWeights.size(-2),attWeights.size(-1)), mode='nearest') if i<self.layersNb and self.multiModSparseConst else attWeights
-                    attWeightsDict[i] = attWeights
-                    layerFeat[i] = layerFeat[i]*attWeights
+        if self.multiLevelFeat:
+            x = self.multiLevMod(layerFeat)
 
-                feat = self.avgpool(layerFeat[i]).view(x.size(0), -1)
-                modelScores = getattr(self,"fc{}".format(i))(feat)
-                scores = modelScores if scores is None else (modelScores+scores)
-
-            scores /= self.layersNb
-            x = scores
-        else:
-            if not self.featMap:
-                x = self.avgpool(x)
-                x = x.view(x.size(0), -1)
+        if not self.featMap:
+            x = self.avgpool(x)
+            x = x.view(x.size(0), -1)
 
         retDict["layerFeat"] = layerFeat
         retDict["x"] = x
         if self.attention:
             retDict["attMaps"] = attWeightsDict
+
+        if self.multiLevelFeat:
+            retDict["multiLevelFeat"] = multiLevelFeat
 
         return retDict
 
