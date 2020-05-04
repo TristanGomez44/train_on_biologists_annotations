@@ -1018,6 +1018,7 @@ def netBuilder(args):
                               reluOnLast=args.relu_on_last_layer,
                               multiLevelFeat=args.multi_level_feat,\
                               multiLev_outChan=args.multi_level_feat_outchan,\
+                              multiLev_cat=args.multi_level_feat_cat,\
                               deeplabv3_outchan=args.deeplabv3_outchan,\
                               **kwargs)
     else:
@@ -1223,6 +1224,8 @@ def addArgs(argreader):
                                   help="To extract multi-level features by combining features maps at every layers.")
     argreader.parser.add_argument('--multi_level_feat_outchan', type=int, metavar='BOOL',
                                   help="The number of channels of the multi level feature maps.")
+    argreader.parser.add_argument('--multi_level_feat_cat', type=args.str2bool, metavar='BOOL',
+                                  help="To concatenate the features instead of computing the mean")
 
     argreader.parser.add_argument('--deeplabv3_outchan', type=int, metavar='BOOL',
                                   help="The number of output channel of deeplabv3")
