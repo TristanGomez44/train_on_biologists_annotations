@@ -52,7 +52,7 @@ def epochSeqTr(model, optim, log_interval, loader, epoch, args, writer, **kwargs
 
     '''
 
-    start_time = time.time() if args.debug else None
+    start_time = time.time() if args.debug or args.benchmark else None
 
     model.train()
 
@@ -106,7 +106,7 @@ def epochSeqTr(model, optim, log_interval, loader, epoch, args, writer, **kwargs
             os.remove("../models/{}/model{}_epoch{}".format(args.exp_id, args.model_id, epoch - 1))
         writeSummaries(metrDict, validBatch, writer, epoch, "train", args.model_id, args.exp_id)
 
-    if args.debug:
+    if args.debug or args.benchmark:
         totalTime = time.time() - start_time
         update.updateTimeCSV(epoch, "train", args.exp_id, args.model_id, totalTime, batch_idx)
 
@@ -168,7 +168,7 @@ def epochImgEval(model, log_interval, loader, epoch, args, writer, metricEarlySt
 
     '''
 
-    if args.debug:
+    if args.debug or args.benchmark:
         start_time = time.time()
 
     model.eval()
@@ -245,7 +245,7 @@ def epochImgEval(model, log_interval, loader, epoch, args, writer, metricEarlySt
         latency_list = np.concatenate((latency_list,batchSize_list),axis=1)
         np.savetxt("../results/{}/latency_{}_epoch{}.csv".format(args.exp_id,args.model_id,epoch),latency_list,header="latency,batch_size",delimiter=",")
 
-    if args.debug:
+    if args.debug or args.benchmark:
         totalTime = time.time() - start_time
         update.updateTimeCSV(epoch, mode, args.exp_id, args.model_id, totalTime, batch_idx)
 
