@@ -110,7 +110,7 @@ def buildTrainLoader(args,transf=None,shuffle=True):
     return trainLoader, train_dataset
 
 
-def buildTestLoader(args, mode):
+def buildTestLoader(args, mode,shuffle=False):
     datasetName = getattr(args, "dataset_{}".format(mode))
 
     resizedImgSize = 500 if args.big_images else 224
@@ -148,7 +148,7 @@ def buildTestLoader(args, mode):
             torch.cuda.manual_seed(args.seed)
 
     testLoader = torch.utils.data.DataLoader(dataset=test_dataset, batch_size=args.val_batch_size,
-                                             num_workers=args.num_workers)
+                                             num_workers=args.num_workers,shuffle=shuffle)
 
     return testLoader
 
