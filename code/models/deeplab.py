@@ -9,16 +9,16 @@ from torch import nn
 from torch.nn import functional as F
 import modelBuilder
 
-def _segm_resnet(name, backbone_name, num_classes=21,**kwargs):
+def _segm_resnet(name, backbone_name, outChan=64,num_classes=21,**kwargs):
     backbone = resnet.__dict__[backbone_name](dilation=[1, 2, 2],**kwargs)
 
     model_map = {
         'deeplabv3': (DeepLabHead, DeepLabV3)
     }
 
-    inplanes = modelBuilder.getResnetFeat(backbone_name,kwargs["chan"])
+    inplanes = modelBuilder.getResnetFeat(backbone_name,kwargs["chan"],outChan)
 
-    classifier = model_map[name][0](inplanes, num_classes)
+    classifier = model_map[name][0](inplanes, outChan,outChan)
     base_model = model_map[name][1]
 
     model = base_model(backbone, classifier)
@@ -34,12 +34,17 @@ class _SimpleSegmentationModel(nn.Module):
     def forward(self, x):
         input_shape = x.shape[-2:]
         # contract: features is a dict of tensors
-        features = self.backbone(x)
+        outDict = self.backbone(x)
+
+        features = outDict["x"]
 
         x = self.classifier(features)
         x = F.interpolate(x, size=input_shape, mode='bilinear', align_corners=False)
 
-        return x
+        outDict["deeplabfeat"] = outDict["x"]
+        outDict["x"] = x
+
+        return outDict
 
 class DeepLabV3(_SimpleSegmentationModel):
     """
@@ -55,9 +60,9 @@ class DeepLabV3(_SimpleSegmentationModel):
 
 
 class DeepLabHead(nn.Sequential):
-    def __init__(self, in_channels, num_classes):
+    def __init__(self, in_channels,out_channels, num_classes):
         super(DeepLabHead, self).__init__(
-            ASPP(in_channels, [12, 24, 36])
+            ASPP(in_channels,out_channels, [12, 24, 36])
         )
 
 class ASPPConv(nn.Sequential):
@@ -86,9 +91,8 @@ class ASPPPooling(nn.Sequential):
 
 
 class ASPP(nn.Module):
-    def __init__(self, in_channels, atrous_rates):
+    def __init__(self, in_channels, out_channels,atrous_rates):
         super(ASPP, self).__init__()
-        out_channels = 256
         modules = []
         modules.append(nn.Sequential(
             nn.Conv2d(in_channels, out_channels, 1, bias=False),
