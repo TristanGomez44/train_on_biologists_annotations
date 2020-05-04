@@ -26,7 +26,7 @@ _EPSILON = 10e-7
 from  torch.nn.modules.upsampling import Upsample
 
 
-def buildFeatModel(featModelName, pretrainedFeatMod, featMap=True, bigMaps=False, layerSizeReduce=False, stride=2,dilation=1, **kwargs):
+def buildFeatModel(featModelName, pretrainedFeatMod, featMap=True, bigMaps=False, layerSizeReduce=False, stride=2,dilation=1,deeplabv3_outchan=64, **kwargs):
     ''' Build a visual feature model
 
     Args:
@@ -37,6 +37,7 @@ def buildFeatModel(featModelName, pretrainedFeatMod, featMap=True, bigMaps=False
     '''
     if featModelName.find("deeplabv3") != -1:
         featModel = deeplab._segm_resnet("deeplabv3", featModelName[featModelName.find("resnet"):], \
+                                         outChan=deeplabv3_outchan,\
                                          pretrained=pretrainedFeatMod, featMap=featMap, layerSizeReduce=layerSizeReduce,
                                          **kwargs)
     elif featModelName.find("resnet") != -1:
@@ -302,7 +303,7 @@ class TopkPointExtractor(nn.Module):
                  furthestPointSampling, furthestPointSampling_nb_pts,\
                  auxModel,topk_euclinorm,hasLinearProb,cannyedge,cannyedge_sigma,orbedge,patchsim,\
                  patchsim_patchsize,patchsim_groupNb,patchsim_neiSimRefin,no_feat,patchsim_mod,norm_points,sagpool,\
-                 sagpool_drop,sagpool_drop_ratio,bottomK,multiLevelFeat,multiLevelFeat_outChan):
+                 sagpool_drop,sagpool_drop_ratio,bottomK):
 
         super(TopkPointExtractor, self).__init__()
 
@@ -441,8 +442,15 @@ class TopkPointExtractor(nn.Module):
                 retDict["pos"] = retDict["pos"].unsqueeze(0).reshape(featureMaps.size(0),ptsNb,-1)
                 retDict["batch"] = retDict["batch"].unsqueeze(0).reshape(featureMaps.size(0),ptsNb)
 
-                nodeWeight, flatInds = torch.topk(nodeWeight, int(nodeWeight.size(1)*self.sagpool_drop_ratio), dim=-1, largest=True)
+                #Finding most important pixels
+                nodeWeight, inds = torch.topk(nodeWeight, int(nodeWeight.size(1)*self.sagpool_drop_ratio), dim=-1, largest=True)
 
+                #Selecting thos pixels
+                retDict["pointfeatures"] = retDict["pointfeatures"][torch.arange(featureMaps.size(0)).unsqueeze(1),inds]
+                retDict["pos"] = retDict["pos"][torch.arange(featureMaps.size(0)).unsqueeze(1),inds]
+                retDict["batch"] = retDict["batch"][torch.arange(featureMaps.size(0)).unsqueeze(1),inds]
+
+                #Reshaping
                 nodeWeight = nodeWeight.reshape(featureMaps.size(0)*ptsNb_afterpool).unsqueeze(1)
                 retDict["pointfeatures"] = retDict["pointfeatures"].reshape(featureMaps.size(0)*ptsNb_afterpool,-1)
                 retDict["pos"] = retDict["pos"].reshape(featureMaps.size(0)*ptsNb_afterpool,-1)
@@ -863,15 +871,27 @@ class PointNet2(SecondModel):
             self.auxModel = nn.Linear(nbFeat, classNb)
 
         if pureTextModel:
-            finalPtsNb = point_nb if not topk_fps else topk_fps_nb_pts
-            self.pureText_pointExtr = TopkPointExtractor(cuda, nbFeat,finalPtsNb*pureTextPtsNbFact, encoderChan, \
-                                                True, finalPtsNb,auxModel, \
+
+            if topk_fps:
+                self.finalPtsNb = topk_fps_nb_pts
+            else:
+                self.finalPtsNb = point_nb
+
+            if topk_sagpool_drop:
+                self.finalPtsNb_postDrop = int(self.finalPtsNb*topk_sagpool_drop_ratio)
+            else:
+                self.finalPtsNb_postDrop = self.finalPtsNb
+
+            self.pureText_pointExtr = TopkPointExtractor(cuda, nbFeat,self.finalPtsNb*pureTextPtsNbFact, encoderChan, \
+                                                True, self.finalPtsNb,auxModel, \
                                                 topk_euclinorm,hasLinearProb,\
-                                                cannyedge,cannyedge_sigma,patchsim,patchsim_patchsize,patchsim_groupNb,patchsim_neiSimRefin,no_feat,\
-                                                patchsim_mod,norm_points,topk_sagpool,topk_sagpool_drop,topk_sagpool_drop_ratio,False,\
-                                                multiLevelFeat,multiLevelFeat_outChan)
+                                                cannyedge,cannyedge_sigma,orbedge,patchsim,patchsim_patchsize,patchsim_groupNb,patchsim_neiSimRefin,no_feat,\
+                                                patchsim_mod,norm_points,topk_sagpool,topk_sagpool_drop,topk_sagpool_drop_ratio,False)
         else:
             self.pureText_pointExtr = None
+
+
+
 
 
     def forward(self, featureMaps,**kwargs):
@@ -882,20 +902,12 @@ class PointNet2(SecondModel):
 
         if self.pureText_pointExtr:
             puretext_retDict = self.pureText_pointExtr(featureMaps,pointFeaturesMap=retDict["featVolume"],x=retDict["prob_map"],**kwargs)
-            #puretext_pred = self.pureText_pn_model(puretext_retDict['pointfeatures'], puretext_retDict['pos'], puretext_retDict['batch'])
-            #retDict["puretext_pred"] = puretext_pred
-            #retDict["struct_pred"] = pred
-            #retDict['pred'] = 0.5*pred+0.5*
-
-            #retDict['points_puretext'] = torch.cat((puretext_retDict["pos"].reshape(featureMaps.size(0),self.point_nb,-1),\
-            #                              puretext_retDict["pointfeatures"].reshape(featureMaps.size(0),self.point_nb,-1)),dim=2)
 
             retDict = merge(puretext_retDict,retDict,suffix="puretext")
 
-            #torch.cat((abs, ord, depth, pointFeat), dim=-1).float()
-
             #Adding feature to indicate if point comes from texture border or center
-            indicator = torch.ones(featureMaps.size(0)*self.point_nb,1).to(featureMaps.device)
+            indicator = torch.ones(featureMaps.size(0)*self.finalPtsNb_postDrop,1).to(featureMaps.device)
+
             puretext_retDict['pointfeatures'] = torch.cat((puretext_retDict['pointfeatures'],indicator),dim=-1)
             retDict['pointfeatures'] = torch.cat((retDict['pointfeatures'],-indicator),dim=-1)
 
@@ -918,11 +930,11 @@ def getLayerNb(backbone_name):
     else:
         return 4
 
-def getResnetFeat(backbone_name, backbone_inplanes):
+def getResnetFeat(backbone_name, backbone_inplanes,deeplabv3_outchan):
     if backbone_name == "resnet50" or backbone_name == "resnet101" or backbone_name == "resnet151":
         nbFeat = backbone_inplanes * 4 * 2 ** (4 - 1)
     elif backbone_name.find("deeplab") != -1:
-        nbFeat = 256
+        nbFeat = deeplabv3_outchan
     elif backbone_name.find("resnet34") != -1:
         nbFeat = backbone_inplanes * 2 ** (4 - 1)
     elif backbone_name.find("resnet18") != -1:
@@ -955,7 +967,7 @@ def netBuilder(args):
     if args.first_mod.find("resnet") != -1:
 
         if not args.multi_level_feat:
-            nbFeat = getResnetFeat(args.first_mod, args.resnet_chan)
+            nbFeat = getResnetFeat(args.first_mod, args.resnet_chan,args.deeplabv3_outchan)
         else:
             nbFeat = args.multi_level_feat_outchan
 
@@ -983,6 +995,7 @@ def netBuilder(args):
                               reluOnLast=args.relu_on_last_layer,
                               multiLevelFeat=args.multi_level_feat,\
                               multiLev_outChan=args.multi_level_feat_outchan,\
+                              deeplabv3_outchan=args.deeplabv3_outchan,\
                               **kwargs)
     else:
         raise ValueError("Unknown visual model type : ", args.first_mod)
@@ -1186,5 +1199,8 @@ def addArgs(argreader):
                                   help="To extract multi-level features by combining features maps at every layers.")
     argreader.parser.add_argument('--multi_level_feat_outchan', type=int, metavar='BOOL',
                                   help="The number of channels of the multi level feature maps.")
+
+    argreader.parser.add_argument('--deeplabv3_outchan', type=int, metavar='BOOL',
+                                  help="The number of output channel of deeplabv3")
 
     return argreader
