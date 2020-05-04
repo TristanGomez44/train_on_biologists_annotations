@@ -378,6 +378,7 @@ def initialize_Net_And_EpochNumber(net, exp_id, model_id, cuda, start_mode, init
             init_path = \
                 sorted(glob.glob("../models/{}/model{}_epoch*".format(exp_id, model_id)), key=utils.findLastNumbers)[-1]
 
+        print(init_path)
         params = torch.load(init_path, map_location="cpu" if not cuda else None)
 
         # Checking if the key of the model start with "module."
@@ -582,6 +583,10 @@ def run(args):
             kwargsTr["model"], kwargsVal["model"] = net, net
 
             if not args.no_train:
+                if args.smooth_features:
+                    smoothKerSize = update.updateSmoothKer(net,epoch,args.smooth_features_sched_step,args.smooth_features_start_size,startEpoch)
+                    writer.add_scalars("SmoothKerSize", {args.model_id:smoothKerSize}, epoch)
+
                 trainFunc(**kwargsTr)
                 if not scheduler is None:
                     writer.add_scalars("LR", {args.model_id: scheduler.get_lr()}, epoch)

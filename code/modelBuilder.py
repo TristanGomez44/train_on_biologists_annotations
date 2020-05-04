@@ -14,7 +14,12 @@ from models import deeplab
 from models import resnet
 from models import pointnet2
 import torchvision
-import torch_geometric
+
+try:
+    import torch_geometric
+except ModuleNotFoundError:
+    pass
+
 import skimage.feature
 import numpy as np
 import matplotlib.pyplot as plt
@@ -844,7 +849,7 @@ class PointNet2(SecondModel):
                  use_baseline=False,topk_euclinorm=True,reinf_linear_only=False, pn_clustering=False,\
                  cannyedge=False,cannyedge_sigma=2,orbedge=False,patchsim=False,patchsim_patchsize=5,patchsim_groupNb=4,patchsim_neiSimRefin=None,\
                  no_feat=False,patchsim_mod=None,norm_points=False,topk_sagpool=False,topk_sagpool_drop=False,topk_sagpool_drop_ratio=0.5,\
-                 pureTextModel=False,pureTextPtsNbFact=4):
+                 pureTextModel=False,pureTextPtsNbFact=4,smoothFeat=False,smoothFeatStartSize=10):
 
         super(PointNet2, self).__init__(nbFeat, classNb)
 
@@ -892,9 +897,27 @@ class PointNet2(SecondModel):
 
 
 
+        self.smoothFeat=smoothFeat
+        self.smoothFeatStartSize=smoothFeatStartSize
+        if smoothFeatStartSize % 2 == 0:
+            raise ValueError("Initial smoohting kernel size must be odd.")
 
+        if smoothFeat:
+            self.smoothKer = torch.ones(nbFeat,1,1,1)
+            self.smoothKer = self.smoothKer.to("cuda") if cuda else self.smoothKer
+
+
+    def setSmoothKer(self,newSize):
+        oldSize = self.smoothKer
+        device=self.smoothKer.device
+        self.smoothKer = torch.ones(oldSize.size(0),oldSize.size(1),newSize,newSize)
+        self.smoothKer = self.smoothKer.to(device)
 
     def forward(self, featureMaps,**kwargs):
+
+        if self.smoothFeat:
+            featureMaps = F.conv2d(featureMaps,self.smoothKer,groups=self.smoothKer.size(0),padding=self.smoothKer.size(-1)//2)
+
         retDict = self.pointExtr(featureMaps,**kwargs)
 
         if self.clustering:
@@ -1038,7 +1061,8 @@ def netBuilder(args):
                                 no_feat=args.pn_topk_no_feat,patchsim_mod=None if args.pn_patchsim_randmod else firstModel.featMod,\
                                 norm_points=args.norm_points,topk_sagpool=args.pn_topk_sagpool,topk_sagpool_drop=args.pn_topk_sagpool_drop,\
                                 topk_sagpool_drop_ratio=args.pn_topk_sagpool_drop_ratio,\
-                                pureTextModel=args.pn_topk_puretext,pureTextPtsNbFact=args.pn_topk_puretext_pts_nb_fact)
+                                pureTextModel=args.pn_topk_puretext,pureTextPtsNbFact=args.pn_topk_puretext_pts_nb_fact,\
+                                smoothFeat=args.smooth_features,smoothFeatStartSize=args.smooth_features_start_size)
     else:
         raise ValueError("Unknown temporal model type : ", args.second_mod)
 
@@ -1202,5 +1226,12 @@ def addArgs(argreader):
 
     argreader.parser.add_argument('--deeplabv3_outchan', type=int, metavar='BOOL',
                                   help="The number of output channel of deeplabv3")
+
+    argreader.parser.add_argument('--smooth_features', type=args.str2bool, metavar='BOOL',
+                                  help="To smooth features using a simple mean.")
+    argreader.parser.add_argument('--smooth_features_sched_step', type=int, metavar='BOOL',
+                                  help="The number of epoch to wait before reducing the size of the kernel used to smooth")
+    argreader.parser.add_argument('--smooth_features_start_size', type=int, metavar='BOOL',
+                                  help="The initial size of the kernel used to smooth.")
 
     return argreader

@@ -174,3 +174,17 @@ def saveMap(fullMap,exp_id,model_id,epoch,mode,key="attMaps"):
         np.save("../results/{}/{}_{}_epoch{}_{}.npy".format(exp_id,key,model_id,epoch,mode),fullMap.numpy())
         fullMap = None
     return fullMap
+
+def updateSmoothKer(net,epoch,step,startSize,startEpoch):
+
+    if epoch % step == 0 or epoch==startEpoch:
+
+        size = startSize-2*(epoch//step)
+        if size < 1:
+            size = 1
+
+        net.secondModel.setSmoothKer(size)
+    else:
+        size = net.secondModel.smoothKer.size(-1)
+
+    return size
