@@ -314,6 +314,7 @@ class TopkPointExtractor(nn.Module):
 
         if nbFeat == encoderChan or encoderChan == 0:
             self.conv1x1 = None
+            encoderChan = nbFeat
         else:
             self.conv1x1 = nn.Conv2d(nbFeat, encoderChan, kernel_size=1, stride=1)
 
