@@ -242,7 +242,7 @@ class CNN2D_simpleAttention(FirstModel):
             features = self.avgpool(features)
             features = features.view(features.size(0), -1)
         else:
-            spatialWeights = torch.zeros((features.size(0), 1, features.size(2), features.size(3)))
+            spatialWeights = torch.zeros((features.size(0), 1, features.size(2), features.size(3))).to(x.device)
             # Compute the mean between the k most active pixels
             featNorm = torch.pow(features, 2).sum(dim=1, keepdim=True)
             flatFeatNorm = featNorm.view(featNorm.size(0), -1)
@@ -306,7 +306,7 @@ class TopkPointExtractor(nn.Module):
 
     def __init__(self, cuda, nbFeat,point_nb,encoderChan, \
                  furthestPointSampling, furthestPointSampling_nb_pts,\
-                 auxModel,topk_euclinorm,hasLinearProb,cannyedge,cannyedge_sigma,orbedge,patchsim,\
+                 auxModel,auxModelTopk,topk_euclinorm,hasLinearProb,cannyedge,cannyedge_sigma,orbedge,patchsim,\
                  patchsim_patchsize,patchsim_groupNb,patchsim_neiSimRefin,no_feat,patchsim_mod,norm_points,sagpool,\
                  sagpool_drop,sagpool_drop_ratio,bottomK):
 
@@ -332,6 +332,7 @@ class TopkPointExtractor(nn.Module):
         self.topk_euclinorm = topk_euclinorm
 
         self.auxModel = auxModel
+        self.auxModelTopk = auxModelTopk
 
         self.hasLinearProb = hasLinearProb
         if self.hasLinearProb:
@@ -373,7 +374,8 @@ class TopkPointExtractor(nn.Module):
                 if self.topk_euclinorm:
                     x = torch.pow(pointFeaturesMap, 2).sum(dim=1, keepdim=True)
                 elif self.patchsim:
-                    distMap = -self.patchSimCNN(kwargs["origImgBatch"],returnLayer="last" if self.patchSim_useAllLayers else '2')
+                    with torch.no_grad():
+                        distMap = -self.patchSimCNN(kwargs["origImgBatch"],returnLayer="last" if self.patchSim_useAllLayers else '2')
                     x = distMap
                     pointFeaturesMap = F.interpolate(pointFeaturesMap,size=(x.size(-2),x.size(-1)))
                 elif self.hasLinearProb:
@@ -394,7 +396,7 @@ class TopkPointExtractor(nn.Module):
             edges = computeEdges(kwargs["origImgBatch"],self.cannyedge_sigma,self.point_extracted,featureMaps.size(-1),self.orbedge,self.point_extracted)
             ord, abs = edges[:,:,0],edges[:,:,1]
 
-        if self.furthestPointSampling:
+        if self.furthestPointSampling and self.furthestPointSampling_nb_pts / abs.size(1) < 1:
             points = torch.cat((abs.unsqueeze(-1), ord.unsqueeze(-1)), dim=-1).float()
 
             exampleInds = torch.arange(points.size(0)).unsqueeze(1).expand(points.size(0), points.size(1)).reshape(-1).to(points.device)
@@ -418,6 +420,12 @@ class TopkPointExtractor(nn.Module):
         retDict["batch"] = torch.arange(points.size(0)).unsqueeze(1).expand(points.size(0), points.size(1)).reshape(-1).to(points.device)
         retDict["pos"] = points.reshape(points.size(0) * points.size(1), points.size(2))
 
+        if self.auxModel:
+            if self.auxModelTopk:
+                retDict["auxFeat"] = F.relu(pointFeat).mean(dim=1)
+            else:
+                retDict["auxFeat"] = F.relu(featureMaps).mean(dim=-1).mean(dim=-1)
+
         if self.no_feat:
             retDict['points'] = torch.cat((abs, ord, depth), dim=-1).float()
             retDict["pointfeatures"] = None
@@ -425,14 +433,11 @@ class TopkPointExtractor(nn.Module):
             retDict['points'] = torch.cat((abs, ord, depth, pointFeat), dim=-1).float()
             retDict["pointfeatures"] = pointFeat.reshape(pointFeat.size(0) * pointFeat.size(1), pointFeat.size(2))
 
-        if self.auxModel:
-            retDict["auxFeat"] = F.relu(featureMaps).mean(dim=-1).mean(dim=-1)
-
         if self.norm_points:
-            if self.cannyedge:
+            if self.cannyedge or self.orbedge:
                 retDict["pos"] = (2*retDict["pos"]/(featureMaps.size(-1)-1))-1
             else:
-                retDict["pos"] = (2*retDict["pos"]/(x.size(-1)-1))-1
+                retDict["pos"][:,:2] = (2*retDict["pos"][:,:2]/(x.size(-1)-1))-1
 
         if self.sagpool:
             nodeWeight,pos,batch = self.sagpoolModule(retDict['pointfeatures'],retDict["pos"],retDict["batch"])
@@ -846,7 +851,7 @@ class PointNet2(SecondModel):
 
     def __init__(self, cuda, classNb, nbFeat, pn_model, topk=False, reinfExct=False, \
                  point_nb=256,encoderChan=1,topk_fps=False,
-                 topk_fps_nb_pts=64, auxModel=False,hasLinearProb=False,
+                 topk_fps_nb_pts=64, auxModel=False,auxModelTopk=False,hasLinearProb=False,
                  use_baseline=False,topk_euclinorm=True,reinf_linear_only=False, pn_clustering=False,\
                  cannyedge=False,cannyedge_sigma=2,orbedge=False,patchsim=False,patchsim_patchsize=5,patchsim_groupNb=4,patchsim_neiSimRefin=None,\
                  no_feat=False,patchsim_mod=None,norm_points=False,topk_sagpool=False,topk_sagpool_drop=False,topk_sagpool_drop_ratio=0.5,\
@@ -858,10 +863,10 @@ class PointNet2(SecondModel):
 
         if topk:
             self.pointExtr = TopkPointExtractor(cuda, nbFeat,point_nb, encoderChan, \
-                                                topk_fps, topk_fps_nb_pts,auxModel, \
+                                                topk_fps, topk_fps_nb_pts,auxModel,auxModelTopk, \
                                                 topk_euclinorm,hasLinearProb,\
                                                 cannyedge,cannyedge_sigma,orbedge,patchsim,patchsim_patchsize,patchsim_groupNb,patchsim_neiSimRefin,no_feat,\
-                                                patchsim_mod,norm_points,topk_sagpool,topk_sagpool_drop,topk_sagpool_drop_ratio,False)
+                                                patchsim_mod,norm_points,topk_sagpool,topk_sagpool_drop,topk_sagpool_drop_ratio,True)
         elif reinfExct:
             self.pointExtr = ReinforcePointExtractor(cuda, nbFeat,point_nb,encoderChan,hasLinearProb, use_baseline, reinf_linear_only)
         else:
@@ -889,7 +894,7 @@ class PointNet2(SecondModel):
                 self.finalPtsNb_postDrop = self.finalPtsNb
 
             self.pureText_pointExtr = TopkPointExtractor(cuda, nbFeat,self.finalPtsNb*pureTextPtsNbFact, encoderChan, \
-                                                True, self.finalPtsNb,auxModel, \
+                                                True, self.finalPtsNb,auxModel,auxModelTopk, \
                                                 topk_euclinorm,hasLinearProb,\
                                                 cannyedge,cannyedge_sigma,orbedge,patchsim,patchsim_patchsize,patchsim_groupNb,patchsim_neiSimRefin,no_feat,\
                                                 patchsim_mod,norm_points,topk_sagpool,topk_sagpool_drop,topk_sagpool_drop_ratio,False)
@@ -1055,7 +1060,7 @@ def netBuilder(args):
                                 topk=args.pn_topk, reinfExct=args.pn_reinf, point_nb=args.pn_point_nb,
                                 encoderChan=args.pn_enc_chan, \
                                 topk_fps=args.pn_topk_farthest_pts_sampling, topk_fps_nb_pts=args.pn_topk_fps_nb_points,
-                                auxModel=args.pn_aux_model, hasLinearProb=args.pn_has_linear_prob, use_baseline=args.pn_reinf_use_baseline, \
+                                auxModel=args.pn_aux_model,auxModelTopk=args.pn_aux_model_topk,hasLinearProb=args.pn_has_linear_prob, use_baseline=args.pn_reinf_use_baseline, \
                                 topk_euclinorm=args.pn_topk_euclinorm, reinf_linear_only=args.pn_train_reinf_linear_only,
                                 pn_clustering=args.pn_clustering,\
                                 cannyedge=args.pn_cannyedge,cannyedge_sigma=args.pn_cannyedge_sigma,orbedge=args.pn_orbedge,\
@@ -1134,6 +1139,10 @@ def addArgs(argreader):
     argreader.parser.add_argument('--pn_aux_model', type=args.str2bool, metavar='INT',
                                   help='To train an auxilliary model that will apply average pooling and a dense layer on the feature map\
                         to make a prediction alongside pointnet\'s one.')
+    argreader.parser.add_argument('--pn_aux_model_topk', type=args.str2bool, metavar='INT',
+                                  help='To make the aux model a topk one.')
+
+
 
     argreader.parser.add_argument('--resnet_chan', type=int, metavar='INT',
                                   help='The channel number for the visual model when resnet is used')
