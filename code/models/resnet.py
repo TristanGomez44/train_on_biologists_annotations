@@ -157,6 +157,9 @@ class MultiLevelFeat(nn.Module):
             self.multLev_conv1x1_3 = conv1x1(chan*4,outChan)
             self.multLev_conv1x1_4 = conv1x1(chan*8,outChan)
 
+    def norm(self,maps):
+        return maps/torch.abs(maps).max(dim=-1,keepdim=True)[0].max(dim=-1,keepdim=True)[0].max(dim=-1,keepdim=True)[0]
+
     def forward(self,featMaps):
 
         maps1 = self.multLev_conv1x1_1(featMaps[1])
@@ -165,6 +168,10 @@ class MultiLevelFeat(nn.Module):
         maps4 = interpo(self.multLev_conv1x1_4(featMaps[4]),(maps1.size(-2),maps1.size(-1)))
 
         if self.cat:
+            maps1 = self.norm(maps1)
+            maps2 = self.norm(maps2)
+            maps3 = self.norm(maps3)
+            maps4 = self.norm(maps4)
             maps = torch.cat((maps1,maps2,maps3,maps4),dim=1)
         else:
             maps = (maps1+maps2+maps3+maps4)/4
