@@ -15,7 +15,7 @@ from tensorboardX import SummaryWriter
 import torch.backends.cudnn as cudnn
 
 torch.backends.cudnn.benchmark = True
-torch.backends.cudnn.enabled = True
+torch.backends.cudnn.enabled = False
 
 import matplotlib.cm as cm
 import matplotlib.pyplot as plt
@@ -182,7 +182,7 @@ def epochImgEval(model, log_interval, loader, epoch, args, writer, metricEarlySt
     allOut = None
     allGT = None
     intermVarDict = {"fullAttMap": None, "fullFeatMapSeq": None, "fullAffTransSeq": None, "fullPointsSeq": None,"fullPointsWeightSeq":None,
-                     "fullPointsSeq_pureText": None,"fullPointsWeightSeq_pureText":None,"fullPNReconstSeq": None,"fullProbMap":None,\
+                     "fullPointsSeq_pureText": None,"fullPointsWeightSeq_pureText":None,"fullPointsSeqDropped":None,"fullPNReconstSeq": None,"fullProbMap":None,\
                      "fullReconstSeq":None}
 
     compute_latency = args.compute_latency and mode == "test"
@@ -235,9 +235,11 @@ def epochImgEval(model, log_interval, loader, epoch, args, writer, metricEarlySt
         if validBatch > 15 and args.debug:
             break
 
-    writeSummaries(metrDict, validBatch, writer, epoch, mode, args.model_id, args.exp_id)
+
     intermVarDict = update.saveIntermediateVariables(intermVarDict, args.exp_id, args.model_id, epoch, mode,
                                                      args.save_all)
+
+    writeSummaries(metrDict, validBatch, writer, epoch, mode, args.model_id, args.exp_id)
 
     if compute_latency:
         latency_list = np.array(latency_list)[:,np.newaxis]

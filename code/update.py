@@ -107,6 +107,7 @@ def catIntermediateVariables(visualDict,intermVarDict,nbVideos, save_all):
         intermVarDict["fullAttMap"] = catMap(visualDict,intermVarDict["fullAttMap"],key="attMaps")
         intermVarDict["fullFeatMapSeq"] = catMap(visualDict,intermVarDict["fullFeatMapSeq"],key="features")
         intermVarDict["fullPointsSeq"] = catPointsSeq(visualDict,intermVarDict["fullPointsSeq"],key="points")
+        intermVarDict["fullPointsSeqDropped"] = catPointsSeq(visualDict,intermVarDict["fullPointsSeqDropped"],key="points_dropped")
         intermVarDict["fullPointsWeightSeq"] = catPointsSeq(visualDict,intermVarDict["fullPointsWeightSeq"],key="pointWeights")
 
         intermVarDict["fullPointsSeq_pureText"] = catPointsSeq(visualDict,intermVarDict["fullPointsSeq_pureText"],key="points_puretext")
@@ -123,6 +124,7 @@ def saveIntermediateVariables(intermVarDict,exp_id,model_id,epoch,mode="val",sav
     if save_all:
         intermVarDict["fullAttMap"] = saveMap(intermVarDict["fullAttMap"],exp_id,model_id,epoch,mode,key="attMaps")
         intermVarDict["fullPointsSeq"] =  savePointsSeq(intermVarDict["fullPointsSeq"],exp_id,model_id,epoch,mode,key="points")
+        intermVarDict["fullPointsSeqDropped"] =  savePointsSeq(intermVarDict["fullPointsSeqDropped"],exp_id,model_id,epoch,mode,key="points_dropped")
         intermVarDict["fullPointsWeightSeq"] =  savePointsSeq(intermVarDict["fullPointsWeightSeq"],exp_id,model_id,epoch,mode,key="pointWeights")
 
         intermVarDict["fullPointsSeq_pureText"] =  savePointsSeq(intermVarDict["fullPointsSeq_pureText"],exp_id,model_id,epoch,mode,key="points_puretext")
