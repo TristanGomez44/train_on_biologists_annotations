@@ -22,6 +22,9 @@ import time
 import skimage.feature
 import torch_cluster
 from skimage import img_as_ubyte
+from scipy import ndimage
+from skimage.transform import resize
+import scipy.ndimage.filters as filters
 def main(argv=None):
     # Getting arguments from config file and command line
     # Building the arg reader
@@ -114,7 +117,8 @@ def main(argv=None):
     argreader.parser.add_argument('--patch_sim_neighradius', type=int,
                                   help="The radius of the neighborhood",default=1)
 
-
+    argreader.parser.add_argument('--crop', type=str2bool,
+                                  help="To preprocess images by randomly cropping them",default=True)
 
     argreader = trainVal.addInitArgs(argreader)
     argreader = trainVal.addOptimArgs(argreader)
@@ -159,7 +163,15 @@ def main(argv=None):
         simclrDict = None
         transf = None
 
-    trainLoader, _ = load_data.buildTrainLoader(args,transf=transf if args.simclr_weight>0 else None,shuffle=args.simclr_weight==0)
+
+    if args.simclr_weight>0:
+        transf = transf
+    elif args.crop:
+        transf = None
+    else:
+        transf = "identity"
+
+    trainLoader, _ = load_data.buildTrainLoader(args,transf=transf,shuffle=args.simclr_weight==0)
 
     data,target =next(iter(trainLoader))
     if args.data_batch_index>0:
@@ -295,6 +307,8 @@ def main(argv=None):
                 os.makedirs(os.path.join(args.patch_sim_out_path,"imgs"))
             if not os.path.exists(os.path.join(args.patch_sim_out_path,"edges")):
                 os.makedirs(os.path.join(args.patch_sim_out_path,"edges"))
+            if not os.path.exists(os.path.join(args.patch_sim_out_path,"sobel")):
+                os.makedirs(os.path.join(args.patch_sim_out_path,"sobel"))
             if not os.path.exists(os.path.join(args.patch_sim_out_path,"simMaps")):
                 os.makedirs(os.path.join(args.patch_sim_out_path,"simMaps"))
             if not os.path.exists(os.path.join(args.patch_sim_out_path,"simMaps",args.model_id)):
@@ -316,18 +330,45 @@ def main(argv=None):
 
                 plotImg(img.detach().cpu().permute(1,2,0).numpy(),os.path.join(args.patch_sim_out_path,"imgs","{}.png".format(i+args.data_batch_index*args.batch_size)))
 
-                edges = skimage.feature.canny(img.detach().cpu().permute(1,2,0).numpy().mean(axis=-1),sigma=3)
+                resizedImg = resize(img.detach().cpu().permute(1,2,0).numpy().mean(axis=-1), (100,100),anti_aliasing=True,mode="constant",order=0)*255
+                edges = ~skimage.feature.canny(resizedImg,sigma=3)
                 plotImg(edges,os.path.join(args.patch_sim_out_path,"edges","{}.png".format(i+args.data_batch_index*args.batch_size)))
 
-                plotImg(distMapAgreg[i][0][1:-1,1:-1].detach().cpu().numpy(),os.path.join(args.patch_sim_out_path,"simMaps",args.model_id,"{}".format(i+args.data_batch_index*args.batch_size),"agr.png"),'gray')
+                sobel = sobelFunc(img.detach().cpu().permute(1,2,0).numpy().mean(axis=-1))
+                plotImg(sobel,os.path.join(args.patch_sim_out_path,"sobel","{}.png".format(i+args.data_batch_index*args.batch_size)))
 
-                pathGif = os.path.join(args.patch_sim_out_path,"simMaps",args.model_id,str(i+args.data_batch_index*args.batch_size),"neighSim.gif")
+                sobel = sobelFunc(img.detach().cpu().permute(1,2,0).numpy().mean(axis=-1))
+                minima = computeMinima(sobel)
+                plotImg(255-((255-sobel)*minima),os.path.join(args.patch_sim_out_path,"sobel","nms-{}.png".format(i+args.data_batch_index*args.batch_size)))
+
+                topk(sobel,minima,os.path.join(args.patch_sim_out_path,"sobel"),"{}".format(i+args.data_batch_index*args.batch_size))
+
+                simMapPath = os.path.join(args.patch_sim_out_path,"simMaps",args.model_id,str(i+args.data_batch_index*args.batch_size))
+
+                plotImg(distMapAgreg[i][0][1:-1,1:-1].detach().cpu().numpy(),os.path.join(simMapPath,"agr.png"),'gray')
+
+                pathGif = os.path.join(simMapPath,"neighSim.gif")
                 with imageio.get_writer(pathGif,duration=1) as writer:
                     neighSim[i] = 255*(neighSim[i]-neighSim[i].min())/(neighSim[i].max()-neighSim[i].min())
                     for j in range(len(neighSim[i])):
                         writer.append_data(img_as_ubyte(neighSim[i][j].astype("uint8")))
-                        pathPNG = os.path.join(args.patch_sim_out_path,"simMaps",args.model_id,str(i+args.data_batch_index*args.batch_size),"neighSim_step{}.png".format(len(neighSim[i])-1-j))
+                        pathPNG = os.path.join(simMapPath,"neighSim_step{}.png".format(len(neighSim[i])-1-j))
                         plotImg(neighSim[i][j],pathPNG,cmap="gray")
+
+                        if j == len(neighSim[i])-1:
+                            sparseNeighSim = neighSim[i][j]
+
+                            plt.figure()
+                            plt.hist(neighSim[i][j].reshape(-1),range=(0,255),bins=255)
+                            plt.vlines(neighSim[i][j].mean(),0,2000)
+                            plt.savefig(os.path.join(simMapPath,"hist_step{}.png".format(len(neighSim[i])-1-j)))
+                            plt.close()
+
+                            minima = computeMinima(neighSim[i][j])
+                            plotImg(~minima,os.path.join(simMapPath,"nms.png"),'gray')
+
+                            topk(sparseNeighSim,minima,simMapPath,"sparseNeighSim_step{}".format(len(neighSim[i])-1-j))
+
                 #mask = (distMap[i] != -1)
                 #distMap[i][mask] = (distMap[i][mask]-distMap[i][mask].min())/(distMap[i][mask].max()-distMap[i][mask].min())
 
@@ -415,6 +456,49 @@ def main(argv=None):
                 plt.close()
 
 
+def topk(img,minima,folder,fileName):
+
+    for k in [256,1024,2048]:
+        flatInds = np.argsort(img.reshape(-1))[:k]
+        abs, ord = (flatInds % img.shape[-1], flatInds // img.shape[-1])
+        img_cpy = np.zeros_like(img)
+        img_cpy[:] = 255
+        img_cpy[ord,abs] = img[ord,abs]
+        pathPNG = os.path.join(folder,"{}-{}.png".format(k,fileName))
+        plotImg(img_cpy,pathPNG,cmap="gray")
+
+        #Topk and then NMS
+        pathPNG = os.path.join(folder,"nms-{}-{}.png".format(k,fileName))
+        plotImg(255-((255-img_cpy)*minima),pathPNG,cmap="gray")
+
+        #NMS and then Topk
+        flatInds = np.argsort((255-((255-img)*minima)).reshape(-1))[:k]
+        abs, ord = (flatInds % img.shape[-1], flatInds // img.shape[-1])
+        img_cpy = np.zeros_like(img)
+        img_cpy[:] = 255
+        img_cpy[ord,abs] = img[ord,abs]
+        pathPNG = os.path.join(folder,"{}-nms-{}.png".format(k,fileName))
+        plotImg(img_cpy,pathPNG,cmap="gray")
+
+def computeMinima(img):
+    neiSimMinV = filters.minimum_filter(img, (3,1))
+    neiSimMinH = filters.minimum_filter(img, (1,3))
+    minima = np.logical_or((img == neiSimMinV),(img == neiSimMinH))
+    return minima
+
+def sobelFunc(img):
+
+    img = (255*(img-img.min())/(img.max()-img.min()))
+    img = resize(img, (100,100),anti_aliasing=True,mode="constant",order=3)*255
+
+    img = img.astype('int32')
+    dx = ndimage.sobel(img, 0)  # horizontal derivative
+    dy = ndimage.sobel(img, 1)  # vertical derivative
+    mag = np.hypot(dx, dy)  # magnitude
+    #mag = dx.astype("float64")
+    mag *= 255.0 / np.max(mag)  # normalize (Q&D)
+    mag= mag.astype("uint8")
+    return 255-mag
 def fig2data(fig):
     """
     @brief Convert a Matplotlib figure to a 4D numpy array with RGBA channels and return it
@@ -434,7 +518,7 @@ def fig2data(fig):
     return buf
 
 
-def plotImg(img,path,cmap=None):
+def plotImg(img,path,cmap="gray"):
     plt.figure(figsize=(10,10))
     if cmap is None:
         plt.imshow(img)
@@ -672,13 +756,11 @@ class NeighSim(torch.nn.Module):
         simMap = modelBuilder.computeTotalSim(features,1)
         simMapList = [simMap]
         for j in range(self.nbIter):
-            print("\t\t Iter",j)
             startime = time.time()
 
             allSim = []
             allFeatShift = []
             allPondFeatShift = []
-            print("\t\t\t Feat comp",end="")
             startime = time.time()
             for direction in self.directions:
                 if self.weightByNeigSim:
@@ -689,12 +771,10 @@ class NeighSim(torch.nn.Module):
                     allSim.append(maskShift1)
                 allFeatShift.append(featuresShift1*maskShift1)
             allSim = torch.cat(allSim,dim=1)
-            print(" {}".format(time.time()-startime))
 
             if self.weightByNeigSim and self.softmax:
                 allSim = torch.softmax(self.softmax_fact*allSim,dim=1)
 
-            print("\t\t\t Feat pond",end="")
             startime = time.time()
 
             for i in range(len(self.directions)):
@@ -702,13 +782,6 @@ class NeighSim(torch.nn.Module):
                 featuresShift1 = allFeatShift[i]
                 allPondFeatShift.append((sim*featuresShift1).unsqueeze(1))
             newFeatures = torch.cat(allPondFeatShift,dim=1).sum(dim=1)
-
-            #origSize = allFeatShift[0].size()
-            #allFeatShift = torch.cat(allFeatShift,dim=0).unsqueeze(0).reshape(features.size(0),len(self.directions),origSize[1],origSize[2],origSize[3])
-            #allPondFeatShift = allFeatShift*allSim.unsqueeze(2)
-            #newFeatures = allPondFeatShift.sum(dim=1)
-
-            print(" {}".format(time.time()-startime))
 
             simMap = modelBuilder.computeTotalSim(features,1)
             simMapList.append(simMap)
@@ -723,9 +796,6 @@ class NeighSim(torch.nn.Module):
                 normSimMap = (simMap-min)/(max-min)
                 features = (1-normSimMap)*features+normSimMap*newFeatures
 
-            print("\t\t {}".format(time.time()-startime))
-
-        print("\t End ",end="")
         startime = time.time()
         simMapList = torch.cat(simMapList,dim=1).unsqueeze(1)
 
@@ -734,7 +804,6 @@ class NeighSim(torch.nn.Module):
         simMapList = simMapList.mean(dim=1)
         # N x nbIter x sqrt(nbPatch) x sqrt(nbPatch)
 
-        print("\t {}".format(time.time()-startime))
         return simMapList
 
 def buildModule(cond,constr,cuda,multi_gpu,kwargs={}):
