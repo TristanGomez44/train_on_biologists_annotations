@@ -38,10 +38,6 @@ from PIL import Image
 from PIL import ImageFont
 from PIL import ImageDraw
 
-from scipy.signal import argrelextrema
-import scipy.ndimage.filters as filters
-import scipy.ndimage.morphology as morphology
-
 import torchvision
 import torch_cluster
 
@@ -102,7 +98,7 @@ def plotPointsImageDataset(imgNb,redFact,plotDepth,args):
         if batchInd>=batchNb:
             break
 
-def plotPointsImageDatasetGrid(exp_id,imgNb,epochs,model_ids,reduction_fact_list,inverse_xy,mode,nbClass,args):
+def plotPointsImageDatasetGrid(exp_id,imgNb,epochs,model_ids,reduction_fact_list,inverse_xy,mode,nbClass,useDropped_list,args):
 
     imgSize = 224
 
@@ -115,24 +111,45 @@ def plotPointsImageDatasetGrid(exp_id,imgNb,epochs,model_ids,reduction_fact_list
     imgBatch,labels = next(iter(imgLoader))
     cmPlasma = plt.get_cmap('plasma')
 
+    if len(inverse_xy):
+        inverse_xy = [True for _ in range(len(model_ids))]
+
+    if len(epochs) == 0:
+        for j in range(len(model_ids)):
+
+            paths = glob.glob("../models/{}/model{}_best_epoch*".format(exp_id,model_ids[j]))
+            if len(paths) > 1:
+                raise ValueError("There should only be one best weight file.",model_ids[j],"has several.")
+
+            fileName = os.path.basename(paths[0])
+            epochs.append(utils.findLastNumbers(fileName))
+
     pointPaths,pointWeightPaths = [],[]
     for j in range(len(model_ids)):
-        pointPaths.append("../results/{}/points_{}_epoch{}_{}.npy".format(exp_id,model_ids[j],epochs[j],mode))
-        pointWeightPaths.append("../results/{}/pointWeights_{}_epoch{}_{}.npy".format(exp_id,model_ids[j],epochs[j],mode))
+
+        if useDropped_list[j]:
+            pointPaths.append("../results/{}/points_dropped_{}_epoch{}_{}.npy".format(exp_id,model_ids[j],epochs[j],mode))
+            pointWeightPaths.append("../results/{}/points_dropped_{}_epoch{}_{}.npy".format(exp_id,model_ids[j],epochs[j],mode))
+        else:
+            pointPaths.append("../results/{}/points_{}_epoch{}_{}.npy".format(exp_id,model_ids[j],epochs[j],mode))
+            pointWeightPaths.append("../results/{}/pointWeights_{}_epoch{}_{}.npy".format(exp_id,model_ids[j],epochs[j],mode))
 
     meanVecList = []
     for i in range(imgNb):
-        print("Img",i)
+        print("Img",i,":",end="")
         if gridImage is None:
             gridImage = imgBatch[i:i+1]
         else:
             gridImage = torch.cat((gridImage,imgBatch[i:i+1]),dim=0)
 
         for j in range(len(pointPaths)):
-
+            print(j,end="")
             ptsOrig = torch.tensor(np.load(pointPaths[j]))[i]
 
-            pts = (ptsOrig*reduction_fact_list[j]).long()
+            if (ptsOrig[:,:3] < 0).sum() > 0:
+                pts = (((ptsOrig[:,:3] + 1)/2)*reduction_fact_list[j]).long()
+            else:
+                pts = (ptsOrig*reduction_fact_list[j]).long()
 
             if inverse_xy[j]:
                 x,y = pts[:,0],pts[:,1]
@@ -142,31 +159,28 @@ def plotPointsImageDatasetGrid(exp_id,imgNb,epochs,model_ids,reduction_fact_list
             ptsImageCopy = ptsImage.clone()
 
             if os.path.exists(pointWeightPaths[j]):
-                ptsWeights = np.load(pointWeightPaths[j])[i]
-                ptsWeights = (ptsWeights-ptsWeights.min())/(ptsWeights.max()-ptsWeights.min())
-                ptsWeights = cmPlasma(ptsWeights)[:,:3]
-                ptsImageCopy[:,y,x] =torch.tensor(ptsWeights).permute(1,0).float()
+                if useDropped_list[j]:
+                    ptsWeights = np.load(pointWeightPaths[j])[i][:,-1]
+                    print("drop",ptsWeights[:10])
+                else:
+                    ptsWeights = np.load(pointWeightPaths[j])[i]
+                    print("no drop",ptsWeights[:10])
+                plt.figure()
+                plt.hist(ptsWeights,range=(0,1),bins=10)
+                plt.savefig("../vis/{}/grid_weight_hist_{}_img{}.png".format(exp_id,model_ids[j],i))
+                plt.close()
             else:
-                ptsWeights = torch.pow(ptsOrig[:,3:],2).sum(dim=-1)
-                ptsImageCopy[:,y,x] = 1
+                ptsWeights = torch.pow(ptsOrig[:,3:],2).sum(dim=-1).numpy()
 
-            meanVecList.append(ptsOrig[:,3:].mean(dim=0).unsqueeze(0))
-
+            ptsWeights = (ptsWeights-ptsWeights.min())/(ptsWeights.max()-ptsWeights.min())
+            ptsWeights = cmPlasma(ptsWeights)[:,:3]
+            ptsImageCopy[:,y,x] =torch.tensor(ptsWeights).permute(1,0).float()
 
             ptsImageCopy = ptsImageCopy.unsqueeze(0)
 
             gridImage = torch.cat((gridImage,ptsImageCopy),dim=0)
-
+        print()
     torchvision.utils.save_image(gridImage, "../vis/{}/points_grid_{}.png".format(exp_id,mode), nrow=len(model_ids)+1,padding=5,pad_value=0.5)
-
-    meanVecList = torch.cat(meanVecList,dim=0).numpy()
-    colors = cm.rainbow(np.linspace(0, 1, nbClass))
-    plt.figure()
-    X = np.array([[0, 0, 0], [0, 1, 1], [1, 0, 1], [1, 1, 1]])
-    meanVecList_emb = TSNE(n_components=2).fit_transform(meanVecList)
-    print(labels,colors[labels].shape)
-    plt.scatter(meanVecList_emb[:,0],meanVecList_emb[:,1],color=colors[labels])
-    plt.savefig("../vis/{}/tsne_{}_{}.png".format(exp_id,mode,nbClass))
 
 def plotProbMaps(imgNb,args,norm=False):
 
@@ -394,11 +408,14 @@ def main(argv=None):
     ######################################## GRID #################################################
 
     argreader.parser.add_argument('--plot_points_image_dataset_grid',action="store_true",help='Same as --plot_points_image_dataset but plot only on image and for several model.')
-    argreader.parser.add_argument('--epoch_list',type=int,metavar="INT",nargs="*",help='The list of epochs at which to get the points.')
+    argreader.parser.add_argument('--epoch_list',type=int,metavar="INT",nargs="*",help='The list of epochs at which to get the points.',default=[])
     argreader.parser.add_argument('--model_ids',type=str,metavar="IDS",nargs="*",help='The list of model ids.')
     argreader.parser.add_argument('--reduction_fact_list',type=float,metavar="INT",nargs="*",help='The list of reduction factor.')
-    argreader.parser.add_argument('--inverse_xy',type=str2bool,nargs="*",metavar="BOOL",help='To inverse x and y')
+    argreader.parser.add_argument('--inverse_xy',type=str2bool,nargs="*",metavar="BOOL",help='To inverse x and y',default=[])
+    argreader.parser.add_argument('--use_dropped_list',type=str2bool,nargs="*",metavar="BOOL",help='To plot the dropped point instead of all the points',default=[])
     argreader.parser.add_argument('--mode',type=str,metavar="MODE",help='Can be "val" or "test".',default="val")
+
+
 
     ######################################## Find failure cases #########################################""
 
@@ -426,7 +443,7 @@ def main(argv=None):
     if args.plot_points_image_dataset_grid:
         if args.exp_id == "default":
             args.exp_id = "CUB3"
-        plotPointsImageDatasetGrid(args.exp_id,args.image_nb,args.epoch_list,args.model_ids,args.reduction_fact_list,args.inverse_xy,args.mode,args.class_nb,args)
+        plotPointsImageDatasetGrid(args.exp_id,args.image_nb,args.epoch_list,args.model_ids,args.reduction_fact_list,args.inverse_xy,args.mode,args.class_nb,args.use_dropped_list,args)
     if args.plot_prob_maps:
         plotProbMaps(args.image_nb,args,args.norm)
     if args.list_best_pred:
