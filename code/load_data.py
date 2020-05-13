@@ -52,9 +52,9 @@ class DataPartitioner(object):
 
 def buildTrainLoader(args,transf=None,shuffle=True):
     normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
-
+    resizedImgSize = 500 if args.big_images else 224
     if transf is None:
-        resizedImgSize = 500 if args.big_images else 224
+
         if args.old_preprocess:
             transf = transforms.Compose(
                 [transforms.RandomResizedCrop(resizedImgSize), transforms.RandomHorizontalFlip(), transforms.ToTensor()])
@@ -77,7 +77,12 @@ def buildTrainLoader(args,transf=None,shuffle=True):
         if args.normalize_data:
             transf = transforms.Compose([transf,normalize])
 
-    train_dataset = torchvision.datasets.ImageFolder("../data/{}".format(args.dataset_train), transf)
+    if transf == "identity":
+        transf = transforms.Compose([transforms.Resize((resizedImgSize,resizedImgSize)), transforms.ToTensor()])
+        train_dataset = torchvision.datasets.ImageFolder("../data/{}".format(args.dataset_train),transf)
+    else:
+        train_dataset = torchvision.datasets.ImageFolder("../data/{}".format(args.dataset_train), transf)
+
     totalLength = len(train_dataset)
 
     if args.prop_set_int_fmt:
