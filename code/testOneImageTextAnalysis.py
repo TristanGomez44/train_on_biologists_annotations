@@ -338,7 +338,7 @@ def main(argv=None):
                 plotImg(sobel,os.path.join(args.patch_sim_out_path,"sobel","{}.png".format(i+args.data_batch_index*args.batch_size)))
 
                 sobel = sobelFunc(img.detach().cpu().permute(1,2,0).numpy().mean(axis=-1))
-                minima = computeMinima(sobel)
+                minima,_,_ = computeMinima(sobel)
                 plotImg(255-((255-sobel)*minima),os.path.join(args.patch_sim_out_path,"sobel","nms-{}.png".format(i+args.data_batch_index*args.batch_size)))
 
                 topk(sobel,minima,os.path.join(args.patch_sim_out_path,"sobel"),"{}".format(i+args.data_batch_index*args.batch_size))
@@ -364,8 +364,10 @@ def main(argv=None):
                             plt.savefig(os.path.join(simMapPath,"hist_step{}.png".format(len(neighSim[i])-1-j)))
                             plt.close()
 
-                            minima = computeMinima(neighSim[i][j])
-                            plotImg(~minima,os.path.join(simMapPath,"nms.png"),'gray')
+                            minima,minimaV,minimaH = computeMinima(neighSim[i][j])
+                            plotImg(~minima,os.path.join(simMapPath,"minima.png"),'gray')
+                            plotImg(~minimaV,os.path.join(simMapPath,"minimaV.png"),'gray')
+                            plotImg(~minimaH,os.path.join(simMapPath,"minimaH.png"),'gray')
 
                             topk(sparseNeighSim,minima,simMapPath,"sparseNeighSim_step{}".format(len(neighSim[i])-1-j))
 
@@ -458,7 +460,10 @@ def main(argv=None):
 
 def topk(img,minima,folder,fileName):
 
-    for k in [256,1024,2048]:
+    pathPNG = os.path.join(folder,"nms-{}.png".format(fileName))
+    plotImg((255-((255-img)*minima)),pathPNG)
+
+    for k in [512,1024,2048]:
         flatInds = np.argsort(img.reshape(-1))[:k]
         abs, ord = (flatInds % img.shape[-1], flatInds // img.shape[-1])
         img_cpy = np.zeros_like(img)
@@ -468,7 +473,7 @@ def topk(img,minima,folder,fileName):
         plotImg(img_cpy,pathPNG,cmap="gray")
 
         #Topk and then NMS
-        pathPNG = os.path.join(folder,"nms-{}-{}.png".format(k,fileName))
+        pathPNG = os.path.join(folder,"{}-nms-{}.png".format(k,fileName))
         plotImg(255-((255-img_cpy)*minima),pathPNG,cmap="gray")
 
         #NMS and then Topk
@@ -477,14 +482,16 @@ def topk(img,minima,folder,fileName):
         img_cpy = np.zeros_like(img)
         img_cpy[:] = 255
         img_cpy[ord,abs] = img[ord,abs]
-        pathPNG = os.path.join(folder,"{}-nms-{}.png".format(k,fileName))
+        pathPNG = os.path.join(folder,"nms-{}-{}.png".format(k,fileName))
         plotImg(img_cpy,pathPNG,cmap="gray")
 
 def computeMinima(img):
     neiSimMinV = filters.minimum_filter(img, (3,1))
     neiSimMinH = filters.minimum_filter(img, (1,3))
     minima = np.logical_or((img == neiSimMinV),(img == neiSimMinH))
-    return minima
+    minimaV = (img == neiSimMinV)
+    minimaH = (img == neiSimMinH)
+    return minima,minimaV,minimaH
 
 def sobelFunc(img):
 
