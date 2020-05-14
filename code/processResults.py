@@ -98,7 +98,7 @@ def plotPointsImageDataset(imgNb,redFact,plotDepth,args):
         if batchInd>=batchNb:
             break
 
-def plotPointsImageDatasetGrid(exp_id,imgNb,epochs,model_ids,reduction_fact_list,inverse_xy,mode,nbClass,useDropped_list,args):
+def plotPointsImageDatasetGrid(exp_id,imgNb,epochs,model_ids,reduction_fact_list,inverse_xy,mode,nbClass,useDropped_list,forceFeat,plotId,args):
 
     imgSize = 224
 
@@ -158,19 +158,20 @@ def plotPointsImageDatasetGrid(exp_id,imgNb,epochs,model_ids,reduction_fact_list
 
             ptsImageCopy = ptsImage.clone()
 
-            if os.path.exists(pointWeightPaths[j]):
+            if os.path.exists(pointWeightPaths[j]) and not forceFeat[j]:
                 if useDropped_list[j]:
                     ptsWeights = np.load(pointWeightPaths[j])[i][:,-1]
-                    print("drop",ptsWeights[:10])
                 else:
                     ptsWeights = np.load(pointWeightPaths[j])[i]
-                    print("no drop",ptsWeights[:10])
                 plt.figure()
                 plt.hist(ptsWeights,range=(0,1),bins=10)
                 plt.savefig("../vis/{}/grid_weight_hist_{}_img{}.png".format(exp_id,model_ids[j],i))
                 plt.close()
             else:
-                ptsWeights = torch.pow(ptsOrig[:,3:],2).sum(dim=-1).numpy()
+                if useDropped_list[j]:
+                    ptsWeights = torch.pow(ptsOrig[:,3:-1],2).sum(dim=-1).numpy()
+                else:
+                    ptsWeights = torch.pow(ptsOrig[:,3:],2).sum(dim=-1).numpy()
 
             ptsWeights = (ptsWeights-ptsWeights.min())/(ptsWeights.max()-ptsWeights.min())
             ptsWeights = cmPlasma(ptsWeights)[:,:3]
@@ -179,8 +180,8 @@ def plotPointsImageDatasetGrid(exp_id,imgNb,epochs,model_ids,reduction_fact_list
             ptsImageCopy = ptsImageCopy.unsqueeze(0)
 
             gridImage = torch.cat((gridImage,ptsImageCopy),dim=0)
-        print()
-    torchvision.utils.save_image(gridImage, "../vis/{}/points_grid_{}.png".format(exp_id,mode), nrow=len(model_ids)+1,padding=5,pad_value=0.5)
+
+    torchvision.utils.save_image(gridImage, "../vis/{}/points_grid_{}_{}.png".format(exp_id,mode,plotId), nrow=len(model_ids)+1,padding=5,pad_value=0.5)
 
 def plotProbMaps(imgNb,args,norm=False):
 
@@ -414,8 +415,8 @@ def main(argv=None):
     argreader.parser.add_argument('--inverse_xy',type=str2bool,nargs="*",metavar="BOOL",help='To inverse x and y',default=[])
     argreader.parser.add_argument('--use_dropped_list',type=str2bool,nargs="*",metavar="BOOL",help='To plot the dropped point instead of all the points',default=[])
     argreader.parser.add_argument('--mode',type=str,metavar="MODE",help='Can be "val" or "test".',default="val")
-
-
+    argreader.parser.add_argument('--force_feat',type=str2bool,nargs="*",metavar="BOOL",help='To force feature plotting even when there is attention weights available.',default=[])
+    argreader.parser.add_argument('--plot_id',type=str,metavar="ID",help='The plot id',default="")
 
     ######################################## Find failure cases #########################################""
 
@@ -443,7 +444,8 @@ def main(argv=None):
     if args.plot_points_image_dataset_grid:
         if args.exp_id == "default":
             args.exp_id = "CUB3"
-        plotPointsImageDatasetGrid(args.exp_id,args.image_nb,args.epoch_list,args.model_ids,args.reduction_fact_list,args.inverse_xy,args.mode,args.class_nb,args.use_dropped_list,args)
+        plotPointsImageDatasetGrid(args.exp_id,args.image_nb,args.epoch_list,args.model_ids,args.reduction_fact_list,args.inverse_xy,args.mode,\
+                                    args.class_nb,args.use_dropped_list,args.force_feat,args.plot_id,args)
     if args.plot_prob_maps:
         plotProbMaps(args.image_nb,args,args.norm)
     if args.list_best_pred:
