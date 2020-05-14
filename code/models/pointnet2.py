@@ -52,6 +52,10 @@ def MLP(channels, batch_norm=True):
     ])
 
 
+def MLP_linEnd(channels, batch_norm=True):
+    seq= Seq(*[Seq(Lin(channels[i - 1], channels[i]), ReLU(), BN(channels[i])) for i in range(1, len(channels)-1)])
+    return Seq(*[seq,Lin(channels[-2], channels[-1])])
+
 class Net(torch.nn.Module):
     def __init__(self,num_classes,input_channels):
         super(Net, self).__init__()
