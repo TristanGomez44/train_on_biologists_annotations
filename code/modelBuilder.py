@@ -198,7 +198,8 @@ class CNN2D_simpleAttention(FirstModel):
 
     def __init__(self, featModelName, pretrainedFeatMod=True, featMap=True, bigMaps=False, chan=64, attBlockNb=2,
                  attChan=16, \
-                 topk=False, topk_pxls_nb=256, topk_enc_chan=64,inFeat=512,**kwargs):
+                 topk=False, topk_pxls_nb=256, topk_enc_chan=64,inFeat=512,sagpool=False,sagpool_drop=False,sagpool_drop_ratio=0.5,\
+                 norm_points=False,**kwargs):
 
         super(CNN2D_simpleAttention, self).__init__(featModelName, pretrainedFeatMod, featMap, bigMaps, **kwargs)
         self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
@@ -219,6 +220,15 @@ class CNN2D_simpleAttention(FirstModel):
         self.topk_enc_chan = topk_enc_chan
         if self.topk_enc_chan != -1:
             self.conv1x1 = nn.Conv2d(inFeat,self.topk_enc_chan,1)
+        else:
+            self.conv1x1 = None
+
+        self.sagpool = sagpool
+        if sagpool:
+            self.sagpoolModule = sagpoolLayer(topk_enc_chan if self.conv1x1 else inFeat)
+            self.sagpool_drop = sagpool_drop
+            self.sagpool_drop_ratio = sagpool_drop_ratio
+            self.norm_points = norm_points
 
     def forward(self, x):
         # N x C x H x L
@@ -248,15 +258,34 @@ class CNN2D_simpleAttention(FirstModel):
             flatFeatNorm = featNorm.view(featNorm.size(0), -1)
             flatVals, flatInds = torch.topk(flatFeatNorm, self.topk_pxls_nb, dim=-1, largest=True)
             abs, ord = (flatInds % featNorm.shape[-1], flatInds // featNorm.shape[-1])
+            depth = torch.zeros(abs.size(0), abs.size(1), 1).to(x.device)
             featureList = mapToList(features, abs, ord)
-            features = featureList.mean(dim=1)
+            retDict['points'] = torch.cat((abs.unsqueeze(2).float(), ord.unsqueeze(2).float(), depth, featureList), dim=-1).float()
+
+            if self.sagpool:
+
+                abs, ord = abs.unsqueeze(-1).float(), ord.unsqueeze(-1).float()
+                points = torch.cat((abs, ord, depth), dim=-1).float()
+
+                retDict["batch"] = torch.arange(points.size(0)).unsqueeze(1).expand(points.size(0), points.size(1)).reshape(-1).to(points.device)
+                retDict["pos"] = points.reshape(points.size(0) * points.size(1), points.size(2))
+                retDict["pointfeatures"] = featureList.reshape(featureList.size(0) * featureList.size(1), featureList.size(2))
+
+                if self.norm_points:
+                    retDict["pos"][:,:2] = (2*retDict["pos"][:,:2]/(x.size(-1)-1))-1
+
+                retDict = applySagPool(self.sagpoolModule,retDict,x.size(0),self.sagpool_drop,self.sagpool_drop_ratio)
+
+                finalPtsNb = int(featureList.size(1)*self.sagpool_drop_ratio) if self.sagpool_drop else featureList.size(1)
+                retDict["pointfeatures"] = retDict["pointfeatures"].reshape(featureList.size(0),finalPtsNb, featureList.size(2))
+            else:
+                retDict["pointfeatures"] = featureList
+
+            features = retDict["pointfeatures"].mean(dim=1)
             indices = tuple([torch.arange(spatialWeights.size(0), dtype=torch.long).unsqueeze(1).unsqueeze(1),
                              torch.arange(spatialWeights.size(1), dtype=torch.long).unsqueeze(1).unsqueeze(0),
                              ord.long().unsqueeze(1), abs.long().unsqueeze(1)])
             spatialWeights[indices] = 1
-
-            depth = torch.zeros(abs.size(0), abs.size(1), 1).to(x.device)
-            retDict['points'] = torch.cat((abs.unsqueeze(2).float(), ord.unsqueeze(2).float(), depth, featureList), dim=-1).float()
 
         retDict["x"] = features
         retDict["attMaps"] = spatialWeights
@@ -302,6 +331,9 @@ class Identity(SecondModel):
     def forward(self, x, batchSize):
         return {"pred": x}
 
+def sagpoolLayer(inChan):
+    return pointnet2.SAModule(1, 0.2, pointnet2.MLP_linEnd([inChan+3,64,1]))
+
 class TopkPointExtractor(nn.Module):
 
     def __init__(self, cuda, nbFeat,point_nb,encoderChan, \
@@ -325,7 +357,7 @@ class TopkPointExtractor(nn.Module):
 
         if self.sagpool:
             #self.sagpoolModule = torch_geometric.nn.SAGPooling(in_channels=encoderChan if self.conv1x1 else nbFeat, ratio=sagpool_pts_nb/point_nb)
-            self.sagpoolModule = pointnet2.SAModule(1, 0.2, pointnet2.MLP([encoderChan+3 if self.conv1x1 else nbFeat+3,64,1]))
+            self.sagpoolModule = sagpoolLayer(encoderChan if self.conv1x1 else nbFeat)
         else:
             self.sagpoolModule = None
 
@@ -440,38 +472,7 @@ class TopkPointExtractor(nn.Module):
                 retDict["pos"][:,:2] = (2*retDict["pos"][:,:2]/(x.size(-1)-1))-1
 
         if self.sagpool:
-            nodeWeight,pos,batch = self.sagpoolModule(retDict['pointfeatures'],retDict["pos"],retDict["batch"])
-            nodeWeight = torch.sigmoid(nodeWeight)
-            ptsNb = nodeWeight.size(0)//featureMaps.size(0)
-
-            retDict["pointWeights"] = nodeWeight.reshape(featureMaps.size(0),ptsNb)
-
-            if self.sagpool_drop:
-
-                ptsNb_afterpool = int(ptsNb*self.sagpool_drop_ratio)
-
-                nodeWeight = nodeWeight.reshape(featureMaps.size(0),ptsNb)
-                retDict["pointfeatures"] = retDict["pointfeatures"].unsqueeze(0).reshape(featureMaps.size(0),ptsNb,-1)
-                retDict["pos"] = retDict["pos"].unsqueeze(0).reshape(featureMaps.size(0),ptsNb,-1)
-                retDict["batch"] = retDict["batch"].unsqueeze(0).reshape(featureMaps.size(0),ptsNb)
-
-                #Finding most important pixels
-                nodeWeight, inds = torch.topk(nodeWeight, int(nodeWeight.size(1)*self.sagpool_drop_ratio), dim=-1, largest=True)
-
-                #Selecting those pixels
-                retDict["pointfeatures"] = retDict["pointfeatures"][torch.arange(featureMaps.size(0)).unsqueeze(1),inds]
-                retDict["pos"] = retDict["pos"][torch.arange(featureMaps.size(0)).unsqueeze(1),inds]
-                retDict["batch"] = retDict["batch"][torch.arange(featureMaps.size(0)).unsqueeze(1),inds]
-
-                retDict["points_dropped"] = torch.cat((retDict["pos"],retDict["pointfeatures"],nodeWeight.unsqueeze(-1)),dim=-1)
-
-                #Reshaping
-                nodeWeight = nodeWeight.reshape(featureMaps.size(0)*ptsNb_afterpool).unsqueeze(1)
-                retDict["pointfeatures"] = retDict["pointfeatures"].reshape(featureMaps.size(0)*ptsNb_afterpool,-1)
-                retDict["pos"] = retDict["pos"].reshape(featureMaps.size(0)*ptsNb_afterpool,-1)
-                retDict["batch"] = retDict["batch"].reshape(featureMaps.size(0)*ptsNb_afterpool)
-
-            retDict["pointfeatures"] = nodeWeight*retDict["pointfeatures"]
+            retDict = applySagPool(self.sagpoolModule,retDict,featureMaps.size(0),self.sagpool_drop,self.sagpool_drop_ratio)
 
         return retDict
 
@@ -481,6 +482,42 @@ class TopkPointExtractor(nn.Module):
             self.ordKerDict[device] = self.ordKer.to(device)
             self.absKerDict[device] = self.absKer.to(device)
             self.spatialWeightKerDict[device] = self.spatialWeightKer.to(device)
+
+def applySagPool(module,retDict,batchSize,drop,dropRatio):
+
+    nodeWeight,pos,batch = module(retDict['pointfeatures'],retDict["pos"],retDict["batch"])
+    nodeWeight = torch.sigmoid(nodeWeight)
+    ptsNb = nodeWeight.size(0)//batchSize
+
+    retDict["pointWeights"] = nodeWeight.reshape(batchSize,ptsNb)
+
+    if drop:
+
+        ptsNb_afterpool = int(ptsNb*dropRatio)
+
+        nodeWeight = nodeWeight.reshape(batchSize,ptsNb)
+        retDict["pointfeatures"] = retDict["pointfeatures"].unsqueeze(0).reshape(batchSize,ptsNb,-1)
+        retDict["pos"] = retDict["pos"].unsqueeze(0).reshape(batchSize,ptsNb,-1)
+        retDict["batch"] = retDict["batch"].unsqueeze(0).reshape(batchSize,ptsNb)
+
+        #Finding most important pixels
+        nodeWeight, inds = torch.topk(nodeWeight, int(nodeWeight.size(1)*dropRatio), dim=-1, largest=True)
+
+        #Selecting those pixels
+        retDict["pointfeatures"] = retDict["pointfeatures"][torch.arange(batchSize).unsqueeze(1),inds]
+        retDict["pos"] = retDict["pos"][torch.arange(batchSize).unsqueeze(1),inds]
+        retDict["batch"] = retDict["batch"][torch.arange(batchSize).unsqueeze(1),inds]
+
+        retDict["points_dropped"] = torch.cat((retDict["pos"],retDict["pointfeatures"],nodeWeight.unsqueeze(-1)),dim=-1)
+
+        #Reshaping
+        nodeWeight = nodeWeight.reshape(batchSize*ptsNb_afterpool).unsqueeze(1)
+        retDict["pointfeatures"] = retDict["pointfeatures"].reshape(batchSize*ptsNb_afterpool,-1)
+        retDict["pos"] = retDict["pos"].reshape(batchSize*ptsNb_afterpool,-1)
+        retDict["batch"] = retDict["batch"].reshape(batchSize*ptsNb_afterpool)
+
+    retDict["pointfeatures"] = nodeWeight*retDict["pointfeatures"]
+    return retDict
 
 def computeORB(origImgBatch,nbPoints):
     kpsCoord_list = []
@@ -1020,7 +1057,11 @@ def netBuilder(args):
             kwargs = {"inFeat":nbFeat,
                       "topk": args.resnet_simple_att_topk,
                       "topk_pxls_nb": args.resnet_simple_att_topk_pxls_nb,
-                      "topk_enc_chan":args.resnet_simple_att_topk_enc_chan}
+                      "topk_enc_chan":args.resnet_simple_att_topk_enc_chan,
+                      "sagpool":args.resnet_simple_att_topk_sagpool,
+                      "sagpool_drop":args.resnet_simple_att_topk_sagpool_drop,
+                      "sagpool_drop_ratio":args.resnet_simple_att_topk_sagpool_ratio,
+                      "norm_points":args.norm_points}
             if args.resnet_simple_att_topk_enc_chan != -1:
                 nbFeat = args.resnet_simple_att_topk_enc_chan
 
@@ -1175,6 +1216,14 @@ def addArgs(argreader):
                                   help='The value of k when using top-k selection for resnet simple attention. Ignored when --resnet_simple_att_topk is False.')
     argreader.parser.add_argument('--resnet_simple_att_topk_enc_chan', type=int, metavar='NB',
                                   help='For the resnet_simple_att_topk model. This is the number of output channel of the encoder. Ignored when --resnet_simple_att_topk is False.')
+
+    argreader.parser.add_argument('--resnet_simple_att_topk_sagpool', type=args.str2bool, metavar='BOOL',
+                                  help='To use sagpool.')
+    argreader.parser.add_argument('--resnet_simple_att_topk_sagpool_drop', type=args.str2bool, metavar='BOOL',
+                                  help='To use sagpool with point dropping.')
+    argreader.parser.add_argument('--resnet_simple_att_topk_sagpool_ratio', type=float, metavar='BOOL',
+                                  help='The ratio of point dropped.')
+
 
     argreader.parser.add_argument('--resnet_apply_stride_on_all', type=args.str2bool, metavar='NB',
                                   help='Apply stride on every non 3x3 convolution')
