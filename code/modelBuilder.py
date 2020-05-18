@@ -195,27 +195,29 @@ class CNN2D(FirstModel):
         else:
             return {'x': res}
 
+def buildImageAttention(inFeat,blockNb):
+    attention = []
+    for i in range(blockNb):
+        attention.append(resnet.BasicBlock(inFeat, inFeat))
+    attention.append(resnet.conv1x1(inFeat, 1))
+    return nn.Sequential(*attention)
+
 class CNN2D_simpleAttention(FirstModel):
 
     def __init__(self, featModelName, pretrainedFeatMod=True, featMap=True, bigMaps=False, chan=64, attBlockNb=2,
                  attChan=16, \
                  topk=False, topk_pxls_nb=256, topk_enc_chan=64,inFeat=512,sagpool=False,sagpool_drop=False,sagpool_drop_ratio=0.5,\
-                 norm_points=False,**kwargs):
+                 norm_points=False,predictScore=False,**kwargs):
 
         super(CNN2D_simpleAttention, self).__init__(featModelName, pretrainedFeatMod, featMap, bigMaps, **kwargs)
         self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
 
-        attention = []
-        for i in range(attBlockNb):
-            attention.append(resnet.BasicBlock(inFeat, inFeat))
-        attention.append(resnet.conv1x1(inFeat, 1))
+        self.predictScore = predictScore
+        if predictScore:
+            self.attention = buildImageAttention(inFeat,attBlockNb)
 
         self.topk = topk
-        if not topk:
-            self.attention = nn.Sequential(*attention)
-            self.topk_pxls_nb = None
-        else:
-            self.attention = None
+        if topk:
             self.topk_pxls_nb = topk_pxls_nb
 
         self.topk_enc_chan = topk_enc_chan
@@ -230,6 +232,8 @@ class CNN2D_simpleAttention(FirstModel):
             self.sagpool_drop = sagpool_drop
             self.sagpool_drop_ratio = sagpool_drop_ratio
             self.norm_points = norm_points
+
+        self.predictScore = predictScore
 
     def forward(self, x):
         # N x C x H x L
@@ -247,20 +251,19 @@ class CNN2D_simpleAttention(FirstModel):
 
         retDict = {}
 
-        if not self.topk:
+        if self.predictScore:
             spatialWeights = torch.sigmoid(self.attention(features))
-            features = spatialWeights * features
-            features = self.avgpool(features)
-            features = features.view(features.size(0), -1)
+            features_weig = spatialWeights * features
         else:
-            spatialWeights = torch.zeros((features.size(0), 1, features.size(2), features.size(3))).to(x.device)
-            # Compute the mean between the k most active pixels
-            featNorm = torch.pow(features, 2).sum(dim=1, keepdim=True)
-            flatFeatNorm = featNorm.view(featNorm.size(0), -1)
-            flatVals, flatInds = torch.topk(flatFeatNorm, self.topk_pxls_nb, dim=-1, largest=True)
-            abs, ord = (flatInds % featNorm.shape[-1], flatInds // featNorm.shape[-1])
+            spatialWeights = torch.pow(features, 2).sum(dim=1, keepdim=True)
+            features_weig = features
+
+        if self.topk:
+            flatSpatialWeights = spatialWeights.view(spatialWeights.size(0), -1)
+            flatVals, flatInds = torch.topk(flatSpatialWeights, self.topk_pxls_nb, dim=-1, largest=True)
+            abs, ord = (flatInds % spatialWeights.shape[-1], flatInds // spatialWeights.shape[-1])
             depth = torch.zeros(abs.size(0), abs.size(1), 1).to(x.device)
-            featureList = mapToList(features, abs, ord)
+            featureList = mapToList(features_weig, abs, ord)
             retDict['points'] = torch.cat((abs.unsqueeze(2).float(), ord.unsqueeze(2).float(), depth, featureList), dim=-1).float()
 
             if self.sagpool:
@@ -282,13 +285,15 @@ class CNN2D_simpleAttention(FirstModel):
             else:
                 retDict["pointfeatures"] = featureList
 
-            features = retDict["pointfeatures"].mean(dim=1)
+            features_agr = retDict["pointfeatures"].mean(dim=1)
             indices = tuple([torch.arange(spatialWeights.size(0), dtype=torch.long).unsqueeze(1).unsqueeze(1),
                              torch.arange(spatialWeights.size(1), dtype=torch.long).unsqueeze(1).unsqueeze(0),
                              ord.long().unsqueeze(1), abs.long().unsqueeze(1)])
-            spatialWeights[indices] = 1
+        else:
+            features_agr = self.avgpool(features_weig)
+            features_agr = features_agr.view(features.size(0), -1)
 
-        retDict["x"] = features
+        retDict["x"] = features_agr
         retDict["attMaps"] = spatialWeights
 
         return retDict
@@ -339,7 +344,7 @@ class TopkPointExtractor(nn.Module):
 
     def __init__(self, cuda, nbFeat,point_nb,encoderChan, \
                  furthestPointSampling, furthestPointSampling_nb_pts,\
-                 auxModel,auxModelTopk,topk_euclinorm,hasLinearProb,cannyedge,cannyedge_sigma,orbedge,sobel,patchsim,\
+                 auxModel,auxModelTopk,topk_euclinorm,predictPixelScore,imageAttBlockNb,cannyedge,cannyedge_sigma,orbedge,sobel,patchsim,\
                  patchsim_patchsize,patchsim_groupNb,patchsim_neiSimRefin,nms,no_feat,patchsim_mod,norm_points,sagpool,\
                  sagpool_drop,sagpool_drop_ratio,bottomK):
 
@@ -367,9 +372,9 @@ class TopkPointExtractor(nn.Module):
         self.auxModel = auxModel
         self.auxModelTopk = auxModelTopk
 
-        self.hasLinearProb = hasLinearProb
-        if self.hasLinearProb:
-            self.linearProb = nn.Conv2d(encoderChan, 1, kernel_size=1, stride=1)
+        self.predictPixelScore = predictPixelScore
+        if self.predictPixelScore:
+            self.imageAttention = buildImageAttention(encoderChan,imageAttBlockNb)
 
         self.cannyedge = cannyedge
         self.cannyedge_sigma = cannyedge_sigma
@@ -413,8 +418,8 @@ class TopkPointExtractor(nn.Module):
                         distMap = -self.patchSimCNN(kwargs["origImgBatch"],returnLayer="last" if self.patchSim_useAllLayers else '2')
                     x = distMap
                     pointFeaturesMap = F.interpolate(pointFeaturesMap,size=(x.size(-2),x.size(-1)))
-                elif self.hasLinearProb:
-                    x = torch.sigmoid(self.linearProb(pointFeaturesMap))
+                elif self.predictPixelScore:
+                    x = torch.sigmoid(self.imageAttention(pointFeaturesMap))
                 elif self.sobel:
                     with torch.no_grad():
                         x = -computeSobel(kwargs["origImgBatch"],self.nms)
@@ -941,7 +946,7 @@ class PointNet2(SecondModel):
 
     def __init__(self, cuda, classNb, nbFeat, pn_model, topk=False, reinfExct=False, \
                  point_nb=256,encoderChan=1,topk_fps=False,
-                 topk_fps_nb_pts=64, auxModel=False,auxModelTopk=False,hasLinearProb=False,
+                 topk_fps_nb_pts=64, auxModel=False,auxModelTopk=False,predictScore=False,imageAttBlockNb=1,
                  use_baseline=False,topk_euclinorm=True,reinf_linear_only=False, pn_clustering=False,\
                  cannyedge=False,cannyedge_sigma=2,orbedge=False,sobel=False,patchsim=False,patchsim_patchsize=5,patchsim_groupNb=4,patchsim_neiSimRefin=None,\
                  nms=False,no_feat=False,patchsim_mod=None,norm_points=False,topk_sagpool=False,topk_sagpool_drop=False,topk_sagpool_drop_ratio=0.5,\
@@ -954,11 +959,11 @@ class PointNet2(SecondModel):
         if topk:
             self.pointExtr = TopkPointExtractor(cuda, nbFeat,point_nb, encoderChan, \
                                                 topk_fps, topk_fps_nb_pts,auxModel,auxModelTopk, \
-                                                topk_euclinorm,hasLinearProb,\
+                                                topk_euclinorm,predictScore,imageAttBlockNb,\
                                                 cannyedge,cannyedge_sigma,orbedge,sobel,patchsim,patchsim_patchsize,patchsim_groupNb,patchsim_neiSimRefin,nms,no_feat,\
                                                 patchsim_mod,norm_points,topk_sagpool,topk_sagpool_drop,topk_sagpool_drop_ratio,False)
         elif reinfExct:
-            self.pointExtr = ReinforcePointExtractor(cuda, nbFeat,point_nb,encoderChan,hasLinearProb, use_baseline, reinf_linear_only)
+            self.pointExtr = ReinforcePointExtractor(cuda, nbFeat,point_nb,encoderChan,predictScore, use_baseline, reinf_linear_only)
         else:
             raise ValueError("Please set topk or reinfExct to True")
 
@@ -985,7 +990,7 @@ class PointNet2(SecondModel):
 
             self.pureText_pointExtr = TopkPointExtractor(cuda, nbFeat,self.finalPtsNb*pureTextPtsNbFact, encoderChan, \
                                                 True, self.finalPtsNb,auxModel,auxModelTopk, \
-                                                topk_euclinorm,hasLinearProb,\
+                                                topk_euclinorm,predictScore,\
                                                 cannyedge,cannyedge_sigma,orbedge,sobel,patchsim,patchsim_patchsize,patchsim_groupNb,patchsim_neiSimRefin,patchSim_NMS,no_feat,\
                                                 patchsim_mod,norm_points,topk_sagpool,topk_sagpool_drop,topk_sagpool_drop_ratio,True)
         else:
@@ -1102,7 +1107,8 @@ def netBuilder(args):
                       "sagpool":args.resnet_simple_att_topk_sagpool,
                       "sagpool_drop":args.resnet_simple_att_topk_sagpool_drop,
                       "sagpool_drop_ratio":args.resnet_simple_att_topk_sagpool_ratio,
-                      "norm_points":args.norm_points}
+                      "norm_points":args.norm_points,\
+                      "predictScore":args.resnet_simple_att_pred_score}
             if args.resnet_simple_att_topk_enc_chan != -1:
                 nbFeat = args.resnet_simple_att_topk_enc_chan
 
@@ -1154,7 +1160,9 @@ def netBuilder(args):
                                 topk=args.pn_topk, reinfExct=args.pn_reinf, point_nb=args.pn_point_nb,
                                 encoderChan=args.pn_enc_chan, \
                                 topk_fps=args.pn_topk_farthest_pts_sampling, topk_fps_nb_pts=args.pn_topk_fps_nb_points,
-                                auxModel=args.pn_aux_model,auxModelTopk=args.pn_aux_model_topk,hasLinearProb=args.pn_has_linear_prob, use_baseline=args.pn_reinf_use_baseline, \
+                                auxModel=args.pn_aux_model,auxModelTopk=args.pn_aux_model_topk,predictScore=args.pn_predict_score,
+                                imageAttBlockNb=args.pn_image_attention_block_nb,
+                                use_baseline=args.pn_reinf_use_baseline, \
                                 topk_euclinorm=args.pn_topk_euclinorm, reinf_linear_only=args.pn_train_reinf_linear_only,
                                 pn_clustering=args.pn_clustering,\
                                 cannyedge=args.pn_cannyedge,cannyedge_sigma=args.pn_cannyedge_sigma,orbedge=args.pn_orbedge,sobel=args.pn_sobel,\
@@ -1202,7 +1210,7 @@ def addArgs(argreader):
     argreader.parser.add_argument('--pn_reinf', type=args.str2bool, metavar='BOOL',
                                   help='To feed the pointnet model with points extracted using reinforcement learning. Ignored if the model \
                             doesn\'t use pointnet.')
-    argreader.parser.add_argument('--pn_has_linear_prob', type=args.str2bool, metavar='BOOL',
+    argreader.parser.add_argument('--pn_predict_score', type=args.str2bool, metavar='BOOL',
                                   help='To use linear layer to compute probabilities for the reinforcement model')
     argreader.parser.add_argument('--pn_reinf_use_baseline', type=args.str2bool, metavar='BOOL',
                                   help='To use linear layer to compute baseline for the reinforcement model training')
@@ -1264,7 +1272,8 @@ def addArgs(argreader):
                                   help='To use sagpool with point dropping.')
     argreader.parser.add_argument('--resnet_simple_att_topk_sagpool_ratio', type=float, metavar='BOOL',
                                   help='The ratio of point dropped.')
-
+    argreader.parser.add_argument('--resnet_simple_att_pred_score', type=args.str2bool, metavar='BOOL',
+                                  help='To predict the score of each pixel, instead of using their norm to select them.')
 
     argreader.parser.add_argument('--resnet_apply_stride_on_all', type=args.str2bool, metavar='NB',
                                   help='Apply stride on every non 3x3 convolution')
@@ -1309,7 +1318,8 @@ def addArgs(argreader):
                                   help='The radius of the neighborhood for neihbor refining')
     argreader.parser.add_argument('--pn_nms', type=args.str2bool, metavar='BOOL',
                                   help='To apply non-min suppresion on the result of patch sim or sobel.')
-
+    argreader.parser.add_argument('--pn_image_attention_block_nb', type=int, metavar='INT',
+                                  help='The number of block to use to predict pixel scores.')
 
 
 
