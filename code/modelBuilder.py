@@ -25,6 +25,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 plt.switch_backend('agg')
 import cv2
+from scipy import ndimage
 
 _EPSILON = 10e-7
 
@@ -338,7 +339,7 @@ class TopkPointExtractor(nn.Module):
 
     def __init__(self, cuda, nbFeat,point_nb,encoderChan, \
                  furthestPointSampling, furthestPointSampling_nb_pts,\
-                 auxModel,auxModelTopk,topk_euclinorm,hasLinearProb,cannyedge,cannyedge_sigma,orbedge,patchsim,\
+                 auxModel,auxModelTopk,topk_euclinorm,hasLinearProb,cannyedge,cannyedge_sigma,orbedge,sobel,patchsim,\
                  patchsim_patchsize,patchsim_groupNb,patchsim_neiSimRefin,nms,no_feat,patchsim_mod,norm_points,sagpool,\
                  sagpool_drop,sagpool_drop_ratio,bottomK):
 
@@ -373,13 +374,15 @@ class TopkPointExtractor(nn.Module):
         self.cannyedge = cannyedge
         self.cannyedge_sigma = cannyedge_sigma
         self.orbedge = orbedge
+        self.sobel = sobel
+        self.nms = nms
 
         self.patchsim = patchsim
         if self.patchsim:
             self.patchSimCNN = PatchSimCNN("resnet9",False,patchsim_groupNb,chan=32,patchSize=patchsim_patchsize,neiSimRefin=patchsim_neiSimRefin,featMod=patchsim_mod,nms=nms)
             self.patchSim_useAllLayers = (patchsim_mod is None)
 
-        if (self.cannyedge or self.orbedge) and self.patchsim:
+        if (self.cannyedge or self.orbedge or self.sobel) and self.patchsim:
             raise ValueError("cannyedge and patchsim can't be True at the same time.")
 
         self.no_feat = no_feat
@@ -393,7 +396,7 @@ class TopkPointExtractor(nn.Module):
 
         # Because of zero padding, the border are very active, so we remove it.
         if pointFeaturesMap is None:
-            if (not self.cannyedge) and (not self.orbedge) and (not self.patchsim):
+            if (not self.cannyedge) and (not self.orbedge) and (not self.sobel) and (not self.patchsim):
                 featureMaps = featureMaps[:, :, 3:-3, 3:-3]
 
             if self.conv1x1:
@@ -412,6 +415,10 @@ class TopkPointExtractor(nn.Module):
                     pointFeaturesMap = F.interpolate(pointFeaturesMap,size=(x.size(-2),x.size(-1)))
                 elif self.hasLinearProb:
                     x = torch.sigmoid(self.linearProb(pointFeaturesMap))
+                elif self.sobel:
+                    with torch.no_grad():
+                        x = -computeSobel(kwargs["origImgBatch"],self.nms)
+                    pointFeaturesMap = F.interpolate(pointFeaturesMap,size=(x.size(-2),x.size(-1)))
                 else:
                     x = F.relu(pointFeaturesMap).sum(dim=1, keepdim=True)
 
@@ -518,6 +525,34 @@ def applySagPool(module,retDict,batchSize,drop,dropRatio):
 
     retDict["pointfeatures"] = nodeWeight*retDict["pointfeatures"]
     return retDict
+
+def sobelFunc(img):
+
+    img = (255*(img-img.min())/(img.max()-img.min()))
+    img = resize(img, (100,100),anti_aliasing=True,mode="constant",order=3)*255
+
+    img = img.astype('int32')
+    dx = ndimage.sobel(img, 0)  # horizontal derivative
+    dy = ndimage.sobel(img, 1)  # vertical derivative
+    mag = np.hypot(dx, dy)  # magnitude
+    #mag = dx.astype("float64")
+    mag *= 255.0 / np.max(mag)  # normalize (Q&D)
+    mag= mag.astype("uint8")
+    return mag
+
+def computeSobel(origImgBatch,nms):
+    allSobel = []
+    for i in range(len(origImgBatch)):
+        img_np= origImgBatch[i].detach().cpu().permute(1,2,0).numpy().mean(axis=-1)
+        allSobel.append(torch.tensor(sobelFunc(img_np)).unsqueeze(0).unsqueeze(0))
+    allSobel = torch.cat(allSobel,dim=0).to(origImgBatch.device)
+
+    if nms:
+        simMap = computeNMS(255-allSobel)
+    else:
+        simMap = -allSobel
+
+    return simMap
 
 def computeORB(origImgBatch,nbPoints):
     kpsCoord_list = []
@@ -734,12 +769,16 @@ class PatchSimCNN(torch.nn.Module):
             # N x 1 x sqrt(nbPatch) x sqrt(nbPatch)
 
         if self.nms:
-            simMapMinH = -F.max_pool2d(-simMap,(1,3), stride=(1,1), padding=(0,1))
-            simMapMinV = -F.max_pool2d(-simMap,(3,1), stride=(1,1), padding=(1,0))
-            minima = ((simMap == simMapMinH) | (simMap == simMapMinV))
-            simMap = 1-((1-simMap)*minima)
+            simMap = computeNMS(simMap)
 
         return simMap
+
+def computeNMS(simMap):
+    simMapMinH = -F.max_pool2d(-simMap,(1,3), stride=(1,1), padding=(0,1))
+    simMapMinV = -F.max_pool2d(-simMap,(3,1), stride=(1,1), padding=(1,0))
+    minima = ((simMap == simMapMinH) | (simMap == simMapMinV))
+    simMap = 1-((1-simMap)*minima)
+    return simMap
 
 def computeNeighborsCoord(neighRadius):
 
@@ -902,8 +941,8 @@ class PointNet2(SecondModel):
                  point_nb=256,encoderChan=1,topk_fps=False,
                  topk_fps_nb_pts=64, auxModel=False,auxModelTopk=False,hasLinearProb=False,
                  use_baseline=False,topk_euclinorm=True,reinf_linear_only=False, pn_clustering=False,\
-                 cannyedge=False,cannyedge_sigma=2,orbedge=False,patchsim=False,patchsim_patchsize=5,patchsim_groupNb=4,patchsim_neiSimRefin=None,\
-                 patchSim_NMS=False,no_feat=False,patchsim_mod=None,norm_points=False,topk_sagpool=False,topk_sagpool_drop=False,topk_sagpool_drop_ratio=0.5,\
+                 cannyedge=False,cannyedge_sigma=2,orbedge=False,sobel=False,patchsim=False,patchsim_patchsize=5,patchsim_groupNb=4,patchsim_neiSimRefin=None,\
+                 nms=False,no_feat=False,patchsim_mod=None,norm_points=False,topk_sagpool=False,topk_sagpool_drop=False,topk_sagpool_drop_ratio=0.5,\
                  pureTextModel=False,pureTextPtsNbFact=4,smoothFeat=False,smoothFeatStartSize=10):
 
         super(PointNet2, self).__init__(nbFeat, classNb)
@@ -914,7 +953,7 @@ class PointNet2(SecondModel):
             self.pointExtr = TopkPointExtractor(cuda, nbFeat,point_nb, encoderChan, \
                                                 topk_fps, topk_fps_nb_pts,auxModel,auxModelTopk, \
                                                 topk_euclinorm,hasLinearProb,\
-                                                cannyedge,cannyedge_sigma,orbedge,patchsim,patchsim_patchsize,patchsim_groupNb,patchsim_neiSimRefin,patchSim_NMS,no_feat,\
+                                                cannyedge,cannyedge_sigma,orbedge,sobel,patchsim,patchsim_patchsize,patchsim_groupNb,patchsim_neiSimRefin,nms,no_feat,\
                                                 patchsim_mod,norm_points,topk_sagpool,topk_sagpool_drop,topk_sagpool_drop_ratio,False)
         elif reinfExct:
             self.pointExtr = ReinforcePointExtractor(cuda, nbFeat,point_nb,encoderChan,hasLinearProb, use_baseline, reinf_linear_only)
@@ -945,7 +984,7 @@ class PointNet2(SecondModel):
             self.pureText_pointExtr = TopkPointExtractor(cuda, nbFeat,self.finalPtsNb*pureTextPtsNbFact, encoderChan, \
                                                 True, self.finalPtsNb,auxModel,auxModelTopk, \
                                                 topk_euclinorm,hasLinearProb,\
-                                                cannyedge,cannyedge_sigma,orbedge,patchsim,patchsim_patchsize,patchsim_groupNb,patchsim_neiSimRefin,patchSim_NMS,no_feat,\
+                                                cannyedge,cannyedge_sigma,orbedge,sobel,patchsim,patchsim_patchsize,patchsim_groupNb,patchsim_neiSimRefin,patchSim_NMS,no_feat,\
                                                 patchsim_mod,norm_points,topk_sagpool,topk_sagpool_drop,topk_sagpool_drop_ratio,True)
         else:
             self.pureText_pointExtr = None
@@ -1116,9 +1155,9 @@ def netBuilder(args):
                                 auxModel=args.pn_aux_model,auxModelTopk=args.pn_aux_model_topk,hasLinearProb=args.pn_has_linear_prob, use_baseline=args.pn_reinf_use_baseline, \
                                 topk_euclinorm=args.pn_topk_euclinorm, reinf_linear_only=args.pn_train_reinf_linear_only,
                                 pn_clustering=args.pn_clustering,\
-                                cannyedge=args.pn_cannyedge,cannyedge_sigma=args.pn_cannyedge_sigma,orbedge=args.pn_orbedge,\
+                                cannyedge=args.pn_cannyedge,cannyedge_sigma=args.pn_cannyedge_sigma,orbedge=args.pn_orbedge,sobel=args.pn_sobel,\
                                 patchsim=args.pn_patchsim,patchsim_patchsize=args.pn_patchsim_patchsize,patchsim_groupNb=args.pn_patchsim_groupnb,patchsim_neiSimRefin=neiSimRefinDict,\
-                                patchSim_NMS=args.pn_patchsim_nms,no_feat=args.pn_topk_no_feat,patchsim_mod=None if args.pn_patchsim_randmod else firstModel.featMod,\
+                                nms=args.pn_nms,no_feat=args.pn_topk_no_feat,patchsim_mod=None if args.pn_patchsim_randmod else firstModel.featMod,\
                                 norm_points=args.norm_points,topk_sagpool=args.pn_topk_sagpool,topk_sagpool_drop=args.pn_topk_sagpool_drop,\
                                 topk_sagpool_drop_ratio=args.pn_topk_sagpool_drop_ratio,\
                                 pureTextModel=args.pn_topk_puretext,pureTextPtsNbFact=args.pn_topk_puretext_pts_nb_fact,\
@@ -1128,7 +1167,7 @@ def netBuilder(args):
 
     ############### Whole Model ##########################
 
-    net = Model(firstModel, secondModel,zoom=args.zoom,passOrigImage=args.pn_cannyedge or args.pn_patchsim or args.pn_orbedge,reducedImgSize=args.reduced_img_size)
+    net = Model(firstModel, secondModel,zoom=args.zoom,passOrigImage=args.pn_cannyedge or args.pn_patchsim or args.pn_orbedge or args.pn_sobel,reducedImgSize=args.reduced_img_size)
 
     if args.cuda:
         net.cuda()
@@ -1244,7 +1283,8 @@ def addArgs(argreader):
                                   help='The sigma hyper-parameter of the canny edge detection.')
     argreader.parser.add_argument('--pn_orbedge', type=args.str2bool, metavar='BOOL',
                                   help='To use ORB to extract points.')
-
+    argreader.parser.add_argument('--pn_sobel', type=args.str2bool, metavar='BOOL',
+                                  help='To use sobel filtering to extract points.')
 
     argreader.parser.add_argument('--pn_patchsim', type=args.str2bool, metavar='BOOL',
                                   help='To use patch similarity to extract points.')
@@ -1265,8 +1305,8 @@ def addArgs(argreader):
                                   help='Whether to weight neighbors using similarity for neihbor refining')
     argreader.parser.add_argument('--pn_patchsim_neiref_neirad', type=int, metavar='BOOL',
                                   help='The radius of the neighborhood for neihbor refining')
-    argreader.parser.add_argument('--pn_patchsim_nms', type=args.str2bool, metavar='BOOL',
-                                  help='To apply non-min suppresion on the result of patch sim.')
+    argreader.parser.add_argument('--pn_nms', type=args.str2bool, metavar='BOOL',
+                                  help='To apply non-min suppresion on the result of patch sim or sobel.')
 
 
 
