@@ -537,7 +537,7 @@ def sobelFunc(img):
     mag = np.hypot(dx, dy)  # magnitude
     #mag = dx.astype("float64")
     mag *= 255.0 / np.max(mag)  # normalize (Q&D)
-    mag= mag.astype("uint8")
+
     return mag
 
 def computeSobel(origImgBatch,nms):
@@ -547,10 +547,12 @@ def computeSobel(origImgBatch,nms):
         allSobel.append(torch.tensor(sobelFunc(img_np)).unsqueeze(0).unsqueeze(0))
     allSobel = torch.cat(allSobel,dim=0).to(origImgBatch.device)
 
+    allSobel = (allSobel-allSobel.min())/(allSobel.max()-allSobel.min())
+
     if nms:
-        simMap = computeNMS(255-allSobel)
+        simMap = computeNMS(1-allSobel)
     else:
-        simMap = -allSobel
+        simMap = 1-allSobel
 
     return simMap
 
