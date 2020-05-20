@@ -30,7 +30,7 @@ from scipy import ndimage
 _EPSILON = 10e-7
 
 from  torch.nn.modules.upsampling import Upsample
-
+import time
 
 def buildFeatModel(featModelName, pretrainedFeatMod, featMap=True, bigMaps=False, layerSizeReduce=False, stride=2,dilation=1,deeplabv3_outchan=64, **kwargs):
     ''' Build a visual feature model
@@ -97,7 +97,7 @@ class Model(nn.Module):
         if self.passOrigImage:
             secModKwargs["origImgBatch"] = origImgBatch
 
-        resDict = self.secondModel(visResDict["x"],**secModKwargs)
+        resDict = self.secondModel(visResDict,**secModKwargs)
 
         resDict = merge(visResDict,resDict)
 
@@ -182,6 +182,7 @@ class CNN2D(FirstModel):
         super(CNN2D, self).__init__(featModelName, pretrainedFeatMod, featMap, bigMaps,**kwargs)
 
     def forward(self, x):
+
         # N x C x H x L
         self.batchSize = x.size(0)
 
@@ -207,7 +208,7 @@ class CNN2D_simpleAttention(FirstModel):
     def __init__(self, featModelName, pretrainedFeatMod=True, featMap=True, bigMaps=False, chan=64, attBlockNb=2,
                  attChan=16, \
                  topk=False, topk_pxls_nb=256, topk_enc_chan=64,inFeat=512,sagpool=False,sagpool_drop=False,sagpool_drop_ratio=0.5,\
-                 norm_points=False,predictScore=False,**kwargs):
+                 norm_points=False,predictScore=False,aux_model=False,**kwargs):
 
         super(CNN2D_simpleAttention, self).__init__(featModelName, pretrainedFeatMod, featMap, bigMaps, **kwargs)
         self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
@@ -222,7 +223,7 @@ class CNN2D_simpleAttention(FirstModel):
 
         self.topk_enc_chan = topk_enc_chan
         if self.topk_enc_chan != -1:
-            self.conv1x1 = nn.Conv2d(inFeat,self.topk_enc_chan,1)
+            self.conv1x1 = nn.Conv2d(inaux_modelFeat,self.topk_enc_chan,1)
         else:
             self.conv1x1 = None
 
@@ -234,6 +235,8 @@ class CNN2D_simpleAttention(FirstModel):
             self.norm_points = norm_points
 
         self.predictScore = predictScore
+
+        self.aux_model = aux_model
 
     def forward(self, x):
         # N x C x H x L
@@ -265,7 +268,6 @@ class CNN2D_simpleAttention(FirstModel):
             depth = torch.zeros(abs.size(0), abs.size(1), 1).to(x.device)
             featureList = mapToList(features_weig, abs, ord)
             retDict['points'] = torch.cat((abs.unsqueeze(2).float(), ord.unsqueeze(2).float(), depth, featureList), dim=-1).float()
-
             if self.sagpool:
 
                 abs, ord = abs.unsqueeze(-1).float(), ord.unsqueeze(-1).float()
@@ -282,6 +284,7 @@ class CNN2D_simpleAttention(FirstModel):
 
                 finalPtsNb = int(featureList.size(1)*self.sagpool_drop_ratio) if self.sagpool_drop else featureList.size(1)
                 retDict["pointfeatures"] = retDict["pointfeatures"].reshape(featureList.size(0),finalPtsNb, featureList.size(2))
+
             else:
                 retDict["pointfeatures"] = featureList
 
@@ -295,6 +298,9 @@ class CNN2D_simpleAttention(FirstModel):
 
         retDict["x"] = features_agr
         retDict["attMaps"] = spatialWeights
+
+        if self.aux_model:
+            retDict["auxFeat"] = features
 
         return retDict
 
@@ -311,31 +317,32 @@ class SecondModel(nn.Module):
 
 class LinearSecondModel(SecondModel):
 
-    def __init__(self, nbFeat, nbClass, dropout):
+    def __init__(self, nbFeat, nbClass, dropout,aux_model=False):
         super(LinearSecondModel, self).__init__(nbFeat, nbClass)
         self.dropout = nn.Dropout(p=dropout)
         self.linLay = nn.Linear(self.nbFeat, self.nbClass)
         self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
 
-    def forward(self, x):
+        self.aux_model = aux_model
+        if self.aux_model:
+            self.aux_model = nn.Linear(self.nbFeat, self.nbClass)
+
+    def forward(self, visResDict):
+
+        x = visResDict["x"]
+
         if len(x.size()) == 4:
             x = self.avgpool(x).squeeze(-1).squeeze(-1)
 
-        # N x D
         x = self.dropout(x)
         x = self.linLay(x)
-        # N x classNb
 
-        # N x classNb
-        return {"pred": x}
+        retDict = {"pred": x}
 
-class Identity(SecondModel):
+        if self.aux_model:
+            retDict["auxPred"] = self.aux_model(visResDict["auxFeat"].mean(dim=-1).mean(dim=-1))
 
-    def __init__(self, nbFeat, nbClass):
-        super(Identity, self).__init__(nbFeat, nbClass)
-
-    def forward(self, x, batchSize):
-        return {"pred": x}
+        return retDict
 
 def sagpoolLayer(inChan):
     return pointnet2.SAModule(1, 0.2, pointnet2.MLP_linEnd([inChan+3,64,1]))
@@ -418,15 +425,19 @@ class TopkPointExtractor(nn.Module):
                         distMap = -self.patchSimCNN(kwargs["origImgBatch"],returnLayer="last" if self.patchSim_useAllLayers else '2')
                     x = distMap
                     pointFeaturesMap = F.interpolate(pointFeaturesMap,size=(x.size(-2),x.size(-1)))
+                    pointFeaturesMap = pointFeaturesMap*x
                 elif self.predictPixelScore:
                     x = torch.sigmoid(self.imageAttention(pointFeaturesMap))
+                    pointFeaturesMap = (pointFeaturesMap*x).float()
                 elif self.sobel:
                     with torch.no_grad():
                         x = -computeSobel(kwargs["origImgBatch"],self.nms)
                     pointFeaturesMap = F.interpolate(pointFeaturesMap,size=(x.size(-2),x.size(-1)))
+                    pointFeaturesMap = pointFeaturesMap*x
                 else:
                     x = F.relu(pointFeaturesMap).sum(dim=1, keepdim=True)
 
+            pointFeaturesMap = pointFeaturesMap.float()
             retDict["featVolume"] = pointFeaturesMap
             retDict["prob_map"] = x
 
@@ -498,7 +509,7 @@ class TopkPointExtractor(nn.Module):
 def applySagPool(module,retDict,batchSize,drop,dropRatio):
 
     nodeWeight,pos,batch = module(retDict['pointfeatures'],retDict["pos"],retDict["batch"])
-    nodeWeight = torch.sigmoid(nodeWeight)
+    nodeWeight = torch.tanh(nodeWeight)
     ptsNb = nodeWeight.size(0)//batchSize
 
     retDict["pointWeights"] = nodeWeight.reshape(batchSize,ptsNb)
@@ -736,12 +747,11 @@ class PatchSimCNN(torch.nn.Module):
 
     def forward(self,data,returnLayer):
 
+        startTime = time.time()
         patch = data.unfold(2, self.patchSize, self.patchSize).unfold(3, self.patchSize, self.patchSize).permute(0,2,3,1,4,5)
         origPatchSize = patch.size()
         patch = patch.reshape(patch.size(0)*patch.size(1)*patch.size(2),patch.size(3),patch.size(4),patch.size(5))
-
         featVolume = self.featMod(patch,returnLayer)["x"]
-
         origFeatVolSize = featVolume.size()
         featVolume = featVolume.unfold(1, featVolume.size(1)//self.nbGroup, featVolume.size(1)//self.nbGroup).permute(0,1,4,2,3)
         featVolume = featVolume.view(featVolume.size(0)*featVolume.size(1),featVolume.size(2),featVolume.size(3),featVolume.size(4))
@@ -764,6 +774,7 @@ class PatchSimCNN(torch.nn.Module):
         # (NxNbGroup) x C x nbPatch x 1
         feat = feat.reshape(feat.size(0),feat.size(1),int(np.sqrt(feat.size(2))),int(np.sqrt(feat.size(2))))
         # (NxNbGroup) x C x sqrt(nbPatch) x sqrt(nbPatch)
+
         if self.refiner is None:
             simMap = computeTotalSim(feat,1).unsqueeze(1)
             # (NxNbGroup) x 1 x 1 x sqrt(nbPatch) x sqrt(nbPatch)
@@ -772,10 +783,12 @@ class PatchSimCNN(torch.nn.Module):
             simMap = simMap.mean(dim=1)
             # N x 1 x sqrt(nbPatch) x sqrt(nbPatch)
         else:
+            startTime = time.time()
             simMap = self.refiner(feat)
             # N x 1 x sqrt(nbPatch) x sqrt(nbPatch)
 
         if self.nms:
+            startTime = time.time()
             simMap = computeNMS(simMap)
 
         return simMap
@@ -1014,7 +1027,9 @@ class PointNet2(SecondModel):
         self.smoothKer = torch.ones(oldSize.size(0),oldSize.size(1),newSize,newSize)
         self.smoothKer = self.smoothKer.to(device)
 
-    def forward(self, featureMaps,**kwargs):
+    def forward(self, visResDict,**kwargs):
+
+        featureMaps = visResDict["x"]
 
         if self.smoothFeat:
             featureMaps = F.conv2d(featureMaps,self.smoothKer.to(featureMaps.device),groups=self.smoothKer.size(0),padding=self.smoothKer.size(-1)//2)
@@ -1039,6 +1054,7 @@ class PointNet2(SecondModel):
             retDict['pointfeatures'] = torch.cat((retDict['pointfeatures'],puretext_retDict['pointfeatures']),dim=0)
             retDict['pos'] = torch.cat((retDict['pos'],puretext_retDict["pos"]),dim=0)
             retDict['batch'] = torch.cat((retDict['batch'],puretext_retDict["batch"]),dim=0)
+
 
         pred = self.pn2(retDict['pointfeatures'], retDict['pos'], retDict['batch'])
         retDict['pred'] = pred
@@ -1108,7 +1124,8 @@ def netBuilder(args):
                       "sagpool_drop":args.resnet_simple_att_topk_sagpool_drop,
                       "sagpool_drop_ratio":args.resnet_simple_att_topk_sagpool_ratio,
                       "norm_points":args.norm_points,\
-                      "predictScore":args.resnet_simple_att_pred_score}
+                      "predictScore":args.resnet_simple_att_pred_score,
+                      "aux_model":args.aux_model}
             if args.resnet_simple_att_topk_enc_chan != -1:
                 nbFeat = args.resnet_simple_att_topk_enc_chan
 
@@ -1136,7 +1153,7 @@ def netBuilder(args):
 
     ############### Temporal Model #######################
     if args.second_mod == "linear":
-        secondModel = LinearSecondModel(nbFeat, args.class_nb, args.dropout)
+        secondModel = LinearSecondModel(nbFeat, args.class_nb, args.dropout,args.aux_model)
     elif args.second_mod == "pointnet2" or args.second_mod == "edgenet":
 
         pointnetInputChannels = computeEncChan(nbFeat,args.pn_enc_chan,args.pn_topk_no_feat,args.pn_topk_puretext)
@@ -1160,7 +1177,7 @@ def netBuilder(args):
                                 topk=args.pn_topk, reinfExct=args.pn_reinf, point_nb=args.pn_point_nb,
                                 encoderChan=args.pn_enc_chan, \
                                 topk_fps=args.pn_topk_farthest_pts_sampling, topk_fps_nb_pts=args.pn_topk_fps_nb_points,
-                                auxModel=args.pn_aux_model,auxModelTopk=args.pn_aux_model_topk,predictScore=args.pn_predict_score,
+                                auxModel=args.aux_model,auxModelTopk=args.pn_aux_model_topk,predictScore=args.pn_predict_score,
                                 imageAttBlockNb=args.pn_image_attention_block_nb,
                                 use_baseline=args.pn_reinf_use_baseline, \
                                 topk_euclinorm=args.pn_topk_euclinorm, reinf_linear_only=args.pn_train_reinf_linear_only,
@@ -1238,7 +1255,7 @@ def addArgs(argreader):
     argreader.parser.add_argument('--pn_enc_chan', type=int, metavar='NB',
                                   help='For the topk point net model. This is the number of output channel of the encoder')
 
-    argreader.parser.add_argument('--pn_aux_model', type=args.str2bool, metavar='INT',
+    argreader.parser.add_argument('--aux_model', type=args.str2bool, metavar='INT',
                                   help='To train an auxilliary model that will apply average pooling and a dense layer on the feature map\
                         to make a prediction alongside pointnet\'s one.')
     argreader.parser.add_argument('--pn_aux_model_topk', type=args.str2bool, metavar='INT',
