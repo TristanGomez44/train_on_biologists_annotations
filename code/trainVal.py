@@ -15,7 +15,7 @@ from tensorboardX import SummaryWriter
 import torch.backends.cudnn as cudnn
 
 torch.backends.cudnn.benchmark = True
-torch.backends.cudnn.enabled = False
+torch.backends.cudnn.enabled = True
 
 import matplotlib.cm as cm
 import matplotlib.pyplot as plt
@@ -73,6 +73,7 @@ def epochSeqTr(model, optim, log_interval, loader, epoch, args, writer, **kwargs
             data, target = data.cuda(), target.cuda()
 
         resDict = model(data)
+
         output = resDict["pred"]
 
         loss = computeLoss(args, output, target, resDict, data)
