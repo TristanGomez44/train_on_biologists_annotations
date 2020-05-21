@@ -41,6 +41,9 @@ from PIL import ImageDraw
 import torchvision
 import torch_cluster
 
+from torch.distributions.normal import Normal
+from torch import tensor
+
 def plotPointsImageDataset(imgNb,redFact,plotDepth,args):
 
     cm = plt.get_cmap('plasma')
@@ -98,7 +101,7 @@ def plotPointsImageDataset(imgNb,redFact,plotDepth,args):
         if batchInd>=batchNb:
             break
 
-def plotPointsImageDatasetGrid(exp_id,imgNb,epochs,model_ids,reduction_fact_list,inverse_xy,mode,nbClass,useDropped_list,forceFeat,plotId,args):
+def plotPointsImageDatasetGrid(exp_id,imgNb,epochs,model_ids,reduction_fact_list,inverse_xy,mode,nbClass,useDropped_list,forceFeat,fullAttMap,threshold,plotId,args):
 
     imgSize = 224
 
@@ -130,54 +133,70 @@ def plotPointsImageDatasetGrid(exp_id,imgNb,epochs,model_ids,reduction_fact_list
         if useDropped_list[j]:
             pointPaths.append("../results/{}/points_dropped_{}_epoch{}_{}.npy".format(exp_id,model_ids[j],epochs[j],mode))
             pointWeightPaths.append("../results/{}/points_dropped_{}_epoch{}_{}.npy".format(exp_id,model_ids[j],epochs[j],mode))
+        elif fullAttMap[j]:
+            pointPaths.append("../results/{}/attMaps_{}_epoch{}_{}.npy".format(exp_id,model_ids[j],epochs[j],mode))
+            pointWeightPaths.append("")
         else:
             pointPaths.append("../results/{}/points_{}_epoch{}_{}.npy".format(exp_id,model_ids[j],epochs[j],mode))
             pointWeightPaths.append("../results/{}/pointWeights_{}_epoch{}_{}.npy".format(exp_id,model_ids[j],epochs[j],mode))
 
     meanVecList = []
     for i in range(imgNb):
-        print("Img",i,":",end="")
+        print("Img",i)
         if gridImage is None:
             gridImage = imgBatch[i:i+1]
         else:
             gridImage = torch.cat((gridImage,imgBatch[i:i+1]),dim=0)
 
         for j in range(len(pointPaths)):
-            print(j,end="")
-            ptsOrig = torch.tensor(np.load(pointPaths[j]))[i]
 
-            if (ptsOrig[:,:3] < 0).sum() > 0:
-                pts = (((ptsOrig[:,:3] + 1)/2)*reduction_fact_list[j]).long()
+            if fullAttMap[j]:
+                ptsImageCopy = ptsImage.clone()
+                attMap = np.load(pointPaths[j])[i]
+                attMap = cmPlasma(attMap)[:,:3]
+                ptsImageCopy = resize(attMap, (ptsImageCopy.shape[0],ptsImageCopy.shape[1]),anti_aliasing=True,mode="constant",order=2)
             else:
-                pts = (ptsOrig*reduction_fact_list[j]).long()
 
-            if inverse_xy[j]:
-                x,y = pts[:,0],pts[:,1]
-            else:
-                y,x = pts[:,0],pts[:,1]
+                ptsOrig = torch.tensor(np.load(pointPaths[j]))[i]
 
-            ptsImageCopy = ptsImage.clone()
-
-            if os.path.exists(pointWeightPaths[j]) and not forceFeat[j]:
-                if useDropped_list[j]:
-                    ptsWeights = np.load(pointWeightPaths[j])[i][:,-1]
+                if (ptsOrig[:,:3] < 0).sum() > 0:
+                    pts = (((ptsOrig[:,:3] + 1)/2)*reduction_fact_list[j]).long()
                 else:
-                    ptsWeights = np.load(pointWeightPaths[j])[i]
-                plt.figure()
-                plt.hist(ptsWeights,range=(0,1),bins=10)
-                plt.savefig("../vis/{}/grid_weight_hist_{}_img{}.png".format(exp_id,model_ids[j],i))
-                plt.close()
-            else:
-                if useDropped_list[j]:
-                    ptsWeights = torch.pow(ptsOrig[:,3:-1],2).sum(dim=-1).numpy()
+                    pts = (ptsOrig*reduction_fact_list[j]).long()
+
+                ptsImageCopy = ptsImage.clone()
+
+                if os.path.exists(pointWeightPaths[j]) and not forceFeat[j]:
+                    if useDropped_list[j]:
+                        ptsWeights = np.load(pointWeightPaths[j])[i][:,-1]
+                    else:
+                        ptsWeights = np.load(pointWeightPaths[j])[i]
+                        print(ptsWeights.min(),ptsWeights.mean(),ptsWeights.max())
+                    plt.figure()
+                    plt.hist(ptsWeights,range=(0,1),bins=10)
+                    plt.savefig("../vis/{}/grid_weight_hist_{}_img{}.png".format(exp_id,model_ids[j],i))
+                    plt.close()
                 else:
-                    ptsWeights = torch.pow(ptsOrig[:,3:],2).sum(dim=-1).numpy()
+                    if useDropped_list[j]:
+                        ptsWeights = torch.sqrt(torch.pow(ptsOrig[:,3:-1],2).sum(dim=-1)).numpy()
+                    else:
+                        ptsWeights = torch.sqrt(torch.pow(ptsOrig[:,3:],2).sum(dim=-1)).numpy()
+                        print("Feat",ptsWeights.min(),ptsWeights.mean(),ptsWeights.max())
+                    plt.figure()
+                    plt.hist(ptsWeights,range=(0,200),bins=20)
+                    plt.savefig("../vis/{}/grid_norm_hist_{}_img{}.png".format(exp_id,model_ids[j],i))
+                    plt.close()
 
-            ptsWeights = (ptsWeights-ptsWeights.min())/(ptsWeights.max()-ptsWeights.min())
-            ptsWeights = cmPlasma(ptsWeights)[:,:3]
-            ptsImageCopy[:,y,x] =torch.tensor(ptsWeights).permute(1,0).float()
+                if inverse_xy[j]:
+                    x,y = pts[:,0],pts[:,1]
+                else:
+                    y,x = pts[:,0],pts[:,1]
 
-            ptsImageCopy = ptsImageCopy.unsqueeze(0)
+                ptsWeights = (ptsWeights-ptsWeights.min())/(ptsWeights.max()-ptsWeights.min())
+                ptsWeights = cmPlasma(ptsWeights)[:,:3]
+                ptsImageCopy[:,y,x] =torch.tensor(ptsWeights).permute(1,0).float()
+
+                ptsImageCopy = ptsImageCopy.unsqueeze(0)
 
             gridImage = torch.cat((gridImage,ptsImageCopy),dim=0)
 
@@ -382,6 +401,47 @@ def efficiencyPlot(exp_id,model_ids,epoch_list):
     plt.savefig("../vis/{}/acc_vs_paramNb.png".format(exp_id))
 
 
+def em(x,k):
+
+    n = len(x)  # must be even number
+    dims = 1
+    eps = torch.finfo(torch.float32).eps
+
+    mu = torch.tensor([50,100]).float()
+    covar = torch.tensor([5,5]).float()
+    converged = False
+    i = 0
+    h = None
+
+    while not converged:
+
+        prev_mu = mu.clone()
+        prev_covar = covar.clone()
+
+        h = Normal(mu, covar)
+
+        llhood = h.log_prob(x)
+
+        log_sum_lhood = torch.logsumexp(llhood, dim=1, keepdim=True)
+        log_posterior = llhood - log_sum_lhood
+
+        pi = torch.exp(log_posterior.reshape(n, k))
+        pi = pi * (1- k * eps) + eps
+
+        mu = torch.sum(x * pi, dim=0) / torch.sum(pi, dim=0)
+
+        delta = pi * (x - mu)
+
+        covar = (delta*delta).sum(dim=0)/pi.sum(dim=0)
+
+        converged = torch.allclose(mu, prev_mu) and torch.allclose(covar, prev_covar)
+        i += 1
+
+        if i%10==0:
+            print(mu)
+
+    return pi
+
 def main(argv=None):
 
     #Getting arguments from config file and command line
@@ -414,6 +474,9 @@ def main(argv=None):
     argreader.parser.add_argument('--reduction_fact_list',type=float,metavar="INT",nargs="*",help='The list of reduction factor.')
     argreader.parser.add_argument('--inverse_xy',type=str2bool,nargs="*",metavar="BOOL",help='To inverse x and y',default=[])
     argreader.parser.add_argument('--use_dropped_list',type=str2bool,nargs="*",metavar="BOOL",help='To plot the dropped point instead of all the points',default=[])
+    argreader.parser.add_argument('--full_att_map',type=str2bool,nargs="*",metavar="BOOL",help='A list of boolean indicating if the model produces full attention maps or selects points.',default=[])
+    argreader.parser.add_argument('--use_threshold',type=str2bool,nargs="*",metavar="BOOL",help='To apply the threshold to filter out points',default=[])
+
     argreader.parser.add_argument('--mode',type=str,metavar="MODE",help='Can be "val" or "test".',default="val")
     argreader.parser.add_argument('--force_feat',type=str2bool,nargs="*",metavar="BOOL",help='To force feature plotting even when there is attention weights available.',default=[])
     argreader.parser.add_argument('--plot_id',type=str,metavar="ID",help='The plot id',default="")
@@ -445,7 +508,7 @@ def main(argv=None):
         if args.exp_id == "default":
             args.exp_id = "CUB3"
         plotPointsImageDatasetGrid(args.exp_id,args.image_nb,args.epoch_list,args.model_ids,args.reduction_fact_list,args.inverse_xy,args.mode,\
-                                    args.class_nb,args.use_dropped_list,args.force_feat,args.plot_id,args)
+                                    args.class_nb,args.use_dropped_list,args.force_feat,args.full_att_map,args.use_threshold,args.plot_id,args)
     if args.plot_prob_maps:
         plotProbMaps(args.image_nb,args,args.norm)
     if args.list_best_pred:
