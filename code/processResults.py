@@ -153,8 +153,8 @@ def plotPointsImageDatasetGrid(exp_id,imgNb,epochs,model_ids,reduction_fact_list
             if fullAttMap[j]:
                 ptsImageCopy = ptsImage.clone()
                 attMap = np.load(pointPaths[j])[i]
-                attMap = cmPlasma(attMap)[:,:3]
-                ptsImageCopy = resize(attMap, (ptsImageCopy.shape[0],ptsImageCopy.shape[1]),anti_aliasing=True,mode="constant",order=2)
+                attMap = cmPlasma(attMap[0])[:,:,:3]
+                ptsImageCopy = torch.tensor(resize(attMap, (ptsImageCopy.shape[1],ptsImageCopy.shape[2]),anti_aliasing=True,mode="constant",order=0)).permute(2,0,1).float().unsqueeze(0)
             else:
 
                 ptsOrig = torch.tensor(np.load(pointPaths[j]))[i]
@@ -408,7 +408,7 @@ def em(x,k):
     eps = torch.finfo(torch.float32).eps
 
     mu = torch.tensor([50,100]).float()
-    covar = torch.tensor([5,5]).float()
+    covar = torch.tensor([1,50]).float()
     converged = False
     i = 0
     h = None
@@ -434,13 +434,118 @@ def em(x,k):
 
         covar = (delta*delta).sum(dim=0)/pi.sum(dim=0)
 
-        converged = torch.allclose(mu, prev_mu) and torch.allclose(covar, prev_covar)
+        converged = (torch.abs(mu-prev_mu).mean() < 1) and (torch.abs(covar-prev_covar).mean() < 1)
+
         i += 1
 
-        if i%10==0:
-            print(mu)
-
     return pi
+
+def getTestPerf(path):
+
+    perf = np.genfromtxt(path,delimiter="?",dtype=str)[1].split(",")[0]
+    perf = float(perf.replace("tensor(",""))
+    return perf
+
+def compileTest(exp_id,id_to_label_dict):
+
+    header = 'Pixel weighting,Pixel selection,Classification,Accuracy'
+    testFilePaths = glob.glob("../results/{}/*metrics_test*".format(exp_id))
+
+    model_id_list = []
+    perf_list = []
+
+    for testFilePath in testFilePaths:
+
+        model_id = os.path.basename(testFilePath).replace("model","").replace("_metrics_test.csv","")
+        model_id = model_id.split("_epoch")[0]
+
+        test_perf = getTestPerf(testFilePath)
+
+        model_id_list.append(model_id)
+        perf_list.append(test_perf)
+
+    model_id_list,perf_list = np.array(model_id_list),np.array(perf_list)
+
+    bestPerf = perf_list.max()
+
+    dic = {}
+
+    for i in range(len(model_id_list)):
+
+        keys = model_id_list[i].split("_")
+
+        if not keys[0] in dic:
+            dic[keys[0]] = {}
+
+        if not keys[1] in dic[keys[0]]:
+            dic[keys[0]][keys[1]] = {}
+
+        if not keys[2] in dic[keys[0]][keys[1]]:
+            dic[keys[0]][keys[1]][keys[2]] = perf_list[i]
+
+        model_id_list[i] = ','.join(keys)
+
+    new_model_id_list = []
+    new_perf_list = []
+
+    for key1 in sorted(dic):
+        for key2 in sorted(dic[key1]):
+            for key3 in sorted(dic[key1][key2]):
+                new_model_id_list.append(",".join([key1,key2,key3]))
+                new_perf_list.append(dic[key1][key2][key3])
+
+    model_id_list = new_model_id_list
+    perf_list = new_perf_list
+
+    model_id_list,perf_list = np.array(model_id_list),np.array(perf_list)
+
+    latexTable = '\\begin{table}[t]  \n' + \
+                  '\\centering  \n' + \
+                  '\\begin{tabular}{*4c}\\toprule  \n' + \
+                  'Pixel weighting & Pixel selection & Classification & Accuracy \\\\ \n' + \
+                  '\\hline \n'
+
+    for key1 in sorted(dic):
+        n = sum([len(dic[key1][tmp_key2]) for tmp_key2 in dic[key1]])
+        latexTable += '\\multirow{'+str(n)+'}{*}{'+id_to_label_dict[key1]+'} &'
+
+        for j,key2 in enumerate(sorted(dic[key1])):
+            m = len(dic[key1][key2])
+
+            if j == 0:
+                latexTable += '\\multirow{'+str(m)+'}{*}{'+id_to_label_dict[key2]+'} &'
+            else:
+                latexTable += '& \\multirow{'+str(m)+'}{*}{'+id_to_label_dict[key2]+'} &'
+
+            for i,key3 in enumerate(sorted(dic[key1][key2])):
+
+                if i > 0:
+                    latexTable += "&&"
+
+                latexTable += id_to_label_dict[key3] + " & "
+
+                if dic[key1][key2][key3] == bestPerf:
+                    latexTable += "$\\mathbf{"+str(round(dic[key1][key2][key3],2)) + "}$ \\\\ \n"
+                else:
+                    latexTable += "$"+str(round(dic[key1][key2][key3],2)) + "$ \\\\ \n"
+
+            if j < len(dic[key1]) -1:
+                latexTable += '\\cline{2-4} \n'
+        latexTable += '\\hline \n'
+
+    latexTable += "\\end{tabular} \n\\caption{} \n\\end{table}"
+
+    with open("../results/{}/test.csv".format(exp_id),"w") as text_file:
+        print(latexTable,file=text_file)
+
+    #sorted_args = np.argsort(perf_list)
+    #model_id_list = model_id_list[sorted_args]
+    #perf_list = perf_list[sorted_args]
+
+    #fullArray = np.concatenate((model_id_list[:,np.newaxis],perf_list[:,np.newaxis]),axis=1)
+    #np.savetxt("../results/{}/test.csv".format(exp_id),fullArray,header=header,fmt="%s",delimiter=",")
+
+
 
 def main(argv=None):
 
@@ -494,6 +599,12 @@ def main(argv=None):
 
     argreader.parser.add_argument('--efficiency_plot',action="store_true",help='to plot accuracy vs latency/model size. --exp_id, --model_ids and --epoch_list must be set.')
 
+    ######################################## Compile test performance ##################################
+
+    argreader.parser.add_argument('--compile_test',action="store_true",help='To compile the test performance of all model of an experiment. The --exp_id arg must be set.')
+
+
+
     argreader = load_data.addArgs(argreader)
 
     #Reading the comand line arg
@@ -517,5 +628,12 @@ def main(argv=None):
         findHardImage(args.exp_id,args.dataset_size,args.threshold,args.dataset_name,args.train_prop,args.nb_class)
     if args.efficiency_plot:
         efficiencyPlot(args.exp_id,args.model_ids,args.epoch_list)
+    if args.compile_test:
+
+        id_to_label_dict = {"1x1":"Score prediction","none":"None","sobel":"Sobel","patchsim":"Patch Similarity","norm":"Norm",
+                            "topk":"Top-K","all":"All",
+                            "pn":"PointNet","avglin":"Linear"}
+
+        compileTest(args.exp_id,id_to_label_dict)
 if __name__ == "__main__":
     main()
