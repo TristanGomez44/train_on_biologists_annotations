@@ -422,8 +422,11 @@ class TopkPointExtractor(nn.Module):
                     x = torch.pow(pointFeaturesMap, 2).sum(dim=1, keepdim=True)
                 elif self.patchsim:
                     with torch.no_grad():
-                        distMap = -self.patchSimCNN(kwargs["origImgBatch"],returnLayer="last" if self.patchSim_useAllLayers else '2')
-                    x = distMap
+                        x = -self.patchSimCNN(kwargs["origImgBatch"],returnLayer="last" if self.patchSim_useAllLayers else '2')
+                    x_min = x.view(pointFeaturesMap.size(0),-1).min(dim=-1,keepdim=True)[0].unsqueeze(1).unsqueeze(1)
+                    x_max = x.view(pointFeaturesMap.size(0),-1).max(dim=-1,keepdim=True)[0].unsqueeze(1).unsqueeze(1)
+                    x = (x-x_min)/(x_max-x_min)
+
                     pointFeaturesMap = F.interpolate(pointFeaturesMap,size=(x.size(-2),x.size(-1)))
                     pointFeaturesMap = pointFeaturesMap*x
                 elif self.predictPixelScore:
@@ -436,6 +439,8 @@ class TopkPointExtractor(nn.Module):
                     pointFeaturesMap = pointFeaturesMap*x
                 else:
                     x = F.relu(pointFeaturesMap).sum(dim=1, keepdim=True)
+            else:
+                x = F.interpolate(torch.pow(pointFeaturesMap, 2).sum(dim=1, keepdim=True),size=(x.size(-2),x.size(-1)))
 
             pointFeaturesMap = pointFeaturesMap.float()
             retDict["featVolume"] = pointFeaturesMap
@@ -991,21 +996,12 @@ class PointNet2(SecondModel):
 
         if pureTextModel:
 
-            if topk_fps:
-                self.finalPtsNb = topk_fps_nb_pts
-            else:
-                self.finalPtsNb = point_nb
-
-            if topk_sagpool_drop:
-                self.finalPtsNb_postDrop = int(self.finalPtsNb*topk_sagpool_drop_ratio)
-            else:
-                self.finalPtsNb_postDrop = self.finalPtsNb
-
-            self.pureText_pointExtr = TopkPointExtractor(cuda, nbFeat,self.finalPtsNb*pureTextPtsNbFact, encoderChan, \
-                                                True, self.finalPtsNb,auxModel,auxModelTopk, \
-                                                topk_euclinorm,predictScore,\
-                                                cannyedge,cannyedge_sigma,orbedge,sobel,patchsim,patchsim_patchsize,patchsim_groupNb,patchsim_neiSimRefin,patchSim_NMS,no_feat,\
-                                                patchsim_mod,norm_points,topk_sagpool,topk_sagpool_drop,topk_sagpool_drop_ratio,True)
+            self.textModPtsNb = point_nb//pureTextPtsNbFact
+            self.pureText_pointExtr = TopkPointExtractor(cuda, nbFeat,self.textModPtsNb, encoderChan, \
+                                                False, point_nb,False,False, \
+                                                True,False,imageAttBlockNb, \
+                                                False,cannyedge_sigma,False,False,False,patchsim_patchsize,patchsim_groupNb,False,False,False,\
+                                                False,norm_points,False,False,topk_sagpool_drop_ratio,False)
         else:
             self.pureText_pointExtr = None
 
@@ -1045,9 +1041,9 @@ class PointNet2(SecondModel):
             retDict = merge(puretext_retDict,retDict,suffix="puretext")
 
             #Adding feature to indicate if point comes from texture border or center
-            indicator = torch.ones(featureMaps.size(0)*self.finalPtsNb_postDrop,1).to(featureMaps.device)
-
+            indicator = torch.ones(featureMaps.size(0)*self.textModPtsNb,1).to(featureMaps.device)
             puretext_retDict['pointfeatures'] = torch.cat((puretext_retDict['pointfeatures'],indicator),dim=-1)
+            indicator = torch.ones(featureMaps.size(0)*self.point_nb,1).to(featureMaps.device)
             retDict['pointfeatures'] = torch.cat((retDict['pointfeatures'],-indicator),dim=-1)
 
             #Merging the two point clouds
@@ -1055,6 +1051,10 @@ class PointNet2(SecondModel):
             retDict['pos'] = torch.cat((retDict['pos'],puretext_retDict["pos"]),dim=0)
             retDict['batch'] = torch.cat((retDict['batch'],puretext_retDict["batch"]),dim=0)
 
+            inds = retDict['batch'].argsort()
+            retDict['pointfeatures'] = retDict['pointfeatures'][inds].contiguous()
+            retDict['pos'] = retDict['pos'][inds].contiguous()
+            retDict['batch'] = retDict['batch'][inds].contiguous()
 
         pred = self.pn2(retDict['pointfeatures'], retDict['pos'], retDict['batch'])
         retDict['pred'] = pred
