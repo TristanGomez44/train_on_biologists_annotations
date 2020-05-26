@@ -44,6 +44,8 @@ import torch_cluster
 from torch.distributions.normal import Normal
 from torch import tensor
 
+import torch.nn.functional as F
+
 def plotPointsImageDataset(imgNb,redFact,plotDepth,args):
 
     cm = plt.get_cmap('plasma')
@@ -105,7 +107,7 @@ def plotPointsImageDatasetGrid(exp_id,imgNb,epochs,model_ids,reduction_fact_list
 
     imgSize = 224
 
-    ptsImage = torch.zeros((3,imgSize,imgSize))
+    ptsImage = torch.ones((3,imgSize,imgSize))
     gridImage = None
 
     args.normalize_data = False
@@ -160,11 +162,11 @@ def plotPointsImageDatasetGrid(exp_id,imgNb,epochs,model_ids,reduction_fact_list
                 ptsOrig = torch.tensor(np.load(pointPaths[j]))[i]
 
                 if (ptsOrig[:,:3] < 0).sum() > 0:
-                    pts = (((ptsOrig[:,:3] + 1)/2)*reduction_fact_list[j]).long()
+                    pts = (((ptsOrig[:,:3] + 1)/2)).long()
                 else:
-                    pts = (ptsOrig*reduction_fact_list[j]).long()
+                    pts = (ptsOrig).long()
 
-                ptsImageCopy = ptsImage.clone()
+                ptsImageCopy = F.interpolate(ptsImage.unsqueeze(0), scale_factor=1/reduction_fact_list[j]).squeeze(0)
 
                 if os.path.exists(pointWeightPaths[j]) and not forceFeat[j]:
                     if useDropped_list[j]:
@@ -187,6 +189,27 @@ def plotPointsImageDatasetGrid(exp_id,imgNb,epochs,model_ids,reduction_fact_list
                     plt.savefig("../vis/{}/grid_norm_hist_{}_img{}.png".format(exp_id,model_ids[j],i))
                     plt.close()
 
+                if threshold[j]:
+                    #pts = pts[ptsWeights > 75]
+                    #ptsWeights = ptsWeights[ptsWeights > 75]
+
+                    #pi = em(torch.tensor(ptsWeights).unsqueeze(1),2)
+
+                    #bins = plt.hist(ptsWeights,range=(0,200),bins=20)
+                    #median = (bins[1][np.argmax(bins[0])]+bins[1][np.argmax(bins[0])+1])/2
+
+                    inds = ptsWeights.argsort()[-25:]
+                    bounding_pts = pts[inds][:,:2]
+
+                    print(inds)
+                    print(bounding_pts)
+
+                    if len(bounding_pts) > 0:
+                        min,max = bounding_pts.min(dim=0)[0],bounding_pts.max(dim=0)[0]
+                        if pts[(min[0] < pts[:,0])*(pts[:,0] > max[0])*(min[1] < pts[:,1])*(pts[:,1] > max[1])].shape[0] > 0 :
+                            ptsWeights = ptsWeights[(min[0] < pts[:,0])*(pts[:,0] > max[0])*(min[1] < pts[:,1])*(pts[:,1] > max[1])]
+                            pts = pts[(min[0] < pts[:,0])*(pts[:,0] > max[0])*(min[1] < pts[:,1])*(pts[:,1] > max[1])]
+
                 if inverse_xy[j]:
                     x,y = pts[:,0],pts[:,1]
                 else:
@@ -197,6 +220,9 @@ def plotPointsImageDatasetGrid(exp_id,imgNb,epochs,model_ids,reduction_fact_list
                 ptsImageCopy[:,y,x] =torch.tensor(ptsWeights).permute(1,0).float()
 
                 ptsImageCopy = ptsImageCopy.unsqueeze(0)
+                ptsImageCopy = F.interpolate(ptsImageCopy, scale_factor=reduction_fact_list[j])
+
+                ptsImageCopy = 0.5*ptsImageCopy+0.5*imgBatch[i:i+1]
 
             gridImage = torch.cat((gridImage,ptsImageCopy),dim=0)
 
