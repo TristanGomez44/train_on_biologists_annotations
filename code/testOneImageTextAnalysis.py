@@ -25,6 +25,7 @@ from skimage import img_as_ubyte
 from scipy import ndimage
 from skimage.transform import resize
 import scipy.ndimage.filters as filters
+import torch_geometric
 def main(argv=None):
     # Getting arguments from config file and command line
     # Building the arg reader
@@ -116,9 +117,15 @@ def main(argv=None):
                                   help="To define the update rate of the feature using the cossim map.",default=False)
     argreader.parser.add_argument('--patch_sim_neighradius', type=int,
                                   help="The radius of the neighborhood",default=1)
+    argreader.parser.add_argument('--patch_sim_neighdilation', type=int,
+                                  help="The dilation of the neighborhood",default=1)
 
     argreader.parser.add_argument('--crop', type=str2bool,
                                   help="To preprocess images by randomly cropping them",default=True)
+    argreader.parser.add_argument('--shuffle', type=str2bool,
+                                  help="To shuffle dataset",default=True)
+
+
 
     argreader = trainVal.addInitArgs(argreader)
     argreader = trainVal.addOptimArgs(argreader)
@@ -171,7 +178,7 @@ def main(argv=None):
     else:
         transf = "identity"
 
-    trainLoader, _ = load_data.buildTrainLoader(args,transf=transf,shuffle=args.simclr_weight==0)
+    trainLoader, _ = load_data.buildTrainLoader(args,transf=transf,shuffle=args.shuffle)
 
     data,target =next(iter(trainLoader))
     if args.data_batch_index>0:
@@ -277,7 +284,8 @@ def main(argv=None):
 
             kwargs = {"cuda":args.cuda,"groupNb":args.patch_sim_group_nb,"nbIter":args.patch_sim_neighsim_nb_iter,\
                         "softmax":args.patch_sim_neighsim_softmax,"softmax_fact":args.patch_sim_neighsim_softmax_fact,\
-                        "weightByNeigSim":args.patch_sim_weight_by_neigsim,"updateRateByCossim":args.patch_sim_update_rate_by_cossim,"neighRadius":args.patch_sim_neighradius}
+                        "weightByNeigSim":args.patch_sim_weight_by_neigsim,"updateRateByCossim":args.patch_sim_update_rate_by_cossim,"neighRadius":args.patch_sim_neighradius,\
+                        "neighDilation":args.patch_sim_neighdilation}
             neighSim = buildModule(True,NeighSim,args.cuda,args.multi_gpu,kwargs)
 
             gram_mat = net(patch)
@@ -356,25 +364,27 @@ def main(argv=None):
                         plotImg(neighSim[i][j],pathPNG,cmap="gray")
 
                         if j == len(neighSim[i])-1:
-                            sparseNeighSim = neighSim[i][j]
 
-                            plt.figure()
-                            plt.hist(neighSim[i][j].reshape(-1),range=(0,255),bins=255)
-                            plt.vlines(neighSim[i][j].mean(),0,2000)
-                            plt.savefig(os.path.join(simMapPath,"hist_step{}.png".format(len(neighSim[i])-1-j)))
-                            plt.close()
+                            #plt.figure()
+                            #plt.hist(neighSim[i][j].reshape(-1),range=(0,255),bins=255)
+                            #plt.vlines(neighSim[i][j].mean(),0,2000)
+                            #plt.savefig(os.path.join(simMapPath,"hist_step{}.png".format(len(neighSim[i])-1-j)))
+                            #plt.close()
 
                             minima,minimaV,minimaH = computeMinima(neighSim[i][j])
-                            plotImg(~minima,os.path.join(simMapPath,"minima.png"),'gray')
-                            plotImg(~minimaV,os.path.join(simMapPath,"minimaV.png"),'gray')
-                            plotImg(~minimaH,os.path.join(simMapPath,"minimaH.png"),'gray')
+                            #plotImg(~minima,os.path.join(simMapPath,"minima.png"),'gray')
+                            #plotImg(~minimaV,os.path.join(simMapPath,"minimaV.png"),'gray')
+                            #plotImg(~minimaH,os.path.join(simMapPath,"minimaH.png"),'gray')
 
-                            topk(sparseNeighSim,minima,simMapPath,"sparseNeighSim_step{}".format(len(neighSim[i])-1-j))
+                            topk(neighSim[i][j],minima,simMapPath,"sparseNeighSim_step{}".format(len(neighSim[i])-1-j))
+
+                            #maxima,_,_ = computeMaxima(neighSim[i][j])
+                            #botk(neighSim[i][j],maxima,simMapPath,"sparseNeighSim_botk_step{}".format(len(neighSim[i])-1-j))
 
                 #mask = (distMap[i] != -1)
                 #distMap[i][mask] = (distMap[i][mask]-distMap[i][mask].min())/(distMap[i][mask].max()-distMap[i][mask].min())
 
-                '''
+                '''inds
                 for l in range(origPatchSize[1]):
                     for m in range(origPatchSize[2]):
                         refPatchInd = l*origPatchSize[2]+m
@@ -461,7 +471,7 @@ def main(argv=None):
 def topk(img,minima,folder,fileName):
 
     pathPNG = os.path.join(folder,"nms-{}.png".format(fileName))
-    plotImg((255-((255-img)*minima)),pathPNG)
+    plotImg(enhanceBlack((255-((255-img)*minima))),pathPNG)
 
     for k in [512,1024,2048]:
         flatInds = np.argsort(img.reshape(-1))[:k]
@@ -481,6 +491,29 @@ def topk(img,minima,folder,fileName):
         abs, ord = (flatInds % img.shape[-1], flatInds // img.shape[-1])
         img_cpy = np.zeros_like(img)
         img_cpy[:] = 255
+
+        img_cpy[ord,abs] = enhanceBlack(img[ord,abs])
+
+        pathPNG = os.path.join(folder,"nms-{}-{}.png".format(k,fileName))
+        plotImg(img_cpy,pathPNG,cmap="gray")
+
+def enhanceBlack(arr):
+    arr = (arr-arr.min())/(arr.max()-arr.min())
+    return 255*(arr*arr*arr*arr)
+
+def botk(img,maxima,folder,fileName):
+
+    for k in [512,1024,2048]:
+        flatInds = np.argsort((img*maxima).reshape(-1))[-2*k:]
+
+        abs, ord = (flatInds % img.shape[-1], flatInds // img.shape[-1])
+        abs,ord = torch.tensor(abs).unsqueeze(1), torch.tensor(ord).unsqueeze(1)
+        x = torch.cat((abs,ord),dim=1)
+        inds = torch_geometric.nn.fps(x.float(), ratio=k/(len(img.reshape(-1))-k))
+        abs,ord = abs[inds].numpy(),ord[inds].numpy()
+
+        img_cpy = np.zeros_like(img)
+        img_cpy[:] = 0
         img_cpy[ord,abs] = img[ord,abs]
         pathPNG = os.path.join(folder,"nms-{}-{}.png".format(k,fileName))
         plotImg(img_cpy,pathPNG,cmap="gray")
@@ -493,10 +526,19 @@ def computeMinima(img):
     minimaH = (img == neiSimMinH)
     return minima,minimaV,minimaH
 
+def computeMaxima(img):
+    neiSimMaxV = filters.maximum_filter(img, (3,1))
+    neiSimMaxH = filters.maximum_filter(img, (1,3))
+    minima = np.logical_or((img == neiSimMaxV),(img == neiSimMaxH))
+    minimaV = (img == neiSimMaxV)
+    minimaH = (img == neiSimMaxH)
+    return minima,minimaV,minimaH
+
+
 def sobelFunc(img):
 
     img = (255*(img-img.min())/(img.max()-img.min()))
-    img = resize(img, (100,100),anti_aliasing=True,mode="constant",order=3)*255
+    #img = resize(img, (100,100),anti_aliasing=True,mode="constant",order=3)*255
 
     img = img.astype('int32')
     dx = ndimage.sobel(img, 0)  # horizontal derivative
@@ -739,10 +781,10 @@ def computeNeighborsCoord(neighRadius):
     return coord
 
 class NeighSim(torch.nn.Module):
-    def __init__(self,cuda,groupNb,nbIter,softmax,softmax_fact,weightByNeigSim,updateRateByCossim,neighRadius):
+    def __init__(self,cuda,groupNb,nbIter,softmax,softmax_fact,weightByNeigSim,updateRateByCossim,neighRadius,neighDilation):
         super(NeighSim,self).__init__()
 
-        self.directions = computeNeighborsCoord(neighRadius)
+        self.directions = computeNeighborsCoord(neighRadius)*neighDilation
 
         self.sumKer = torch.ones((1,len(self.directions),1,1))
         self.sumKer = self.sumKer.cuda() if cuda else self.sumKer
