@@ -26,6 +26,8 @@ from scipy import ndimage
 from skimage.transform import resize
 import scipy.ndimage.filters as filters
 import torch_geometric
+import torch.nn.functional as F
+from sklearn.manifold import TSNE
 def main(argv=None):
     # Getting arguments from config file and command line
     # Building the arg reader
@@ -124,6 +126,14 @@ def main(argv=None):
                                   help="To preprocess images by randomly cropping them",default=True)
     argreader.parser.add_argument('--shuffle', type=str2bool,
                                   help="To shuffle dataset",default=True)
+
+    argreader.parser.add_argument('--multi_scale', type=str2bool,
+                                  help="To use multi-scale analysis",default=False)
+    argreader.parser.add_argument('--second_parse', type=str2bool,
+                                  help="To parse the feature as if they were input images",default=False)
+    argreader.parser.add_argument('--resnet_multilev', type=str2bool,
+                                  help="To use multi-level features with resnet",default=False)
+
 
 
 
@@ -270,15 +280,15 @@ def main(argv=None):
             kwargs = {"full_mode":args.patch_sim_full,"kerSize":args.patch_sim_neig_mode_ker_size,"parralelMode":args.patch_sim_paral_mode}
             gramDistMap = buildModule(True,GramDistMap,args.cuda,args.multi_gpu,kwargs)
 
-            kwargs = {"resnet":args.patch_sim_resnet,"resType":args.patch_sim_restype,"pretr":args.patch_sim_pretr_res,"nbGroup":args.patch_sim_group_nb,\
-                        "reluOnSimple":args.patch_sim_relu_on_simple,"chan":args.resnet_chan,"gramOrder":args.patch_sim_gram_order,"useModel":args.patch_sim_usemodel}
-            net = buildModule(True,PatchSimCNN,args.cuda,args.multi_gpu,kwargs)
+            kwargsNet = {"resnet":args.patch_sim_resnet,"resType":args.patch_sim_restype,"pretr":args.patch_sim_pretr_res,"nbGroup":args.patch_sim_group_nb,\
+                        "reluOnSimple":args.patch_sim_relu_on_simple,"chan":args.resnet_chan,"gramOrder":args.patch_sim_gram_order,"useModel":args.patch_sim_usemodel,\
+                        "inChan":3,"resnet_multilev":args.resnet_multilev}
+            net = buildModule(True,PatchSimCNN,args.cuda,args.multi_gpu,kwargsNet)
 
             kwargs = {}
             cosimMap = buildModule(True,CosimMap,args.cuda,args.multi_gpu,kwargs)
 
             patch = data.unfold(2, args.patch_size, args.patch_stride).unfold(3, args.patch_size, args.patch_stride).permute(0,2,3,1,4,5)
-
             origPatchSize = patch.size()
             patch = patch.reshape(patch.size(0)*patch.size(1)*patch.size(2),patch.size(3),patch.size(4),patch.size(5))
 
@@ -286,22 +296,36 @@ def main(argv=None):
                         "softmax":args.patch_sim_neighsim_softmax,"softmax_fact":args.patch_sim_neighsim_softmax_fact,\
                         "weightByNeigSim":args.patch_sim_weight_by_neigsim,"updateRateByCossim":args.patch_sim_update_rate_by_cossim,"neighRadius":args.patch_sim_neighradius,\
                         "neighDilation":args.patch_sim_neighdilation}
-            neighSim = buildModule(True,NeighSim,args.cuda,args.multi_gpu,kwargs)
-
-            gram_mat = net(patch)
-            #gram_mat = gram_mat.view(data.size(0),-1,args.patch_sim_group_nb,gram_mat.size(2),gram_mat.size(3))
-            gram_mat = gram_mat.view(data.size(0),-1,args.patch_sim_group_nb,gram_mat.size(2))
-            gram_mat = gram_mat.permute(0,2,1,3)
-
-            #distMap = gramDistMap(gram_mat,patchPerRow=origPatchSize[2])
-
-            distMapAgreg,feat = cosimMap(gram_mat)
+            neighSimMod = buildModule(True,NeighSim,args.cuda,args.multi_gpu,kwargs)
 
             print("Start !")
             start = time.time()
 
-            neighSim = neighSim(feat)
+            def textLimit(patch):
 
+                kwargsNet["inChan"] = patch.size(1)
+                print(kwargsNet["inChan"],patch.size())
+                patchMod = buildModule(True,PatchSimCNN,args.cuda,args.multi_gpu,kwargsNet)
+                print(patchMod)
+                gram_mat = patchMod(patch)
+                gram_mat = gram_mat.view(data.size(0),-1,args.patch_sim_group_nb,gram_mat.size(2))
+                gram_mat = gram_mat.permute(0,2,1,3)
+                distMapAgreg,feat = cosimMap(gram_mat)
+                neighSim,refFeat = neighSimMod(feat)
+                if args.multi_scale:
+                    neighSim_small,_ = neighSimMod(F.interpolate(feat,scale_factor=0.125))
+                else:
+                    neighSim_small = None
+                return distMapAgreg,neighSim,neighSim_small,refFeat
+            distMapAgreg,neighSim,neighSim_small,refFeat = textLimit(patch)
+
+            if args.second_parse:
+                feat_patch = refFeat.unfold(2, args.patch_size, 1).unfold(3, args.patch_size,1).permute(0,2,3,1,4,5)
+                origFeatPatchSize = feat_patch.size()
+                feat_patch = feat_patch.reshape(feat_patch.size(0)*feat_patch.size(1)*feat_patch.size(2),feat_patch.size(3),feat_patch.size(4),feat_patch.size(5))
+                featDistMapAgreg,featNeighSim,featNeighSim_small,featRefFeat = textLimit(feat_patch)
+            else:
+                featNeighSim,featNeighSim_small,featRefFeat = None,None,None
             print("End ",time.time()-start)
 
             if not os.path.exists("../vis/{}/".format(args.exp_id)):
@@ -329,6 +353,12 @@ def main(argv=None):
             #distMap = distMap.cpu().numpy()
             neighSim = neighSim.detach().cpu().numpy()
 
+            if not neighSim_small is None:
+                neighSim_small = neighSim_small.detach().cpu().numpy()
+
+            if not featNeighSim is None:
+                featNeighSim = featNeighSim.detach().cpu().numpy()
+
             for i,img in enumerate(data):
 
                 if not os.path.exists(os.path.join(args.patch_sim_out_path,"simMaps",args.model_id,"{}".format(i+args.data_batch_index*args.batch_size))):
@@ -353,73 +383,35 @@ def main(argv=None):
 
                 simMapPath = os.path.join(args.patch_sim_out_path,"simMaps",args.model_id,str(i+args.data_batch_index*args.batch_size))
 
-                plotImg(distMapAgreg[i][0][1:-1,1:-1].detach().cpu().numpy(),os.path.join(simMapPath,"agr.png"),'gray')
+                def writeAllImg(distMapAgreg,neighSim,i,simMapPath,name):
+                    if not distMapAgreg is None:
+                        plotImg(distMapAgreg[i][0][1:-1,1:-1].detach().cpu().numpy(),os.path.join(simMapPath,name+"_agr.png"),'gray')
 
-                pathGif = os.path.join(simMapPath,"neighSim.gif")
-                with imageio.get_writer(pathGif,duration=1) as writer:
                     neighSim[i] = 255*(neighSim[i]-neighSim[i].min())/(neighSim[i].max()-neighSim[i].min())
-                    for j in range(len(neighSim[i])):
-                        writer.append_data(img_as_ubyte(neighSim[i][j].astype("uint8")))
-                        pathPNG = os.path.join(simMapPath,"neighSim_step{}.png".format(len(neighSim[i])-1-j))
-                        plotImg(neighSim[i][j],pathPNG,cmap="gray")
+                    j = len(neighSim[i])-1
 
-                        if j == len(neighSim[i])-1:
+                    pathPNG = os.path.join(simMapPath,name.format(len(neighSim[i])-1-j))
+                    plotImg(neighSim[i][j],pathPNG,cmap="gray")
 
-                            #plt.figure()
-                            #plt.hist(neighSim[i][j].reshape(-1),range=(0,255),bins=255)
-                            #plt.vlines(neighSim[i][j].mean(),0,2000)
-                            #plt.savefig(os.path.join(simMapPath,"hist_step{}.png".format(len(neighSim[i])-1-j)))
-                            #plt.close()
+                    minima,minimaV,minimaH = computeMinima(neighSim[i][-1])
+                    topk(neighSim[i][j],minima,simMapPath,name)
 
-                            minima,minimaV,minimaH = computeMinima(neighSim[i][j])
-                            #plotImg(~minima,os.path.join(simMapPath,"minima.png"),'gray')
-                            #plotImg(~minimaV,os.path.join(simMapPath,"minimaV.png"),'gray')
-                            #plotImg(~minimaH,os.path.join(simMapPath,"minimaH.png"),'gray')
+                writeAllImg(distMapAgreg,neighSim,i,simMapPath,"sparseNeighSim_step0")
 
-                            topk(neighSim[i][j],minima,simMapPath,"sparseNeighSim_step{}".format(len(neighSim[i])-1-j))
+                if not neighSim_small is None:
+                    writeAllImg(None,neighSim_small,i,simMapPath,"sparseNeighSim_step0_x2")
 
-                            #maxima,_,_ = computeMaxima(neighSim[i][j])
-                            #botk(neighSim[i][j],maxima,simMapPath,"sparseNeighSim_botk_step{}".format(len(neighSim[i])-1-j))
+                if not featNeighSim is None:
+                    writeAllImg(featDistMapAgreg,distMapAgreg,featNeighSim,i,simMapPath,"sparseNeighSim_step0_feat")
 
-                #mask = (distMap[i] != -1)
-                #distMap[i][mask] = (distMap[i][mask]-distMap[i][mask].min())/(distMap[i][mask].max()-distMap[i][mask].min())
-
-                '''inds
-                for l in range(origPatchSize[1]):
-                    for m in range(origPatchSize[2]):
-                        refPatchInd = l*origPatchSize[2]+m
-                        if args.patch_size == args.patch_stride:
-                            map = distMap[i][refPatchInd]
-                        else:
-                            plt.imshow(img.detach().cpu().permute(1,2,0).numpy())
-                            for j in range(origPatchSize[1]):
-                                for k in range(origPatchSize[2]):
-                                    if j !=l or k != m:
-
-                                        patchInd = j*origPatchSize[2]+k
-
-                                        x = int(k*data.size(2)/origPatchSize[1])
-                                        y = int(j*data.size(3)/origPatchSize[2])
-                                        alpha = distMap[i][refPatchInd,patchInd]
-
-                                        rect = patches.Rectangle((x,y), args.patch_size, args.patch_size,alpha=(alpha!=-1),linewidth=0,color=cm.plasma(alpha))
-                                        ax.add_patch(rect)
-
-                        #refX = int(m*data.size(2)/origPatchSize[1])
-                        #refY = int(l*data.size(3)/origPatchSize[2])
-                        #refRect = patches.Rectangle((refX,refY), args.patch_size, args.patch_size,alpha=1,linewidth=0,color="black")
-                        #ax.add_patch(refRect)
-
-                        #array = fig2data(fig)
-                        #writer.append_data(img_as_ubyte(array.astype("uint8")))
-
-                        #plt.subplots_adjust(left=0, right=1, top=1, bottom=0)
-                        #plt.savefig(os.path.join(args.patch_sim_out_path,"simMaps",args.model_id,"{}".format(i),"{}_{}.png".format(m,l)))
-                        #array = fig2data(fig)
-                        cv2.imwrite(os.path.join(args.patch_sim_out_path,"simMaps",args.model_id,"{}".format(i+args.data_batch_index*args.batch_size),"{}_{}.png".format(m,l)),255*map)
-                        #plt.close()
-                '''
-
+                #refFeat_emb = TSNE(3).fit_transform(refFeat[i].view(refFeat[i].size(0),-1).permute(1,0).cpu().detach().numpy())
+                #refFeat_emb = refFeat_emb.reshape((refFeat[i].size(1),refFeat[i].size(2),3))
+                #refFeat_emb = (refFeat_emb-refFeat_emb.min())/(refFeat_emb.max()-refFeat_emb.min())
+                #plt.figure()
+                #plt.imshow(refFeat_emb)
+                #plt.subplots_adjust(left=0, right=1, top=1, bottom=0)
+                #plt.savefig(os.path.join(simMapPath,"tsne.png"))
+                #plt.close()
 
     else:
         with torch.no_grad():
@@ -627,7 +619,7 @@ class GramDistMap(torch.nn.Module):
         return distMat_mean
 
 class PatchSimCNN(torch.nn.Module):
-    def __init__(self,resnet,resType,pretr,nbGroup,reluOnSimple,gramOrder,useModel,**kwargs):
+    def __init__(self,resnet,resType,pretr,nbGroup,reluOnSimple,gramOrder,useModel,resnet_multilev,**kwargs):
         super(PatchSimCNN,self).__init__()
 
         self.resnet = resnet
@@ -638,16 +630,22 @@ class PatchSimCNN(torch.nn.Module):
             channelPerFilterSize = kwargs["chan"]//8
             for filterSize in self.filterSizes:
                 if reluOnSimple:
-                    layer = torch.nn.Sequential(torch.nn.Conv2d(3,channelPerFilterSize,filterSize,padding=(filterSize-1)//2),torch.nn.ReLU())
+                    layer = torch.nn.Sequential(torch.nn.Conv2d(kwargs["inChan"],channelPerFilterSize,filterSize,padding=(filterSize-1)//2),torch.nn.ReLU())
                 else:
-                    layer = torch.nn.Conv2d(3,channelPerFilterSize,filterSize,padding=(filterSize-1)//2)
+                    layer = torch.nn.Conv2d(kwargs["inChan"],channelPerFilterSize,filterSize,padding=(filterSize-1)//2)
                 self.layers.append(layer)
         else:
-            self.featMod = modelBuilder.buildFeatModel(resType, pretr, True, False,**kwargs)
+            if resnet_multilev:
+                kwargs["chan"] = [kwargs["chan"]//4 for _ in range(4)]
+                self.featMod = modelBuilder.buildFeatModel(resType, pretr, True, False,**kwargs)
+            else:
+                kwargs["chan"] = kwargs["chan"]//2
+                self.featMod = modelBuilder.buildFeatModel(resType, pretr, True, False,**kwargs)
 
         self.nbGroup = nbGroup
         self.gramOrder = gramOrder
         self.useModel = useModel
+        self.resnet_multilev = resnet_multilev
     def forward(self,x):
 
         if self.useModel:
@@ -660,7 +658,10 @@ class PatchSimCNN(torch.nn.Module):
                 featVolume = torch.cat(featList,dim=1)
                 featVolume = featVolume[:,torch.randperm(featVolume.size(1))]
             else:
-                featVolume = self.featMod(x)["x"]
+                if self.resnet_multilev:
+                    featVolume = torch.cat([self.featMod(x)["layerFeat"][i] for i in range(1,5)],dim=1)
+                else:
+                    featVolume = self.featMod(x)["x"]
         else:
             featVolume = torch.nn.functional.adaptive_avg_pool2d(x,(3,3))
 
@@ -853,7 +854,7 @@ class NeighSim(torch.nn.Module):
         simMapList = simMapList.mean(dim=1)
         # N x nbIter x sqrt(nbPatch) x sqrt(nbPatch)
 
-        return simMapList
+        return simMapList,features
 
 def buildModule(cond,constr,cuda,multi_gpu,kwargs={}):
 
