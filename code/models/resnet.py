@@ -187,9 +187,15 @@ class ResNet(nn.Module):
         super(ResNet, self).__init__()
         if norm_layer is None:
             norm_layer = nn.BatchNorm2d
-        self.inplanes = chan
-        self.conv1 = nn.Conv2d(inChan, chan, kernel_size=7, stride=1 if not preLayerSizeReduce else stride,bias=False,padding=3)
-        self.bn1 = norm_layer(chan)
+
+        if not type(chan) is list:
+            chan = [chan,chan*2,chan*4,chan*8]
+
+        self.inplanes = chan[0]
+
+        print("Building resnet : ",inChan,layerSizeReduce)
+        self.conv1 = nn.Conv2d(inChan, chan[0], kernel_size=7, stride=1 if not preLayerSizeReduce else stride,bias=False,padding=3)
+        self.bn1 = norm_layer(chan[0])
         self.relu = nn.ReLU(inplace=True)
         self.maxpool = nn.MaxPool2d(kernel_size=maxPoolKer, stride=1 if not preLayerSizeReduce else stride, padding=maxPoolPad)
 
@@ -202,13 +208,13 @@ class ResNet(nn.Module):
 
         self.replaceBy1x1 = replaceBy1x1
         #All layers are built but they will not necessarily be used
-        self.layer1 = self._make_layer(block, chan*1, layers[0], stride=1,norm_layer=norm_layer,reluOnLast=reluOnLast if self.nbLayers==1 else True,\
+        self.layer1 = self._make_layer(block, chan[0], layers[0], stride=1,norm_layer=norm_layer,reluOnLast=reluOnLast if self.nbLayers==1 else True,\
                                         dilation=1,applyStrideOnAll=applyStrideOnAll,replaceBy1x1=replaceBy1x1)
-        self.layer2 = self._make_layer(block, chan*2, layers[1], stride=1 if not layerSizeReduce else stride, norm_layer=norm_layer,\
+        self.layer2 = self._make_layer(block, chan[1], layers[1], stride=1 if not layerSizeReduce else stride, norm_layer=norm_layer,\
                                         reluOnLast=reluOnLast if self.nbLayers==2 else True,dilation=dilation[0],applyStrideOnAll=applyStrideOnAll,replaceBy1x1=replaceBy1x1)
-        self.layer3 = self._make_layer(block, chan*4, layers[2], stride=1 if not layerSizeReduce else stride, norm_layer=norm_layer,\
+        self.layer3 = self._make_layer(block, chan[2], layers[2], stride=1 if not layerSizeReduce else stride, norm_layer=norm_layer,\
                                         reluOnLast=reluOnLast if self.nbLayers==3 else True,dilation=dilation[1],applyStrideOnAll=applyStrideOnAll,replaceBy1x1=replaceBy1x1)
-        self.layer4 = self._make_layer(block, chan*8, layers[3], stride=1 if not layerSizeReduce else stride, norm_layer=norm_layer,\
+        self.layer4 = self._make_layer(block, chan[3], layers[3], stride=1 if not layerSizeReduce else stride, norm_layer=norm_layer,\
                                         reluOnLast=reluOnLast if self.nbLayers==4 else True,dilation=dilation[2],applyStrideOnAll=applyStrideOnAll,replaceBy1x1=replaceBy1x1)
 
         if layersNb<1 or layersNb>4:
@@ -216,7 +222,7 @@ class ResNet(nn.Module):
 
         self.layersNb = layersNb
 
-        self.fc = nn.Linear(chan*(2**(4-1)) * block.expansion, 1000)
+        self.fc = nn.Linear(chan[0]*(2**(4-1)) * block.expansion, 1000)
 
         self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
 
@@ -241,7 +247,7 @@ class ResNet(nn.Module):
 
         self.multiLevelFeat = multiLevelFeat
         if self.multiLevelFeat:
-            self.multiLevMod = MultiLevelFeat(chan,multiLev_outChan,multiLev_cat)
+            self.multiLevMod = MultiLevelFeat(chan[0],multiLev_outChan,multiLev_cat)
 
 
         self.attention = attention
@@ -251,10 +257,10 @@ class ResNet(nn.Module):
             self.att2 = self._make_layer(block, attChan, attBlockNb, stride=1, norm_layer=norm_layer,feat=True)
             self.att3 = self._make_layer(block, attChan, attBlockNb, stride=1, norm_layer=norm_layer,feat=True)
             self.att4 = self._make_layer(block, attChan, attBlockNb, stride=1, norm_layer=norm_layer,feat=True)
-            self.att_conv1x1_1 = conv1x1(chan*1, attChan, stride=1)
-            self.att_conv1x1_2 = conv1x1(chan*2, attChan, stride=1)
-            self.att_conv1x1_3 = conv1x1(chan*4, attChan, stride=1)
-            self.att_conv1x1_4 = conv1x1(chan*8, attChan, stride=1)
+            self.att_conv1x1_1 = conv1x1(chan[0], attChan, stride=1)
+            self.att_conv1x1_2 = conv1x1(chan[1], attChan, stride=1)
+            self.att_conv1x1_3 = conv1x1(chan[2], attChan, stride=1)
+            self.att_conv1x1_4 = conv1x1(chan[3], attChan, stride=1)
             self.att_final_conv1x1 = conv1x1(attChan, 1, stride=1)
 
             if attActFunc == "sigmoid":
