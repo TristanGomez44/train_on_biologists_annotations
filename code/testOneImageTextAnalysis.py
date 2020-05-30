@@ -304,16 +304,17 @@ def main(argv=None):
             def textLimit(patch):
 
                 kwargsNet["inChan"] = patch.size(1)
-                print(kwargsNet["inChan"],patch.size())
                 patchMod = buildModule(True,PatchSimCNN,args.cuda,args.multi_gpu,kwargsNet)
-                print(patchMod)
                 gram_mat = patchMod(patch)
                 gram_mat = gram_mat.view(data.size(0),-1,args.patch_sim_group_nb,gram_mat.size(2))
                 gram_mat = gram_mat.permute(0,2,1,3)
                 distMapAgreg,feat = cosimMap(gram_mat)
                 neighSim,refFeat = neighSimMod(feat)
                 if args.multi_scale:
-                    neighSim_small,_ = neighSimMod(F.interpolate(feat,scale_factor=0.125))
+                    multiScaleKer = torch.ones((feat.size(1),1,9,9)).to(feat.device)
+                    multiScaleKer /= (feat.size(-2)*feat.size(-1))
+                    multiScaleFeat = F.conv2d(feat,multiScaleKer,groups=feat.size(1),padding=9//2)
+                    neighSim_small,_ = neighSimMod(multiScaleFeat)
                 else:
                     neighSim_small = None
                 return distMapAgreg,neighSim,neighSim_small,refFeat
@@ -463,7 +464,7 @@ def main(argv=None):
 def topk(img,minima,folder,fileName):
 
     pathPNG = os.path.join(folder,"nms-{}.png".format(fileName))
-    plotImg(enhanceBlack((255-((255-img)*minima))),pathPNG)
+    plotImg(255-((255-img)*minima),pathPNG)
 
     for k in [512,1024,2048]:
         flatInds = np.argsort(img.reshape(-1))[:k]
@@ -484,7 +485,7 @@ def topk(img,minima,folder,fileName):
         img_cpy = np.zeros_like(img)
         img_cpy[:] = 255
 
-        img_cpy[ord,abs] = enhanceBlack(img[ord,abs])
+        img_cpy[ord,abs] = img[ord,abs]
 
         pathPNG = os.path.join(folder,"nms-{}-{}.png".format(k,fileName))
         plotImg(img_cpy,pathPNG,cmap="gray")
@@ -802,16 +803,13 @@ class NeighSim(torch.nn.Module):
 
     def forward(self,features):
 
-        startime = time.time()
         simMap = modelBuilder.computeTotalSim(features,1)
         simMapList = [simMap]
         for j in range(self.nbIter):
-            startime = time.time()
 
             allSim = []
             allFeatShift = []
             allPondFeatShift = []
-            startime = time.time()
             for direction in self.directions:
                 if self.weightByNeigSim:
                     sim,featuresShift1,_,maskShift1,_ = modelBuilder.applyDiffKer_CosSimi(direction,features,1)
@@ -825,8 +823,6 @@ class NeighSim(torch.nn.Module):
             if self.weightByNeigSim and self.softmax:
                 allSim = torch.softmax(self.softmax_fact*allSim,dim=1)
 
-            startime = time.time()
-
             for i in range(len(self.directions)):
                 sim = allSim[:,i:i+1]
                 featuresShift1 = allFeatShift[i]
@@ -834,6 +830,7 @@ class NeighSim(torch.nn.Module):
             newFeatures = torch.cat(allPondFeatShift,dim=1).sum(dim=1)
 
             simMap = modelBuilder.computeTotalSim(features,1)
+
             simMapList.append(simMap)
 
             simSum = torch.nn.functional.conv2d(allSim,self.sumKer.to(allSim.device))
@@ -844,9 +841,9 @@ class NeighSim(torch.nn.Module):
                 min = simMap.min(dim=-1,keepdim=True)[0].min(dim=-1,keepdim=True)[0]
                 max = simMap.max(dim=-1,keepdim=True)[0].max(dim=-1,keepdim=True)[0]
                 normSimMap = (simMap-min)/(max-min)
-                features = (1-normSimMap)*features+normSimMap*newFeatures
+                features = ((1-normSimMap)*features+normSimMap*newFeatures)
 
-        startime = time.time()
+
         simMapList = torch.cat(simMapList,dim=1).unsqueeze(1)
 
         simMapList = simMapList.reshape(simMapList.size(0)//self.groupNb,self.groupNb,self.nbIter+1,simMapList.size(3),simMapList.size(4))
