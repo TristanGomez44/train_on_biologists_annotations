@@ -107,7 +107,7 @@ def plotPointsImageDatasetGrid(exp_id,imgNb,epochs,model_ids,reduction_fact_list
 
     imgSize = 224
 
-    ptsImage = torch.ones((3,imgSize,imgSize))
+    ptsImage = torch.zeros((3,imgSize,imgSize))
     gridImage = None
 
     args.normalize_data = False
@@ -173,7 +173,6 @@ def plotPointsImageDatasetGrid(exp_id,imgNb,epochs,model_ids,reduction_fact_list
                         ptsWeights = np.load(pointWeightPaths[j])[i][:,-1]
                     else:
                         ptsWeights = np.load(pointWeightPaths[j])[i]
-                        print(ptsWeights.min(),ptsWeights.mean(),ptsWeights.max())
                     plt.figure()
                     plt.hist(ptsWeights,range=(0,1),bins=10)
                     plt.savefig("../vis/{}/grid_weight_hist_{}_img{}.png".format(exp_id,model_ids[j],i))
@@ -184,10 +183,6 @@ def plotPointsImageDatasetGrid(exp_id,imgNb,epochs,model_ids,reduction_fact_list
                     else:
                         ptsWeights = torch.sqrt(torch.pow(ptsOrig[:,3:],2).sum(dim=-1)).numpy()
                         print("Feat",ptsWeights.min(),ptsWeights.mean(),ptsWeights.max())
-                    plt.figure()
-                    plt.hist(ptsWeights,range=(0,200),bins=20)
-                    plt.savefig("../vis/{}/grid_norm_hist_{}_img{}.png".format(exp_id,model_ids[j],i))
-                    plt.close()
 
                 if threshold[j]:
                     #pts = pts[ptsWeights > 75]
@@ -195,20 +190,30 @@ def plotPointsImageDatasetGrid(exp_id,imgNb,epochs,model_ids,reduction_fact_list
 
                     #pi = em(torch.tensor(ptsWeights).unsqueeze(1),2)
 
-                    #bins = plt.hist(ptsWeights,range=(0,200),bins=20)
+                    plt.figure(i*len(pointPaths)+j)
+                    bins = plt.hist(ptsWeights,range=(0,200),bins=20,alpha=0.5)
                     #median = (bins[1][np.argmax(bins[0])]+bins[1][np.argmax(bins[0])+1])/2
+                    medianInd = np.nonzero(np.r_[True, bins[0][1:] > bins[0][:-1]] & np.r_[bins[0][:-1] > bins[0][1:], True])[0][0]
 
-                    inds = ptsWeights.argsort()[-25:]
-                    bounding_pts = pts[inds][:,:2]
+                    #print(medianInd,bins[0])
+                    median = (bins[1][medianInd]+bins[1][medianInd+1])/2
+                    #if (2*median < ptsWeights).sum() > 0:
+                    #    pts = pts[2*median < ptsWeights]
+                    #    ptsWeights = ptsWeights[2*median < ptsWeights]
+                    #else:
+                    print(median)
+                    pts = pts[2*median < ptsWeights]
+                    ptsWeights = ptsWeights[2*median < ptsWeights]
+                    plt.hist(ptsWeights,range=(0,200),bins=20,alpha=0.5)
+                    plt.savefig("../vis/{}/grid_norm_hist_{}_img{}.png".format(exp_id,model_ids[j],i))
+                    plt.close()
 
-                    print(inds)
-                    print(bounding_pts)
-
-                    if len(bounding_pts) > 0:
-                        min,max = bounding_pts.min(dim=0)[0],bounding_pts.max(dim=0)[0]
-                        if pts[(min[0] < pts[:,0])*(pts[:,0] > max[0])*(min[1] < pts[:,1])*(pts[:,1] > max[1])].shape[0] > 0 :
-                            ptsWeights = ptsWeights[(min[0] < pts[:,0])*(pts[:,0] > max[0])*(min[1] < pts[:,1])*(pts[:,1] > max[1])]
-                            pts = pts[(min[0] < pts[:,0])*(pts[:,0] > max[0])*(min[1] < pts[:,1])*(pts[:,1] > max[1])]
+                    #inds = ptsWeights.argsort()[-256:]
+                    #inds = inds[ptsWeights[inds] > 75]
+                    #bounding_pts = pts[inds][:,:2]
+                    #min,max = bounding_pts.min(dim=0)[0],bounding_pts.max(dim=0)[0]
+                    #ptsWeights = ptsWeights[(min[0] < pts[:,0])*(pts[:,0] < max[0])*(min[1] < pts[:,1])*(pts[:,1] < max[1])]
+                    #pts = pts[(min[0] < pts[:,0])*(pts[:,0] < max[0])*(min[1] < pts[:,1])*(pts[:,1] < max[1])]
 
                 if inverse_xy[j]:
                     x,y = pts[:,0],pts[:,1]
@@ -657,8 +662,8 @@ def main(argv=None):
     if args.compile_test:
 
         id_to_label_dict = {"1x1":"Score prediction","none":"None","sobel":"Sobel","patchsim":"Patch Similarity","norm":"Norm",
-                            "topk":"Top-K","all":"All",
-                            "pn":"PointNet","avglin":"Linear"}
+                            "topk":"Top-K","topksag":"Topk-K (SAG)","all":"All",
+                            "pn":"PointNet","pnnorm":"PointNet (norm)","avglin":"Linear"}
 
         compileTest(args.exp_id,id_to_label_dict)
 if __name__ == "__main__":
