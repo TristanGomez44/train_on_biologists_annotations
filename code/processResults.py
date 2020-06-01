@@ -663,7 +663,8 @@ def main(argv=None):
 
         id_to_label_dict = {"1x1":"Score prediction","none":"None","sobel":"Sobel","patchsim":"Patch Similarity","norm":"Norm",
                             "topk":"Top-K","topksag":"Topk-K (SAG)","all":"All",
-                            "pn":"PointNet","pnnorm":"PointNet (norm)","avglin":"Linear"}
+                            "pn":"PointNet","pnnorm":"PointNet (norm)","avglin":"Linear",
+                            "patchnoredtext":"Patch (No Red) (Text. model)"}
 
         compileTest(args.exp_id,id_to_label_dict)
 if __name__ == "__main__":
