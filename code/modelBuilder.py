@@ -1143,7 +1143,7 @@ def netBuilder(args):
             if args.resnet_simple_att_topk_enc_chan != -1:
                 nbFeat = args.resnet_simple_att_topk_enc_chan
 
-            if len(args.resnet_simple_att_topk_pxls_nb) > 1:
+            if type(args.resnet_simple_att_topk_pxls_nb) is list and len(args.resnet_simple_att_topk_pxls_nb) > 1:
                 nbFeat *= len(args.resnet_simple_att_topk_pxls_nb)
 
         firstModel = CNNconst(args.first_mod, args.pretrained_visual, featMap=True,chan=args.resnet_chan, stride=args.resnet_stride,
