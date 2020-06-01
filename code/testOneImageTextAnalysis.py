@@ -28,6 +28,7 @@ import scipy.ndimage.filters as filters
 import torch_geometric
 import torch.nn.functional as F
 from sklearn.manifold import TSNE
+import umap
 def main(argv=None):
     # Getting arguments from config file and command line
     # Building the arg reader
@@ -134,6 +135,12 @@ def main(argv=None):
     argreader.parser.add_argument('--resnet_multilev', type=str2bool,
                                   help="To use multi-level features with resnet",default=False)
 
+    argreader.parser.add_argument('--second_scale', type=str2bool,
+                                  help="To process the image using a second patch size,stride",default=False)
+    argreader.parser.add_argument('--patch_size_second', type=int,
+                                  help="Patch size for the second processing",default=20)
+    argreader.parser.add_argument('--patch_stride_second', type=int,
+                                  help="Patch stride for the second processing",default=20)
 
 
 
@@ -327,6 +334,14 @@ def main(argv=None):
                 featDistMapAgreg,featNeighSim,featNeighSim_small,featRefFeat = textLimit(feat_patch)
             else:
                 featNeighSim,featNeighSim_small,featRefFeat = None,None,None
+
+            if args.second_scale:
+                patch_second = data.unfold(2, args.patch_size_second, args.patch_stride_second).unfold(3, args.patch_size_second,args.patch_stride_second).permute(0,2,3,1,4,5)
+                origSecondPatchSize = patch_second.size()
+                patch_second = patch_second.reshape(patch_second.size(0)*patch_second.size(1)*patch_second.size(2),patch_second.size(3),patch_second.size(4),patch_second.size(5))
+                secondDistMapAgreg,secondNeighSim,secondNeighSim_small,secondRefFeat = textLimit(patch_second)
+            else:
+                secondDistMapAgreg,secondNeighSim,secondRefFeat = None,None,None
             print("End ",time.time()-start)
 
             if not os.path.exists("../vis/{}/".format(args.exp_id)):
@@ -352,6 +367,15 @@ def main(argv=None):
             #distMap = distMap.detach()
             #distMap = torch.nn.functional.interpolate(distMap, size=(data.size(-1),data.size(-2)))
             #distMap = distMap.cpu().numpy()
+            if not secondNeighSim is None:
+                for i in range(len(neighSim)):
+                    neighSim[i] = (neighSim[i]-neighSim[i].min())/(neighSim[i].max()-neighSim[i].min())
+                    secondNeighSim[i] = (secondNeighSim[i]-secondNeighSim[i].min())/(secondNeighSim[i].max()-secondNeighSim[i].min())
+
+                firstAndSecondNeighSim_mean = 0.5*neighSim+0.5*torch.nn.functional.interpolate(secondNeighSim, size=(neighSim.size(-2),neighSim.size(-1)),mode="bilinear",align_corners=False)
+                firstAndSecondNeighSim_max = torch.min(neighSim,torch.nn.functional.interpolate(secondNeighSim, size=(neighSim.size(-2),neighSim.size(-1)),mode="bilinear",align_corners=False))
+                firstAndSecondNeighSim_min = torch.max(neighSim,torch.nn.functional.interpolate(secondNeighSim, size=(neighSim.size(-2),neighSim.size(-1)),mode="bilinear",align_corners=False))
+
             neighSim = neighSim.detach().cpu().numpy()
 
             if not neighSim_small is None:
@@ -359,6 +383,12 @@ def main(argv=None):
 
             if not featNeighSim is None:
                 featNeighSim = featNeighSim.detach().cpu().numpy()
+
+            if not secondNeighSim is None:
+                secondNeighSim = secondNeighSim.detach().cpu().numpy()
+                firstAndSecondNeighSim_mean = firstAndSecondNeighSim_mean.detach().cpu().numpy()
+                firstAndSecondNeighSim_max = firstAndSecondNeighSim_max.detach().cpu().numpy()
+                firstAndSecondNeighSim_min = firstAndSecondNeighSim_min.detach().cpu().numpy()
 
             for i,img in enumerate(data):
 
@@ -403,16 +433,17 @@ def main(argv=None):
                     writeAllImg(None,neighSim_small,i,simMapPath,"sparseNeighSim_step0_x2")
 
                 if not featNeighSim is None:
-                    writeAllImg(featDistMapAgreg,distMapAgreg,featNeighSim,i,simMapPath,"sparseNeighSim_step0_feat")
+                    writeAllImg(featDistMapAgreg,featNeighSim,i,simMapPath,"sparseNeighSim_step0_feat")
 
-                #refFeat_emb = TSNE(3).fit_transform(refFeat[i].view(refFeat[i].size(0),-1).permute(1,0).cpu().detach().numpy())
-                #refFeat_emb = refFeat_emb.reshape((refFeat[i].size(1),refFeat[i].size(2),3))
-                #refFeat_emb = (refFeat_emb-refFeat_emb.min())/(refFeat_emb.max()-refFeat_emb.min())
-                #plt.figure()
-                #plt.imshow(refFeat_emb)
-                #plt.subplots_adjust(left=0, right=1, top=1, bottom=0)
-                #plt.savefig(os.path.join(simMapPath,"tsne.png"))
-                #plt.close()
+                if not secondNeighSim is None:
+                    writeAllImg(secondDistMapAgreg,secondNeighSim,i,simMapPath,"sparseNeighSim_step0_second")
+                    writeAllImg(None,firstAndSecondNeighSim_mean,i,simMapPath,"sparseNeighSim_step0_firstAndSecond_mean")
+                    writeAllImg(None,firstAndSecondNeighSim_min,i,simMapPath,"sparseNeighSim_step0_firstAndSecond_min")
+                    writeAllImg(None,firstAndSecondNeighSim_max,i,simMapPath,"sparseNeighSim_step0_firstAndSecond_max")
+
+                dimRed(distMapAgreg,simMapPath,i,"agr")
+                dimRed(refFeat,simMapPath,i,"neiRef")
+
 
     else:
         with torch.no_grad():
@@ -459,6 +490,27 @@ def main(argv=None):
                 plt.subplots_adjust(left=0, right=1, top=1, bottom=0)
                 plt.savefig("../vis/{}/points_{}_simMap_{}.png".format(args.exp_id,args.model_id,i))
                 plt.close()
+
+
+def dimRed(refFeat,simMapPath,i,name):
+
+    refFeat_emb = umap.UMAP().fit_transform(refFeat[i].view(refFeat[i].size(0),-1).permute(1,0).cpu().detach().numpy())
+
+    plt.figure()
+    plt.scatter(refFeat_emb[:,0],refFeat_emb[:,1])
+    plt.subplots_adjust(left=0, right=1, top=1, bottom=0)
+    plt.savefig(os.path.join(simMapPath,"{}_tsne.png".format(name)))
+    plt.close()
+
+    refFeat_emb = umap.UMAP(n_components=3).fit_transform(refFeat[i].view(refFeat[i].size(0),-1).permute(1,0).cpu().detach().numpy())
+    refFeat_emb = refFeat_emb.reshape((refFeat[i].size(1),refFeat[i].size(2),3))
+    refFeat_emb = (refFeat_emb-refFeat_emb.min())/(refFeat_emb.max()-refFeat_emb.min())
+    plt.figure(figsize=(10,10))
+    plt.imshow(refFeat_emb)
+    plt.subplots_adjust(left=0, right=1, top=1, bottom=0)
+    plt.savefig(os.path.join(simMapPath,"{}_tsne_img.png".format(name)))
+    plt.close()
+
 
 
 def topk(img,minima,folder,fileName):
