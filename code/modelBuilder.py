@@ -221,6 +221,9 @@ class CNN2D_simpleAttention(FirstModel):
         if topk:
             self.topk_pxls_nb = topk_pxls_nb
 
+            if not type(self.topk_pxls_nb) is list:
+                self.topk_pxls_nb = [self.topk_pxls_nb]
+
         self.topk_enc_chan = topk_enc_chan
         if self.topk_enc_chan != -1:
             self.conv1x1 = nn.Conv2d(inaux_modelFeat,self.topk_enc_chan,1)
@@ -262,36 +265,39 @@ class CNN2D_simpleAttention(FirstModel):
             features_weig = features
 
         if self.topk:
+
+            featVecList = []
+
             flatSpatialWeights = spatialWeights.view(spatialWeights.size(0), -1)
-            flatVals, flatInds = torch.topk(flatSpatialWeights, self.topk_pxls_nb, dim=-1, largest=True)
-            abs, ord = (flatInds % spatialWeights.shape[-1], flatInds // spatialWeights.shape[-1])
-            depth = torch.zeros(abs.size(0), abs.size(1), 1).to(x.device)
-            featureList = mapToList(features_weig, abs, ord)
-            retDict['points'] = torch.cat((abs.unsqueeze(2).float(), ord.unsqueeze(2).float(), depth, featureList), dim=-1).float()
-            if self.sagpool:
+            allFlatVals, allFlatInds = torch.topk(flatSpatialWeights, max(self.topk_pxls_nb), dim=-1, largest=True)
 
-                abs, ord = abs.unsqueeze(-1).float(), ord.unsqueeze(-1).float()
-                points = torch.cat((abs, ord, depth), dim=-1).float()
+            for i in range(len(self.topk_pxls_nb)):
+                flatVals, flatInds = allFlatVals[:,:self.topk_pxls_nb[i]], allFlatInds[:,:self.topk_pxls_nb[i]]
+                abs, ord = (flatInds % spatialWeights.shape[-1], flatInds // spatialWeights.shape[-1])
+                depth = torch.zeros(abs.size(0), abs.size(1), 1).to(x.device)
+                featureList = mapToList(features_weig, abs, ord)
 
-                retDict["batch"] = torch.arange(points.size(0)).unsqueeze(1).expand(points.size(0), points.size(1)).reshape(-1).to(points.device)
-                retDict["pos"] = points.reshape(points.size(0) * points.size(1), points.size(2))
-                retDict["pointfeatures"] = featureList.reshape(featureList.size(0) * featureList.size(1), featureList.size(2))
+                points = torch.cat((abs.unsqueeze(2).float(), ord.unsqueeze(2).float(), depth, featureList), dim=-1).float()
+                addOrCat(retDict,'points',points,dim=1)
 
-                if self.norm_points:
-                    retDict["pos"][:,:2] = (2*retDict["pos"][:,:2]/(x.size(-1)-1))-1
+                if self.sagpool:
+                    abs, ord = abs.unsqueeze(-1).float(), ord.unsqueeze(-1).float()
+                    points = torch.cat((abs, ord, depth), dim=-1).float()
+                    ptsDict = {"batch" : torch.arange(points.size(0)).unsqueeze(1).expand(points.size(0), points.size(1)).reshape(-1).to(points.device),
+                               "pos" : points.reshape(points.size(0) * points.size(1), points.size(2)),
+                               "pointfeatures" : featureList.reshape(featureList.size(0) * featureList.size(1), featureList.size(2))}
+                    if self.norm_points:
+                        ptsDict["pos"][:,:2] = (2*ptsDict["pos"][:,:2]/(x.size(-1)-1))-1
+                    ptsDict = applySagPool(self.sagpoolModule,ptsDict,x.size(0),self.sagpool_drop,self.sagpool_drop_ratio)
+                    finalPtsNb = int(featureList.size(1)*self.sagpool_drop_ratio) if self.sagpool_drop else featureList.size(1)
+                    featureList = ptsDict["pointfeatures"].reshape(featureList.size(0),finalPtsNb, featureList.size(2))
 
-                retDict = applySagPool(self.sagpoolModule,retDict,x.size(0),self.sagpool_drop,self.sagpool_drop_ratio)
+                addOrCat(retDict,"pointfeatures",featureList,dim=1)
 
-                finalPtsNb = int(featureList.size(1)*self.sagpool_drop_ratio) if self.sagpool_drop else featureList.size(1)
-                retDict["pointfeatures"] = retDict["pointfeatures"].reshape(featureList.size(0),finalPtsNb, featureList.size(2))
+                features_agr = featureList.mean(dim=1)
+                featVecList.append(features_agr)
+            features_agr = torch.cat(featVecList,dim=-1)
 
-            else:
-                retDict["pointfeatures"] = featureList
-
-            features_agr = retDict["pointfeatures"].mean(dim=1)
-            indices = tuple([torch.arange(spatialWeights.size(0), dtype=torch.long).unsqueeze(1).unsqueeze(1),
-                             torch.arange(spatialWeights.size(1), dtype=torch.long).unsqueeze(1).unsqueeze(0),
-                             ord.long().unsqueeze(1), abs.long().unsqueeze(1)])
         else:
             features_agr = self.avgpool(features_weig)
             features_agr = features_agr.view(features.size(0), -1)
@@ -303,6 +309,14 @@ class CNN2D_simpleAttention(FirstModel):
             retDict["auxFeat"] = features
 
         return retDict
+
+
+def addOrCat(dict,key,tensor,dim):
+    if not key in dict:
+        dict[key] = tensor
+    else:
+        dict[key] = torch.cat((dict[key],tensor),dim=dim)
+
 
 ################################ Temporal Model ########################""
 
@@ -1129,6 +1143,9 @@ def netBuilder(args):
             if args.resnet_simple_att_topk_enc_chan != -1:
                 nbFeat = args.resnet_simple_att_topk_enc_chan
 
+            if len(args.resnet_simple_att_topk_pxls_nb) > 1:
+                nbFeat *= len(args.resnet_simple_att_topk_pxls_nb)
+
         firstModel = CNNconst(args.first_mod, args.pretrained_visual, featMap=True,chan=args.resnet_chan, stride=args.resnet_stride,
                               dilation=args.resnet_dilation, \
                               attChan=args.resnet_att_chan, attBlockNb=args.resnet_att_blocks_nb,
@@ -1279,7 +1296,7 @@ def addArgs(argreader):
     argreader.parser.add_argument('--resnet_simple_att_topk', type=args.str2bool, metavar='BOOL',
                                   help='To use top-k feature as attention model with resnet. Ignored when --resnet_simple_att is False.')
     argreader.parser.add_argument('--resnet_simple_att_topk_pxls_nb', type=int, metavar='INT',
-                                  help='The value of k when using top-k selection for resnet simple attention. Ignored when --resnet_simple_att_topk is False.')
+                                  nargs="*",help='The value of k when using top-k selection for resnet simple attention. Can be a list of values. Ignored when --resnet_simple_att_topk is False.')
     argreader.parser.add_argument('--resnet_simple_att_topk_enc_chan', type=int, metavar='NB',
                                   help='For the resnet_simple_att_topk model. This is the number of output channel of the encoder. Ignored when --resnet_simple_att_topk is False.')
 
