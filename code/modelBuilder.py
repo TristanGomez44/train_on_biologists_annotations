@@ -297,7 +297,6 @@ class CNN2D_simpleAttention(FirstModel):
                 features_agr = featureList.mean(dim=1)
                 featVecList.append(features_agr)
             features_agr = torch.cat(featVecList,dim=-1)
-
         else:
             features_agr = self.avgpool(features_weig)
             features_agr = features_agr.view(features.size(0), -1)
@@ -331,7 +330,7 @@ class SecondModel(nn.Module):
 
 class LinearSecondModel(SecondModel):
 
-    def __init__(self, nbFeat, nbClass, dropout,aux_model=False):
+    def __init__(self, nbFeat, nbFeatAux,nbClass, dropout,aux_model=False):
         super(LinearSecondModel, self).__init__(nbFeat, nbClass)
         self.dropout = nn.Dropout(p=dropout)
         self.linLay = nn.Linear(self.nbFeat, self.nbClass)
@@ -339,7 +338,7 @@ class LinearSecondModel(SecondModel):
 
         self.aux_model = aux_model
         if self.aux_model:
-            self.aux_model = nn.Linear(self.nbFeat, self.nbClass)
+            self.aux_model = nn.Linear(nbFeatAux, self.nbClass)
 
     def forward(self, visResDict):
 
@@ -976,7 +975,7 @@ class ClusterModel(nn.Module):
 
 class PointNet2(SecondModel):
 
-    def __init__(self, cuda, classNb, nbFeat, pn_model, topk=False, reinfExct=False, \
+    def __init__(self, cuda, classNb, nbFeat, nbFeatAux,pn_model, topk=False, reinfExct=False, \
                  point_nb=256,encoderChan=1,topk_fps=False,
                  topk_fps_nb_pts=64, auxModel=False,auxModelTopk=False,predictScore=False,imageAttBlockNb=1,
                  use_baseline=False,topk_euclinorm=True,reinf_linear_only=False, pn_clustering=False,\
@@ -987,7 +986,6 @@ class PointNet2(SecondModel):
         super(PointNet2, self).__init__(nbFeat, classNb)
 
         self.point_nb = point_nb
-
         if topk:
             self.pointExtr = TopkPointExtractor(cuda, nbFeat,point_nb, encoderChan, \
                                                 topk_fps, topk_fps_nb_pts,auxModel,auxModelTopk, \
@@ -1006,7 +1004,7 @@ class PointNet2(SecondModel):
 
         self.auxModel = auxModel
         if auxModel:
-            self.auxModel = nn.Linear(nbFeat, classNb)
+            self.auxModel = nn.Linear(nbFeatAux, classNb)
 
         if pureTextModel:
 
@@ -1143,6 +1141,7 @@ def netBuilder(args):
             if args.resnet_simple_att_topk_enc_chan != -1:
                 nbFeat = args.resnet_simple_att_topk_enc_chan
 
+            nbFeatAux = nbFeat
             if type(args.resnet_simple_att_topk_pxls_nb) is list and len(args.resnet_simple_att_topk_pxls_nb) > 1:
                 nbFeat *= len(args.resnet_simple_att_topk_pxls_nb)
 
@@ -1170,7 +1169,7 @@ def netBuilder(args):
 
     ############### Temporal Model #######################
     if args.second_mod == "linear":
-        secondModel = LinearSecondModel(nbFeat, args.class_nb, args.dropout,args.aux_model)
+        secondModel = LinearSecondModel(nbFeat,nbFeatAux, args.class_nb, args.dropout,args.aux_model)
     elif args.second_mod == "pointnet2" or args.second_mod == "edgenet":
 
         pointnetInputChannels = computeEncChan(nbFeat,args.pn_enc_chan,args.pn_topk_no_feat,args.pn_topk_puretext)
@@ -1190,7 +1189,7 @@ def netBuilder(args):
         else:
             neiSimRefinDict = None
 
-        secondModel = PointNet2(args.cuda, args.class_nb, nbFeat=nbFeat, pn_model=pn_model,\
+        secondModel = PointNet2(args.cuda, args.class_nb, nbFeat=nbFeat, nbFeatAux=nbFeatAux,pn_model=pn_model,\
                                 topk=args.pn_topk, reinfExct=args.pn_reinf, point_nb=args.pn_point_nb,
                                 encoderChan=args.pn_enc_chan, \
                                 topk_fps=args.pn_topk_farthest_pts_sampling, topk_fps_nb_pts=args.pn_topk_fps_nb_points,
