@@ -662,7 +662,7 @@ def main(argv=None):
     if args.compile_test:
 
         id_to_label_dict = {"1x1":"Score prediction","none":"None","sobel":"Sobel","patchsim":"Patch Similarity","norm":"Norm",
-                            "topk":"Top-K","topksag":"Topk-K (SAG)","all":"All",
+                            "topk":"Top-256","topksag":"Topk-K (SAG)","all":"All","multitopk":"Multiple Top-K","top1024":"Top-1024",
                             "pn":"PointNet","pnnorm":"PointNet (norm)","avglin":"Linear",
                             "patchnoredtext":"Patch (No Red) (Text. model)"}
 
