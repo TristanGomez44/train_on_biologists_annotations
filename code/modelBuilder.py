@@ -32,6 +32,9 @@ _EPSILON = 10e-7
 from  torch.nn.modules.upsampling import Upsample
 import time
 
+import matplotlib.pyplot as plt
+plt.switch_backend('agg')
+
 def buildFeatModel(featModelName, pretrainedFeatMod, featMap=True, bigMaps=False, layerSizeReduce=False, stride=2,dilation=1,deeplabv3_outchan=64, **kwargs):
     ''' Build a visual feature model
 
@@ -76,13 +79,15 @@ class DataParallelModel(nn.DataParallel):
 
 class Model(nn.Module):
 
-    def __init__(self, firstModel, secondModel,zoom=False,passOrigImage=False,reducedImgSize=1):
+    def __init__(self, firstModel, secondModel,nbFeat=512,zoom=False,zoom_max_sub_clouds=2,passOrigImage=False,reducedImgSize=1):
         super(Model, self).__init__()
         self.firstModel = firstModel
         self.secondModel = secondModel
         self.zoom = zoom
         self.passOrigImage = passOrigImage
         self.reducedImgSize = reducedImgSize
+        self.subcloudNb = zoom_max_sub_clouds
+        self.nbFeat = nbFeat
 
     def forward(self, origImgBatch):
 
@@ -102,50 +107,180 @@ class Model(nn.Module):
         resDict = merge(visResDict,resDict)
 
         if self.zoom:
-            croppedImg,xMinCr,xMaxCr,yMinCr,yMaxCr = self.computeZoom(origImgBatch,visResDict["x"],resDict)
+
+            if len(visResDict["x"].size()) == 4:
+                xSize = visResDict["x"].size()
+            else:
+                xSize = visResDict["x_size"]
+
+            subCloudInd,countList = self.splitCloud(resDict['points'],xSize)
+
+            croppedImg,_,_,_,_,bboxNbs = self.computeZoom(origImgBatch,xSize,resDict['points'],subCloudInd,countList)
+
+            cumBboxNbs = torch.cumsum(torch.tensor([0]+bboxNbs).to(origImgBatch),dim=0).long()
             visResDict_zoom = self.firstModel(croppedImg)
-            resDict_zoom = self.secondModel(visResDict_zoom["x"])
+
+            predBatch = visResDict_zoom["x"]
+
+            predList = [[predBatch[cumBboxNbs[i]+j].unsqueeze(0) for j in range(bboxNbs[i])] for i in range(len(origImgBatch))]
+
+            #Padding for image in which there is less than the required number of sub cloud
+            predList = [torch.cat((torch.cat(predList[i],dim=-1),torch.zeros((1,self.nbFeat*(self.subcloudNb-bboxNbs[i]))).to(origImgBatch.device)),dim=-1) for i in range(len(origImgBatch))]
+            predBatch = torch.cat(predList,dim=0)
+            visResDict_zoom["x"] = predBatch
+
+            resDict_zoom = self.secondModel(visResDict_zoom)
             resDict_zoom = merge(visResDict_zoom,resDict_zoom)
             resDict = merge(resDict_zoom,resDict,"zoom")
 
         return resDict
 
-    def computeZoom(self,origImg,x,retDict):
-        imgSize = torch.tensor(origImg.size())[-2:].to(x.device)
-        xSize = torch.tensor(x.size())[-2:].to(x.device)
+    def computeZoom(self,origImg,xSize,pts,subCloudInd,countList):
+        imgSize = torch.tensor(origImg.size())[-2:].to(origImg.device)
+        xSize = torch.tensor(xSize)[-2:].to(origImg.device)
 
-        pts = retDict['points']
-        pts = pts.view(x.size(0),-1,pts.size(-1))
+        bboxNbs = list(map(lambda x:min(len(x)-1,self.subcloudNb),countList))
 
-        ptsValues = torch.abs(pts[:,:,4:]).sum(axis=-1)
-        ptsValues = ptsValues/ptsValues.max()
-        ptsValues = torch.pow(ptsValues,2)
-        means = (pts[:,:,:2]*ptsValues.unsqueeze(2)).sum(dim=1)/ptsValues.sum(dim=1).unsqueeze(1)
-        stds = torch.sqrt((torch.pow(pts[:,:,:2]-pts[:,:,:2].mean(dim=1).unsqueeze(1),2)*ptsValues.unsqueeze(2)).sum(dim=1)/ptsValues.sum(dim=1).unsqueeze(1))
+        bboxCount = 0
+        bboxs = torch.zeros((sum(bboxNbs),4)).to(origImg.device)
+        pts = pts.view(origImg.size(0),-1,pts.size(-1))
+        for i in range(len(pts)):
+            sortedInds = torch.argsort(countList[i],descending=True)
+            for j in range(1,1+min(len(countList[i])-1,self.subcloudNb)):
+                ptsCoord = (subCloudInd[i,0] == sortedInds[j]).nonzero()
+                ptsCoord *= (imgSize/xSize).unsqueeze(0)
+                yMin,yMax = ptsCoord[:,0].min(dim=0)[0],ptsCoord[:,0].max(dim=0)[0]
+                xMin,xMax = ptsCoord[:,1].min(dim=0)[0],ptsCoord[:,1].max(dim=0)[0]
+                bboxs[bboxCount] = torch.cat((xMin.unsqueeze(0),xMax.unsqueeze(0),yMin.unsqueeze(0),yMax.unsqueeze(0)),dim=0)
+                bboxCount += 1
 
-        means *= (imgSize/xSize).unsqueeze(0)
-        stds *= (imgSize/xSize).unsqueeze(0)
+        theta = bboxToTheta(bboxs,imgSize)
 
-        xMin,xMax,yMin,yMax = means[:,1]-2*stds[:,1],means[:,1]+2*stds[:,1],means[:,0]-2*stds[:,0],means[:,0]+2*stds[:,0]
-        xMin = xMin.unsqueeze(1).unsqueeze(1).unsqueeze(1).expand(-1,origImg.size(1),-1,-1)
-        xMax = xMax.unsqueeze(1).unsqueeze(1).unsqueeze(1).expand(-1,origImg.size(1),-1,-1)
-        yMin = yMin.unsqueeze(1).unsqueeze(1).unsqueeze(1).expand(-1,origImg.size(1),-1,-1)
-        yMax = yMax.unsqueeze(1).unsqueeze(1).unsqueeze(1).expand(-1,origImg.size(1),-1,-1)
+        origImg = torch.repeat_interleave(origImg, torch.tensor(bboxNbs).to(origImg.device), dim=0)
+        pts = torch.repeat_interleave(pts, torch.tensor(bboxNbs).to(origImg.device), dim=0)
+        #origImg = debugCrop(pts,origImg,xSize)
 
-        indsX = torch.arange(origImg.size(-1)).unsqueeze(1).unsqueeze(0).unsqueeze(0).expand(-1,origImg.size(1),-1,-1).to(origImg.device)
-        indsY = torch.arange(origImg.size(-2)).unsqueeze(0).unsqueeze(0).unsqueeze(0).expand(-1,origImg.size(1),-1,-1).to(origImg.device)
+        flowField = F.affine_grid(theta, origImg.size(),align_corners=False).to(origImg.device)
+        croppedImg = F.grid_sample(origImg, flowField,align_corners=False)
 
-        maskedImage = torch.zeros_like(origImg)
+        #torchvision.utils.save_image(croppedImg, "../vis/cropped.png")
 
-        mask = (yMin < indsY)*(indsY < yMax)*(xMin < indsX)*(indsX < xMax)
-        maskedImage[mask] = origImg[mask]
+        return croppedImg,xMin,xMax,yMin,yMax,bboxNbs
 
-        theta = torch.eye(3)[:2].unsqueeze(0).expand(x.size(0),-1,-1)
+    def splitCloud(self,points,xSize,maxSubCloud=3):
 
-        flowField = F.affine_grid(theta, origImg.size(),align_corners=False).to(x.device)
-        croppedImg = F.grid_sample(maskedImage, flowField,align_corners=False,padding_mode='border')
+        ended = False
+        randTens = torch.rand((points.size(0),1,xSize[-2],xSize[-1])).to(points.device)
 
-        return croppedImg,xMin,xMax,yMin,yMax
+        tensor = torch.zeros_like(randTens).to(points.device)
+
+        inds = tuple([torch.arange(tensor.size(0), dtype=torch.long).unsqueeze(1).unsqueeze(1),
+                         torch.arange(tensor.size(1), dtype=torch.long).unsqueeze(1).unsqueeze(0),
+                         points[:,:,1].long().unsqueeze(1), points[:,:,0].long().unsqueeze(1)])
+
+        tensor[inds] = randTens[inds]
+        stepCount = 0
+        tensList = [tensor]
+
+        #Spliting the clouds
+        while not ended and stepCount<40:
+
+            newTensor = F.max_pool2d(tensor,kernel_size=3,stride=1,padding=1)
+
+            newTensorPadded = torch.zeros_like(newTensor).to(points.device)
+            newTensorPadded[inds] = newTensor[inds]
+            newTensor = newTensorPadded
+
+            ended=torch.all(torch.eq(newTensor, tensor))
+            if not ended:
+                tensor = newTensor.clone()
+
+            tensList.append(newTensor)
+            stepCount += 1
+
+        #debugSplitCloud(tensList)
+
+        #For each cloud, collecting the biggest subclouds
+        ids = tensList[-1][inds].squeeze(1)
+
+        subCloudInd = []
+        countList = []
+        for i in range(len(tensList[-1])):
+            _,revInds,counts = torch.unique(tensList[-1][i],return_inverse=True,return_counts=True)
+            subCloudInd.append(revInds.unsqueeze(0))
+            countList.append(counts)
+
+        subCloudInd = torch.cat(subCloudInd,dim=0)
+
+        return subCloudInd,countList
+
+def bboxToTheta(bboxs,imgSize):
+
+    xMin,xMax,yMin,yMax = bboxs[:,0],bboxs[:,1],bboxs[:,2],bboxs[:,3]
+
+    theta = torch.eye(3)[:2].unsqueeze(0).expand(len(xMin),-1,-1)
+
+    #Zoom
+    theta = theta.permute(1,2,0).clone()
+
+    zoomX = (xMax-xMin)/imgSize[-2]
+    zoomY = (yMax-yMin)/imgSize[-1]
+    theta[0,0] = torch.max(zoomX,zoomY)
+    theta[1,1] = torch.max(zoomX,zoomY)
+    theta = theta.permute(2,0,1)
+
+    #Translation
+    theta = theta.permute(2,0,1).clone()
+    theta[2,:,0] = 2*((xMax+xMin)/2)/imgSize[0]-1
+    theta[2,:,1] = 2*((yMax+yMin)/2)/imgSize[1]-1
+    theta = theta.permute(1,2,0)
+    return theta
+
+def debugCrop(pts,origImg,xSize):
+    ptsValues = torch.abs(pts[:,:,4:]).sum(axis=-1)
+    ptsValues = ptsValues/ptsValues.max()
+    ptsValues = torch.pow(ptsValues,2)
+    ptsWeights = (ptsValues-ptsValues.min(dim=0)[0])/(ptsValues.max(dim=0)[0]-ptsValues.min(dim=0)[0])
+    cmPlasma = plt.get_cmap('plasma')
+    ptsWeights = torch.tensor(cmPlasma(ptsWeights.cpu().detach().numpy())).to(ptsValues.device)[:,:,:3].float()
+    ptsCoord = pts[:,:,:2]
+    ptsImage = torch.zeros((origImg.size(0),origImg.size(1),xSize[0],xSize[1])).to(ptsValues.device)
+    ptsImage[torch.arange(origImg.size(0)).unsqueeze(1),:,ptsCoord[:,:,1].long(),ptsCoord[:,:,0].long()] = ptsWeights
+    ptsImage = F.interpolate(ptsImage, size=(origImg.size(-2),origImg.size(-1)))
+    origImg = 0.5*origImg+0.5*ptsImage
+    torchvision.utils.save_image(origImg, "../vis/orig.png")
+    return origImg
+
+def debugSplitCloud(tensList):
+    cmPlasma = plt.get_cmap('rainbow')
+
+    colorTensBatch = []
+    for i,tensor in enumerate(tensList[-1]):
+        values = torch.unique(tensor)
+        tensor = tensor[0]
+        colorTens = torch.ones((tensor.size(0),tensor.size(1),3)).to(tensList[-1].device)
+        for j,value in enumerate(values):
+            if value != 0:
+                color = cmPlasma(j/len(values))[:3]
+                colorTens[tensor == value] = torch.tensor(color).to(tensList[-1].device)
+        colorTens = colorTens.permute(2,0,1).unsqueeze(0)
+        colorTensBatch.append(colorTens)
+
+    colorTensBatch = torch.cat(colorTensBatch,dim=0)
+    torchvision.utils.save_image(F.interpolate(colorTensBatch,size=(224,224)), "../vis/cloudSplit_color.png")
+
+    for i,tensor in enumerate(tensList):
+        torchvision.utils.save_image(F.interpolate(tensor,size=(224,224)), "../vis/cloudSplit{}.png".format(i))
+
+def debugSubClouds(subCloudsList,origImgBatch,resDict):
+    tensor = torch.zeros((origImgBatch.size(0),56,56,3)).to(origImgBatch.device)
+    for i,subClouds in enumerate(subCloudsList):
+        for j,subCloud in enumerate(subClouds):
+            tensor[i][subCloud[:,0],subCloud[:,1]] = 2
+
+    tensor = tensor.permute(0,3,1,2)
+    tensor = 0.5*F.interpolate(tensor,size=(224,224))+0.5*origImgBatch
+    torchvision.utils.save_image(tensor, "../vis/cloudSplit_kepsSubs.png")
 
 def merge(dictA,dictB,suffix=""):
     for key in dictA.keys():
@@ -302,6 +437,7 @@ class CNN2D_simpleAttention(FirstModel):
             features_agr = features_agr.view(features.size(0), -1)
 
         retDict["x"] = features_agr
+        retDict["x_size"] = features_weig.size()
         retDict["attMaps"] = spatialWeights
 
         if self.aux_model:
@@ -330,7 +466,7 @@ class SecondModel(nn.Module):
 
 class LinearSecondModel(SecondModel):
 
-    def __init__(self, nbFeat, nbFeatAux,nbClass, dropout,aux_model=False):
+    def __init__(self, nbFeat, nbFeatAux,nbClass, dropout,aux_model=False,zoom=False,zoom_max_sub_clouds=2):
         super(LinearSecondModel, self).__init__(nbFeat, nbClass)
         self.dropout = nn.Dropout(p=dropout)
         self.linLay = nn.Linear(self.nbFeat, self.nbClass)
@@ -340,6 +476,10 @@ class LinearSecondModel(SecondModel):
         if self.aux_model:
             self.aux_model = nn.Linear(nbFeatAux, self.nbClass)
 
+        self.zoom = zoom
+        if self.zoom:
+            self.zoom_model = nn.Linear(zoom_max_sub_clouds*nbFeat,self.nbClass)
+
     def forward(self, visResDict):
 
         x = visResDict["x"]
@@ -348,7 +488,11 @@ class LinearSecondModel(SecondModel):
             x = self.avgpool(x).squeeze(-1).squeeze(-1)
 
         x = self.dropout(x)
-        x = self.linLay(x)
+
+        if x.size(-1) == self.nbFeat:
+            x = self.linLay(x)
+        else:
+            x = self.zoom_model(x)
 
         retDict = {"pred": x}
 
@@ -1126,6 +1270,7 @@ def netBuilder(args):
         if not args.resnet_simple_att:
             CNNconst = CNN2D
             kwargs = {}
+            nbFeatAux = nbFeat
         else:
             CNNconst = CNN2D_simpleAttention
             kwargs = {"inFeat":nbFeat,
@@ -1144,6 +1289,8 @@ def netBuilder(args):
             nbFeatAux = nbFeat
             if type(args.resnet_simple_att_topk_pxls_nb) is list and len(args.resnet_simple_att_topk_pxls_nb) > 1:
                 nbFeat *= len(args.resnet_simple_att_topk_pxls_nb)
+            #elif args.zoom:
+            #    nbFeat *= args.zoom_max_sub_clouds
 
         firstModel = CNNconst(args.first_mod, args.pretrained_visual, featMap=True,chan=args.resnet_chan, stride=args.resnet_stride,
                               dilation=args.resnet_dilation, \
@@ -1167,9 +1314,15 @@ def netBuilder(args):
         for param in firstModel.parameters():
             param.requires_grad = False
 
-    ############### Temporal Model #######################
+    ############### Second Model #######################
+
+    zoomArgs= {"zoom":args.zoom,"zoom_max_sub_clouds":args.zoom_max_sub_clouds}
+
+    if args.zoom and args.second_mod != "linear":
+        raise ValueError("Can't use zoom with pointnet or edgenet")
+
     if args.second_mod == "linear":
-        secondModel = LinearSecondModel(nbFeat,nbFeatAux, args.class_nb, args.dropout,args.aux_model)
+        secondModel = LinearSecondModel(nbFeat,nbFeatAux, args.class_nb, args.dropout,args.aux_model,**zoomArgs)
     elif args.second_mod == "pointnet2" or args.second_mod == "edgenet":
 
         pointnetInputChannels = computeEncChan(nbFeat,args.pn_enc_chan,args.pn_topk_no_feat,args.pn_topk_puretext)
@@ -1210,7 +1363,7 @@ def netBuilder(args):
 
     ############### Whole Model ##########################
 
-    net = Model(firstModel, secondModel,zoom=args.zoom,passOrigImage=args.pn_cannyedge or args.pn_patchsim or args.pn_orbedge or args.pn_sobel,reducedImgSize=args.reduced_img_size)
+    net = Model(firstModel, secondModel,zoom=args.zoom,zoom_max_sub_clouds=args.zoom_max_sub_clouds,passOrigImage=args.pn_cannyedge or args.pn_patchsim or args.pn_orbedge or args.pn_sobel,reducedImgSize=args.reduced_img_size)
 
     if args.cuda:
         net.cuda()
@@ -1263,7 +1416,11 @@ def addArgs(argreader):
                                   filtered by a Relu.')
 
     argreader.parser.add_argument('--zoom', type=args.str2bool, metavar='BOOL',
-                                  help='To use with a model that generates points. To zoom on the part of the images where the points are focused an apply the model a second time on it.')
+                                  help='To use with a model that generates points. To zoom on the parts of the images where the points are focused an apply the model a second time on it.')
+
+    argreader.parser.add_argument('--zoom_max_sub_clouds', type=int, metavar='NB',
+                                  help='The maximum number of subclouds to use.')
+
 
     argreader.parser.add_argument('--pn_point_nb', type=int, metavar='NB',
                                   help='For the topk point net model. This is the number of point extracted for each image.')
