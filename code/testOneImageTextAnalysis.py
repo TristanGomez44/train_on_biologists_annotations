@@ -37,20 +37,6 @@ def main(argv=None):
     argreader.parser.add_argument('--layer', type=int,
                                   help="The encoding layer to use for feature similarity.",default=4)
 
-    argreader.parser.add_argument('--gram_matrix_weight', type=float,
-                                  help="The weight of the gram matrix loss term",default=0)
-    argreader.parser.add_argument('--gram_matrix_weight_threshold', type=float,
-                                  help="The threshold at which the graham term is applied. If the term weight is positive, the term stops being applied \
-                                  it gets below the threshold. If the weight is negative, the term stops being applied if it gets above.",default=0)
-    argreader.parser.add_argument('--simclr_weight', type=float,
-                                  help="The weight of the SimCLR term",default=0)
-    argreader.parser.add_argument('--simclr_projdim', type=int,
-                                  help="For simCLR : The projection dimension",default=64)
-
-    argreader.parser.add_argument('--separated_training', type=str2bool,
-                                  help="Trains an encoder to maximise reconstruction and trains a decoder to minimise graham matrix difference \
-                                  between encoding and decoding",default=False)
-
     argreader.parser.add_argument('--last_conv_decod', type=str2bool,
                                   help="Compute the prob map on the last conv layer of the decoder",default=False)
 
@@ -91,12 +77,6 @@ def main(argv=None):
     argreader.parser.add_argument('--patch_sim_out_path', type=str,
                                   help="The output path")
 
-    argreader.parser.add_argument('--pixel_sim', type=str2bool,
-                                  help="To run a small experiment with an untrained CNN",default=False)
-    argreader.parser.add_argument('--pixel_sim_kersize', type=int,
-                                  help="kernel size for pixel similarity",default=10)
-    argreader.parser.add_argument('--pixel_sim_stride', type=int,
-                                  help="stride for pixel similarity",default=4)
     argreader.parser.add_argument('--patch_sim_kertype', type=str,
                                   help="Kernel type. Can be linear, squarred or constant.",default="linear")
     argreader.parser.add_argument('--patch_sim_gram_order', type=int,
@@ -141,8 +121,10 @@ def main(argv=None):
                                   help="Patch size for the second processing",default=20)
     argreader.parser.add_argument('--patch_stride_second', type=int,
                                   help="Patch stride for the second processing",default=20)
-
-
+    argreader.parser.add_argument('--random_farthest', type=str2bool,
+                                  help="During neighbor refininement, randomly replace a pixel with its farthest neighbor instead of its closest. ",default=False)
+    argreader.parser.add_argument('--random_farthest_prop', type=float,
+                                  help="Probability that a pixel is replaced by its closest neighbor.",default=0.7)
 
     argreader = trainVal.addInitArgs(argreader)
     argreader = trainVal.addOptimArgs(argreader)
@@ -166,31 +148,7 @@ def main(argv=None):
     net = modelBuilder.netBuilder(args)
     kwargs = {"momentum":args.momentum} if args.optim == "SGD" else {}
 
-    if not args.separated_training:
-        optim = getattr(torch.optim,args.optim)(net.parameters(),lr=args.lr, **kwargs)
-    else:
-        #encParams = list(net.firstModel.featMod.parameters())+list(net.firstModel.bottleneck.parameters())
-        optimEnc = getattr(torch.optim,args.optim)(net.parameters(),lr=args.lr, **kwargs)
-        decParams = list(net.firstModel.decoder.parameters())
-        optimDec = getattr(torch.optim,args.optim)(decParams,lr=args.lr, **kwargs)
-
-    if args.simclr_weight > 0:
-        mask = mask_correlated_samples(args)
-        simCLR_loss = nt_xent.NT_Xent(args.batch_size, 0.5, mask)
-        simclrDict = {"weight":args.simclr_weight,"loss":simCLR_loss}
-        transf = transfSimCLR.TransformsSimCLR()
-        nbFeat = args.pn_enc_chan
-        simclrDict["mlp"] = torch.nn.Sequential(torch.nn.Linear(nbFeat, nbFeat, bias=False),torch.nn.ReLU(),torch.nn.Linear(nbFeat, args.simclr_projdim, bias=False))
-        simclrDict["mlp"] = simclrDict["mlp"].cuda() if args.cuda else simclrDict["mlp"]
-    else:
-        simCLR_loss = None
-        simclrDict = None
-        transf = None
-
-
-    if args.simclr_weight>0:
-        transf = transf
-    elif args.crop:
+    if args.crop:
         transf = None
     else:
         transf = "identity"
@@ -202,90 +160,11 @@ def main(argv=None):
         for i in range(args.data_batch_index):
             data,target =next(iter(trainLoader))
 
-    gram_loss_module = buildModule(args.gram_matrix_weight > 0,GrahamLoss,args.cuda,args.multi_gpu)
-    grahProbModule = GrahamProb()
-    if args.multi_gpu:
-        grahProbModule = torch.nn.DataParallel(grahProbModule)
 
-    writer = SummaryWriter('../results/{}'.format(args.exp_id))
-
-    normResizeSave(writer,'{}_in_images'.format(args.model_id),data,0)
-
-    if (not args.patch_sim) and (not args.pixel_sim):
-
-        for i in range(args.epochs):
-            if i%args.log_interval == 0:
-                print(i)
-
-            #data_noise = data+torch.zeros_like(data).normal_(0, data.std()/2)
-            #normResizeSave(writer,'{}_in_images_noise'.format(args.model_id),data_noise,i)
-
-            if args.simclr_weight>0:
-                #data1,data2 =transf(data)
-                data,target = next(iter(trainLoader))
-                normResizeSave(writer,'{}_in_images'.format(args.model_id),data,i)
-                data1,data2 = data
-                if args.cuda:
-                    data1,data2 = data1.cuda(),data2.cuda()
-                retDict1,retDict2 = net(data1),net(data2)
-                h1,h2 = retDict1["features"].mean(dim=-1).mean(dim=-1),retDict2["features"].mean(dim=-1).mean(dim=-1)
-                simclrDict["z1"],simclrDict["z2"] = simclrDict["mlp"](h1),simclrDict["mlp"](h2)
-                retDict = retDict1
-            else:
-                if args.cuda:
-                    data = data.cuda()
-                retDict = net(data)
-
-            lossDict,prob_map,reconst = computeLoss(args.gram_matrix_weight,\
-                                                    args.gram_matrix_weight_threshold,gram_loss_module,simclrDict,\
-                                                    retDict,data,target,args.text_enc_pos_dil,args.text_enc_neg_dil,\
-                                                    args.text_env_margin,args.layer)
-
-            total_loss,loss,graham_loss,simCLR_loss = lossDict["total_loss"],lossDict["loss"],lossDict["graham_loss"],lossDict["simCLR_loss"]
-
-            if not args.separated_training:
-                total_loss.backward()
-                optim.step()
-                optim.zero_grad()
-            else:
-                loss.backward(retain_graph=True)
-                optimEnc.step()
-                optimEnc.zero_grad()
-                graham_loss.backward()
-                optimDec.step()
-                optimDec.zero_grad()
-
-            writer.add_scalars("Loss",{args.model_id+"_total":total_loss.cpu().detach()},i)
-            writer.add_scalars("Loss",{args.model_id:loss.cpu().detach()},i)
-            if not type(graham_loss) is int:
-                writer.add_scalars("Loss",{args.model_id+"_graham":graham_loss.cpu().detach()},i)
-
-            if i%10 == 0:
-                normResizeSave(writer,'{}_prob_map'.format(args.model_id),prob_map,i)
-
-                if "neighFeatPredErr" in retDict.keys():
-                    normResizeSave(writer,'{}_neigh_pred_error'.format(args.model_id),-retDict["neighFeatPredErr"],i)
-
-                if not reconst is None:
-                    normResizeSave(writer,'{}_reconst'.format(args.model_id),reconst,i)
-
-                if args.last_conv_decod:
-                    with torch.no_grad():
-                        prob_map_last_conv = modelBuilder.computeTotalSim(retDict["layerFeat_decod"]["conv1"],args.text_enc_pos_dil)
-                        normResizeSave(writer,'{}_prob_map_lastconv'.format(args.model_id),prob_map_last_conv,i)
-
-                if args.lay_1_conv_decod:
-                    with torch.no_grad():
-                        prob_map_last_lay1 = modelBuilder.computeTotalSim(retDict["layerFeat_decod"][1],args.text_enc_pos_dil)
-                        normResizeSave(writer,'{}_prob_map_declay1'.format(args.model_id),prob_map_last_lay1,i)
-
-    elif args.patch_sim:
+    if args.patch_sim:
         with torch.no_grad():
 
             data = data.cuda() if args.cuda else data
-
-            kwargs = {"full_mode":args.patch_sim_full,"kerSize":args.patch_sim_neig_mode_ker_size,"parralelMode":args.patch_sim_paral_mode}
-            gramDistMap = buildModule(True,GramDistMap,args.cuda,args.multi_gpu,kwargs)
 
             kwargsNet = {"resnet":args.patch_sim_resnet,"resType":args.patch_sim_restype,"pretr":args.patch_sim_pretr_res,"nbGroup":args.patch_sim_group_nb,\
                         "reluOnSimple":args.patch_sim_relu_on_simple,"chan":args.resnet_chan,"gramOrder":args.patch_sim_gram_order,"useModel":args.patch_sim_usemodel,\
@@ -299,16 +178,16 @@ def main(argv=None):
             origPatchSize = patch.size()
             patch = patch.reshape(patch.size(0)*patch.size(1)*patch.size(2),patch.size(3),patch.size(4),patch.size(5))
 
-            kwargs = {"cuda":args.cuda,"groupNb":args.patch_sim_group_nb,"nbIter":args.patch_sim_neighsim_nb_iter,\
+            kwargsNeiSim = {"cuda":args.cuda,"groupNb":args.patch_sim_group_nb,"nbIter":args.patch_sim_neighsim_nb_iter,\
                         "softmax":args.patch_sim_neighsim_softmax,"softmax_fact":args.patch_sim_neighsim_softmax_fact,\
                         "weightByNeigSim":args.patch_sim_weight_by_neigsim,"updateRateByCossim":args.patch_sim_update_rate_by_cossim,"neighRadius":args.patch_sim_neighradius,\
-                        "neighDilation":args.patch_sim_neighdilation}
-            neighSimMod = buildModule(True,NeighSim,args.cuda,args.multi_gpu,kwargs)
+                        "neighDilation":args.patch_sim_neighdilation,"random_farthest":args.random_farthest,"random_farthest_prop":args.random_farthest_prop}
+            neighSimMod = buildModule(True,NeighSim,args.cuda,args.multi_gpu,kwargsNeiSim)
 
             print("Start !")
             start = time.time()
 
-            def textLimit(patch):
+            def textLimit(patch,secondParse=False):
 
                 kwargsNet["inChan"] = patch.size(1)
                 patchMod = buildModule(True,PatchSimCNN,args.cuda,args.multi_gpu,kwargsNet)
@@ -318,20 +197,28 @@ def main(argv=None):
                 distMapAgreg,feat = cosimMap(gram_mat)
                 neighSim,refFeat = neighSimMod(feat)
                 if args.multi_scale:
-                    multiScaleKer = torch.ones((feat.size(1),1,9,9)).to(feat.device)
+                    multiScaleKer = torch.ones((feat.size(1),1,21,21)).to(feat.device)
                     multiScaleKer /= (feat.size(-2)*feat.size(-1))
-                    multiScaleFeat = F.conv2d(feat,multiScaleKer,groups=feat.size(1),padding=9//2)
-                    neighSim_small,_ = neighSimMod(multiScaleFeat)
+                    multiScaleFeat = F.conv2d(feat,multiScaleKer,groups=feat.size(1),padding=21//2)
+
+                    kwargsNeiSim["neighDilation"] = 5
+                    neighSimMod_multiscale = buildModule(True,NeighSim,args.cuda,args.multi_gpu,kwargsNeiSim)
+                    #neighSim_small,refFeat_small = neighSimMod_multiscale(multiScaleFeat)
+                    refFeat_small = multiScaleFeat
+                    neighSim_small = simMap = modelBuilder.computeTotalSim(multiScaleFeat,1)
+
                 else:
-                    neighSim_small = None
-                return distMapAgreg,neighSim,neighSim_small,refFeat
-            distMapAgreg,neighSim,neighSim_small,refFeat = textLimit(patch)
+                    neighSim_small,refFeat_small = None,None
+
+                return distMapAgreg,neighSim,neighSim_small,refFeat,refFeat_small
+
+            distMapAgreg,neighSim,neighSim_small,refFeat,refFeat_small = textLimit(patch)
 
             if args.second_parse:
-                feat_patch = refFeat.unfold(2, args.patch_size, 1).unfold(3, args.patch_size,1).permute(0,2,3,1,4,5)
+                feat_patch = refFeat.unfold(2, args.patch_size_second, args.patch_stride_second).unfold(3, args.patch_size_second,args.patch_stride_second).permute(0,2,3,1,4,5)
                 origFeatPatchSize = feat_patch.size()
                 feat_patch = feat_patch.reshape(feat_patch.size(0)*feat_patch.size(1)*feat_patch.size(2),feat_patch.size(3),feat_patch.size(4),feat_patch.size(5))
-                featDistMapAgreg,featNeighSim,featNeighSim_small,featRefFeat = textLimit(feat_patch)
+                featDistMapAgreg,featNeighSim,featNeighSim_small,featRefFeat,_ = textLimit(feat_patch)
             else:
                 featNeighSim,featNeighSim_small,featRefFeat = None,None,None
 
@@ -339,7 +226,7 @@ def main(argv=None):
                 patch_second = data.unfold(2, args.patch_size_second, args.patch_stride_second).unfold(3, args.patch_size_second,args.patch_stride_second).permute(0,2,3,1,4,5)
                 origSecondPatchSize = patch_second.size()
                 patch_second = patch_second.reshape(patch_second.size(0)*patch_second.size(1)*patch_second.size(2),patch_second.size(3),patch_second.size(4),patch_second.size(5))
-                secondDistMapAgreg,secondNeighSim,secondNeighSim_small,secondRefFeat = textLimit(patch_second)
+                secondDistMapAgreg,secondNeighSim,secondNeighSim_small,secondRefFeat,_ = textLimit(patch_second)
             else:
                 secondDistMapAgreg,secondNeighSim,secondRefFeat = None,None,None
             print("End ",time.time()-start)
@@ -362,11 +249,6 @@ def main(argv=None):
             if not os.path.exists(os.path.join(args.patch_sim_out_path,"simMaps",args.model_id)):
                 os.makedirs(os.path.join(args.patch_sim_out_path,"simMaps",args.model_id))
 
-            #if args.patch_size == args.patch_stride:
-            #    distMap = distMap[:,:,:,np.newaxis].reshape(distMap.shape[0],distMap.shape[1],origPatchSize[1],origPatchSize[2])
-            #distMap = distMap.detach()
-            #distMap = torch.nn.functional.interpolate(distMap, size=(data.size(-1),data.size(-2)))
-            #distMap = distMap.cpu().numpy()
             if not secondNeighSim is None:
                 for i in range(len(neighSim)):
                     neighSim[i] = (neighSim[i]-neighSim[i].min())/(neighSim[i].max()-neighSim[i].min())
@@ -428,9 +310,12 @@ def main(argv=None):
                     topk(neighSim[i][j],minima,simMapPath,name)
 
                 writeAllImg(distMapAgreg,neighSim,i,simMapPath,"sparseNeighSim_step0")
+                dimRed(refFeat,simMapPath,i,"neiRef")
+                #dimRed(distMapAgreg,simMapPath,i,"agr")
 
                 if not neighSim_small is None:
                     writeAllImg(None,neighSim_small,i,simMapPath,"sparseNeighSim_step0_x2")
+                    dimRed(refFeat_small,simMapPath,i,"neiRef_small")
 
                 if not featNeighSim is None:
                     writeAllImg(featDistMapAgreg,featNeighSim,i,simMapPath,"sparseNeighSim_step0_feat")
@@ -441,63 +326,13 @@ def main(argv=None):
                     writeAllImg(None,firstAndSecondNeighSim_min,i,simMapPath,"sparseNeighSim_step0_firstAndSecond_min")
                     writeAllImg(None,firstAndSecondNeighSim_max,i,simMapPath,"sparseNeighSim_step0_firstAndSecond_max")
 
-                dimRed(distMapAgreg,simMapPath,i,"agr")
-                dimRed(refFeat,simMapPath,i,"neiRef")
-
-
-    else:
-        with torch.no_grad():
-            print("Start !")
-            start = time.time()
-
-            kwargs = {"resnet":args.patch_sim_resnet,"pretr":args.patch_sim_pretr_res,"kerSize":args.pixel_sim_kersize,"groupNb":args.patch_sim_group_nb,\
-                        "stride":args.pixel_sim_stride,"kerType":args.patch_sim_kertype}
-            net = buildModule(True,PxlSimCNN,args.cuda,args.multi_gpu,kwargs)
-            data = data.cuda() if args.cuda else data
-            simMap = net(data)
-            print("End ",time.time()-start)
-            #if not os.path.exists("../vis/{}/".format(args.exp_id)):
-            #    os.makedirs("../vis/{}/".format(args.exp_id))
-            #if not os.path.exists("../results/{}/".format(args.exp_id)):
-            #    os.makedirs("../results/{}/".format(args.exp_id))
-
-            #if not os.path.exists(os.path.join(args.patch_sim_out_path,"imgs")):
-            #    os.makedirs(os.path.join(args.patch_sim_out_path,"imgs"))
-            #if not os.path.exists(os.path.join(args.patch_sim_out_path,"simMaps")):
-            #    os.makedirs(os.path.join(args.patch_sim_out_path,"simMaps"))
-            #if not os.path.exists(os.path.join(args.patch_sim_out_path,"simMaps",args.model_id)):
-            #    os.makedirs(os.path.join(args.patch_sim_out_path,"simMaps",args.model_id))
-
-            for i,img in enumerate(data):
-
-                #if not os.path.exists(os.path.join(args.patch_sim_out_path,"simMaps",args.model_id,"{}".format(i))):
-                #    os.makedirs(os.path.join(args.patch_sim_out_path,"simMaps",args.model_id,"{}".format(i)))
-
-                img = (img-img.min())/(img.max()-img.min())
-
-                plt.figure(figsize=(10,10))
-                #plt.imshow(img.detach().cpu().permute(1,2,0).numpy())
-                #plt.subplots_adjust(left=0, right=1, top=1, bottom=0)
-                #plt.savefig(os.path.join(args.patch_sim_out_path,"imgs","{}.png".format(i)))
-                #plt.close()
-
-                #mask = (distMap[i] != -1)
-                #distMap[i][mask] = (distMap[i][mask]-distMap[i][mask].min())/(distMap[i][mask].max()-distMap[i][mask].min())
-
-                simMap[i] = (simMap[i]-simMap[i].min())/(simMap[i].max()-simMap[i].min())
-
-                plt.imshow(simMap[i][0][1:-1,1:-1].detach().cpu().numpy())
-                plt.subplots_adjust(left=0, right=1, top=1, bottom=0)
-                plt.savefig("../vis/{}/points_{}_simMap_{}.png".format(args.exp_id,args.model_id,i))
-                plt.close()
-
 
 def dimRed(refFeat,simMapPath,i,name):
 
     refFeat_emb = umap.UMAP().fit_transform(refFeat[i].view(refFeat[i].size(0),-1).permute(1,0).cpu().detach().numpy())
 
     plt.figure()
-    plt.scatter(refFeat_emb[:,0],refFeat_emb[:,1])
+    plt.scatter(refFeat_emb[:,0],refFeat_emb[:,1],alpha=0.1,edgecolors=None)
     plt.subplots_adjust(left=0, right=1, top=1, bottom=0)
     plt.savefig(os.path.join(simMapPath,"{}_tsne.png".format(name)))
     plt.close()
@@ -510,8 +345,6 @@ def dimRed(refFeat,simMapPath,i,name):
     plt.subplots_adjust(left=0, right=1, top=1, bottom=0)
     plt.savefig(os.path.join(simMapPath,"{}_tsne_img.png".format(name)))
     plt.close()
-
-
 
 def topk(img,minima,folder,fileName):
 
@@ -579,7 +412,6 @@ def computeMaxima(img):
     minimaH = (img == neiSimMaxH)
     return minima,minimaV,minimaH
 
-
 def sobelFunc(img):
 
     img = (255*(img-img.min())/(img.max()-img.min()))
@@ -593,24 +425,6 @@ def sobelFunc(img):
     mag *= 255.0 / np.max(mag)  # normalize (Q&D)
     mag= mag.astype("uint8")
     return 255-mag
-def fig2data(fig):
-    """
-    @brief Convert a Matplotlib figure to a 4D numpy array with RGBA channels and return it
-    @param fig a matplotlib figure
-    @return a numpy 3D array of RGBA values
-    """
-    # draw the renderer
-    fig.canvas.draw()
-
-    # Get the RGBA buffer from the figure
-    w,h = fig.canvas.get_width_height()
-    buf = np.frombuffer ( fig.canvas.tostring_argb(), dtype=np.uint8 )
-    buf.shape = ( h, w,4 )
-
-    # canvas.tostring_argb give pixmap in ARGB mode. Roll the ALPHA channel to have it in RGBA mode
-    buf = np.roll ( buf, 3, axis = 2 )
-    return buf
-
 
 def plotImg(img,path,cmap="gray"):
     plt.figure(figsize=(10,10))
@@ -728,75 +542,6 @@ class PatchSimCNN(torch.nn.Module):
 
         return gramMat
 
-class PxlSimCNN(torch.nn.Module):
-    def __init__(self,resnet,pretr,kerSize,groupNb,stride,kerType):
-        super(PxlSimCNN,self).__init__()
-
-        self.resnet = resnet
-        if not resnet:
-            self.filterSizes = [3,5,7,11,15,23,37,55]
-            self.layers = torch.nn.ModuleList()
-
-            for filterSize in self.filterSizes:
-                layer = torch.nn.Sequential(torch.nn.Conv2d(3,64,filterSize,padding=(filterSize-1)//2),torch.nn.ReLU())
-                self.layers.append(layer)
-        else:
-            self.featMod = modelBuilder.buildFeatModel("resnet18", pretr, True, False)
-
-        self.kernel = None
-        self.kerSize = kerSize
-        self.groupNb = groupNb
-        self.stride = stride
-        self.kerType = kerType
-    def forward(self,x):
-
-        if not self.resnet:
-            featList = []
-            for i,layer in enumerate(self.layers):
-                layerFeat = layer(x)
-                featList.append(layerFeat)
-
-            featVolume = torch.cat(featList,dim=1)
-            featVolume = featVolume[:,torch.randperm(featVolume.size(1))]
-        else:
-            featVolume = self.featMod(x)["x"]
-
-        origFeatSize = featVolume.size()
-
-        featVolume = featVolume.unfold(1, featVolume.size(1)//self.groupNb, featVolume.size(1)//self.groupNb).permute(0,1,4,2,3)
-        featVolume = featVolume.view(featVolume.size(0)*featVolume.size(1),featVolume.size(2),featVolume.size(3),featVolume.size(4))
-        if self.kernel is None:
-            self.kernel = self.buildKernel(featVolume.size(1),self.kerType,featVolume.device)
-        gramMatMap = grahamPxl(featVolume,self.kernel,self.stride)
-        simMap = modelBuilder.computeTotalSim(gramMatMap,1)
-        simMap = simMap.reshape(x.size(0),self.groupNb,simMap.size(2),simMap.size(3))
-        simMap = simMap.mean(dim=1,keepdim=True)
-
-        return simMap
-
-    def buildKernel(self,featNb,type,device):
-
-        if type == "constant":
-            kernel = torch.ones((featNb*featNb,1,self.kerSize,self.kerSize)).to(device)
-            kernel /= self.kerSize*self.kerSize
-
-        elif type == "linear" or type == "squarred":
-            ordKer = (torch.arange(self.kerSize) - self.kerSize // 2).unsqueeze(1).unsqueeze(0).unsqueeze(0).expand(1, 1, self.kerSize, self.kerSize).float()
-            absKer = (torch.arange(self.kerSize) - self.kerSize // 2).unsqueeze(0).unsqueeze(0).unsqueeze(0).expand(1, 1, self.kerSize, self.kerSize).float()
-            ordKer, absKer = (ordKer.to(device), absKer.to(device))
-            kernel = self.kerSize - (torch.abs(ordKer) + torch.abs(absKer))
-
-            if type == "squarred":
-                kernel = kernel*kernel
-
-            kernel /= kernel.sum(dim=-1,keepdim=True).sum(dim=-1,keepdim=True)
-            kernel = kernel.expand(featNb*featNb,-1,-1,-1)
-
-        else:
-            raise ValueError("Unkown kernel type : ",type)
-
-        return kernel
-
 class CosimMap(torch.nn.Module):
     def __init__(self):
         super(CosimMap,self).__init__()
@@ -835,10 +580,10 @@ def computeNeighborsCoord(neighRadius):
     return coord
 
 class NeighSim(torch.nn.Module):
-    def __init__(self,cuda,groupNb,nbIter,softmax,softmax_fact,weightByNeigSim,updateRateByCossim,neighRadius,neighDilation):
+    def __init__(self,cuda,groupNb,nbIter,softmax,softmax_fact,weightByNeigSim,updateRateByCossim,neighRadius,neighDilation,random_farthest,random_farthest_prop):
         super(NeighSim,self).__init__()
 
-        self.directions = computeNeighborsCoord(neighRadius)*neighDilation
+        self.directions = computeNeighborsCoord(neighRadius)
 
         self.sumKer = torch.ones((1,len(self.directions),1,1))
         self.sumKer = self.sumKer.cuda() if cuda else self.sumKer
@@ -853,28 +598,50 @@ class NeighSim(torch.nn.Module):
         if not self.weightByNeigSim and self.softmax:
             raise ValueError("Can't have weightByNeigSim=False and softmax=True")
 
+        self.random_farthest = random_farthest
+        if self.random_farthest:
+            self.distr = torch.distributions.bernoulli.Bernoulli(probs=torch.tensor([random_farthest_prop]))
+            self.neighDilation = neighDilation
+        else:
+            self.distr=None
+            self.neighDilation = None
+
+    def computeSimAndShiftFeat(self,features,dilation=1):
+        allSim = []
+        allFeatShift = []
+        for direction in self.directions:
+            if self.weightByNeigSim:
+                sim,featuresShift1,_,maskShift1,_ = modelBuilder.applyDiffKer_CosSimi(direction*dilation,features,1)
+                allSim.append(sim*maskShift1)
+            else:
+                featuresShift1,maskShift1 = modelBuilder.shiftFeat(direction,features,1)
+                allSim.append(maskShift1)
+            allFeatShift.append((featuresShift1*maskShift1).unsqueeze(0))
+        allSim = torch.cat(allSim,dim=1)
+        allFeatShift = torch.cat(allFeatShift,dim=0)
+
+        return allSim,allFeatShift
+
     def forward(self,features):
 
         simMap = modelBuilder.computeTotalSim(features,1)
         simMapList = [simMap]
+
         for j in range(self.nbIter):
 
-            allSim = []
-            allFeatShift = []
-            allPondFeatShift = []
-            for direction in self.directions:
-                if self.weightByNeigSim:
-                    sim,featuresShift1,_,maskShift1,_ = modelBuilder.applyDiffKer_CosSimi(direction,features,1)
-                    allSim.append(sim*maskShift1)
-                else:
-                    featuresShift1,maskShift1 = modelBuilder.shiftFeat(direction,features,1)
-                    allSim.append(maskShift1)
-                allFeatShift.append(featuresShift1*maskShift1)
-            allSim = torch.cat(allSim,dim=1)
+            allSim,allFeatShift = self.computeSimAndShiftFeat(features)
+
+            if self.random_farthest and j < 10:
+                allSimDil,allFeatShiftDil = self.computeSimAndShiftFeat(features,self.neighDilation)
+                mask = self.distr.sample((1,allSim.size(1),allSim.size(2),allSim.size(3))).bool().to(features.device).squeeze(-1)
+                allSim = mask*allSim +(~mask)*(1-allSimDil)
+                mask = mask.permute(1,0,2,3).unsqueeze(2)
+                allFeatShift = mask*allFeatShift+(~mask)*allFeatShiftDil
 
             if self.weightByNeigSim and self.softmax:
                 allSim = torch.softmax(self.softmax_fact*allSim,dim=1)
 
+            allPondFeatShift = []
             for i in range(len(self.directions)):
                 sim = allSim[:,i:i+1]
                 featuresShift1 = allFeatShift[i]
@@ -887,7 +654,7 @@ class NeighSim(torch.nn.Module):
 
             simSum = torch.nn.functional.conv2d(allSim,self.sumKer.to(allSim.device))
             newFeatures /= simSum
-            if not self.updateRateByCossim:
+            if (not self.updateRateByCossim) or j<3:
                 features = newFeatures
             else:
                 min = simMap.min(dim=-1,keepdim=True)[0].min(dim=-1,keepdim=True)[0]
@@ -923,6 +690,7 @@ class GrahamProb(torch.nn.Module):
 
     def forward(self,feat):
         return grahamProbMap(feat)
+
 class GrahamLoss(torch.nn.Module):
     def __init__(self):
         super(GrahamLoss,self).__init__()
@@ -989,47 +757,6 @@ def computeTotalSim(features,dilRange=(1,6)):
 
     return totalSim
 
-def computeLoss(gram_matrix_weight,gram_thres,gram_loss_module,\
-                simclrDict,resDict, data, target,posDil,negDil,margin,layer):
-
-    if layer<4:
-        features = resDict["layerFeat"][layer]
-    else:
-        features = resDict["features"]
-
-    loss = 0
-
-    graham_loss = 0
-    if gram_matrix_weight != 0:
-
-        for layer in resDict["layerFeat"].keys():
-            if layer < 4:
-                feat = resDict["layerFeat"][layer].detach()
-                feat_decod = resDict["layerFeat_decod"][layer]
-
-                selectedFilters = torch.randint(feat.size(1),size=(64,))
-
-                feat = feat[:,selectedFilters]
-                feat_decod = feat_decod[:,selectedFilters]
-
-                graham_loss += gram_matrix_weight*gram_loss_module(feat,feat_decod).mean()
-
-    if graham_loss > gram_thres and gram_matrix_weight > 0:
-        total_loss = loss+graham_loss
-    elif graham_loss < -gram_thres and gram_matrix_weight < 0:
-        total_loss = loss+graham_loss
-    else:
-        total_loss = loss
-
-    if not simclrDict is None:
-        simCLR_loss = simclrDict["weight"]*simclrDict["loss"](simclrDict["z1"],simclrDict["z2"])
-    else:
-        simCLR_loss = 0
-
-    total_loss += simCLR_loss
-
-    return {"total_loss":total_loss,"loss":loss,"graham_loss":graham_loss,"simCLR_loss":simCLR_loss},totalSimPos,reconst
-
 def graham(feat,gramOrder):
 
     feat = feat.reshape(feat.size(0),feat.size(1),feat.size(2)*feat.size(3))
@@ -1048,20 +775,6 @@ def graham(feat,gramOrder):
     else:
         raise ValueError("Unkown gram order :",gramOrder)
     return gram
-
-def grahamPxl(feat,kernel,stride):
-    gram = (feat.unsqueeze(2)*feat.unsqueeze(1))
-    gram = gram.reshape(gram.size(0),gram.size(1)*gram.size(2),gram.size(3),gram.size(4))
-    gram = torch.nn.functional.conv2d(gram,kernel,groups=feat.size(1)*feat.size(1),padding=(kernel.size(-1)-1)//2,stride=stride)
-    return gram
-
-def mask_correlated_samples(args):
-    mask = torch.ones((args.batch_size * 2, args.batch_size * 2), dtype=bool)
-    mask = mask.fill_diagonal_(0)
-    for i in range(args.batch_size):
-        mask[i, args.batch_size + i] = 0
-        mask[args.batch_size + i, i] = 0
-    return mask
 
 if __name__ == "__main__":
     main()
