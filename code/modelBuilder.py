@@ -119,7 +119,7 @@ class Model(nn.Module):
             croppedImg,_,_,_,_,bboxNbs = self.computeZoom(origImgBatch,xSize,resDict['points'],subCloudInd,countList)
 
             cumBboxNbs = torch.cumsum(torch.tensor([0]+bboxNbs).to(origImgBatch),dim=0).long()
-            visResDict_zoom = self.firstModel(croppedImg)
+            visResDict_zoom = self.firstModel(croppedImg,zoom=True)
 
             predBatch = visResDict_zoom["x"]
 
@@ -351,7 +351,7 @@ class CNN2D_simpleAttention(FirstModel):
     def __init__(self, featModelName, pretrainedFeatMod=True, featMap=True, bigMaps=False, chan=64, attBlockNb=2,
                  attChan=16, \
                  topk=False, topk_pxls_nb=256, topk_enc_chan=64,inFeat=512,sagpool=False,sagpool_drop=False,sagpool_drop_ratio=0.5,\
-                 norm_points=False,predictScore=False,aux_model=False,zoom_tied_models=False,**kwargs):
+                 norm_points=False,predictScore=False,aux_model=False,zoom_tied_models=False,zoom_model_no_topk=False,**kwargs):
 
         super(CNN2D_simpleAttention, self).__init__(featModelName, pretrainedFeatMod, featMap, bigMaps, **kwargs)
         self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
@@ -390,6 +390,8 @@ class CNN2D_simpleAttention(FirstModel):
         else:
             self.featMod_zoom = buildFeatModel(featModelName, pretrainedFeatMod, featMap, bigMaps, **kwargs)
 
+        self.zoom_model_no_topk = zoom_model_no_topk
+
     def forward(self, x,zoom=False):
         # N x C x H x L
         self.batchSize = x.size(0)
@@ -416,8 +418,7 @@ class CNN2D_simpleAttention(FirstModel):
             spatialWeights = torch.pow(features, 2).sum(dim=1, keepdim=True)
             features_weig = features
 
-        if self.topk:
-
+        if self.topk and (not (zoom and self.zoom_model_no_topk)):
             featVecList = []
 
             flatSpatialWeights = spatialWeights.view(spatialWeights.size(0), -1)
@@ -1300,7 +1301,8 @@ def netBuilder(args):
                       "norm_points":args.norm_points,\
                       "predictScore":args.resnet_simple_att_pred_score,
                       "aux_model":args.aux_model,\
-                      "zoom_tied_models":args.zoom_tied_models}
+                      "zoom_tied_models":args.zoom_tied_models,\
+                      "zoom_model_no_topk":args.zoom_model_no_topk}
             if args.resnet_simple_att_topk_enc_chan != -1:
                 nbFeat = args.resnet_simple_att_topk_enc_chan
 
@@ -1446,6 +1448,10 @@ def addArgs(argreader):
 
     argreader.parser.add_argument('--zoom_tied_models', type=args.str2bool, metavar='BOOL',
                                   help='To tie the weights of the global and the zoom model.')
+
+    argreader.parser.add_argument('--zoom_model_no_topk', type=args.str2bool, metavar='BOOL',
+                                  help='To force the zoom model to not use only the top-K pixels but all of them when the global model is a top-K model.')
+
 
 
 
