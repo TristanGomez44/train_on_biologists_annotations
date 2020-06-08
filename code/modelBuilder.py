@@ -133,6 +133,9 @@ class Model(nn.Module):
             resDict_zoom = merge(visResDict_zoom,resDict_zoom)
             resDict = merge(resDict_zoom,resDict,"zoom")
 
+        resDict.pop('x_size', None)
+        resDict.pop('x_size_zoom', None)
+
         return resDict
 
     def computeZoom(self,origImg,xSize,pts,subCloudInd,countList):
