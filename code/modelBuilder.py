@@ -351,7 +351,7 @@ class CNN2D_simpleAttention(FirstModel):
     def __init__(self, featModelName, pretrainedFeatMod=True, featMap=True, bigMaps=False, chan=64, attBlockNb=2,
                  attChan=16, \
                  topk=False, topk_pxls_nb=256, topk_enc_chan=64,inFeat=512,sagpool=False,sagpool_drop=False,sagpool_drop_ratio=0.5,\
-                 norm_points=False,predictScore=False,aux_model=False,**kwargs):
+                 norm_points=False,predictScore=False,aux_model=False,zoom_tied_models=False,**kwargs):
 
         super(CNN2D_simpleAttention, self).__init__(featModelName, pretrainedFeatMod, featMap, bigMaps, **kwargs)
         self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
@@ -384,11 +384,20 @@ class CNN2D_simpleAttention(FirstModel):
 
         self.aux_model = aux_model
 
-    def forward(self, x):
+        self.zoom_tied_models = zoom_tied_models
+        if self.zoom_tied_models:
+            self.featMod_zoom = self.featMod
+        else:
+            self.featMod_zoom = buildFeatModel(featModelName, pretrainedFeatMod, featMap, bigMaps, **kwargs)
+
+    def forward(self, x,zoom=False):
         # N x C x H x L
         self.batchSize = x.size(0)
         # N x C x H x L
-        output = self.featMod(x)
+        if zoom:
+            output = self.featMod_zoom(x)
+        else:
+            output = self.featMod(x)
 
         if type(output) is dict:
             features = output["x"]
@@ -1290,7 +1299,8 @@ def netBuilder(args):
                       "sagpool_drop_ratio":args.resnet_simple_att_topk_sagpool_ratio,
                       "norm_points":args.norm_points,\
                       "predictScore":args.resnet_simple_att_pred_score,
-                      "aux_model":args.aux_model}
+                      "aux_model":args.aux_model,\
+                      "zoom_tied_models":args.zoom_tied_models}
             if args.resnet_simple_att_topk_enc_chan != -1:
                 nbFeat = args.resnet_simple_att_topk_enc_chan
 
@@ -1433,6 +1443,10 @@ def addArgs(argreader):
 
     argreader.parser.add_argument('--zoom_merge_preds', type=args.str2bool, metavar='BOOL',
                                   help='To merge the predictions produced by the first model and by the model using crops.')
+
+    argreader.parser.add_argument('--zoom_tied_models', type=args.str2bool, metavar='BOOL',
+                                  help='To tie the weights of the global and the zoom model.')
+
 
 
     argreader.parser.add_argument('--pn_point_nb', type=int, metavar='NB',
