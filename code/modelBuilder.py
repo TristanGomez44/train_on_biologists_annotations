@@ -79,7 +79,7 @@ class DataParallelModel(nn.DataParallel):
 
 class Model(nn.Module):
 
-    def __init__(self, firstModel, secondModel,nbFeat=512,zoom=False,zoom_max_sub_clouds=2,passOrigImage=False,reducedImgSize=1):
+    def __init__(self, firstModel, secondModel,nbFeat=512,zoom=False,zoom_max_sub_clouds=2,zoom_merge_preds=False,passOrigImage=False,reducedImgSize=1):
         super(Model, self).__init__()
         self.firstModel = firstModel
         self.secondModel = secondModel
@@ -87,6 +87,7 @@ class Model(nn.Module):
         self.passOrigImage = passOrigImage
         self.reducedImgSize = reducedImgSize
         self.subcloudNb = zoom_max_sub_clouds
+        self.zoom_merge_preds = zoom_merge_preds
         self.nbFeat = nbFeat
 
     def forward(self, origImgBatch):
@@ -135,6 +136,10 @@ class Model(nn.Module):
 
         resDict.pop('x_size', None)
         resDict.pop('x_size_zoom', None)
+
+        if self.zoom_merge_preds:
+            resDict["pred"] = 0.5*resDict["pred"]+0.5*resDict["pred_zoom"]
+            resDict.pop('pred_zoom', None)
 
         return resDict
 
@@ -1366,7 +1371,9 @@ def netBuilder(args):
 
     ############### Whole Model ##########################
 
-    net = Model(firstModel, secondModel,zoom=args.zoom,zoom_max_sub_clouds=args.zoom_max_sub_clouds,passOrigImage=args.pn_cannyedge or args.pn_patchsim or args.pn_orbedge or args.pn_sobel,reducedImgSize=args.reduced_img_size)
+    net = Model(firstModel, secondModel,zoom=args.zoom,zoom_max_sub_clouds=args.zoom_max_sub_clouds,\
+                zoom_merge_preds=args.zoom_merge_preds,\
+                passOrigImage=args.pn_cannyedge or args.pn_patchsim or args.pn_orbedge or args.pn_sobel,reducedImgSize=args.reduced_img_size)
 
     if args.cuda:
         net.cuda()
@@ -1423,6 +1430,9 @@ def addArgs(argreader):
 
     argreader.parser.add_argument('--zoom_max_sub_clouds', type=int, metavar='NB',
                                   help='The maximum number of subclouds to use.')
+
+    argreader.parser.add_argument('--zoom_merge_preds', type=args.str2bool, metavar='BOOL',
+                                  help='To merge the predictions produced by the first model and by the model using crops.')
 
 
     argreader.parser.add_argument('--pn_point_nb', type=int, metavar='NB',
