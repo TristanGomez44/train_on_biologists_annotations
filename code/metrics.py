@@ -29,14 +29,11 @@ def binaryToMetrics(output,target,resDict):
 
     '''
 
-    #Simple Accuracy
-    pred = output.argmax(dim=-1)
-    acc = (pred == target).float().sum()/(pred.numel())
-
+    acc = compAccuracy(output,target)
     metDict = {"Accuracy":acc}
 
-    cleanNames = ["Accuracy_aux","Accuracy_puretext","Accuracy_struct"]
-    keys = ["auxPred","puretext_pred","struct_pred"]
+    cleanNames = ["Accuracy_aux","Accuracy_puretext","Accuracy_struct","Accuracy_zoom"]
+    keys = ["auxPred","puretext_pred","struct_pred","pred_zoom"]
     for i in range(len(keys)):
         if keys[i] in resDict:
             metDict[cleanNames[i]] = compAccuracy(resDict[keys[i]],target)
