@@ -346,12 +346,21 @@ def buildImageAttention(inFeat,blockNb):
     attention.append(resnet.conv1x1(inFeat, 1))
     return nn.Sequential(*attention)
 
+class SoftMax(nn.Module):
+    def __init__(self):
+        super(SoftMax,self).__init__()
+    def forward(self,x):
+        origSize = x.size()
+        x = torch.softmax(x.view(x.size(0),-1),dim=-1).view(origSize)
+        return x
+
+
 class CNN2D_simpleAttention(FirstModel):
 
     def __init__(self, featModelName, pretrainedFeatMod=True, featMap=True, bigMaps=False, chan=64, attBlockNb=2,
                  attChan=16, \
                  topk=False, topk_pxls_nb=256, topk_enc_chan=64,inFeat=512,sagpool=False,sagpool_drop=False,sagpool_drop_ratio=0.5,\
-                 norm_points=False,predictScore=False,aux_model=False,zoom_tied_models=False,zoom_model_no_topk=False,**kwargs):
+                 norm_points=False,predictScore=False,score_pred_act_func="sigmoid",aux_model=False,zoom_tied_models=False,zoom_model_no_topk=False,**kwargs):
 
         super(CNN2D_simpleAttention, self).__init__(featModelName, pretrainedFeatMod, featMap, bigMaps, **kwargs)
         self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
@@ -359,6 +368,12 @@ class CNN2D_simpleAttention(FirstModel):
         self.predictScore = predictScore
         if predictScore:
             self.attention = buildImageAttention(inFeat,attBlockNb)
+            if score_pred_act_func == "sigmoid":
+                self.attention_activation = torch.sigmoid
+            elif score_pred_act_func == "softmax":
+                self.attention_activation = SoftMax()
+            else:
+                raise ValueError("Unknown activation function")
 
         self.topk = topk
         if topk:
@@ -412,7 +427,7 @@ class CNN2D_simpleAttention(FirstModel):
         retDict = {}
 
         if self.predictScore:
-            spatialWeights = torch.sigmoid(self.attention(features))
+            spatialWeights = self.attention_activation(self.attention(features))
             features_weig = spatialWeights * features
         else:
             spatialWeights = torch.pow(features, 2).sum(dim=1, keepdim=True)
@@ -825,9 +840,12 @@ def compositeShiftFeat(coord,features):
 
     return shiftFeatH,shiftMaskH*shiftMaskV
 
-def shiftFeat(where,features,dilation=None):
+def shiftFeat(where,features,dilation=1,neigAvgSize=1):
 
     mask = torch.ones_like(features)
+
+    if neigAvgSize > 1:
+        dilation = neigAvgSize//2
 
     if where=="left":
         #x,y = 0,1
@@ -859,31 +877,34 @@ def shiftFeat(where,features,dilation=None):
     else:
         raise ValueError("Unkown position")
 
+    if neigAvgSize > 1:
+        featuresShift = F.conv2d(featuresShift,torch.ones(featuresShift.size(1),1,neigAvgSize,neigAvgSize).to(featuresShift.device),groups=featuresShift.size(1),padding=neigAvgSize//2)
+
     maskShift = maskShift.mean(dim=1,keepdim=True)
     return featuresShift,maskShift
 
-def applyDiffKer_CosSimi(direction,features,dilation=1):
+def applyDiffKer_CosSimi(direction,features,dilation=1,neigAvgSize=1):
     origFeatSize = features.size()
     featNb = origFeatSize[1]
 
     if type(direction) is str:
         if direction == "horizontal":
-            featuresShift1,maskShift1 = shiftFeat("right",features,dilation)
-            featuresShift2,maskShift2 = shiftFeat("left",features,dilation)
+            featuresShift1,maskShift1 = shiftFeat("right",features,dilation,neigAvgSize)
+            featuresShift2,maskShift2 = shiftFeat("left",features,dilation,neigAvgSize)
         elif direction == "vertical":
-            featuresShift1,maskShift1 = shiftFeat("top",features,dilation)
-            featuresShift2,maskShift2 = shiftFeat("bot",features,dilation)
+            featuresShift1,maskShift1 = shiftFeat("top",features,dilation,neigAvgSize)
+            featuresShift2,maskShift2 = shiftFeat("bot",features,dilation,neigAvgSize)
         elif direction == "top":
-            featuresShift1,maskShift1 = shiftFeat("top",features,dilation)
+            featuresShift1,maskShift1 = shiftFeat("top",features,dilation,neigAvgSize)
             featuresShift2,maskShift2 = shiftFeat("none",features)
         elif direction == "bot":
-            featuresShift1,maskShift1 = shiftFeat("bot",features,dilation)
+            featuresShift1,maskShift1 = shiftFeat("bot",features,dilation,neigAvgSize)
             featuresShift2,maskShift2 = shiftFeat("none",features)
         elif direction == "left":
-            featuresShift1,maskShift1 = shiftFeat("left",features,dilation)
+            featuresShift1,maskShift1 = shiftFeat("left",features,dilation,neigAvgSize)
             featuresShift2,maskShift2 = shiftFeat("none",features)
         elif direction == "right":
-            featuresShift1,maskShift1 = shiftFeat("right",features,dilation)
+            featuresShift1,maskShift1 = shiftFeat("right",features,dilation,neigAvgSize)
             featuresShift2,maskShift2 = shiftFeat("none",features)
         elif direction == "none":
             featuresShift1,maskShift1 = shiftFeat("none",features)
@@ -899,9 +920,9 @@ def applyDiffKer_CosSimi(direction,features,dilation=1):
 
     return sim,featuresShift1,featuresShift2,maskShift1,maskShift2
 
-def computeTotalSim(features,dilation):
-    horizDiff,_,_,_,_ = applyDiffKer_CosSimi("horizontal",features,dilation)
-    vertiDiff,_,_,_,_ = applyDiffKer_CosSimi("vertical",features,dilation)
+def computeTotalSim(features,dilation,neigAvgSize=1):
+    horizDiff,_,_,_,_ = applyDiffKer_CosSimi("horizontal",features,dilation,neigAvgSize)
+    vertiDiff,_,_,_,_ = applyDiffKer_CosSimi("vertical",features,dilation,neigAvgSize)
     totalDiff = (horizDiff + vertiDiff)/2
     return totalDiff
 
@@ -1300,6 +1321,7 @@ def netBuilder(args):
                       "sagpool_drop_ratio":args.resnet_simple_att_topk_sagpool_ratio,
                       "norm_points":args.norm_points,\
                       "predictScore":args.resnet_simple_att_pred_score,
+                      "score_pred_act_func":args.resnet_simple_att_score_pred_act_func,
                       "aux_model":args.aux_model,\
                       "zoom_tied_models":args.zoom_tied_models,\
                       "zoom_model_no_topk":args.zoom_model_no_topk}
@@ -1497,6 +1519,8 @@ def addArgs(argreader):
                                   help='The ratio of point dropped.')
     argreader.parser.add_argument('--resnet_simple_att_pred_score', type=args.str2bool, metavar='BOOL',
                                   help='To predict the score of each pixel, instead of using their norm to select them.')
+    argreader.parser.add_argument('--resnet_simple_att_score_pred_act_func', type=str, metavar='STR',
+                                  help='The activation function of the attention module.')
 
     argreader.parser.add_argument('--resnet_apply_stride_on_all', type=args.str2bool, metavar='NB',
                                   help='Apply stride on every non 3x3 convolution')
