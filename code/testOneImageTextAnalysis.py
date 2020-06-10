@@ -208,7 +208,7 @@ def main(argv=None):
                     neighSimMod_multiscale = buildModule(True,NeighSim,args.cuda,args.multi_gpu,kwargsNeiSim)
                     #neighSim_small,refFeat_small = neighSimMod_multiscale(multiScaleFeat)
                     refFeat_small = multiScaleFeat
-                    neighSim_small = simMap = modelBuilder.computeTotalSim(multiScaleFeat,1)
+                    neighSim_small = simMap = computeTotalSim(multiScaleFeat,1)
 
                 else:
                     neighSim_small,refFeat_small = None,None
@@ -595,7 +595,7 @@ class CosimMap(torch.nn.Module):
         # (NxNbGroup) x C x nbPatch x 1
         feat = x.reshape(x.size(0),x.size(1),int(np.sqrt(x.size(2))),int(np.sqrt(x.size(2))))
         # (NxNbGroup) x C x sqrt(nbPatch) x sqrt(nbPatch)
-        x = modelBuilder.computeTotalSim(feat,1).unsqueeze(1)
+        x = computeTotalSim(feat,1).unsqueeze(1)
         # (NxNbGroup) x 1 x 1 x sqrt(nbPatch) x sqrt(nbPatch)
         x = x.reshape(origSize[0],origSize[1],x.size(2),x.size(3),x.size(4))
         # N x NbGroup x 1 x sqrt(nbPatch) x sqrt(nbPatch)
@@ -614,6 +614,114 @@ def computeNeighborsCoord(neighRadius):
     coord = coord[~((coord[:,0] == 0)*(coord[:,1] == 0))]
 
     return coord
+
+
+def compositeShiftFeat(coord,features):
+
+    if coord[0] != 0:
+        if coord[0] > 0:
+            shiftFeatV,shiftMaskV = shiftFeat("top",features,coord[0])
+        else:
+            shiftFeatV,shiftMaskV = shiftFeat("bot",features,-coord[0])
+    else:
+        shiftFeatV,shiftMaskV = shiftFeat("none",features)
+
+    if coord[1] != 0:
+        if coord[1] > 0:
+            shiftFeatH,shiftMaskH = shiftFeat("right",shiftFeatV,coord[1])
+        else:
+            shiftFeatH,shiftMaskH = shiftFeat("left",shiftFeatV,-coord[1])
+    else:
+        shiftFeatH,shiftMaskH = shiftFeat("none",shiftFeatV)
+
+    return shiftFeatH,shiftMaskH*shiftMaskV
+
+def shiftFeat(where,features,dilation=1,neigAvgSize=1):
+
+    mask = torch.ones_like(features)
+
+    if neigAvgSize > 1:
+        dilation = neigAvgSize//2
+
+    if where=="left":
+        #x,y = 0,1
+        padd = features[:,:,:,-1:].expand(-1,-1,-1,dilation)
+        paddMask = torch.zeros((features.size(0),features.size(1),features.size(2),dilation)).to(features.device)+0.0001
+        featuresShift = torch.cat((features[:,:,:,dilation:],padd),dim=-1)
+        maskShift = torch.cat((mask[:,:,:,dilation:],paddMask),dim=-1)
+    elif where=="right":
+        #x,y= 2,1
+        padd = features[:,:,:,:1].expand(-1,-1,-1,dilation)
+        paddMask = torch.zeros((features.size(0),features.size(1),features.size(2),dilation)).to(features.device)+0.0001
+        featuresShift = torch.cat((padd,features[:,:,:,:-dilation]),dim=-1)
+        maskShift = torch.cat((paddMask,mask[:,:,:,:-dilation]),dim=-1)
+    elif where=="bot":
+        #x,y = 1,0
+        padd = features[:,:,:1].expand(-1,-1,dilation,-1)
+        paddMask = torch.zeros((features.size(0),features.size(1),dilation,features.size(3))).to(features.device)+0.0001
+        featuresShift = torch.cat((padd,features[:,:,:-dilation,:]),dim=-2)
+        maskShift = torch.cat((paddMask,mask[:,:,:-dilation,:]),dim=-2)
+    elif where=="top":
+        #x,y = 1,2
+        padd = features[:,:,-1:].expand(-1,-1,dilation,-1)
+        paddMask = torch.zeros((features.size(0),features.size(1),dilation,features.size(3))).to(features.device)+0.0001
+        featuresShift = torch.cat((features[:,:,dilation:,:],padd),dim=-2)
+        maskShift = torch.cat((mask[:,:,dilation:,:],paddMask),dim=-2)
+    elif where=="none":
+        featuresShift = features
+        maskShift = mask
+    else:
+        raise ValueError("Unkown position")
+
+    if neigAvgSize > 1:
+        featuresShift = F.conv2d(featuresShift,torch.ones(featuresShift.size(1),1,neigAvgSize,neigAvgSize).to(featuresShift.device),groups=featuresShift.size(1),padding=neigAvgSize//2)
+
+    maskShift = maskShift.mean(dim=1,keepdim=True)
+    return featuresShift,maskShift
+
+def applyDiffKer_CosSimi(direction,features,dilation=1,neigAvgSize=1):
+    origFeatSize = features.size()
+    featNb = origFeatSize[1]
+
+    if type(direction) is str:
+        if direction == "horizontal":
+            featuresShift1,maskShift1 = shiftFeat("right",features,dilation,neigAvgSize)
+            featuresShift2,maskShift2 = shiftFeat("left",features,dilation,neigAvgSize)
+        elif direction == "vertical":
+            featuresShift1,maskShift1 = shiftFeat("top",features,dilation,neigAvgSize)
+            featuresShift2,maskShift2 = shiftFeat("bot",features,dilation,neigAvgSize)
+        elif direction == "top":
+            featuresShift1,maskShift1 = shiftFeat("top",features,dilation,neigAvgSize)
+            featuresShift2,maskShift2 = shiftFeat("none",features)
+        elif direction == "bot":
+            featuresShift1,maskShift1 = shiftFeat("bot",features,dilation,neigAvgSize)
+            featuresShift2,maskShift2 = shiftFeat("none",features)
+        elif direction == "left":
+            featuresShift1,maskShift1 = shiftFeat("left",features,dilation,neigAvgSize)
+            featuresShift2,maskShift2 = shiftFeat("none",features)
+        elif direction == "right":
+            featuresShift1,maskShift1 = shiftFeat("right",features,dilation,neigAvgSize)
+            featuresShift2,maskShift2 = shiftFeat("none",features)
+        elif direction == "none":
+            featuresShift1,maskShift1 = shiftFeat("none",features)
+            featuresShift2,maskShift2 = shiftFeat("none",features)
+        else:
+            raise ValueError("Unknown direction : ",direction)
+    else:
+        featuresShift1,maskShift1 = compositeShiftFeat(direction,features)
+        featuresShift2,maskShift2 = shiftFeat("none",features)
+
+    sim = (featuresShift1*featuresShift2*maskShift1*maskShift2).sum(dim=1,keepdim=True)
+    sim /= torch.sqrt(torch.pow(maskShift1*featuresShift1,2).sum(dim=1,keepdim=True))*torch.sqrt(torch.pow(maskShift2*featuresShift2,2).sum(dim=1,keepdim=True))
+
+    return sim,featuresShift1,featuresShift2,maskShift1,maskShift2
+
+def computeTotalSim(features,dilation,neigAvgSize=1):
+    horizDiff,_,_,_,_ = applyDiffKer_CosSimi("horizontal",features,dilation,neigAvgSize)
+    vertiDiff,_,_,_,_ = applyDiffKer_CosSimi("vertical",features,dilation,neigAvgSize)
+    totalDiff = (horizDiff + vertiDiff)/2
+    return totalDiff
+
 
 class NeighSim(torch.nn.Module):
     def __init__(self,cuda,groupNb,nbIter,softmax,softmax_fact,weightByNeigSim,updateRateByCossim,neighRadius,neighDilation,random_farthest,random_farthest_prop,\
@@ -650,10 +758,10 @@ class NeighSim(torch.nn.Module):
         allFeatShift = []
         for direction in self.directions:
             if self.weightByNeigSim:
-                sim,featuresShift1,_,maskShift1,_ = modelBuilder.applyDiffKer_CosSimi(direction*dilation,features,1)
+                sim,featuresShift1,_,maskShift1,_ = applyDiffKer_CosSimi(direction*dilation,features,1)
                 allSim.append(sim*maskShift1)
             else:
-                featuresShift1,maskShift1 = modelBuilder.shiftFeat(direction,features,1)
+                featuresShift1,maskShift1 = shiftFeat(direction,features,1)
                 allSim.append(maskShift1)
             allFeatShift.append((featuresShift1*maskShift1).unsqueeze(0))
         allSim = torch.cat(allSim,dim=1)
@@ -663,7 +771,7 @@ class NeighSim(torch.nn.Module):
 
     def forward(self,features):
 
-        simMap = modelBuilder.computeTotalSim(features,1)
+        simMap = computeTotalSim(features,1)
         simMapList = [simMap]
         featList = [features]
 
@@ -688,7 +796,7 @@ class NeighSim(torch.nn.Module):
                 allPondFeatShift.append((sim*featuresShift1).unsqueeze(1))
             newFeatures = torch.cat(allPondFeatShift,dim=1).sum(dim=1)
 
-            simMap = modelBuilder.computeTotalSim(features,1,self.neigAvgSize)
+            simMap = computeTotalSim(features,1,self.neigAvgSize)
 
             simMapList.append(simMap)
 
@@ -753,7 +861,7 @@ def grahamProbMap(feat):
     featCorr = (feat.unsqueeze(2)*feat.unsqueeze(1)).reshape(feat.size(0),feat.size(1)*feat.size(1),feat.size(2),feat.size(3))
     avgpoolKer = (torch.ones((14,14))/(14*14)).unsqueeze(0).unsqueeze(0).expand(featCorr.size(1),featCorr.size(1),-1,-1).to(feat.device)
     featCorr = torch.nn.functional.conv2d(featCorr,avgpoolKer)
-    return modelBuilder.computeTotalSim(featCorr,1)
+    return computeTotalSim(featCorr,1)
 
 def normResizeSave(destination,name,tensorToSave,i,min=None,max=None,size=336,imgPerRow=None):
 
@@ -787,7 +895,7 @@ def computeTotalSim(features,dilRange=(1,6)):
     weightSum = (weightSum*weightSum).sum()
 
     for i in range(dilRange[0],dilRange[1]):
-        sim = modelBuilder.computeTotalSim(features,i)
+        sim = computeTotalSim(features,i)
 
         weight = (i*i)/(weightSum)
 
