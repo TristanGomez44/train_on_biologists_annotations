@@ -352,8 +352,10 @@ class SoftMax(nn.Module):
     def forward(self,x):
         origSize = x.size()
         x = torch.softmax(x.view(x.size(0),-1),dim=-1).view(origSize)
+        x_min,x_max = x.min(dim=-1,keepdim=True)[0].min(dim=-2,keepdim=True)[0],x.max(dim=-1,keepdim=True)[0].max(dim=-2,keepdim=True)[0]
+        print(x_min.size(),x_max.size())
+        x = (x-x_min)/(x_max-x_min)
         return x
-
 
 class CNN2D_simpleAttention(FirstModel):
 
