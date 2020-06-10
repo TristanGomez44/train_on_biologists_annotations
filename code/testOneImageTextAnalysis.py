@@ -125,6 +125,8 @@ def main(argv=None):
                                   help="During neighbor refininement, randomly replace a pixel with its farthest neighbor instead of its closest. ",default=False)
     argreader.parser.add_argument('--random_farthest_prop', type=float,
                                   help="Probability that a pixel is replaced by its closest neighbor.",default=0.7)
+    argreader.parser.add_argument('--patch_sim_neiref_neisimavgsize', type=int,
+                                  help="The neighborhood size to compare a pixel with when computing similarity.",default=1)
 
     argreader = trainVal.addInitArgs(argreader)
     argreader = trainVal.addOptimArgs(argreader)
@@ -181,7 +183,8 @@ def main(argv=None):
             kwargsNeiSim = {"cuda":args.cuda,"groupNb":args.patch_sim_group_nb,"nbIter":args.patch_sim_neighsim_nb_iter,\
                         "softmax":args.patch_sim_neighsim_softmax,"softmax_fact":args.patch_sim_neighsim_softmax_fact,\
                         "weightByNeigSim":args.patch_sim_weight_by_neigsim,"updateRateByCossim":args.patch_sim_update_rate_by_cossim,"neighRadius":args.patch_sim_neighradius,\
-                        "neighDilation":args.patch_sim_neighdilation,"random_farthest":args.random_farthest,"random_farthest_prop":args.random_farthest_prop}
+                        "neighDilation":args.patch_sim_neighdilation,"random_farthest":args.random_farthest,"random_farthest_prop":args.random_farthest_prop,\
+                        "neigAvgSize":args.patch_sim_neiref_neisimavgsize}
             neighSimMod = buildModule(True,NeighSim,args.cuda,args.multi_gpu,kwargsNeiSim)
 
             print("Start !")
@@ -195,7 +198,7 @@ def main(argv=None):
                 gram_mat = gram_mat.view(data.size(0),-1,args.patch_sim_group_nb,gram_mat.size(2))
                 gram_mat = gram_mat.permute(0,2,1,3)
                 distMapAgreg,feat = cosimMap(gram_mat)
-                neighSim,refFeat = neighSimMod(feat)
+                neighSim,refFeatList = neighSimMod(feat)
                 if args.multi_scale:
                     multiScaleKer = torch.ones((feat.size(1),1,21,21)).to(feat.device)
                     multiScaleKer /= (feat.size(-2)*feat.size(-1))
@@ -210,15 +213,15 @@ def main(argv=None):
                 else:
                     neighSim_small,refFeat_small = None,None
 
-                return distMapAgreg,neighSim,neighSim_small,refFeat,refFeat_small
+                return feat,distMapAgreg,neighSim,neighSim_small,refFeatList,refFeat_small
 
-            distMapAgreg,neighSim,neighSim_small,refFeat,refFeat_small = textLimit(patch)
+            feat,distMapAgreg,neighSim,neighSim_small,refFeatList,refFeat_small = textLimit(patch)
 
             if args.second_parse:
-                feat_patch = refFeat.unfold(2, args.patch_size_second, args.patch_stride_second).unfold(3, args.patch_size_second,args.patch_stride_second).permute(0,2,3,1,4,5)
+                feat_patch = refFeatList[-1].unfold(2, args.patch_size_second, args.patch_stride_second).unfold(3, args.patch_size_second,args.patch_stride_second).permute(0,2,3,1,4,5)
                 origFeatPatchSize = feat_patch.size()
                 feat_patch = feat_patch.reshape(feat_patch.size(0)*feat_patch.size(1)*feat_patch.size(2),feat_patch.size(3),feat_patch.size(4),feat_patch.size(5))
-                featDistMapAgreg,featNeighSim,featNeighSim_small,featRefFeat,_ = textLimit(feat_patch)
+                _,featDistMapAgreg,featNeighSim,featNeighSim_small,featRefFeat,_ = textLimit(feat_patch)
             else:
                 featNeighSim,featNeighSim_small,featRefFeat = None,None,None
 
@@ -310,7 +313,10 @@ def main(argv=None):
                     topk(neighSim[i][j],minima,simMapPath,name)
 
                 writeAllImg(distMapAgreg,neighSim,i,simMapPath,"sparseNeighSim_step0")
-                dimRed(refFeat,simMapPath,i,"neiRef")
+                #for j,refFeat in enumerate(refFeatList):
+                #    dimRed(refFeat,simMapPath,i,"neiRef_{}".format(len(refFeatList)-(j+1)))
+                refFeatListFull = [feat] + refFeatList
+                dimRedList(refFeatListFull,simMapPath,i,"neiRef")
                 #dimRed(distMapAgreg,simMapPath,i,"agr")
 
                 if not neighSim_small is None:
@@ -329,13 +335,13 @@ def main(argv=None):
 
 def dimRed(refFeat,simMapPath,i,name):
 
-    refFeat_emb = umap.UMAP().fit_transform(refFeat[i].view(refFeat[i].size(0),-1).permute(1,0).cpu().detach().numpy())
+    #refFeat_emb = umap.UMAP().fit_transform(refFeat[i].view(refFeat[i].size(0),-1).permute(1,0).cpu().detach().numpy())
 
-    plt.figure()
-    plt.scatter(refFeat_emb[:,0],refFeat_emb[:,1],alpha=0.1,edgecolors=None)
-    plt.subplots_adjust(left=0, right=1, top=1, bottom=0)
-    plt.savefig(os.path.join(simMapPath,"{}_tsne.png".format(name)))
-    plt.close()
+    #plt.figure()
+    #plt.scatter(refFeat_emb[:,0],refFeat_emb[:,1],alpha=0.1,edgecolors=None)
+    #plt.subplots_adjust(left=0, right=1, top=1, bottom=0)
+    #plt.savefig(os.path.join(simMapPath,"{}_tsne.png".format(name)))
+    #plt.close()
 
     refFeat_emb = umap.UMAP(n_components=3).fit_transform(refFeat[i].view(refFeat[i].size(0),-1).permute(1,0).cpu().detach().numpy())
     refFeat_emb = refFeat_emb.reshape((refFeat[i].size(1),refFeat[i].size(2),3))
@@ -345,6 +351,36 @@ def dimRed(refFeat,simMapPath,i,name):
     plt.subplots_adjust(left=0, right=1, top=1, bottom=0)
     plt.savefig(os.path.join(simMapPath,"{}_tsne_img.png".format(name)))
     plt.close()
+
+def dimRedList(refFeatList,simMapPath,i,name):
+
+    #refFeat_emb = umap.UMAP().fit_transform(refFeat[i].view(refFeat[i].size(0),-1).permute(1,0).cpu().detach().numpy())
+
+    #plt.figure()
+    #plt.scatter(refFeat_emb[:,0],refFeat_emb[:,1],alpha=0.1,edgecolors=None)
+    #plt.subplots_adjust(left=0, right=1, top=1, bottom=0)
+    #plt.savefig(os.path.join(simMapPath,"{}_tsne.png".format(name)))
+    #plt.close()
+
+    refFeatList_ex = [refFeatList[j][i] for j in range(len(refFeatList))]
+    for j in range(len(refFeatList_ex)):
+        refFeatList_ex[j] = refFeatList_ex[j].unsqueeze(0)
+    refFeatList_ex = torch.cat(refFeatList_ex,dim=0)
+
+    origShape = refFeatList_ex.size()
+    refFeatList_ex = refFeatList_ex.permute(1,0,2,3)
+
+    refFeat_emb = umap.UMAP(n_components=3).fit_transform(refFeatList_ex.reshape(refFeatList_ex.size(0),-1).permute(1,0).cpu().detach().numpy())
+
+    refFeat_emb = refFeat_emb.reshape((origShape[0],origShape[2],origShape[3],3))
+    refFeat_emb = (refFeat_emb-refFeat_emb.min())/(refFeat_emb.max()-refFeat_emb.min())
+
+    for j in range(len(refFeat_emb)):
+        plt.figure(figsize=(10,10))
+        plt.imshow(refFeat_emb[j])
+        plt.subplots_adjust(left=0, right=1, top=1, bottom=0)
+        plt.savefig(os.path.join(simMapPath,"{}_{}_tsne_img.png".format(name,j)))
+        plt.close()
 
 def topk(img,minima,folder,fileName):
 
@@ -580,7 +616,8 @@ def computeNeighborsCoord(neighRadius):
     return coord
 
 class NeighSim(torch.nn.Module):
-    def __init__(self,cuda,groupNb,nbIter,softmax,softmax_fact,weightByNeigSim,updateRateByCossim,neighRadius,neighDilation,random_farthest,random_farthest_prop):
+    def __init__(self,cuda,groupNb,nbIter,softmax,softmax_fact,weightByNeigSim,updateRateByCossim,neighRadius,neighDilation,random_farthest,random_farthest_prop,\
+                        neigAvgSize):
         super(NeighSim,self).__init__()
 
         self.directions = computeNeighborsCoord(neighRadius)
@@ -606,6 +643,8 @@ class NeighSim(torch.nn.Module):
             self.distr=None
             self.neighDilation = None
 
+        self.neigAvgSize = neigAvgSize
+
     def computeSimAndShiftFeat(self,features,dilation=1):
         allSim = []
         allFeatShift = []
@@ -626,6 +665,7 @@ class NeighSim(torch.nn.Module):
 
         simMap = modelBuilder.computeTotalSim(features,1)
         simMapList = [simMap]
+        featList = [features]
 
         for j in range(self.nbIter):
 
@@ -648,7 +688,7 @@ class NeighSim(torch.nn.Module):
                 allPondFeatShift.append((sim*featuresShift1).unsqueeze(1))
             newFeatures = torch.cat(allPondFeatShift,dim=1).sum(dim=1)
 
-            simMap = modelBuilder.computeTotalSim(features,1)
+            simMap = modelBuilder.computeTotalSim(features,1,self.neigAvgSize)
 
             simMapList.append(simMap)
 
@@ -662,6 +702,7 @@ class NeighSim(torch.nn.Module):
                 normSimMap = (simMap-min)/(max-min)
                 features = ((1-normSimMap)*features+normSimMap*newFeatures)
 
+            featList.append(features)
 
         simMapList = torch.cat(simMapList,dim=1).unsqueeze(1)
 
@@ -670,7 +711,7 @@ class NeighSim(torch.nn.Module):
         simMapList = simMapList.mean(dim=1)
         # N x nbIter x sqrt(nbPatch) x sqrt(nbPatch)
 
-        return simMapList,features
+        return simMapList,featList
 
 def buildModule(cond,constr,cuda,multi_gpu,kwargs={}):
 
