@@ -103,7 +103,7 @@ def plotPointsImageDataset(imgNb,redFact,plotDepth,args):
         if batchInd>=batchNb:
             break
 
-def plotPointsImageDatasetGrid(exp_id,imgNb,epochs,model_ids,reduction_fact_list,inverse_xy,mode,nbClass,useDropped_list,forceFeat,fullAttMap,threshold,plotId,args):
+def plotPointsImageDatasetGrid(exp_id,imgNb,epochs,model_ids,reduction_fact_list,inverse_xy,mode,nbClass,useDropped_list,forceFeat,fullAttMap,threshold,maps_inds,plotId,args):
 
     imgSize = 224
 
@@ -155,6 +155,8 @@ def plotPointsImageDatasetGrid(exp_id,imgNb,epochs,model_ids,reduction_fact_list
             if fullAttMap[j]:
                 ptsImageCopy = ptsImage.clone()
                 attMap = np.load(pointPaths[j])[i]
+                if attMap.shape[0] != 1:
+                    attMap = attMap[maps_inds[j]:maps_inds[j]+1]
                 attMap = cmPlasma(attMap[0])[:,:,:3]
                 ptsImageCopy = torch.tensor(resize(attMap, (ptsImageCopy.shape[1],ptsImageCopy.shape[2]),anti_aliasing=True,mode="constant",order=0)).permute(2,0,1).float().unsqueeze(0)
             else:
@@ -616,6 +618,8 @@ def main(argv=None):
     argreader.parser.add_argument('--mode',type=str,metavar="MODE",help='Can be "val" or "test".',default="val")
     argreader.parser.add_argument('--force_feat',type=str2bool,nargs="*",metavar="BOOL",help='To force feature plotting even when there is attention weights available.',default=[])
     argreader.parser.add_argument('--plot_id',type=str,metavar="ID",help='The plot id',default="")
+    argreader.parser.add_argument('--maps_inds',type=int,nargs="*",metavar="INT",help='The index of the attention map to use when there is several. If there only one or if there is none, set this to -1',default=[])
+
 
     ######################################## Find failure cases #########################################""
 
@@ -650,7 +654,7 @@ def main(argv=None):
         if args.exp_id == "default":
             args.exp_id = "CUB3"
         plotPointsImageDatasetGrid(args.exp_id,args.image_nb,args.epoch_list,args.model_ids,args.reduction_fact_list,args.inverse_xy,args.mode,\
-                                    args.class_nb,args.use_dropped_list,args.force_feat,args.full_att_map,args.use_threshold,args.plot_id,args)
+                                    args.class_nb,args.use_dropped_list,args.force_feat,args.full_att_map,args.use_threshold,args.maps_inds,args.plot_id,args)
     if args.plot_prob_maps:
         plotProbMaps(args.image_nb,args,args.norm)
     if args.list_best_pred:
@@ -664,6 +668,9 @@ def main(argv=None):
         id_to_label_dict = {"1x1":"Score prediction","none":"None","sobel":"Sobel","patchsim":"Patch Similarity","norm":"Norm",
                             "topk":"Top-256","topksag":"Topk-K (SAG)","all":"All","multitopk":"Multiple Top-K","top1024":"Top-1024",
                             "pn":"PointNet","pnnorm":"PointNet (norm)","avglin":"Linear","avglinzoom":"Linear + Zoom","avglinzoomindep":"Linear + Zoom Indep",
+                            "1x1softmscalenored":"Score prediction - SoftMax -- Stride=1",
+                            "1x1softmscalenoredbigimg":"Score prediction - SoftMax -- Stride=1 -- Big Input Image",
+                            "bil":"Bilinear",
                             "patchnoredtext":"Patch (No Red) (Text. model)"}
 
         compileTest(args.exp_id,id_to_label_dict)
