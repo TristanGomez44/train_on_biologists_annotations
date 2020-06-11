@@ -128,6 +128,10 @@ def main(argv=None):
     argreader.parser.add_argument('--patch_sim_neiref_neisimavgsize', type=int,
                                   help="The neighborhood size to compare a pixel with when computing similarity.",default=1)
 
+    argreader.parser.add_argument('--patch_sim_neiref_norm_feat', type=str2bool,
+                                  help="To normalize feature before applying neighbor refining",default=False)
+
+
     argreader = trainVal.addInitArgs(argreader)
     argreader = trainVal.addOptimArgs(argreader)
     argreader = trainVal.addValArgs(argreader)
@@ -184,7 +188,7 @@ def main(argv=None):
                         "softmax":args.patch_sim_neighsim_softmax,"softmax_fact":args.patch_sim_neighsim_softmax_fact,\
                         "weightByNeigSim":args.patch_sim_weight_by_neigsim,"updateRateByCossim":args.patch_sim_update_rate_by_cossim,"neighRadius":args.patch_sim_neighradius,\
                         "neighDilation":args.patch_sim_neighdilation,"random_farthest":args.random_farthest,"random_farthest_prop":args.random_farthest_prop,\
-                        "neigAvgSize":args.patch_sim_neiref_neisimavgsize}
+                        "neigAvgSize":args.patch_sim_neiref_neisimavgsize,"normFeat":args.patch_sim_neiref_norm_feat}
             neighSimMod = buildModule(True,NeighSim,args.cuda,args.multi_gpu,kwargsNeiSim)
 
             print("Start !")
@@ -304,10 +308,11 @@ def main(argv=None):
                         plotImg(distMapAgreg[i][0][1:-1,1:-1].detach().cpu().numpy(),os.path.join(simMapPath,name+"_agr.png"),'gray')
 
                     neighSim[i] = 255*(neighSim[i]-neighSim[i].min())/(neighSim[i].max()-neighSim[i].min())
-                    j = len(neighSim[i])-1
+                    for j in range(len(neighSim[i])):
+                        pathPNG = os.path.join(simMapPath,name.replace("step0","step{}".format(len(neighSim[i])-1-j)))
+                        plotImg(neighSim[i][j],pathPNG,cmap="gray")
 
-                    pathPNG = os.path.join(simMapPath,name.format(len(neighSim[i])-1-j))
-                    plotImg(neighSim[i][j],pathPNG,cmap="gray")
+                    j = len(neighSim[i])-1
 
                     minima,minimaV,minimaH = computeMinima(neighSim[i][-1])
                     topk(neighSim[i][j],minima,simMapPath,name)
@@ -315,8 +320,8 @@ def main(argv=None):
                 writeAllImg(distMapAgreg,neighSim,i,simMapPath,"sparseNeighSim_step0")
                 #for j,refFeat in enumerate(refFeatList):
                 #    dimRed(refFeat,simMapPath,i,"neiRef_{}".format(len(refFeatList)-(j+1)))
-                refFeatListFull = [feat] + refFeatList
-                dimRedList(refFeatListFull,simMapPath,i,"neiRef")
+                dimRedList(refFeatList,simMapPath,i,"neiRef")
+                #normList(refFeatListFull,simMapPath,i,"neiRef")
                 #dimRed(distMapAgreg,simMapPath,i,"agr")
 
                 if not neighSim_small is None:
@@ -352,6 +357,7 @@ def dimRed(refFeat,simMapPath,i,name):
     plt.savefig(os.path.join(simMapPath,"{}_tsne_img.png".format(name)))
     plt.close()
 
+
 def dimRedList(refFeatList,simMapPath,i,name):
 
     #refFeat_emb = umap.UMAP().fit_transform(refFeat[i].view(refFeat[i].size(0),-1).permute(1,0).cpu().detach().numpy())
@@ -380,6 +386,31 @@ def dimRedList(refFeatList,simMapPath,i,name):
         plt.imshow(refFeat_emb[j])
         plt.subplots_adjust(left=0, right=1, top=1, bottom=0)
         plt.savefig(os.path.join(simMapPath,"{}_{}_tsne_img.png".format(name,j)))
+        plt.close()
+
+        #norm = torch.sqrt(torch.pow(refFeatList_ex[j],2).sum(dim=0)).cpu().detach().numpy()
+        #plt.figure(figsize=(10,10))
+        #plt.imshow(norm)
+        #plt.subplots_adjust(left=0, right=1, top=1, bottom=0)
+        #plt.savefig(os.path.join(simMapPath,"{}_{}_norm.png".format(name,j)))
+        #plt.close()
+        #norm = (norm-norm.min())/(norm.max()-norm.min())
+
+        #emb_norm = norm[:,:,np.newaxis]*refFeat_emb[j]
+        #plt.figure(figsize=(10,10))
+        #plt.imshow(emb_norm)
+        #plt.subplots_adjust(left=0, right=1, top=1, bottom=0)
+        #plt.savefig(os.path.join(simMapPath,"{}_{}_tsne_img_norm.png".format(name,j)))
+        #plt.close()
+
+def normList(refFeatListFull,simMapPath,i,name):
+
+    for j in range(len(refFeatListFull)):
+        norm = torch.sqrt(torch.pow(refFeatListFull[j][i],2).sum(dim=0))
+        plt.figure(figsize=(10,10))
+        plt.imshow(norm.cpu().detach().numpy())
+        plt.subplots_adjust(left=0, right=1, top=1, bottom=0)
+        plt.savefig(os.path.join(simMapPath,"{}_{}_norm.png".format(name,j)))
         plt.close()
 
 def topk(img,minima,folder,fileName):
@@ -675,9 +706,39 @@ def shiftFeat(where,features,dilation=1,neigAvgSize=1):
 
     if neigAvgSize > 1:
         featuresShift = F.conv2d(featuresShift,torch.ones(featuresShift.size(1),1,neigAvgSize,neigAvgSize).to(featuresShift.device),groups=featuresShift.size(1),padding=neigAvgSize//2)
+        representativeVectors(features)
 
     maskShift = maskShift.mean(dim=1,keepdim=True)
     return featuresShift,maskShift
+
+def representativeVectors(x):
+    origShape = x.size()
+    print(x.size())
+    #patch = x.unfold(2, 5, 1,padding=2).unfold(3, 5, 1,padding=2).permute(0,2,3,1,4,5)
+    patch = F.unfold(x,5,padding=2)
+    print(patch.size())
+    sys.exit(0)
+    patch = patch.reshape(patch.size(0)*patch.size(1)*patch.size(2),patch.size(3),patch.size(4)*patch.size(5))
+    print(patch.size())
+    patch = patch.permute(0,2,1)
+    print(patch.size())
+
+    sim = (patch*patch[:,0:1]).sum(dim=-1,keepdim=True)/(torch.sqrt(torch.pow(patch,2).sum(dim=-1,keepdim=True))*torch.sqrt(torch.pow(patch[:,0:1],2).sum(dim=-1,keepdim=True)))
+
+    #sim_min,sim_max = sim.min(dim=1)[0],sim.max(dim=1)[0]
+    #sim = (sim-sim_min)/(sim_max-sim_min)
+
+    sim = sim/sim.sum(dim=1,keepdim=True)
+
+    reprVec = (patch*sim).mean(dim=1,keepdim=True)
+    print(reprVec.size())
+
+    reprVec = reprVec.reshape(origShape[0],origShape[2],origShape[3],reprVec.size(-2),reprVec.size(-1))
+    print(reprVec.size())
+
+
+    sys.exit(0)
+
 
 def applyDiffKer_CosSimi(direction,features,dilation=1,neigAvgSize=1):
     origFeatSize = features.size()
@@ -725,7 +786,7 @@ def computeTotalSim(features,dilation,neigAvgSize=1):
 
 class NeighSim(torch.nn.Module):
     def __init__(self,cuda,groupNb,nbIter,softmax,softmax_fact,weightByNeigSim,updateRateByCossim,neighRadius,neighDilation,random_farthest,random_farthest_prop,\
-                        neigAvgSize):
+                        neigAvgSize,normFeat):
         super(NeighSim,self).__init__()
 
         self.directions = computeNeighborsCoord(neighRadius)
@@ -752,6 +813,7 @@ class NeighSim(torch.nn.Module):
             self.neighDilation = None
 
         self.neigAvgSize = neigAvgSize
+        self.normFeat = normFeat
 
     def computeSimAndShiftFeat(self,features,dilation=1):
         allSim = []
@@ -770,6 +832,9 @@ class NeighSim(torch.nn.Module):
         return allSim,allFeatShift
 
     def forward(self,features):
+
+        if self.normFeat:
+            features = features/torch.sqrt(torch.pow(features,2).sum(dim=1,keepdim=True))
 
         simMap = computeTotalSim(features,1)
         simMapList = [simMap]
@@ -809,6 +874,9 @@ class NeighSim(torch.nn.Module):
                 max = simMap.max(dim=-1,keepdim=True)[0].max(dim=-1,keepdim=True)[0]
                 normSimMap = (simMap-min)/(max-min)
                 features = ((1-normSimMap)*features+normSimMap*newFeatures)
+
+            if self.normFeat:
+                features = features/torch.sqrt(torch.pow(features,2).sum(dim=1,keepdim=True))
 
             featList.append(features)
 
@@ -887,24 +955,13 @@ def normResizeSave(destination,name,tensorToSave,i,min=None,max=None,size=336,im
         else:
             destination.add_image(name+"_{}".format(j) if suff else name, grid, i)
 
-def computeTotalSim(features,dilRange=(1,6)):
+def computeTotalSim(features,dilation,neigAvgSize=1):
+    horizDiff,_,_,_,_ = applyDiffKer_CosSimi("horizontal",features,dilation,neigAvgSize)
+    vertiDiff,_,_,_,_ = applyDiffKer_CosSimi("vertical",features,dilation,neigAvgSize)
+    totalDiff = (horizDiff + vertiDiff)/2
+    return totalDiff
 
-    totalSim = None
 
-    weightSum = np.arange(dilRange[0],dilRange[1])
-    weightSum = (weightSum*weightSum).sum()
-
-    for i in range(dilRange[0],dilRange[1]):
-        sim = computeTotalSim(features,i)
-
-        weight = (i*i)/(weightSum)
-
-        if totalSim is None:
-            totalSim = sim*weight
-        else:
-            totalSim += sim*weight
-
-    return totalSim
 
 def graham(feat,gramOrder):
 
