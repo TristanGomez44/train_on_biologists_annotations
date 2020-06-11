@@ -339,21 +339,27 @@ class CNN2D(FirstModel):
         else:
             return {'x': res}
 
-def buildImageAttention(inFeat,blockNb):
+def buildImageAttention(inFeat,blockNb,outChan=1):
     attention = []
     for i in range(blockNb):
         attention.append(resnet.BasicBlock(inFeat, inFeat))
-    attention.append(resnet.conv1x1(inFeat, 1))
+    attention.append(resnet.conv1x1(inFeat, outChan))
     return nn.Sequential(*attention)
 
 class SoftMax(nn.Module):
-    def __init__(self):
+    def __init__(self,norm=True,dim=-1):
         super(SoftMax,self).__init__()
+        self.norm = norm
+        self.dim = dim
     def forward(self,x):
-        origSize = x.size()
-        x = torch.softmax(x.view(x.size(0),-1),dim=-1).view(origSize)
-        x_min,x_max = x.min(dim=-1,keepdim=True)[0].min(dim=-2,keepdim=True)[0],x.max(dim=-1,keepdim=True)[0].max(dim=-2,keepdim=True)[0]
-        x = (x-x_min)/(x_max-x_min)
+        if self.dim == -1:
+            origSize = x.size()
+            x = torch.softmax(x.view(x.size(0),-1),dim=-1).view(origSize)
+        elif self.dim == 1:
+            x = torch.softmax(x.permute(0,2,3,1),dim=-1).permute(0,3,1,2)
+        if self.norm:
+            x_min,x_max = x.min(dim=-1,keepdim=True)[0].min(dim=-2,keepdim=True)[0],x.max(dim=-1,keepdim=True)[0].max(dim=-2,keepdim=True)[0]
+            x = (x-x_min)/(x_max-x_min)
         return x
 
 class CNN2D_simpleAttention(FirstModel):
@@ -479,6 +485,49 @@ class CNN2D_simpleAttention(FirstModel):
 
         return retDict
 
+class CNN2D_bilinearAttPool(FirstModel):
+
+    def __init__(self, featModelName, pretrainedFeatMod=True, featMap=True, bigMaps=False, chan=64, attBlockNb=2,
+                 attChan=16,inFeat=512,nb_parts=3,aux_model=False,**kwargs):
+
+        super(CNN2D_bilinearAttPool, self).__init__(featModelName, pretrainedFeatMod, featMap, bigMaps, **kwargs)
+        self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
+
+        self.attention = buildImageAttention(inFeat,attBlockNb,nb_parts+1)
+        self.nb_parts = nb_parts
+        self.attention_activation = SoftMax(norm=False,dim=1)
+
+        self.aux_model = aux_model
+
+    def forward(self, x):
+        # N x C x H x L
+        self.batchSize = x.size(0)
+        # N x C x H x L
+        output = self.featMod(x)
+
+        if type(output) is dict:
+            features = output["x"]
+        else:
+            features = output
+
+        retDict = {}
+
+        spatialWeights = self.attention_activation(self.attention(features))
+        features_weig = (spatialWeights[:,:self.nb_parts].unsqueeze(2)*features.unsqueeze(1)).reshape(features.size(0),features.size(1)*(spatialWeights.size(1)-1),features.size(2),features.size(3))
+        features_agr = self.avgpool(features_weig)
+
+        features_agr = features_agr.view(features.size(0), -1)
+
+        retDict["x"] = features_agr
+        retDict["x_size"] = features_weig.size()
+        retDict["attMaps"] = spatialWeights
+
+        if self.aux_model:
+            retDict["auxFeat"] = features
+
+        return retDict
+
+
 def addOrCat(dict,key,tensor,dim):
     if not key in dict:
         dict[key] = tensor
@@ -520,7 +569,6 @@ class LinearSecondModel(SecondModel):
             x = self.avgpool(x).squeeze(-1).squeeze(-1)
 
         x = self.dropout(x)
-
         if x.size(-1) == self.nbFeat:
             x = self.linLay(x)
         else:
@@ -685,11 +733,12 @@ def netBuilder(args):
         else:
             nbFeat = args.multi_level_feat_outchan
 
-        if not args.resnet_simple_att:
-            CNNconst = CNN2D
-            kwargs = {}
+        if args.resnet_bilinear:
+            CNNconst = CNN2D_bilinearAttPool
+            kwargs = {"inFeat":nbFeat,"aux_model":args.aux_model,"nb_parts":args.resnet_bil_nb_parts}
             nbFeatAux = nbFeat
-        else:
+            nbFeat *= args.resnet_bil_nb_parts
+        elif args.resnet_simple_att:
             CNNconst = CNN2D_simpleAttention
             kwargs = {"inFeat":nbFeat,
                       "topk": args.resnet_simple_att_topk,
@@ -710,8 +759,11 @@ def netBuilder(args):
             nbFeatAux = nbFeat
             if type(args.resnet_simple_att_topk_pxls_nb) is list and len(args.resnet_simple_att_topk_pxls_nb) > 1:
                 nbFeat *= len(args.resnet_simple_att_topk_pxls_nb)
-            #elif args.zoom:
-            #    nbFeat *= args.zoom_max_sub_clouds
+
+        else:
+            CNNconst = CNN2D
+            kwargs = {}
+            nbFeatAux = nbFeat
 
         firstModel = CNNconst(args.first_mod, args.pretrained_visual, featMap=True,chan=args.resnet_chan, stride=args.resnet_stride,
                               dilation=args.resnet_dilation, \
@@ -859,11 +911,12 @@ def addArgs(argreader):
     argreader.parser.add_argument('--deeplabv3_outchan', type=int, metavar='BOOL',
                                   help="The number of output channel of deeplabv3")
 
-    argreader.parser.add_argument('--smooth_features', type=args.str2bool, metavar='BOOL',
-                                  help="To smooth features using a simple mean.")
-    argreader.parser.add_argument('--smooth_features_sched_step', type=int, metavar='BOOL',
-                                  help="The number of epoch to wait before reducing the size of the kernel used to smooth")
-    argreader.parser.add_argument('--smooth_features_start_size', type=int, metavar='BOOL',
-                                  help="The initial size of the kernel used to smooth.")
+    argreader.parser.add_argument('--resnet_bil_nb_parts', type=int, metavar='INT',
+                                  help="The number of parts for the bilinear model.")
+    argreader.parser.add_argument('--resnet_bilinear', type=args.str2bool, metavar='BOOL',
+                                  help="To use bilinear attention")
+
+
+
 
     return argreader
