@@ -114,38 +114,26 @@ def epochSeqTr(model, optim, log_interval, loader, epoch, args, writer, **kwargs
 def computeLoss(args, output, target, resDict, data):
 
     loss = args.nll_weight * F.cross_entropy(output, target)
-    if args.pn_reinf_weight > 0:
-        loss += pn_reinf_term(args.pn_reinf_weight, resDict, target, args.pn_reinf_weight_baseline, args.score_reward)
     if args.aux_mod_nll_weight > 0:
         loss += aux_model_loss_term(args.aux_mod_nll_weight, resDict, data, target)
     if args.zoom_nll_weight > 0:
         loss += zoom_loss_term(args.zoom_nll_weight, resDict, data, target)
+    if args.bil_backgr_weight > 0:
+        back_term = bil_backgr_term(args.bil_backgr_weight,args.bil_backgr_thres,resDict)
+        loss += back_term
     return loss
-
-def pn_reinf_term(pn_reinf_weight, resDict, target, pn_reinf_weight_baseline, score_reward):
-    flatInds = resDict['flatInds']
-    pi = resDict['probs'][torch.arange(flatInds.size(0), dtype=torch.long).unsqueeze(1), flatInds]
-    acc = (resDict["pred"].detach().argmax(dim=-1) == target)
-
-    if score_reward:
-        _, topk = torch.topk(resDict["pred"], 200)
-        ranks = (topk == target.unsqueeze(1)).nonzero()[:, 1].type(torch.cuda.FloatTensor)
-        reward = ((200 - ranks) / 200).unsqueeze(1)
-    else:
-        reward = (acc * 1.0).unsqueeze(1)
-
-    if pn_reinf_weight_baseline > 0.0:
-        baseline = pn_reinf_weight_baseline * F.mse_loss(resDict['baseline'], reward)
-        reward = baseline.detach() - reward
-
-    loss_reinforce = torch.mean(torch.mean(-torch.log(pi) * reward, dim=1))
-    return pn_reinf_weight * loss_reinforce
 
 def aux_model_loss_term(aux_model_weight, resDict, data, target):
     return aux_model_weight * F.cross_entropy(resDict["auxPred"], target)
 
 def zoom_loss_term(zoom_nll_weight, resDict, data, target):
     return zoom_nll_weight * F.cross_entropy(resDict["pred_zoom"], target)
+
+def bil_backgr_term(bil_backgr_weight,bil_backgr_thres,resDict):
+    size = resDict["attMaps"][0,0].size()
+    pixelNb = size[0]*size[1]
+    mean = resDict["attMaps"][:,-1].mean(dim=-1).mean(dim=-1)
+    return -bil_backgr_weight*((mean<bil_backgr_thres)*mean).mean()
 
 def average_gradients(model):
     size = float(dist.get_world_size())
@@ -337,7 +325,7 @@ def getOptim_and_Scheduler(optimStr, lr,momentum,weightDecay,useScheduler,maxEpo
 
     return optim, scheduler
 
-def initialize_Net_And_EpochNumber(net, exp_id, model_id, cuda, start_mode, init_path, strict, init_pn_path):
+def initialize_Net_And_EpochNumber(net, exp_id, model_id, cuda, start_mode, init_path, strict):
     '''Initialize a network
 
     If init is None, the network will be left unmodified. Its initial parameters will be saved.
@@ -361,15 +349,6 @@ def initialize_Net_And_EpochNumber(net, exp_id, model_id, cuda, start_mode, init
         print("Autodetected mode", start_mode)
 
     if start_mode == "scratch":
-
-        if init_pn_path != "None":
-            pn_params = torch.load(init_pn_path, map_location="cpu" if not cuda else None)
-            pn_params_filtered = {}
-            for key in pn_params.keys():
-                if key.find("sa1_module.conv.local_nn.0.0.weight") == -1 and key.find("lin3") == -1:
-                    pn_params_filtered[key] = pn_params[key]
-
-            res = net.secondModel.pn2.load_state_dict(pn_params_filtered, False)
 
         # Saving initial parameters
         torch.save(net.state_dict(), "../models/{}/{}_epoch0".format(exp_id, model_id))
@@ -479,8 +458,7 @@ def addInitArgs(argreader):
                                   help='The path to the weight file to use to initialise the network')
     argreader.parser.add_argument('--strict_init', type=str2bool, metavar='SM',
                                   help='Set to True to make torch.load_state_dict throw an error when not all keys match (to use with --init_path)')
-    argreader.parser.add_argument('--init_pn_path', type=str, metavar='SM',
-                                  help='The path to the weight file of a pn model.')
+
     return argreader
 
 
@@ -522,13 +500,10 @@ def addLossTermArgs(argreader):
                                   help='The weight of the negative log-likelihood term in the loss function for the aux model (when using pointnet).')
     argreader.parser.add_argument('--zoom_nll_weight', type=float, metavar='FLOAT',
                                   help='The weight of the negative log-likelihood term in the loss function for the zoom model (when using a model that generates points).')
-
-    argreader.parser.add_argument('--pn_reinf_weight', type=float, metavar='FLOAT',
-                                  help='The weight of the reinforcement term in the loss function when using a reinforcement learning.')
-    argreader.parser.add_argument('--pn_reinf_weight_baseline', type=float, metavar='FLOAT',
-                                  help='The weight of the reinforcement baseline term in the loss function when using a reinforcement learning.')
-    argreader.parser.add_argument('--pn_reinf_score_reward', type=args.str2bool, metavar='BOOL',
-                                  help='Whether to calculate the reinforcement learning reward with topk score')
+    argreader.parser.add_argument('--bil_backgr_weight', type=float, metavar='FLOAT',
+                                  help='The weight of the background term when using bilinear model.')
+    argreader.parser.add_argument('--bil_backgr_thres', type=float, metavar='FLOAT',
+                                  help='The threshold between 0 and 1 for the background term when using bilinear model.')
 
     return argreader
 
@@ -565,7 +540,7 @@ def run(args):
     kwargsVal["metricEarlyStop"] = args.metric_early_stop
 
     startEpoch = initialize_Net_And_EpochNumber(net, args.exp_id, args.model_id, args.cuda, args.start_mode,
-                                                args.init_path, args.strict_init, args.init_pn_path)
+                                                args.init_path, args.strict_init)
 
     kwargsTr["optim"],scheduler = getOptim_and_Scheduler(args.optim, args.lr,args.momentum,args.weight_decay,args.use_scheduler,args.epochs,-1,net)
 
@@ -586,9 +561,6 @@ def run(args):
             kwargsTr["model"], kwargsVal["model"] = net, net
 
             if not args.no_train:
-                if args.smooth_features:
-                    smoothKerSize = update.updateSmoothKer(net,epoch,args.smooth_features_sched_step,args.smooth_features_start_size,startEpoch)
-                    writer.add_scalars("SmoothKerSize", {args.model_id:smoothKerSize}, epoch)
 
                 trainFunc(**kwargsTr)
                 if not scheduler is None:
