@@ -670,7 +670,7 @@ def main(argv=None):
                             "pn":"PointNet","pnnorm":"PointNet (norm)","avglin":"Linear","avglinzoom":"Linear + Zoom","avglinzoomindep":"Linear + Zoom Indep",
                             "1x1softmscalenored":"Score prediction - SoftMax -- Stride=1",
                             "1x1softmscalenoredbigimg":"Score prediction - SoftMax -- Stride=1 -- Big Input Image",
-                            "bil":"Bilinear",
+                            "bil":"Bilinear","bilreg001":"Bilinear (\\lambda=0.01)","bilreg01":"Bilinear (\\lambda=0.1)","bilreg1":"Bilinear (\\lambda=1)",
                             "patchnoredtext":"Patch (No Red) (Text. model)"}
 
         compileTest(args.exp_id,id_to_label_dict)
