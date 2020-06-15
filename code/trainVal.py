@@ -319,7 +319,7 @@ def getOptim_and_Scheduler(optimStr, lr,momentum,weightDecay,useScheduler,maxEpo
     optim = optimConst(net.parameters(), **kwargs)
 
     if useScheduler:
-        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optim, maxEpoch,last_epoch=lastEpoch)
+        scheduler = torch.optim.lr_scheduler.StepLR(optim, step_size=2, gamma=0.9)
     else:
         scheduler = None
 
