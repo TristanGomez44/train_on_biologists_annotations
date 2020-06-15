@@ -139,7 +139,6 @@ class Model(nn.Module):
             resDict_zoom = merge(visResDict_zoom,resDict_zoom)
             resDict = merge(resDict_zoom,resDict,"zoom")
 
-            resDict.pop('x_size', None)
             resDict.pop('x_size_zoom', None)
 
             if self.zoom_merge_preds:
@@ -165,6 +164,7 @@ class Model(nn.Module):
                 drop_images = batch_augment(origImgBatch, resDict["attMaps"], mode='drop', theta=(0.2, 0.5))
             resDict["pred_drop"] = self.secondModel(self.firstModel(drop_images))["pred"]
 
+        resDict.pop('x_size', None)
         return resDict
 
     def computeZoom(self,origImg,xSize,pts,subCloudInd,countList):
