@@ -92,6 +92,8 @@ class Model(nn.Module):
         self.zoom_merge_preds = zoom_merge_preds
         self.nbFeat = nbFeat
         self.drop_and_crop = drop_and_crop
+        if drop_and_crop:
+            self.bn = nn.BatchNorm2d(nbFeat, eps=0.001)
 
     def forward(self, origImgBatch):
 
@@ -145,6 +147,13 @@ class Model(nn.Module):
                 resDict.pop('pred_zoom', None)
 
         elif self.drop_and_crop:
+
+            if self.firstModel.topk:
+                features = resDict["features"]
+                features = self.bn(features)
+                attMaps = torch.mean(F.relu(features, inplace=True), dim=1, keepdim=True)
+            else:
+                attMaps = resDict["attMaps"]
 
             with torch.no_grad():
                 crop_images = batch_augment(origImgBatch, resDict["attMaps"], mode='crop', theta=(0.4, 0.6), padding_ratio=0.1)
@@ -538,6 +547,7 @@ class CNN2D_simpleAttention(FirstModel):
         retDict["x"] = features_agr
         retDict["x_size"] = features_weig.size()
         retDict["attMaps"] = spatialWeights
+        retDict["features"] = features
 
         if self.aux_model:
             retDict["auxFeat"] = features
