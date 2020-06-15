@@ -1,4 +1,4 @@
-import torch
+.import torch
 import args
 import modelBuilder
 import load_data
@@ -712,30 +712,45 @@ def shiftFeat(where,features,dilation=1,neigAvgSize=1):
     return featuresShift,maskShift
 
 def representativeVectors(x):
+
+    kerSize = 3
+
+    #x = torch.ones(1,1,kerSize,kerSize)
+    x = torch.normal(torch.ones(1,1,kerSize,kerSize), 0.001*torch.ones(1,1,kerSize,kerSize))
+
     origShape = x.size()
     print(x.size())
     #patch = x.unfold(2, 5, 1,padding=2).unfold(3, 5, 1,padding=2).permute(0,2,3,1,4,5)
-    patch = F.unfold(x,5,padding=2)
+    patch = F.unfold(x,kerSize)+0.00001
     print(patch.size())
-    sys.exit(0)
+    patch = patch.permute(0,2,1).reshape(origShape[0],origShape[2]-(kerSize-1),origShape[3]-(kerSize-1),origShape[1],kerSize,kerSize)
+    print(patch.size())
     patch = patch.reshape(patch.size(0)*patch.size(1)*patch.size(2),patch.size(3),patch.size(4)*patch.size(5))
     print(patch.size())
     patch = patch.permute(0,2,1)
     print(patch.size())
 
-    sim = (patch*patch[:,0:1]).sum(dim=-1,keepdim=True)/(torch.sqrt(torch.pow(patch,2).sum(dim=-1,keepdim=True))*torch.sqrt(torch.pow(patch[:,0:1],2).sum(dim=-1,keepdim=True)))
+    sim = (patch*patch[:,patch.size(1)//2:patch.size(1)//2+1]).sum(dim=-1,keepdim=True)/(torch.sqrt(torch.pow(patch,2).sum(dim=-1,keepdim=True))*torch.sqrt(torch.pow(patch[:,0:1],2).sum(dim=-1,keepdim=True)))
+
+    print("sim",sim.size())
+    #print(sim)
 
     #sim_min,sim_max = sim.min(dim=1)[0],sim.max(dim=1)[0]
     #sim = (sim-sim_min)/(sim_max-sim_min)
 
     sim = sim/sim.sum(dim=1,keepdim=True)
 
-    reprVec = (patch*sim).mean(dim=1,keepdim=True)
-    print(reprVec.size())
+    reprVec = (patch*sim).sum(dim=1,keepdim=True)/sim.sum(dim=1,keepdim=True)
+    #print(reprVec.size())
 
-    reprVec = reprVec.reshape(origShape[0],origShape[2],origShape[3],reprVec.size(-2),reprVec.size(-1))
-    print(reprVec.size())
+    reprVec = reprVec.reshape(origShape[0],origShape[2]-(kerSize-1),origShape[3]-(kerSize-1),reprVec.size(-2),reprVec.size(-1))
+    print(reprVec[0].size())
+    print(reprVec[0])
+    #for i in range(reprVec[0].size(0)):
+    #    for j in range(reprVec[0].size(1)):
+    #        print(reprVec[0][i,j][0])
 
+    #print(reprVec.mean())
 
     sys.exit(0)
 
