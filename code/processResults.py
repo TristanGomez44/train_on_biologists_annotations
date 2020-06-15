@@ -671,6 +671,7 @@ def main(argv=None):
                             "1x1softmscalenored":"Score prediction - SoftMax -- Stride=1",
                             "1x1softmscalenoredbigimg":"Score prediction - SoftMax -- Stride=1 -- Big Input Image",
                             "bil":"Bilinear","bilreg001":"Bilinear (\\lambda=0.01)","bilreg01":"Bilinear (\\lambda=0.1)","bilreg1":"Bilinear (\\lambda=1)",
+                            "bilreg10":"Bilinear (\\lambda=10)","bilreg20":"Bilinear (\\lambda=20)","bilreg60":"Bilinear (\\lambda=60)",
                             "patchnoredtext":"Patch (No Red) (Text. model)"}
 
         compileTest(args.exp_id,id_to_label_dict)
