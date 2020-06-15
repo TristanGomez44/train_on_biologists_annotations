@@ -121,6 +121,14 @@ def computeLoss(args, output, target, resDict, data):
     if args.bil_backgr_weight > 0:
         back_term = bil_backgr_term(args.bil_backgr_weight,args.bil_backgr_thres,resDict)
         loss += back_term
+
+    if args.crop_nll_weight > 0:
+        crop_term = args.crop_nll_weight*F.cross_entropy(resDict["pred_crop"], target)
+        loss += crop_term
+    if args.drop_nll_weight > 0:
+        drop_term = args.drop_nll_weight*F.cross_entropy(resDict["pred_drop"], target)
+        loss += drop_term
+
     return loss
 
 def aux_model_loss_term(aux_model_weight, resDict, data, target):
@@ -504,6 +512,11 @@ def addLossTermArgs(argreader):
                                   help='The weight of the background term when using bilinear model.')
     argreader.parser.add_argument('--bil_backgr_thres', type=float, metavar='FLOAT',
                                   help='The threshold between 0 and 1 for the background term when using bilinear model.')
+
+    argreader.parser.add_argument('--crop_nll_weight', type=float, metavar='FLOAT',
+                                  help='The weight of the negative log-likelihood term in the loss function for the crop term.')
+    argreader.parser.add_argument('--drop_nll_weight', type=float, metavar='FLOAT',
+                                  help='The weight of the negative log-likelihood term in the loss function for the drop term.')
 
     return argreader
 

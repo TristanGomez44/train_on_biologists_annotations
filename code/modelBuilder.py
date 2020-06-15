@@ -35,6 +35,8 @@ import time
 import matplotlib.pyplot as plt
 plt.switch_backend('agg')
 
+import random
+
 def buildFeatModel(featModelName, pretrainedFeatMod, featMap=True, bigMaps=False, layerSizeReduce=False, stride=2,dilation=1,deeplabv3_outchan=64, **kwargs):
     ''' Build a visual feature model
 
@@ -79,7 +81,7 @@ class DataParallelModel(nn.DataParallel):
 
 class Model(nn.Module):
 
-    def __init__(self, firstModel, secondModel,nbFeat=512,zoom=False,zoom_max_sub_clouds=2,zoom_merge_preds=False,passOrigImage=False,reducedImgSize=1):
+    def __init__(self, firstModel, secondModel,nbFeat=512,drop_and_crop=False,zoom=False,zoom_max_sub_clouds=2,zoom_merge_preds=False,passOrigImage=False,reducedImgSize=1):
         super(Model, self).__init__()
         self.firstModel = firstModel
         self.secondModel = secondModel
@@ -89,6 +91,7 @@ class Model(nn.Module):
         self.subcloudNb = zoom_max_sub_clouds
         self.zoom_merge_preds = zoom_merge_preds
         self.nbFeat = nbFeat
+        self.drop_and_crop = drop_and_crop
 
     def forward(self, origImgBatch):
 
@@ -134,12 +137,24 @@ class Model(nn.Module):
             resDict_zoom = merge(visResDict_zoom,resDict_zoom)
             resDict = merge(resDict_zoom,resDict,"zoom")
 
-        resDict.pop('x_size', None)
-        resDict.pop('x_size_zoom', None)
+            resDict.pop('x_size', None)
+            resDict.pop('x_size_zoom', None)
 
-        if self.zoom_merge_preds:
-            resDict["pred"] = 0.5*resDict["pred"]+0.5*resDict["pred_zoom"]
-            resDict.pop('pred_zoom', None)
+            if self.zoom_merge_preds:
+                resDict["pred"] = 0.5*resDict["pred"]+0.5*resDict["pred_zoom"]
+                resDict.pop('pred_zoom', None)
+
+        elif self.drop_and_crop:
+
+            with torch.no_grad():
+                crop_images = batch_augment(origImgBatch, resDict["attMaps"], mode='crop', theta=(0.4, 0.6), padding_ratio=0.1)
+            resDict["pred_crop"] = self.secondModel(self.firstModel(crop_images))["pred"]
+
+            resDict["pred_rawcrop"] = (resDict["pred_crop"]+resDict["pred"])/2
+
+            with torch.no_grad():
+                drop_images = batch_augment(origImgBatch, resDict["attMaps"], mode='drop', theta=(0.2, 0.5))
+            resDict["pred_drop"] = self.secondModel(self.firstModel(drop_images))["pred"]
 
         return resDict
 
@@ -305,6 +320,50 @@ def plotBox(mask,xMin,xMax,yMin,yMax,chan):
     mask[chan][min(xMax,mask.size(1)-1),max(yMin,0):min(yMax,mask.size(2)-1)] = 1
     return mask
 ################################# Visual Model ##########################
+
+def batch_augment(images, attention_map, mode='crop', theta=0.5, padding_ratio=0.1):
+    #This comes from https://github.com/GuYuc/WS-DAN.PyTorch/blob/87779124f619ceeb445ddfb0246c8a22ff324db4/utils.py
+
+    batches, _, imgH, imgW = images.size()
+
+    if mode == 'crop':
+        crop_images = []
+        for batch_index in range(batches):
+            atten_map = attention_map[batch_index:batch_index + 1]
+            if isinstance(theta, tuple):
+                theta_c = random.uniform(*theta) * atten_map.max()
+            else:
+                theta_c = theta * atten_map.max()
+
+            crop_mask = F.interpolate(atten_map, size=(imgH, imgW)) >= theta_c
+            nonzero_indices = torch.nonzero(crop_mask[0, 0, ...])
+            height_min = max(int(nonzero_indices[:, 0].min().item() - padding_ratio * imgH), 0)
+            height_max = min(int(nonzero_indices[:, 0].max().item() + padding_ratio * imgH), imgH)
+            width_min = max(int(nonzero_indices[:, 1].min().item() - padding_ratio * imgW), 0)
+            width_max = min(int(nonzero_indices[:, 1].max().item() + padding_ratio * imgW), imgW)
+
+            crop_images.append(
+                F.interpolate(images[batch_index:batch_index + 1, :, height_min:height_max, width_min:width_max],
+                                    size=(imgH, imgW)))
+        crop_images = torch.cat(crop_images, dim=0)
+        return crop_images
+
+    elif mode == 'drop':
+        drop_masks = []
+        for batch_index in range(batches):
+            atten_map = attention_map[batch_index:batch_index + 1]
+            if isinstance(theta, tuple):
+                theta_d = random.uniform(*theta) * atten_map.max()
+            else:
+                theta_d = theta * atten_map.max()
+
+            drop_masks.append(F.interpolate(atten_map, size=(imgH, imgW)) < theta_d)
+        drop_masks = torch.cat(drop_masks, dim=0)
+        drop_images = images * drop_masks.float()
+        return drop_images
+
+    else:
+        raise ValueError('Expected mode in [\'crop\', \'drop\'], but received unsupported augmentation method %s' % mode)
 
 class FirstModel(nn.Module):
 
@@ -801,7 +860,7 @@ def netBuilder(args):
 
     ############### Whole Model ##########################
 
-    net = Model(firstModel, secondModel,zoom=args.zoom,zoom_max_sub_clouds=args.zoom_max_sub_clouds,\
+    net = Model(firstModel, secondModel,drop_and_crop=args.drop_and_crop,zoom=args.zoom,zoom_max_sub_clouds=args.zoom_max_sub_clouds,\
                 zoom_merge_preds=args.zoom_merge_preds,\
                 passOrigImage=False,reducedImgSize=args.reduced_img_size)
 
@@ -916,6 +975,9 @@ def addArgs(argreader):
     argreader.parser.add_argument('--resnet_bilinear', type=args.str2bool, metavar='BOOL',
                                   help="To use bilinear attention")
 
+
+    argreader.parser.add_argument('--drop_and_crop', type=args.str2bool, metavar='BOOL',
+                                  help="To crop and drop part of the images where the attention is focused.")
 
 
 
