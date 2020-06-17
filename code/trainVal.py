@@ -365,71 +365,9 @@ def initialize_Net_And_EpochNumber(net, exp_id, model_id, cuda, start_mode, init
     elif start_mode == "fine_tune":
 
         if init_path == "None":
-            init_path = \
-                sorted(glob.glob("../models/{}/model{}_epoch*".format(exp_id, model_id)), key=utils.findLastNumbers)[-1]
+            init_path = sorted(glob.glob("../models/{}/model{}_epoch*".format(exp_id, model_id)), key=utils.findLastNumbers)[-1]
 
-        print(init_path)
-        params = torch.load(init_path, map_location="cpu" if not cuda else None)
-
-        # Checking if the key of the model start with "module."
-        startsWithModule = (list(net.state_dict().keys())[0].find("module.") == 0)
-
-        if startsWithModule:
-            paramsFormated = {}
-            for key in params.keys():
-                keyFormat = "module." + key if key.find("module") == -1 else key
-                paramsFormated[keyFormat] = params[key]
-            params = paramsFormated
-
-        else:
-            paramsFormated = {}
-            for key in params.keys():
-                keyFormat = key.split('.')
-                if keyFormat[0] == 'module':
-                    keyFormat = '.'.join(keyFormat[1:])
-                else:
-                    keyFormat = '.'.join(keyFormat)
-                # keyFormat = key.replace("module.", "") if key.find("module.") == 0 else key
-                paramsFormated[keyFormat] = params[key]
-            params = paramsFormated
-
-        # else:
-
-        # Removing keys corresponding to parameter which shape are different in the checkpoint and in the current model
-        # For example, this is necessary to load a model trained on n classes to bootstrap a model with m != n classes.
-        keysToRemove = []
-        for key in params.keys():
-            if key in net.state_dict().keys():
-                if net.state_dict()[key].size() != params[key].size():
-                    keysToRemove.append(key)
-        for key in keysToRemove:
-            params.pop(key)
-
-        # This is necessary to start with weights created when the model attributes were "visualModel" and "tempModel".
-        paramsWithNewNames = {}
-        for key in params.keys():
-            paramsWithNewNames[key.replace("visualModel", "firstModel").replace("tempModel", "secondModel")] = params[
-                key]
-        params = paramsWithNewNames
-
-        if hasattr(net, "secondModel"):
-            if not hasattr(net.secondModel, "linLay"):
-                def checkAndReplace(key):
-                    if key.find("secondModel.linLay") != -1:
-                        key = key.replace("secondModel.linLay", "secondModel.linTempMod.linLay")
-                    return key
-
-                params = {checkAndReplace(k): params[k] for k in params.keys()}
-
-        res = net.load_state_dict(params, strict)
-
-        # Depending on the pytorch version the load_state_dict() method can return the list of missing and unexpected parameters keys or nothing
-        if not res is None:
-            missingKeys, unexpectedKeys = res
-            if len(missingKeys) > 0:
-                print("missing keys", missingKeys)
-            if len(unexpectedKeys) > 0:
-                print("unexpected keys", unexpectedKeys)
+        net = preprocessAndLoadParams(init_path,cuda,net,strict)
 
         # Start epoch is 1 if strict if false because strict=False means that it is another model which is being trained
         if strict:
@@ -439,6 +377,96 @@ def initialize_Net_And_EpochNumber(net, exp_id, model_id, cuda, start_mode, init
 
     return startEpoch
 
+def preprocessAndLoadParams(init_path,cuda,net,strict):
+    params = torch.load(init_path, map_location="cpu" if not cuda else None)
+
+    params = addOrRemoveModule(params,net)
+    params = removeBadSizedParams(params,net)
+    params = addFeatModZoom(params,net)
+    params = changeOldNames(params,net)
+
+    res = net.load_state_dict(params, strict)
+
+    # Depending on the pytorch version the load_state_dict() method can return the list of missing and unexpected parameters keys or nothing
+    if not res is None:
+        missingKeys, unexpectedKeys = res
+        if len(missingKeys) > 0:
+            print("missing keys", missingKeys)
+        if len(unexpectedKeys) > 0:
+            print("unexpected keys", unexpectedKeys)
+
+    return net
+
+def addOrRemoveModule(params,net):
+    # Checking if the key of the model start with "module."
+    startsWithModule = (list(net.state_dict().keys())[0].find("module.") == 0)
+
+    if startsWithModule:
+        paramsFormated = {}
+        for key in params.keys():
+            keyFormat = "module." + key if key.find("module") == -1 else key
+            paramsFormated[keyFormat] = params[key]
+        params = paramsFormated
+    else:
+        paramsFormated = {}
+        for key in params.keys():
+            keyFormat = key.split('.')
+            if keyFormat[0] == 'module':
+                keyFormat = '.'.join(keyFormat[1:])
+            else:
+                keyFormat = '.'.join(keyFormat)
+            # keyFormat = key.replace("module.", "") if key.find("module.") == 0 else key
+            paramsFormated[keyFormat] = params[key]
+        params = paramsFormated
+    return params
+
+def addFeatModZoom(params,net):
+
+    shouldAddFeatModZoom = False
+    for key in net.state_dict().keys():
+        if key.find("featMod_zoom") != -1:
+            shouldAddFeatModZoom = True
+
+    if shouldAddFeatModZoom:
+        #Adding keys in case model was created before the zoom feature was implemented
+        keyValsToAdd = {}
+        for key in params.keys():
+            if key.find(".featMod.") != -1:
+                keyToAdd = key.replace(".featMod.",".featMod_zoom.")
+                valToAdd = params[key]
+            keyValsToAdd.update({keyToAdd:valToAdd})
+        params.update(keyValsToAdd)
+    return params
+
+def removeBadSizedParams(params,net):
+    # Removing keys corresponding to parameter which shape are different in the checkpoint and in the current model
+    # For example, this is necessary to load a model trained on n classes to bootstrap a model with m != n classes.
+    keysToRemove = []
+    for key in params.keys():
+        if key in net.state_dict().keys():
+            if net.state_dict()[key].size() != params[key].size():
+                keysToRemove.append(key)
+    for key in keysToRemove:
+        params.pop(key)
+    return params
+
+def changeOldNames(params,net):
+    # This is necessary to start with weights created when the model attributes were "visualModel" and "tempModel".
+    paramsWithNewNames = {}
+    for key in params.keys():
+        paramsWithNewNames[key.replace("visualModel", "firstModel").replace("tempModel", "secondModel")] = params[
+            key]
+    params = paramsWithNewNames
+
+    if hasattr(net, "secondModel"):
+        if not hasattr(net.secondModel, "linLay"):
+            def checkAndReplace(key):
+                if key.find("secondModel.linLay") != -1:
+                    key = key.replace("secondModel.linLay", "secondModel.linTempMod.linLay")
+                return key
+
+            params = {checkAndReplace(k): params[k] for k in params.keys()}
+    return params
 
 def getBestEpochInd_and_WorseEpochNb(start_mode, exp_id, model_id, epoch):
     if start_mode == "scratch":
@@ -581,9 +609,7 @@ def run(args):
                     scheduler.step()
             else:
                 if not args.no_val:
-                    net.load_state_dict(torch.load(
-                        "../models/{}/model{}_epoch{}".format(args.exp_id_no_train, args.model_id_no_train, epoch),
-                        map_location="cpu" if not args.cuda else None))
+                    net = preprocessAndLoadParams("../models/{}/model{}_epoch{}".format(args.exp_id_no_train, args.model_id_no_train, epoch),args.cuda,net,args.strict_init)
 
             if not args.no_val:
                 with torch.no_grad():
