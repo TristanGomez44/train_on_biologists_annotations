@@ -389,8 +389,10 @@ class FirstModel(nn.Module):
 
 class CNN2D(FirstModel):
 
-    def __init__(self, featModelName, pretrainedFeatMod=True, featMap=True, bigMaps=False,**kwargs):
+    def __init__(self, featModelName, pretrainedFeatMod=True, featMap=True, bigMaps=False,aux_model=False,**kwargs):
         super(CNN2D, self).__init__(featModelName, pretrainedFeatMod, featMap, bigMaps,**kwargs)
+
+        self.aux_model= aux_model
 
     def forward(self, x):
 
@@ -399,13 +401,17 @@ class CNN2D(FirstModel):
 
         # N x C x H x L
         res = self.featMod(x)
+        features = res["x"]
 
-        # N x D
-        if type(res) is dict:
-            # Some feature model can return a dictionnary instead of a tensor
-            return res
-        else:
-            return {'x': res}
+        spatialWeights = torch.pow(features, 2).sum(dim=1, keepdim=True)
+        retDict = {}
+        retDict["attMaps"] = spatialWeights
+        retDict["x"] = features
+
+        if self.aux_model:
+            retDict["auxFeat"] = features
+
+        return retDict
 
 def buildImageAttention(inFeat,blockNb,outChan=1):
     attention = []
@@ -447,6 +453,8 @@ class CNN2D_simpleAttention(FirstModel):
                 self.attention_activation = torch.sigmoid
             elif score_pred_act_func == "softmax":
                 self.attention_activation = SoftMax()
+            elif score_pred_act_func == "relu":
+                self.attention_activation = torch.relu
             else:
                 raise ValueError("Unknown activation function")
 
@@ -831,7 +839,7 @@ def netBuilder(args):
 
         else:
             CNNconst = CNN2D
-            kwargs = {}
+            kwargs = {"aux_model":args.aux_model}
             nbFeatAux = nbFeat
 
         firstModel = CNNconst(args.first_mod, args.pretrained_visual, featMap=True,chan=args.resnet_chan, stride=args.resnet_stride,
