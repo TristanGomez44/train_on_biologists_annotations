@@ -665,11 +665,13 @@ def main(argv=None):
         efficiencyPlot(args.exp_id,args.model_ids,args.epoch_list)
     if args.compile_test:
 
-        id_to_label_dict = {"1x1":"Score prediction","none":"None","sobel":"Sobel","patchsim":"Patch Similarity","norm":"Norm",
+        id_to_label_dict = {"1x1":"Score prediction","none":"None","sobel":"Sobel","patchsim":"Patch Similarity","norm":"Norm","normDropCrop":"Norm + WS-DAN",
                             "topk":"Top-256","topksag":"Topk-K (SAG)","all":"All","multitopk":"Multiple Top-K","top1024":"Top-1024",
                             "pn":"PointNet","pnnorm":"PointNet (norm)","avglin":"Linear","avglinzoom":"Linear + Zoom","avglinzoomindep":"Linear + Zoom Indep",
-                            "1x1softmscalenored":"Score prediction - SoftMax -- Stride=1",
+                            "1x1softmscale":"Score prediction - SoftMax","1x1softmscalenored":"Score prediction - SoftMax -- Stride=1",
                             "1x1softmscalenoredbigimg":"Score prediction - SoftMax -- Stride=1 -- Big Input Image",
+                            "1x1relu":"Score prediction - ReLU",
+                            "noneHyp":"None - BS=12, Image size=448, StepLR",
                             "bil":"Bilinear","bilreg001":"Bilinear (\\lambda=0.01)","bilreg01":"Bilinear (\\lambda=0.1)","bilreg1":"Bilinear (\\lambda=1)",
                             "bilreg10":"Bilinear (\\lambda=10)","bilreg20":"Bilinear (\\lambda=20)","bilreg60":"Bilinear (\\lambda=60)",
                             "patchnoredtext":"Patch (No Red) (Text. model)"}
