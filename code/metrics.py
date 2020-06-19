@@ -38,9 +38,17 @@ def binaryToMetrics(output,target,resDict):
         if keys[i] in resDict:
             metDict[cleanNames[i]] = compAccuracy(resDict[keys[i]],target)
 
+    if "attMaps" in resDict.keys():
+        metDict["Sparsity"] = compAttMapSparsity(resDict["attMaps"])
+
     return metDict
 
 def compAccuracy(output,target):
     pred = output.argmax(dim=-1)
-    acc = (pred == target).float().sum()/(pred.numel())
+    acc = (pred == target).float().sum()
     return acc
+
+def compAttMapSparsity(attMaps):
+    max = attMaps.max(dim=-1,keepdim=True)[0].max(dim=-2,keepdim=True)[0]
+    attMaps = attMaps/(max+0.00001)
+    return attMaps.mean(dim=(2,3)).sum()

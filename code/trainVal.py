@@ -60,6 +60,7 @@ def epochSeqTr(model, optim, log_interval, loader, epoch, args, writer, **kwargs
 
     metrDict = None
     validBatch = 0
+    totalImgNb = 0
     allOut, allGT = None, None
 
     for batch_idx, batch in enumerate(loader):
@@ -89,11 +90,13 @@ def epochSeqTr(model, optim, log_interval, loader, epoch, args, writer, **kwargs
         optim.zero_grad()
 
         # Metrics
-        metDictSample = metrics.binaryToMetrics(output, target, resDict)
+        with torch.no_grad():
+            metDictSample = metrics.binaryToMetrics(output, target, resDict)
         metDictSample["Loss"] = loss.detach().data.item()
         metrDict = metrics.updateMetrDict(metrDict, metDictSample)
 
         validBatch += 1
+        totalImgNb += target.size(0)
 
         if validBatch > 15 and args.debug:
             break
@@ -105,7 +108,7 @@ def epochSeqTr(model, optim, log_interval, loader, epoch, args, writer, **kwargs
         if (not args.save_all) and os.path.exists(
                 "../models/{}/model{}_epoch{}".format(args.exp_id, args.model_id, epoch - 1)):
             os.remove("../models/{}/model{}_epoch{}".format(args.exp_id, args.model_id, epoch - 1))
-        writeSummaries(metrDict, validBatch, writer, epoch, "train", args.model_id, args.exp_id)
+        writeSummaries(metrDict, totalImgNb, writer, epoch, "train", args.model_id, args.exp_id)
 
     if args.debug or args.benchmark:
         totalTime = time.time() - start_time
@@ -175,7 +178,7 @@ def epochImgEval(model, log_interval, loader, epoch, args, writer, metricEarlySt
     metrDict = None
 
     validBatch = 0
-
+    totalImgNb = 0
     allOut = None
     allGT = None
     intermVarDict = {"fullAttMap": None, "fullFeatMapSeq": None, "fullAffTransSeq": None, "fullPointsSeq": None,"fullPointsWeightSeq":None,
@@ -228,15 +231,15 @@ def epochImgEval(model, log_interval, loader, epoch, args, writer, metricEarlySt
         writePreds(output, target, epoch, args.exp_id, args.model_id, args.class_nb, batch_idx)
 
         validBatch += 1
+        totalImgNb += target.size(0)
 
         if validBatch > 15 and args.debug:
             break
 
-
     intermVarDict = update.saveIntermediateVariables(intermVarDict, args.exp_id, args.model_id, epoch, mode,
                                                      args.save_all)
 
-    writeSummaries(metrDict, validBatch, writer, epoch, mode, args.model_id, args.exp_id)
+    writeSummaries(metrDict, totalImgNb, writer, epoch, mode, args.model_id, args.exp_id)
 
     if compute_latency:
         latency_list = np.array(latency_list)[:,np.newaxis]
@@ -264,12 +267,12 @@ def writePreds(predBatch, targBatch, epoch, exp_id, model_id, class_nb, batch_id
                 predBatch[i].cpu().detach().numpy().astype(str)), file=text_file)
 
 
-def writeSummaries(metrDict, sampleNb, writer, epoch, mode, model_id, exp_id):
+def writeSummaries(metrDict, totalImgNb, writer, epoch, mode, model_id, exp_id):
     ''' Write the metric computed during an evaluation in a tf writer and in a csv file
 
     Args:
     - metrDict (dict): the dictionary containing the value of metrics (not divided by the number of batch)
-    - batchNb (int): the total number of batches during the epoch
+    - totalImgNb (int): the total number of images during the epoch
     - writer (tensorboardX.SummaryWriter): the writer to use to write the metrics to tensorboardX
     - mode (str): either 'train', 'val' or 'test' to indicate if the epoch was a training epoch or a validation epoch
     - model_id (str): the id of the model
@@ -283,7 +286,7 @@ def writeSummaries(metrDict, sampleNb, writer, epoch, mode, model_id, exp_id):
     '''
 
     for metric in metrDict.keys():
-        metrDict[metric] /= sampleNb
+        metrDict[metric] /= totalImgNb
 
     for metric in metrDict:
         if metric.find("Accuracy_") != -1:
