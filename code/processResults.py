@@ -473,9 +473,12 @@ def em(x,k):
 
     return pi
 
-def getTestPerf(path):
+def getTestPerf(path,accuracy_rawcrop):
 
-    perf = np.genfromtxt(path,delimiter="?",dtype=str)[1].split(",")[0]
+    if accuracy_rawcrop:
+        perf = np.genfromtxt(path,delimiter="?",dtype=str)[1].split(",")[8]
+    else:
+        perf = np.genfromtxt(path,delimiter="?",dtype=str)[1].split(",")[0]
     perf = float(perf.replace("tensor(",""))
     return perf
 
@@ -492,7 +495,9 @@ def compileTest(exp_id,id_to_label_dict):
         model_id = os.path.basename(testFilePath).replace("model","").replace("_metrics_test.csv","")
         model_id = model_id.split("_epoch")[0]
 
-        test_perf = getTestPerf(testFilePath)
+        accuracy_rawcrop = model_id.find("Drop") != -1 and model_id.find("Crop")
+
+        test_perf = getTestPerf(testFilePath,accuracy_rawcrop)
 
         model_id_list.append(model_id)
         perf_list.append(test_perf)
@@ -557,7 +562,7 @@ def compileTest(exp_id,id_to_label_dict):
 
                 latexTable += id_to_label_dict[key3] + " & "
 
-                if dic[key1][key2][key3] == bestPerf:
+                if round(dic[key1][key2][key3],2) == round(bestPerf,2):
                     latexTable += "$\\mathbf{"+str(round(dic[key1][key2][key3],2)) + "}$ \\\\ \n"
                 else:
                     latexTable += "$"+str(round(dic[key1][key2][key3],2)) + "$ \\\\ \n"
@@ -666,11 +671,13 @@ def main(argv=None):
     if args.compile_test:
 
         id_to_label_dict = {"1x1":"Score prediction","none":"None","noneNoRed":"None - Stride=1","sobel":"Sobel","patchsim":"Patch Similarity","norm":"Norm","normDropCrop":"Norm + WS-DAN",
+                            "1x1DropCrop":"Score prediction + WS - DAN","1x1reluDropAndCrop":"Score prediction - ReLU + WS - DAN","1x1softmscalemDropAndCrop":"Score prediction - SoftMax + WS - DAN",
                             "topk":"Top-256","topksag":"Topk-K (SAG)","all":"All","multitopk":"Multiple Top-K","top1024":"Top-1024",
                             "pn":"PointNet","pnnorm":"PointNet (norm)","avglin":"Linear","avglinzoom":"Linear + Zoom","avglinzoomindep":"Linear + Zoom Indep",
                             "1x1softmscale":"Score prediction - SoftMax","1x1softmscalenored":"Score prediction - SoftMax -- Stride=1",
                             "1x1softmscalenoredbigimg":"Score prediction - SoftMax -- Stride=1 -- Big Input Image",
                             "1x1relu":"Score prediction - ReLU",
+
                             "noneHyp":"None - BS=12, Image size=448, StepLR",
                             "bil":"Bilinear","bilreg001":"Bilinear (\\lambda=0.01)","bilreg01":"Bilinear (\\lambda=0.1)","bilreg1":"Bilinear (\\lambda=1)",
                             "bilreg10":"Bilinear (\\lambda=10)","bilreg20":"Bilinear (\\lambda=20)","bilreg60":"Bilinear (\\lambda=60)",
