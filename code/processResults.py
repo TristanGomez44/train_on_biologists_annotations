@@ -103,8 +103,28 @@ def plotPointsImageDataset(imgNb,redFact,plotDepth,args):
         if batchInd>=batchNb:
             break
 
+def compRFKernel(recField):
+    ker = torch.abs(torch.arange(recField)-recField//2)
+    ker = torch.max(ker.unsqueeze(0),ker.unsqueeze(1))
+    ker = recField//2 - ker + 1
+    return ker.unsqueeze(0).unsqueeze(0).float()/ker.max()
+
+def compRecField(architecture):
+
+    #Initial 7x7 conv with stride=2 and 3x3 max pool with stride=2
+    rec_field = 1 + (6+1) + (2+1)
+
+    if architecture == "resnet18":
+        #There 8 3x3 conv
+        rec_field += 8*2
+    else:
+        raise ValueError("Unkown architecture",architecture)
+
+    return rec_field
+
 def plotPointsImageDatasetGrid(exp_id,imgNb,epochs,model_ids,reduction_fact_list,inverse_xy,mode,nbClass,\
-                                useDropped_list,forceFeat,fullAttMap,threshold,maps_inds,plotId,luminosity,args):
+                                useDropped_list,forceFeat,fullAttMap,threshold,maps_inds,plotId,luminosity,\
+                                receptive_field,args):
 
     imgSize = 224
 
@@ -233,6 +253,12 @@ def plotPointsImageDatasetGrid(exp_id,imgNb,epochs,model_ids,reduction_fact_list
 
                 ptsImageCopy = ptsImageCopy.unsqueeze(0)
                 ptsImageCopy = F.interpolate(ptsImageCopy, scale_factor=reduction_fact_list[j])
+
+            if receptive_field[j]:
+                rf_size = compRecField("resnet18")
+                rf_kernel = compRFKernel(rf_size)
+                ptsImageCopy = F.conv_transpose2d(ptsImageCopy,rf_kernel,padding=rf_size//2)
+                ptsImageCopy = ptsImageCopy/ptsImageCopy.max()
 
             if (not fullAttMap[j]) or (fullAttMap[j] and luminosity):
 
@@ -634,6 +660,7 @@ def main(argv=None):
     argreader.parser.add_argument('--force_feat',type=str2bool,nargs="*",metavar="BOOL",help='To force feature plotting even when there is attention weights available.',default=[])
     argreader.parser.add_argument('--plot_id',type=str,metavar="ID",help='The plot id',default="")
     argreader.parser.add_argument('--maps_inds',type=int,nargs="*",metavar="INT",help='The index of the attention map to use when there is several. If there only one or if there is none, set this to -1',default=[])
+    argreader.parser.add_argument('--receptive_field',type=str2bool,nargs="*",metavar="BOOL",help='To plot with the effective receptive field',default=[])
 
     argreader.parser.add_argument('--luminosity',type=str2bool,metavar="BOOL",help='To plot the attention maps not with a cmap but with luminosity',default=False)
 
@@ -671,7 +698,7 @@ def main(argv=None):
             args.exp_id = "CUB3"
         plotPointsImageDatasetGrid(args.exp_id,args.image_nb,args.epoch_list,args.model_ids,args.reduction_fact_list,args.inverse_xy,args.mode,\
                                     args.class_nb,args.use_dropped_list,args.force_feat,args.full_att_map,args.use_threshold,args.maps_inds,args.plot_id,\
-                                    args.luminosity,args)
+                                    args.luminosity,args.receptive_field,args)
     if args.plot_prob_maps:
         plotProbMaps(args.image_nb,args,args.norm)
     if args.list_best_pred:
