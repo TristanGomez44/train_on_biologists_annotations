@@ -565,14 +565,22 @@ class CNN2D_simpleAttention(FirstModel):
 class CNN2D_bilinearAttPool(FirstModel):
 
     def __init__(self, featModelName, pretrainedFeatMod=True, featMap=True, bigMaps=False, chan=64, attBlockNb=2,
-                 attChan=16,inFeat=512,nb_parts=3,aux_model=False,**kwargs):
+                 attChan=16,inFeat=512,nb_parts=3,aux_model=False,score_pred_act_func="softmax",**kwargs):
 
         super(CNN2D_bilinearAttPool, self).__init__(featModelName, pretrainedFeatMod, featMap, bigMaps, **kwargs)
         self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
 
         self.attention = buildImageAttention(inFeat,attBlockNb,nb_parts+1)
         self.nb_parts = nb_parts
-        self.attention_activation = SoftMax(norm=False,dim=1)
+
+        if score_pred_act_func == "softmax":
+            self.attention_activation = SoftMax(norm=False,dim=1)
+        elif score_pred_act_func == "relu":
+            self.attention_activation = torch.relu
+        elif score_pred_act_func == "sigmoid":
+            self.attention_activation = torch.sigmoid
+        else:
+            raise ValueError("Unkown activation function")
 
         self.aux_model = aux_model
 
@@ -812,7 +820,8 @@ def netBuilder(args):
 
         if args.resnet_bilinear:
             CNNconst = CNN2D_bilinearAttPool
-            kwargs = {"inFeat":nbFeat,"aux_model":args.aux_model,"nb_parts":args.resnet_bil_nb_parts}
+            kwargs = {"inFeat":nbFeat,"aux_model":args.aux_model,"nb_parts":args.resnet_bil_nb_parts,\
+                      "score_pred_act_func":args.resnet_simple_att_score_pred_act_func}
             nbFeatAux = nbFeat
             nbFeat *= args.resnet_bil_nb_parts
         elif args.resnet_simple_att:
