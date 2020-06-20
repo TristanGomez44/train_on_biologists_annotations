@@ -46,6 +46,8 @@ from torch import tensor
 
 import torch.nn.functional as F
 
+import umap
+
 def plotPointsImageDataset(imgNb,redFact,plotDepth,args):
 
     cm = plt.get_cmap('plasma')
@@ -124,7 +126,7 @@ def compRecField(architecture):
 
 def plotPointsImageDatasetGrid(exp_id,imgNb,epochs,model_ids,reduction_fact_list,inverse_xy,mode,nbClass,\
                                 useDropped_list,forceFeat,fullAttMap,threshold,maps_inds,plotId,luminosity,\
-                                receptive_field,args):
+                                receptive_field,cluster,args):
 
     imgSize = 224
 
@@ -179,7 +181,14 @@ def plotPointsImageDatasetGrid(exp_id,imgNb,epochs,model_ids,reduction_fact_list
                 if attMap.shape[0] != 1:
                     attMap = attMap[maps_inds[j]:maps_inds[j]+1]
                 if not luminosity:
-                    attMap = cmPlasma(attMap[0])[:,:,:3]
+
+                    if cluster[j]:
+                        features = np.load(pointPaths[j].replace("attMaps","features"))[i]
+                        attMap = umap.UMAP(n_components=3).fit_transform(features.transpose(1,2,0).reshape(features.shape[1]*features.shape[2],features.shape[0]))
+                        attMap = (attMap-attMap.min())/(attMap.max()-attMap.min())
+                        attMap = attMap.reshape(features.shape[1],features.shape[2],3)
+                    else:
+                        attMap = cmPlasma(attMap[0])[:,:,:3]
                 else:
                     attMap = attMap[0][:,:,np.newaxis]
                 ptsImageCopy = torch.tensor(resize(attMap, (ptsImageCopy.shape[1],ptsImageCopy.shape[2]),anti_aliasing=True,mode="constant",order=0)).permute(2,0,1).float().unsqueeze(0)
@@ -199,47 +208,12 @@ def plotPointsImageDatasetGrid(exp_id,imgNb,epochs,model_ids,reduction_fact_list
                         ptsWeights = np.load(pointWeightPaths[j])[i][:,-1]
                     else:
                         ptsWeights = np.load(pointWeightPaths[j])[i]
-                    plt.figure()
-                    plt.hist(ptsWeights,range=(0,1),bins=10)
-                    plt.savefig("../vis/{}/grid_weight_hist_{}_img{}.png".format(exp_id,model_ids[j],i))
-                    plt.close()
                 else:
                     if useDropped_list[j]:
                         ptsWeights = torch.sqrt(torch.pow(ptsOrig[:,3:-1],2).sum(dim=-1)).numpy()
                     else:
                         ptsWeights = torch.sqrt(torch.pow(ptsOrig[:,3:],2).sum(dim=-1)).numpy()
                         print("Feat",ptsWeights.min(),ptsWeights.mean(),ptsWeights.max())
-
-                if threshold[j]:
-                    #pts = pts[ptsWeights > 75]
-                    #ptsWeights = ptsWeights[ptsWeights > 75]
-
-                    #pi = em(torch.tensor(ptsWeights).unsqueeze(1),2)
-
-                    plt.figure(i*len(pointPaths)+j)
-                    bins = plt.hist(ptsWeights,range=(0,200),bins=20,alpha=0.5)
-                    #median = (bins[1][np.argmax(bins[0])]+bins[1][np.argmax(bins[0])+1])/2
-                    medianInd = np.nonzero(np.r_[True, bins[0][1:] > bins[0][:-1]] & np.r_[bins[0][:-1] > bins[0][1:], True])[0][0]
-
-                    #print(medianInd,bins[0])
-                    median = (bins[1][medianInd]+bins[1][medianInd+1])/2
-                    #if (2*median < ptsWeights).sum() > 0:
-                    #    pts = pts[2*median < ptsWeights]
-                    #    ptsWeights = ptsWeights[2*median < ptsWeights]
-                    #else:
-                    print(median)
-                    pts = pts[2*median < ptsWeights]
-                    ptsWeights = ptsWeights[2*median < ptsWeights]
-                    plt.hist(ptsWeights,range=(0,200),bins=20,alpha=0.5)
-                    plt.savefig("../vis/{}/grid_norm_hist_{}_img{}.png".format(exp_id,model_ids[j],i))
-                    plt.close()
-
-                    #inds = ptsWeights.argsort()[-256:]
-                    #inds = inds[ptsWeights[inds] > 75]
-                    #bounding_pts = pts[inds][:,:2]
-                    #min,max = bounding_pts.min(dim=0)[0],bounding_pts.max(dim=0)[0]
-                    #ptsWeights = ptsWeights[(min[0] < pts[:,0])*(pts[:,0] < max[0])*(min[1] < pts[:,1])*(pts[:,1] < max[1])]
-                    #pts = pts[(min[0] < pts[:,0])*(pts[:,0] < max[0])*(min[1] < pts[:,1])*(pts[:,1] < max[1])]
 
                 if inverse_xy[j]:
                     x,y = pts[:,0],pts[:,1]
@@ -248,7 +222,14 @@ def plotPointsImageDatasetGrid(exp_id,imgNb,epochs,model_ids,reduction_fact_list
 
                 ptsWeights = (ptsWeights-ptsWeights.min())/(ptsWeights.max()-ptsWeights.min())
                 if not luminosity:
-                    ptsWeights = cmPlasma(ptsWeights)[:,:3]
+
+                    if cluster[j]:
+                        ptsWeights = umap.UMAP(n_components=3).fit_transform(ptsOrig[:,3:].cpu().detach().numpy())
+                        ptsWeights = (ptsWeights-ptsWeights.min())/(ptsWeights.max()-ptsWeights.min())
+                        #ptsWeights = np.concatenate((np.zeros((ptsWeights.shape[0],1)),ptsWeights),axis=-1)
+                    else:
+                        ptsWeights = cmPlasma(ptsWeights)[:,:3]
+
                 ptsImageCopy[:,y,x] =torch.tensor(ptsWeights).permute(1,0).float()
 
                 ptsImageCopy = ptsImageCopy.unsqueeze(0)
@@ -661,8 +642,10 @@ def main(argv=None):
     argreader.parser.add_argument('--plot_id',type=str,metavar="ID",help='The plot id',default="")
     argreader.parser.add_argument('--maps_inds',type=int,nargs="*",metavar="INT",help='The index of the attention map to use when there is several. If there only one or if there is none, set this to -1',default=[])
     argreader.parser.add_argument('--receptive_field',type=str2bool,nargs="*",metavar="BOOL",help='To plot with the effective receptive field',default=[])
+    argreader.parser.add_argument('--cluster',type=str2bool,nargs="*",metavar="BOOL",help='To cluster points with UMAP',default=[])
 
     argreader.parser.add_argument('--luminosity',type=str2bool,metavar="BOOL",help='To plot the attention maps not with a cmap but with luminosity',default=False)
+
 
     ######################################## Find failure cases #########################################""
 
@@ -698,7 +681,7 @@ def main(argv=None):
             args.exp_id = "CUB3"
         plotPointsImageDatasetGrid(args.exp_id,args.image_nb,args.epoch_list,args.model_ids,args.reduction_fact_list,args.inverse_xy,args.mode,\
                                     args.class_nb,args.use_dropped_list,args.force_feat,args.full_att_map,args.use_threshold,args.maps_inds,args.plot_id,\
-                                    args.luminosity,args.receptive_field,args)
+                                    args.luminosity,args.receptive_field,args.cluster,args)
     if args.plot_prob_maps:
         plotProbMaps(args.image_nb,args,args.norm)
     if args.list_best_pred:
@@ -720,6 +703,7 @@ def main(argv=None):
                             "noneHyp":"None - BS=12, Image size=448, StepLR",
                             "bil":"Bilinear","bilreg001":"Bilinear (\\lambda=0.01)","bilreg01":"Bilinear (\\lambda=0.1)","bilreg1":"Bilinear (\\lambda=1)",
                             "bilreg10":"Bilinear (\\lambda=10)","bilreg20":"Bilinear (\\lambda=20)","bilreg60":"Bilinear (\\lambda=60)",
+                            "bilSigm":"Bilinear - Sigmoid","bilRelu":"Bilinear - ReLU","bilReluMany":"Bilinear - ReLU - 32 Maps",
                             "patchnoredtext":"Patch (No Red) (Text. model)"}
 
         compileTest(args.exp_id,id_to_label_dict)
