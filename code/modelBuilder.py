@@ -565,7 +565,8 @@ class CNN2D_simpleAttention(FirstModel):
 class CNN2D_bilinearAttPool(FirstModel):
 
     def __init__(self, featModelName, pretrainedFeatMod=True, featMap=True, bigMaps=False, chan=64, attBlockNb=2,
-                 attChan=16,inFeat=512,nb_parts=3,aux_model=False,score_pred_act_func="softmax",**kwargs):
+                 attChan=16,inFeat=512,nb_parts=3,aux_model=False,score_pred_act_func="softmax",center_loss=False,\
+                 center_loss_beta=5e-2,num_classes=200,cuda=True,**kwargs):
 
         super(CNN2D_bilinearAttPool, self).__init__(featModelName, pretrainedFeatMod, featMap, bigMaps, **kwargs)
         self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
@@ -583,6 +584,12 @@ class CNN2D_bilinearAttPool(FirstModel):
             raise ValueError("Unkown activation function")
 
         self.aux_model = aux_model
+
+        self.center_loss = center_loss
+        if self.center_loss:
+            self.center_loss_beta = center_loss_beta
+            self.feature_center = torch.zeros(num_classes, nb_parts * inFeat)
+            self.feature_center = self.feature_center.cuda() if cuda else self.feature_center
 
     def forward(self, x):
         # N x C x H x L
@@ -606,12 +613,20 @@ class CNN2D_bilinearAttPool(FirstModel):
         retDict["x"] = features_agr
         retDict["x_size"] = features_weig.size()
         retDict["attMaps"] = spatialWeights
+        retDict["features"] = features
+
+        if self.center_loss:
+            retDict["feature_matrix"] = retDict["x"]
 
         if self.aux_model:
             retDict["auxFeat"] = features
 
         return retDict
 
+    def computeFeatCenter(self,target):
+        return F.normalize(self.feature_center[target], dim=-1)
+    def updateFeatCenter(self,feature_center_batch,features_agr,target):
+        self.feature_center[target] += self.center_loss_beta * (features_agr.detach() - feature_center_batch)
 
 def addOrCat(dict,key,tensor,dim):
     if not key in dict:
@@ -821,7 +836,9 @@ def netBuilder(args):
         if args.resnet_bilinear:
             CNNconst = CNN2D_bilinearAttPool
             kwargs = {"inFeat":nbFeat,"aux_model":args.aux_model,"nb_parts":args.resnet_bil_nb_parts,\
-                      "score_pred_act_func":args.resnet_simple_att_score_pred_act_func}
+                      "score_pred_act_func":args.resnet_simple_att_score_pred_act_func,
+                      "center_loss":args.bil_center_loss,"center_loss_beta":args.bil_center_loss_beta,\
+                      "cuda":args.cuda}
             nbFeatAux = nbFeat
             nbFeat *= args.resnet_bil_nb_parts
         elif args.resnet_simple_att:
@@ -1001,6 +1018,13 @@ def addArgs(argreader):
                                   help="The number of parts for the bilinear model.")
     argreader.parser.add_argument('--resnet_bilinear', type=args.str2bool, metavar='BOOL',
                                   help="To use bilinear attention")
+    argreader.parser.add_argument('--bil_center_loss', type=args.str2bool, metavar='BOOL',
+                                  help="To use center loss when using bilinear model")
+    argreader.parser.add_argument('--bil_center_loss_beta', type=float, metavar='BOOL',
+                                  help="The update rate term for the center loss.")
+
+
+
 
 
     argreader.parser.add_argument('--drop_and_crop', type=args.str2bool, metavar='BOOL',

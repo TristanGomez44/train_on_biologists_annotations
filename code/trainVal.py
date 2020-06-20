@@ -34,9 +34,6 @@ from torch.multiprocessing import Process
 
 import time
 
-
-
-
 def epochSeqTr(model, optim, log_interval, loader, epoch, args, writer, **kwargs):
     ''' Train a model during one epoch
 
@@ -74,6 +71,10 @@ def epochSeqTr(model, optim, log_interval, loader, epoch, args, writer, **kwargs
             data, target = data.cuda(), target.cuda()
 
         resDict = model(data)
+
+        if args.bil_center_loss:
+            resDict["feature_center_batch"] = model.firstModel.computeFeatCenter(target)
+            model.firstModel.updateFeatCenter(resDict["feature_center_batch"],resDict["feature_matrix"],target)
 
         output = resDict["pred"]
 
@@ -131,6 +132,11 @@ def computeLoss(args, output, target, resDict, data):
     if args.drop_nll_weight > 0:
         drop_term = args.drop_nll_weight*F.cross_entropy(resDict["pred_drop"], target)
         loss += drop_term
+    if args.center_loss_weight > 0:
+        center_term = F.mse_loss(resDict["feature_matrix"], resDict["feature_center_batch"],reduction="sum") / resDict["feature_matrix"].size(0)
+        print(loss.item(),center_term.item())
+        center_term *= args.center_loss_weight
+        loss += center_term
 
     return loss
 
@@ -210,6 +216,9 @@ def epochImgEval(model, log_interval, loader, epoch, args, writer, metricEarlySt
             batchSize_list.append(data.size(0))
         else:
             resDict = model(data)
+
+        if args.bil_center_loss:
+            resDict["feature_center_batch"] = model.firstModel.computeFeatCenter(target)
 
         output = resDict["pred"]
 
@@ -548,6 +557,10 @@ def addLossTermArgs(argreader):
                                   help='The weight of the negative log-likelihood term in the loss function for the crop term.')
     argreader.parser.add_argument('--drop_nll_weight', type=float, metavar='FLOAT',
                                   help='The weight of the negative log-likelihood term in the loss function for the drop term.')
+
+    argreader.parser.add_argument('--center_loss_weight', type=float, metavar='FLOAT',
+                                  help='The weight of the center loss term in the loss function when using bilinear model.')
+
 
     return argreader
 
