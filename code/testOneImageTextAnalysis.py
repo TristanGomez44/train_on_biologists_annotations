@@ -135,6 +135,10 @@ def main(argv=None):
                                   help="To normalize feature before applying neighbor refining",default=False)
 
 
+    argreader.parser.add_argument('--repr_vec', type=str2bool,
+                                  help="To run the representative vectors experiment",default=False)
+
+
     argreader = trainVal.addInitArgs(argreader)
     argreader = trainVal.addOptimArgs(argreader)
     argreader = trainVal.addValArgs(argreader)
@@ -148,29 +152,30 @@ def main(argv=None):
 
     args = argreader.args
 
-    #args.second_mod = "pointnet2"
-    args.pn_topk = True
-    args.pn_topk_euclinorm = False
-    args.texture_encoding = True
-    args.big_images = True
-
-    net = modelBuilder.netBuilder(args)
-    kwargs = {"momentum":args.momentum} if args.optim == "SGD" else {}
-
-    if args.crop:
-        transf = None
-    else:
-        transf = "identity"
-
-    trainLoader, _ = load_data.buildTrainLoader(args,transf=transf,shuffle=args.shuffle)
-
-    data,target =next(iter(trainLoader))
-    if args.data_batch_index>0:
-        for i in range(args.data_batch_index):
-            data,target =next(iter(trainLoader))
-
-
     if args.patch_sim:
+
+        #args.second_mod = "pointnet2"
+        args.pn_topk = True
+        args.pn_topk_euclinorm = False
+        args.texture_encoding = True
+        args.big_images = True
+
+        net = modelBuilder.netBuilder(args)
+        kwargs = {"momentum":args.momentum} if args.optim == "SGD" else {}
+
+        if args.crop:
+            transf = None
+        else:
+            transf = "identity"
+
+        trainLoader, _ = load_data.buildTrainLoader(args,transf=transf,shuffle=args.shuffle)
+
+        data,target =next(iter(trainLoader))
+        if args.data_batch_index>0:
+            for i in range(args.data_batch_index):
+                data,target =next(iter(trainLoader))
+
+
         with torch.no_grad():
 
             data = data.cuda() if args.cuda else data
@@ -345,6 +350,128 @@ def main(argv=None):
                     writeAllImg(None,firstAndSecondNeighSim_mean,i,simMapPath,"sparseNeighSim_step0_firstAndSecond_mean")
                     writeAllImg(None,firstAndSecondNeighSim_min,i,simMapPath,"sparseNeighSim_step0_firstAndSecond_min")
                     writeAllImg(None,firstAndSecondNeighSim_max,i,simMapPath,"sparseNeighSim_step0_firstAndSecond_max")
+
+    elif args.repr_vec:
+
+        #img = torch.rand((2,3,50,50))
+        img = torch.zeros((1,3,50,50))
+        img[0,1,:,:] = 1
+
+        img[0,1,:5,:5] = 0
+        img[0,0,:5,:5] = 50
+
+        img[0,:,-5:,:-5:] = 0
+        img[0,2,-5:,:-5:] = 25
+
+        n = 3
+
+        reprVecMod = RepresentativeVectors(n)
+        reprVecList = reprVecMod(img)
+
+        img_reprVecList = []
+        for reprVec in reprVecList:
+            img_reprVec = reprVec.unsqueeze(-1).unsqueeze(-1)
+            img_reprVec = torch.nn.functional.interpolate(img_reprVec, size=224)
+
+            img_reprVecList.append(img_reprVec)
+
+        img = torch.nn.functional.interpolate(img, size=224)
+        img_mean = torch.nn.functional.interpolate(img.mean(dim=(2,3),keepdim=True), size=224)
+        img = torch.cat([img,img_mean]+img_reprVecList,dim=0)
+
+        torchvision.utils.save_image(img,"../vis/repreVec.png",nrow=(n+3)*img.size(0))
+        #torchvision.utils.save_image(img_mean,"../vis/repreVec_initial_Image_mean.png")
+        #torchvision.utils.save_image(img_reprVec,"../vis/repreVec.png")
+
+class RepresentativeVectors(torch.nn.Module):
+    def __init__(self,nbVec):
+        super(RepresentativeVectors,self).__init__()
+        self.nbVec = nbVec
+    def forward(self,x):
+
+        x = x.permute(0,2,3,1).reshape(x.size(0),x.size(2)*x.size(3),x.size(1))
+        norm = torch.sqrt(torch.pow(x,2).sum(dim=-1))
+        #Adding small constant to prevent zero division
+        norm += 0.00001
+        raw_reprVec_score = norm
+
+        repreVecList = []
+
+        for i in range(self.nbVec):
+            raw_reprVec_norm,ind = raw_reprVec_score.max(dim=1,keepdim=True)
+            raw_reprVec = x[torch.arange(x.size(0)).unsqueeze(1),ind]
+            sim = (x*raw_reprVec).sum(dim=-1)/(norm*raw_reprVec_norm)
+            simNorm = sim/sim.sum(dim=1,keepdim=True)
+            reprVec = (x*simNorm.unsqueeze(-1)).sum(dim=1)
+
+            repreVecList.append(reprVec)
+            raw_reprVec_score = (1-sim)*raw_reprVec_score
+
+        return repreVecList
+
+def representativeVectorsPatch(x,kerSize=5):
+
+    #x = torch.ones(1,1,kerSize,kerSize)
+    #x = torch.normal(torch.ones(1,1,kerSize,kerSize), 0.001*torch.ones(1,1,kerSize,kerSize))
+    #x[0,0,0,0] = -1
+    origShape = x.size()
+    #print(x.size())
+    patch = F.unfold(x,kerSize,padding=kerSize//2)+0.00001
+    #print("unfold",patch.size())
+    patch = patch.permute(0,2,1)
+    #print("permute",patch.size())
+    patch = patch.reshape(origShape[0],origShape[2],origShape[3],origShape[1],kerSize,kerSize)
+    #print("reshape",patch.size())
+    patch = patch.reshape(patch.size(0)*patch.size(1)*patch.size(2),patch.size(3),patch.size(4)*patch.size(5))
+    #print("reshape",patch.size())
+    patch = patch.permute(0,2,1)
+    #print("permute",patch.size())
+    #print("patch size before norm",patch.size())
+
+    patchNorm = patch/torch.sqrt(torch.pow(patch,2).sum(dim=-1,keepdim=True))
+    sim = (patchNorm*patchNorm[:,patch.size(1)//2:patch.size(1)//2+1]).sum(dim=-1,keepdim=True)
+    #print(patchNorm.size(),patchNorm[:,patch.size(1)//2:patch.size(1)//2+1].size(),(patchNorm*patchNorm[:,patch.size(1)//2:patch.size(1)//2+1]).size())
+    #print("sim",sim.max(),sim.min(),sim.mean())
+    #sim = (sim+1)/2
+    sim = torch.softmax(50*sim,dim=1)
+    #sim = sim/sim.sum(dim=1,keepdim=True)
+    #print("sim",sim.max(),sim.min(),sim.mean())
+
+    reshapedPatch = patch.reshape(origShape[0],origShape[-2],origShape[-1],patch.size(-2),patch.size(-1))
+
+    #print(patch.size(),sim.size())
+    #print("Computing the ponderated average")
+    reprVec = (patch*sim).sum(dim=1,keepdim=True)
+    #print(reprVec.size())
+    reprVec = reprVec.reshape(origShape[0],origShape[2],origShape[3],reprVec.size(-2),reprVec.size(-1))
+    #print(reprVec.size())
+    reprVec = reprVec.squeeze(dim=-2)
+    #print(reprVec.size())
+    reprVec = reprVec.permute(0,3,1,2)
+    #print(x.size(),reprVec.size())
+
+    #sys.exit(0)
+
+    reprVecNoWei = patch.mean(dim=1,keepdim=True)
+    reprVecNoWei = reprVecNoWei.reshape(origShape[0],origShape[2],origShape[3],reprVecNoWei.size(-2),reprVecNoWei.size(-1))
+    reprVecNoWei = reprVecNoWei.squeeze(dim=-2)
+    reprVecNoWei = reprVecNoWei.permute(0,3,1,2)
+
+    '''
+    print(reprVecNoWei.min(dim=-1)[0].min(dim=-1)[0].min(dim=-1)[0])
+    print(reshapedPatch.min(dim=-1)[0].min(dim=-1)[0].min(dim=-1)[0].min(dim=-1)[0])
+    print(reprVec.min(dim=-1)[0].min(dim=-1)[0].min(dim=-1)[0])
+    print(x.min(dim=-1)[0].min(dim=-1)[0].min(dim=-1)[0])
+
+    print(reprVecNoWei.max(dim=-1)[0].max(dim=-1)[0].max(dim=-1)[0])
+    print(reshapedPatch.max(dim=-1)[0].max(dim=-1)[0].max(dim=-1)[0].max(dim=-1)[0])
+    print(reprVec.max(dim=-1)[0].max(dim=-1)[0].max(dim=-1)[0])
+    print(x.max(dim=-1)[0].max(dim=-1)[0].max(dim=-1)[0])
+
+    sys.exit(0)
+    '''
+
+    return reprVec
 
 def writeAllImg(distMapAgreg,neighSim,i,simMapPath,name):
     if not distMapAgreg is None:
@@ -525,11 +652,6 @@ def plotImg(img,path,cmap="gray"):
     plt.savefig(path)
     plt.close()
 
-class RepresentativeVectors(torch.nn.Module):
-    def __init__(self):
-        super(RepresentativeVectors,self).__init__()
-    def forward(self,features,patch_sim_neiref_neisimavgsize):
-        return representativeVectors(features,patch_sim_neiref_neisimavgsize)
 
 class ComputeTotalSim(torch.nn.Module):
     def __init__(self):
@@ -752,69 +874,7 @@ def shiftFeat(where,features,dilation=1,neigAvgSize=1,reprVec=False):
     maskShift = maskShift.mean(dim=1,keepdim=True)
     return featuresShift,maskShift
 
-def representativeVectors(x,kerSize=5):
 
-    #x = torch.ones(1,1,kerSize,kerSize)
-    #x = torch.normal(torch.ones(1,1,kerSize,kerSize), 0.001*torch.ones(1,1,kerSize,kerSize))
-    #x[0,0,0,0] = -1
-    origShape = x.size()
-    #print(x.size())
-    patch = F.unfold(x,kerSize,padding=kerSize//2)+0.00001
-    #print("unfold",patch.size())
-    patch = patch.permute(0,2,1)
-    #print("permute",patch.size())
-    patch = patch.reshape(origShape[0],origShape[2],origShape[3],origShape[1],kerSize,kerSize)
-    #print("reshape",patch.size())
-    patch = patch.reshape(patch.size(0)*patch.size(1)*patch.size(2),patch.size(3),patch.size(4)*patch.size(5))
-    #print("reshape",patch.size())
-    patch = patch.permute(0,2,1)
-    #print("permute",patch.size())
-    #print("patch size before norm",patch.size())
-
-    patchNorm = patch/torch.sqrt(torch.pow(patch,2).sum(dim=-1,keepdim=True))
-    sim = (patchNorm*patchNorm[:,patch.size(1)//2:patch.size(1)//2+1]).sum(dim=-1,keepdim=True)
-    #print(patchNorm.size(),patchNorm[:,patch.size(1)//2:patch.size(1)//2+1].size(),(patchNorm*patchNorm[:,patch.size(1)//2:patch.size(1)//2+1]).size())
-    #print("sim",sim.max(),sim.min(),sim.mean())
-    #sim = (sim+1)/2
-    sim = torch.softmax(50*sim,dim=1)
-    #sim = sim/sim.sum(dim=1,keepdim=True)
-    #print("sim",sim.max(),sim.min(),sim.mean())
-
-    reshapedPatch = patch.reshape(origShape[0],origShape[-2],origShape[-1],patch.size(-2),patch.size(-1))
-
-    #print(patch.size(),sim.size())
-    #print("Computing the ponderated average")
-    reprVec = (patch*sim).sum(dim=1,keepdim=True)
-    #print(reprVec.size())
-    reprVec = reprVec.reshape(origShape[0],origShape[2],origShape[3],reprVec.size(-2),reprVec.size(-1))
-    #print(reprVec.size())
-    reprVec = reprVec.squeeze(dim=-2)
-    #print(reprVec.size())
-    reprVec = reprVec.permute(0,3,1,2)
-    #print(x.size(),reprVec.size())
-
-    #sys.exit(0)
-
-    reprVecNoWei = patch.mean(dim=1,keepdim=True)
-    reprVecNoWei = reprVecNoWei.reshape(origShape[0],origShape[2],origShape[3],reprVecNoWei.size(-2),reprVecNoWei.size(-1))
-    reprVecNoWei = reprVecNoWei.squeeze(dim=-2)
-    reprVecNoWei = reprVecNoWei.permute(0,3,1,2)
-
-    '''
-    print(reprVecNoWei.min(dim=-1)[0].min(dim=-1)[0].min(dim=-1)[0])
-    print(reshapedPatch.min(dim=-1)[0].min(dim=-1)[0].min(dim=-1)[0].min(dim=-1)[0])
-    print(reprVec.min(dim=-1)[0].min(dim=-1)[0].min(dim=-1)[0])
-    print(x.min(dim=-1)[0].min(dim=-1)[0].min(dim=-1)[0])
-
-    print(reprVecNoWei.max(dim=-1)[0].max(dim=-1)[0].max(dim=-1)[0])
-    print(reshapedPatch.max(dim=-1)[0].max(dim=-1)[0].max(dim=-1)[0].max(dim=-1)[0])
-    print(reprVec.max(dim=-1)[0].max(dim=-1)[0].max(dim=-1)[0])
-    print(x.max(dim=-1)[0].max(dim=-1)[0].max(dim=-1)[0])
-
-    sys.exit(0)
-    '''
-
-    return reprVec
 
 def applyDiffKer_CosSimi(direction,features,dilation=1,neigAvgSize=1,reprVec=False):
     origFeatSize = features.size()

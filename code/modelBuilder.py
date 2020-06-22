@@ -562,26 +562,56 @@ class CNN2D_simpleAttention(FirstModel):
 
         return retDict
 
+def representativeVectors(x,nbVec):
+    xOrigShape = x.size()
+    x = x.permute(0,2,3,1).reshape(x.size(0),x.size(2)*x.size(3),x.size(1))
+    norm = torch.sqrt(torch.pow(x,2).sum(dim=-1)) + 0.00001
+    raw_reprVec_score = norm.clone()
+
+    repreVecList = []
+    simList = []
+    for i in range(nbVec):
+        raw_reprVec_norm,ind = raw_reprVec_score.max(dim=1,keepdim=True)
+        raw_reprVec = x[torch.arange(x.size(0)).unsqueeze(1),ind]
+        sim = (x*raw_reprVec).sum(dim=-1)/(norm*raw_reprVec_norm)
+        simNorm = sim/sim.sum(dim=1,keepdim=True)
+        reprVec = (x*simNorm.unsqueeze(-1)).sum(dim=1)
+
+        repreVecList.append(reprVec)
+        raw_reprVec_score = (1-sim)*raw_reprVec_score
+
+        simList.append(sim.reshape(sim.size(0),1,xOrigShape[2],xOrigShape[3]))
+
+    return repreVecList,simList
+
 class CNN2D_bilinearAttPool(FirstModel):
 
     def __init__(self, featModelName, pretrainedFeatMod=True, featMap=True, bigMaps=False, chan=64, attBlockNb=2,
                  attChan=16,inFeat=512,nb_parts=3,aux_model=False,score_pred_act_func="softmax",center_loss=False,\
-                 center_loss_beta=5e-2,num_classes=200,cuda=True,**kwargs):
+                 center_loss_beta=5e-2,num_classes=200,cuda=True,cluster=False,**kwargs):
 
         super(CNN2D_bilinearAttPool, self).__init__(featModelName, pretrainedFeatMod, featMap, bigMaps, **kwargs)
         self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
 
-        self.attention = buildImageAttention(inFeat,attBlockNb,nb_parts+1)
+        if not cluster:
+            self.attention = buildImageAttention(inFeat,attBlockNb,nb_parts+1)
+        else:
+            self.attention = None
+
         self.nb_parts = nb_parts
 
-        if score_pred_act_func == "softmax":
-            self.attention_activation = SoftMax(norm=False,dim=1)
-        elif score_pred_act_func == "relu":
-            self.attention_activation = torch.relu
-        elif score_pred_act_func == "sigmoid":
-            self.attention_activation = torch.sigmoid
+        self.cluster = cluster
+        if not cluster:
+            if score_pred_act_func == "softmax":
+                self.attention_activation = SoftMax(norm=False,dim=1)
+            elif score_pred_act_func == "relu":
+                self.attention_activation = torch.relu
+            elif score_pred_act_func == "sigmoid":
+                self.attention_activation = torch.sigmoid
+            else:
+                raise ValueError("Unkown activation function : ",score_pred_act_func)
         else:
-            raise ValueError("Unkown activation function")
+            self.attention_activation = None
 
         self.aux_model = aux_model
 
@@ -604,14 +634,19 @@ class CNN2D_bilinearAttPool(FirstModel):
 
         retDict = {}
 
-        spatialWeights = self.attention_activation(self.attention(features))
-        features_weig = (spatialWeights[:,:self.nb_parts].unsqueeze(2)*features.unsqueeze(1)).reshape(features.size(0),features.size(1)*(spatialWeights.size(1)-1),features.size(2),features.size(3))
-        features_agr = self.avgpool(features_weig)
+        if not self.cluster:
+            spatialWeights = self.attention_activation(self.attention(features))
+            features_weig = (spatialWeights[:,:self.nb_parts].unsqueeze(2)*features.unsqueeze(1)).reshape(features.size(0),features.size(1)*(spatialWeights.size(1)-1),features.size(2),features.size(3))
+            features_agr = self.avgpool(features_weig)
+            retDict["x_size"] = features_weig.size()
+        else:
+            vecList,simList = representativeVectors(features,self.nb_parts)
+            features_agr = torch.cat(vecList,dim=-1)
+            spatialWeights = torch.cat(simList,dim=1)
 
         features_agr = features_agr.view(features.size(0), -1)
 
         retDict["x"] = features_agr
-        retDict["x_size"] = features_weig.size()
         retDict["attMaps"] = spatialWeights
         retDict["features"] = features
 
@@ -838,7 +873,7 @@ def netBuilder(args):
             kwargs = {"inFeat":nbFeat,"aux_model":args.aux_model,"nb_parts":args.resnet_bil_nb_parts,\
                       "score_pred_act_func":args.resnet_simple_att_score_pred_act_func,
                       "center_loss":args.bil_center_loss,"center_loss_beta":args.bil_center_loss_beta,\
-                      "cuda":args.cuda}
+                      "cuda":args.cuda,"cluster":args.bil_cluster}
             nbFeatAux = nbFeat
             nbFeat *= args.resnet_bil_nb_parts
         elif args.resnet_simple_att:
@@ -1023,13 +1058,10 @@ def addArgs(argreader):
     argreader.parser.add_argument('--bil_center_loss_beta', type=float, metavar='BOOL',
                                   help="The update rate term for the center loss.")
 
-
-
-
+    argreader.parser.add_argument('--bil_cluster', type=args.str2bool, metavar='BOOL',
+                                  help="To have a cluster bilinear")
 
     argreader.parser.add_argument('--drop_and_crop', type=args.str2bool, metavar='BOOL',
                                   help="To crop and drop part of the images where the attention is focused.")
-
-
 
     return argreader
