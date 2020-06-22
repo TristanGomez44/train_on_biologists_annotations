@@ -600,7 +600,25 @@ def compileTest(exp_id,id_to_label_dict):
     #fullArray = np.concatenate((model_id_list[:,np.newaxis],perf_list[:,np.newaxis]),axis=1)
     #np.savetxt("../results/{}/test.csv".format(exp_id),fullArray,header=header,fmt="%s",delimiter=",")
 
+def umapPlot(exp_id,model_id):
+    cm = plt.get_cmap('plasma')
+    bestPaths = sorted(glob.glob("../models/{}/*{}*best*".format(exp_id,model_id)))
+    if len(bestPaths) > 1:
+        raise ValueError("Multiple best weight files for model {} : {}".format(model_id,len(bestPaths)))
+    bestPath = bestPaths[0]
 
+    bestEpoch = utils.findNumbers(os.path.basename(bestPath).split("best")[-1])
+    features = np.load("../results/{}/points_{}_epoch{}_val.npy".format(exp_id,model_id,bestEpoch))[:,:,3:]
+    print(features.shape)
+    for i in range(10):
+        #feat = features[i].transpose(1,2,0).reshape(features[i].shape[1]*features[i].shape[2],features[i].shape[0])
+        feat = features[i]
+        features_emb = umap.UMAP(n_components=2).fit_transform(feat)
+        features_norm = np.sqrt(np.power(feat,2).sum(axis=-1))
+        features_norm = (features_norm-features_norm.min())/(features_norm.max()-features_norm.min())
+        plt.figure()
+        plt.scatter(features_emb[:,0],features_emb[:,1],color=cm(features_norm)[:,:3])
+        plt.savefig("../vis/{}/umap_{}_img{}.png".format(exp_id,model_id,i))
 
 def main(argv=None):
 
@@ -664,7 +682,9 @@ def main(argv=None):
 
     argreader.parser.add_argument('--compile_test',action="store_true",help='To compile the test performance of all model of an experiment. The --exp_id arg must be set.')
 
+    ####################################### UMAP ############################################
 
+    argreader.parser.add_argument('--umap',action="store_true",help='To plot features using UMAP')
 
     argreader = load_data.addArgs(argreader)
 
@@ -690,6 +710,8 @@ def main(argv=None):
         findHardImage(args.exp_id,args.dataset_size,args.threshold,args.dataset_name,args.train_prop,args.nb_class)
     if args.efficiency_plot:
         efficiencyPlot(args.exp_id,args.model_ids,args.epoch_list)
+    if args.umap:
+        umapPlot(args.exp_id,args.model_id)
     if args.compile_test:
 
         id_to_label_dict = {"1x1":"Score prediction","none":"None","noneNoRed":"None - Stride=1","sobel":"Sobel","patchsim":"Patch Similarity","norm":"Norm","normDropCrop":"Norm + WS-DAN",
