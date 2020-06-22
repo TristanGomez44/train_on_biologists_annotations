@@ -81,12 +81,11 @@ class DataParallelModel(nn.DataParallel):
 
 class Model(nn.Module):
 
-    def __init__(self, firstModel, secondModel,nbFeat=512,drop_and_crop=False,zoom=False,zoom_max_sub_clouds=2,zoom_merge_preds=False,passOrigImage=False,reducedImgSize=1):
+    def __init__(self, firstModel, secondModel,nbFeat=512,drop_and_crop=False,zoom=False,zoom_max_sub_clouds=2,zoom_merge_preds=False,reducedImgSize=1):
         super(Model, self).__init__()
         self.firstModel = firstModel
         self.secondModel = secondModel
         self.zoom = zoom
-        self.passOrigImage = passOrigImage
         self.reducedImgSize = reducedImgSize
         self.subcloudNb = zoom_max_sub_clouds
         self.zoom_merge_preds = zoom_merge_preds
@@ -104,11 +103,7 @@ class Model(nn.Module):
 
         visResDict = self.firstModel(imgBatch)
 
-        secModKwargs = {}
-        if self.passOrigImage:
-            secModKwargs["origImgBatch"] = origImgBatch
-
-        resDict = self.secondModel(visResDict,**secModKwargs)
+        resDict = self.secondModel(visResDict)
 
         resDict = merge(visResDict,resDict)
 
@@ -588,7 +583,7 @@ class CNN2D_bilinearAttPool(FirstModel):
 
     def __init__(self, featModelName, pretrainedFeatMod=True, featMap=True, bigMaps=False, chan=64, attBlockNb=2,
                  attChan=16,inFeat=512,nb_parts=3,aux_model=False,score_pred_act_func="softmax",center_loss=False,\
-                 center_loss_beta=5e-2,num_classes=200,cuda=True,cluster=False,**kwargs):
+                 center_loss_beta=5e-2,num_classes=200,cuda=True,cluster=False,cluster_ensemble=False,**kwargs):
 
         super(CNN2D_bilinearAttPool, self).__init__(featModelName, pretrainedFeatMod, featMap, bigMaps, **kwargs)
         self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
@@ -612,6 +607,7 @@ class CNN2D_bilinearAttPool(FirstModel):
                 raise ValueError("Unkown activation function : ",score_pred_act_func)
         else:
             self.attention_activation = None
+            self.cluster_ensemble = cluster_ensemble
 
         self.aux_model = aux_model
 
@@ -639,12 +635,15 @@ class CNN2D_bilinearAttPool(FirstModel):
             features_weig = (spatialWeights[:,:self.nb_parts].unsqueeze(2)*features.unsqueeze(1)).reshape(features.size(0),features.size(1)*(spatialWeights.size(1)-1),features.size(2),features.size(3))
             features_agr = self.avgpool(features_weig)
             retDict["x_size"] = features_weig.size()
+            features_agr = features_agr.view(features.size(0), -1)
         else:
             vecList,simList = representativeVectors(features,self.nb_parts)
-            features_agr = torch.cat(vecList,dim=-1)
-            spatialWeights = torch.cat(simList,dim=1)
+            if not self.cluster_ensemble:
+                features_agr = torch.cat(vecList,dim=-1)
+            else:
+                features_agr = vecList
 
-        features_agr = features_agr.view(features.size(0), -1)
+            spatialWeights = torch.cat(simList,dim=1)
 
         retDict["x"] = features_agr
         retDict["attMaps"] = spatialWeights
@@ -682,7 +681,7 @@ class SecondModel(nn.Module):
 
 class LinearSecondModel(SecondModel):
 
-    def __init__(self, nbFeat, nbFeatAux,nbClass, dropout,aux_model=False,zoom=False,zoom_max_sub_clouds=2):
+    def __init__(self, nbFeat, nbFeatAux,nbClass, dropout,aux_model=False,zoom=False,zoom_max_sub_clouds=2,bil_cluster_ensemble=False):
         super(LinearSecondModel, self).__init__(nbFeat, nbClass)
         self.dropout = nn.Dropout(p=dropout)
         self.linLay = nn.Linear(self.nbFeat, self.nbClass)
@@ -696,20 +695,29 @@ class LinearSecondModel(SecondModel):
         if self.zoom:
             self.zoom_model = nn.Linear(zoom_max_sub_clouds*nbFeat,self.nbClass)
 
+        self.bil_cluster_ensemble = bil_cluster_ensemble
     def forward(self, visResDict):
 
-        x = visResDict["x"]
+        if not self.bil_cluster_ensemble:
+            x = visResDict["x"]
 
-        if len(x.size()) == 4:
-            x = self.avgpool(x).squeeze(-1).squeeze(-1)
+            if len(x.size()) == 4:
+                x = self.avgpool(x).squeeze(-1).squeeze(-1)
 
-        x = self.dropout(x)
-        if x.size(-1) == self.nbFeat:
-            x = self.linLay(x)
+            x = self.dropout(x)
+            if x.size(-1) == self.nbFeat:
+                x = self.linLay(x)
+            else:
+                x = self.zoom_model(x)
+            retDict = {"pred": x}
         else:
-            x = self.zoom_model(x)
+            predList = []
+            for featVec in visResDict["x"]:
+                predList.append(self.linLay(featVec).unsqueeze(0))
+            x = torch.cat(predList,dim=0).mean(dim=0)
 
-        retDict = {"pred": x}
+            retDict = {"pred": x}
+            retDict.update({"predBilClusEns{}".format(i):predList[i][0] for i in range(len(predList))})
 
         if self.aux_model:
             retDict["auxPred"] = self.aux_model(visResDict["auxFeat"].mean(dim=-1).mean(dim=-1))
@@ -873,9 +881,10 @@ def netBuilder(args):
             kwargs = {"inFeat":nbFeat,"aux_model":args.aux_model,"nb_parts":args.resnet_bil_nb_parts,\
                       "score_pred_act_func":args.resnet_simple_att_score_pred_act_func,
                       "center_loss":args.bil_center_loss,"center_loss_beta":args.bil_center_loss_beta,\
-                      "cuda":args.cuda,"cluster":args.bil_cluster}
+                      "cuda":args.cuda,"cluster":args.bil_cluster,"cluster_ensemble":args.bil_cluster_ensemble}
             nbFeatAux = nbFeat
-            nbFeat *= args.resnet_bil_nb_parts
+            if not args.bil_cluster_ensemble:
+                nbFeat *= args.resnet_bil_nb_parts
         elif args.resnet_simple_att:
             CNNconst = CNN2D_simpleAttention
             kwargs = {"inFeat":nbFeat,
@@ -933,15 +942,14 @@ def netBuilder(args):
         raise ValueError("zoom must be used with linear second model")
 
     if args.second_mod == "linear":
-        secondModel = LinearSecondModel(nbFeat,nbFeatAux, args.class_nb, args.dropout,args.aux_model,**zoomArgs)
+        secondModel = LinearSecondModel(nbFeat,nbFeatAux, args.class_nb, args.dropout,args.aux_model,bil_cluster_ensemble=args.bil_cluster_ensemble,**zoomArgs)
     else:
         raise ValueError("Unknown temporal model type : ", args.second_mod)
 
     ############### Whole Model ##########################
 
     net = Model(firstModel, secondModel,drop_and_crop=args.drop_and_crop,zoom=args.zoom,zoom_max_sub_clouds=args.zoom_max_sub_clouds,\
-                zoom_merge_preds=args.zoom_merge_preds,\
-                passOrigImage=False,reducedImgSize=args.reduced_img_size)
+                zoom_merge_preds=args.zoom_merge_preds,reducedImgSize=args.reduced_img_size)
 
     if args.cuda:
         net.cuda()
@@ -1060,6 +1068,8 @@ def addArgs(argreader):
 
     argreader.parser.add_argument('--bil_cluster', type=args.str2bool, metavar='BOOL',
                                   help="To have a cluster bilinear")
+    argreader.parser.add_argument('--bil_cluster_ensemble', type=args.str2bool, metavar='BOOL',
+                                  help="To classify each of the feature vector obtained and then aggregates those decision.")
 
     argreader.parser.add_argument('--drop_and_crop', type=args.str2bool, metavar='BOOL',
                                   help="To crop and drop part of the images where the attention is focused.")
