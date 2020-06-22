@@ -583,7 +583,7 @@ class CNN2D_bilinearAttPool(FirstModel):
 
     def __init__(self, featModelName, pretrainedFeatMod=True, featMap=True, bigMaps=False, chan=64, attBlockNb=2,
                  attChan=16,inFeat=512,nb_parts=3,aux_model=False,score_pred_act_func="softmax",center_loss=False,\
-                 center_loss_beta=5e-2,num_classes=200,cuda=True,cluster=False,cluster_ensemble=False,**kwargs):
+                 center_loss_beta=5e-2,num_classes=200,cuda=True,cluster=False,cluster_ensemble=False,normFeat=False,**kwargs):
 
         super(CNN2D_bilinearAttPool, self).__init__(featModelName, pretrainedFeatMod, featMap, bigMaps, **kwargs)
         self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
@@ -594,7 +594,7 @@ class CNN2D_bilinearAttPool(FirstModel):
             self.attention = None
 
         self.nb_parts = nb_parts
-
+        self.normFeat = normFeat
         self.cluster = cluster
         if not cluster:
             if score_pred_act_func == "softmax":
@@ -627,6 +627,9 @@ class CNN2D_bilinearAttPool(FirstModel):
             features = output["x"]
         else:
             features = output
+
+        if self.normFeat:
+            features = features/torch.sqrt(torch.pow(features,2).sum(dim=1,keepdim=True))
 
         retDict = {}
 
@@ -881,7 +884,8 @@ def netBuilder(args):
             kwargs = {"inFeat":nbFeat,"aux_model":args.aux_model,"nb_parts":args.resnet_bil_nb_parts,\
                       "score_pred_act_func":args.resnet_simple_att_score_pred_act_func,
                       "center_loss":args.bil_center_loss,"center_loss_beta":args.bil_center_loss_beta,\
-                      "cuda":args.cuda,"cluster":args.bil_cluster,"cluster_ensemble":args.bil_cluster_ensemble}
+                      "cuda":args.cuda,"cluster":args.bil_cluster,"cluster_ensemble":args.bil_cluster_ensemble,
+                      "normFeat":args.bil_norm_feat}
             nbFeatAux = nbFeat
             if not args.bil_cluster_ensemble:
                 nbFeat *= args.resnet_bil_nb_parts
@@ -1070,6 +1074,8 @@ def addArgs(argreader):
                                   help="To have a cluster bilinear")
     argreader.parser.add_argument('--bil_cluster_ensemble', type=args.str2bool, metavar='BOOL',
                                   help="To classify each of the feature vector obtained and then aggregates those decision.")
+    argreader.parser.add_argument('--bil_norm_feat', type=args.str2bool, metavar='BOOL',
+                                  help="To normalize feature before computing attention")
 
     argreader.parser.add_argument('--drop_and_crop', type=args.str2bool, metavar='BOOL',
                                   help="To crop and drop part of the images where the attention is focused.")
