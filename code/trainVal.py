@@ -304,10 +304,7 @@ def writeSummaries(metrDict, totalImgNb, writer, epoch, mode, model_id, exp_id):
         else:
             writer.add_scalars(metric, {model_id + "_" + mode: metrDict[metric]}, epoch)
 
-    if not os.path.exists("../results/{}/model{}_epoch{}_metrics_{}.csv".format(exp_id, model_id, epoch, mode)):
-        header = [metric.lower().replace(" ", "_") for metric in metrDict.keys()]
-    else:
-        header = ""
+    header = ",".join([metric.lower().replace(" ", "_") for metric in metrDict.keys()])
 
     with open("../results/{}/model{}_epoch{}_metrics_{}.csv".format(exp_id, model_id, epoch, mode), "a") as text_file:
         print(header, file=text_file)
@@ -383,7 +380,7 @@ def initialize_Net_And_EpochNumber(net, exp_id, model_id, cuda, start_mode, init
 
         # Start epoch is 1 if strict if false because strict=False means that it is another model which is being trained
         if strict:
-            startEpoch = utils.findLastNumbers(init_path)
+            startEpoch = utils.findLastNumbers(init_path)+1
         else:
             startEpoch = 1
 
@@ -660,8 +657,8 @@ def run(args):
 
             kwargsTest['loader'] = testLoader
 
-            net.load_state_dict(torch.load("../models/{}/model{}_best_epoch{}".format(args.exp_id, args.model_id, bestEpoch),
-                                           map_location="cpu" if not args.cuda else None))
+            net = preprocessAndLoadParams("../models/{}/model{}_best_epoch{}".format(args.exp_id, args.model_id, bestEpoch),args.cuda,net,args.strict_init)
+
             kwargsTest["model"] = net
             kwargsTest["epoch"] = bestEpoch
 
