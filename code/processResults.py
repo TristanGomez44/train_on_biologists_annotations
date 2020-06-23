@@ -450,7 +450,6 @@ def efficiencyPlot(exp_id,model_ids,epoch_list):
     plt.ylim(0,1)
     plt.savefig("../vis/{}/acc_vs_paramNb.png".format(exp_id))
 
-
 def em(x,k):
 
     n = len(x)  # must be even number
@@ -490,17 +489,9 @@ def em(x,k):
 
     return pi
 
-def getTestPerf(path,accuracy_rawcrop):
-
-    if accuracy_rawcrop:
-        perf = np.genfromtxt(path,delimiter="?",dtype=str)[1].split(",")[8]
-    else:
-        perf = np.genfromtxt(path,delimiter="?",dtype=str)[1].split(",")[0]
-    perf = float(perf.replace("tensor(",""))
-    return perf
-
 def compileTest(exp_id,id_to_label_dict):
 
+    metricsToMax = {"accuracy":True,"latency":False,"sparsity":False}
     header = 'Pixel weighting,Pixel selection,Classification,Accuracy'
     testFilePaths = glob.glob("../results/{}/*metrics_test*".format(exp_id))
 
@@ -519,9 +510,15 @@ def compileTest(exp_id,id_to_label_dict):
         model_id_list.append(model_id)
         perf_list.append(test_perf)
 
-    model_id_list,perf_list = np.array(model_id_list),np.array(perf_list)
+    model_id_list = np.array(model_id_list)
+    perf_list = {metric:np.array([perf_list[i][metric] for i in range(len(perf_list))]) for metric in metricsToMax.keys()}
 
-    bestPerf = perf_list.max()
+    bestPerf = {}
+    for metric in perf_list.keys():
+        if metricsToMax[metric]:
+            bestPerf[metric] = np.ma.array(perf_list[metric], mask=np.isnan(perf_list[metric])).max()
+        else:
+            bestPerf[metric] = np.ma.array(perf_list[metric], mask=np.isnan(perf_list[metric])).min()
 
     dic = {}
 
@@ -536,28 +533,14 @@ def compileTest(exp_id,id_to_label_dict):
             dic[keys[0]][keys[1]] = {}
 
         if not keys[2] in dic[keys[0]][keys[1]]:
-            dic[keys[0]][keys[1]][keys[2]] = perf_list[i]
+            dic[keys[0]][keys[1]][keys[2]] = {metric:perf_list[metric][i] for metric in perf_list.keys()}
 
         model_id_list[i] = ','.join(keys)
 
-    new_model_id_list = []
-    new_perf_list = []
-
-    for key1 in sorted(dic):
-        for key2 in sorted(dic[key1]):
-            for key3 in sorted(dic[key1][key2]):
-                new_model_id_list.append(",".join([key1,key2,key3]))
-                new_perf_list.append(dic[key1][key2][key3])
-
-    model_id_list = new_model_id_list
-    perf_list = new_perf_list
-
-    model_id_list,perf_list = np.array(model_id_list),np.array(perf_list)
-
     latexTable = '\\begin{table}[t]  \n' + \
-                  '\\centering  \n' + \
-                  '\\begin{tabular}{*4c}\\toprule  \n' + \
-                  'Pixel weighting & Pixel selection & Classification & Accuracy \\\\ \n' + \
+                  '\\hspace{-3cm}  \n' + \
+                  '\\begin{tabular}{*6c}\\toprule  \n' + \
+                  'Pixel weighting & Pixel selection & Classification & Accuracy & Sparsity & Latency \\\\ \n' + \
                   '\\hline \n'
 
     for key1 in sorted(dic):
@@ -579,10 +562,20 @@ def compileTest(exp_id,id_to_label_dict):
 
                 latexTable += id_to_label_dict[key3] + " & "
 
-                if round(dic[key1][key2][key3],2) == round(bestPerf,2):
-                    latexTable += "$\\mathbf{"+str(round(dic[key1][key2][key3],2)) + "}$ \\\\ \n"
-                else:
-                    latexTable += "$"+str(round(dic[key1][key2][key3],2)) + "$ \\\\ \n"
+                for l,metric in enumerate(bestPerf.keys()):
+
+                    if not np.isnan(dic[key1][key2][key3][metric]):
+                        if round(dic[key1][key2][key3][metric],2) == round(bestPerf[metric],2):
+                            latexTable += "$\\mathbf{"+str(round(dic[key1][key2][key3][metric],2)) + "}$ "
+                        else:
+                            latexTable += "$"+str(round(dic[key1][key2][key3][metric],2)) + "$ "
+                    else:
+                        latexTable += "-"
+
+                    if l < len(bestPerf.keys()) - 1:
+                        latexTable += " & "
+
+                latexTable += " \\\\ \n"
 
             if j < len(dic[key1]) -1:
                 latexTable += '\\cline{2-4} \n'
@@ -593,12 +586,42 @@ def compileTest(exp_id,id_to_label_dict):
     with open("../results/{}/test.csv".format(exp_id),"w") as text_file:
         print(latexTable,file=text_file)
 
-    #sorted_args = np.argsort(perf_list)
-    #model_id_list = model_id_list[sorted_args]
-    #perf_list = perf_list[sorted_args]
+def getTestPerf(path,accuracy_rawcrop):
 
-    #fullArray = np.concatenate((model_id_list[:,np.newaxis],perf_list[:,np.newaxis]),axis=1)
-    #np.savetxt("../results/{}/test.csv".format(exp_id),fullArray,header=header,fmt="%s",delimiter=",")
+    try:
+        perf = np.genfromtxt(path,delimiter=",",dtype=str)
+        newFormat=True
+    except ValueError:
+        newFormat=False
+
+    if not newFormat:
+        perf = np.genfromtxt(path,delimiter="?",dtype=str)[1].split(",")
+        if accuracy_rawcrop:
+            perf = perf[8]
+        else:
+            perf = perf[0]
+        perf = float(perf.replace("tensor(",""))
+        return {"accuracy":perf,"sparsity":np.nan,"latency":np.nan}
+    else:
+        perf = np.genfromtxt(path,delimiter=",",dtype=str)
+        metrics = ["accuracy","sparsity"]
+        if accuracy_rawcrop:
+            metrics[0] = "accuracy_rawcrop"
+
+        metrics_dict = {}
+        for metric in metrics:
+            if accuracy_rawcrop and metric == "accuracy":
+                metrics_dict[metric] = float(perf[1][np.argwhere(perf[0] == "accuracy_rawcrop")])
+            else:
+                metrics_dict[metric] = float(perf[1][np.argwhere(perf[0] == metric)])
+
+        latency_path = path.replace("model","latency_").replace("_metrics_test","")
+        latency = np.genfromtxt(latency_path,delimiter=",")[3:-1,0].mean()
+
+        metrics_dict["latency"] = latency
+
+        return metrics_dict
+
 
 def umapPlot(exp_id,model_id):
     cm = plt.get_cmap('plasma')
@@ -726,6 +749,8 @@ def main(argv=None):
                             "bil":"Bilinear","bilreg001":"Bilinear (\\lambda=0.01)","bilreg01":"Bilinear (\\lambda=0.1)","bilreg1":"Bilinear (\\lambda=1)",
                             "bilreg10":"Bilinear (\\lambda=10)","bilreg20":"Bilinear (\\lambda=20)","bilreg60":"Bilinear (\\lambda=60)",
                             "bilSigm":"Bilinear - Sigmoid","bilRelu":"Bilinear - ReLU","bilReluMany":"Bilinear - ReLU - 32 Maps",
+                            "bilClus":"Bilinear - Clustering","bilClusEns":"Bilinear - Clustering + Ensembling","bilFeatNorm":"Bilinear - Feature normalisation",
+                            "bilReluMany00001CL":"Bilinear - ReLU - 32 Maps - $\\lambda_{CL}=0,0001$","bilReluMany0001CL":"Bilinear - ReLU - 32 Maps - $\\lambda_{CL}=0,001$",
                             "patchnoredtext":"Patch (No Red) (Text. model)"}
 
         compileTest(args.exp_id,id_to_label_dict)
