@@ -402,6 +402,7 @@ class CNN2D(FirstModel):
         retDict = {}
         retDict["attMaps"] = spatialWeights
         retDict["x"] = features
+        retDict["features"] = retDict["x"]
 
         if self.aux_model:
             retDict["auxFeat"] = features

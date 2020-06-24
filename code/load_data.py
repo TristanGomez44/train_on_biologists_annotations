@@ -15,6 +15,8 @@ import utils
 import torch.distributed as dist
 from random import Random
 import albumentations
+import scipy.io
+import imageDatasetWithSeg
 
 class Partition(object):
 
@@ -50,7 +52,8 @@ class DataPartitioner(object):
         return Partition(self.data, self.partitions[partition])
 
 
-def buildTrainLoader(args,transf=None,shuffle=True):
+
+def buildTrainLoader(args,transf=None,shuffle=True,withSeg=False):
     normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
     resizedImgSize = 500 if args.big_images else 224
     if transf is None:
@@ -79,9 +82,13 @@ def buildTrainLoader(args,transf=None,shuffle=True):
 
     if transf == "identity":
         transf = transforms.Compose([transforms.Resize((resizedImgSize,resizedImgSize)), transforms.ToTensor()])
-        train_dataset = torchvision.datasets.ImageFolder("../data/{}".format(args.dataset_train),transf)
+
+    if withSeg:
+        datasetConst = imageDatasetWithSeg.ImageFolderWithSeg
     else:
-        train_dataset = torchvision.datasets.ImageFolder("../data/{}".format(args.dataset_train), transf)
+        datasetConst = torchvision.datasets.ImageFolder
+
+    train_dataset = datasetConst("../data/{}".format(args.dataset_train), transf)
 
     totalLength = len(train_dataset)
 
@@ -115,7 +122,7 @@ def buildTrainLoader(args,transf=None,shuffle=True):
     return trainLoader, train_dataset
 
 
-def buildTestLoader(args, mode,shuffle=False):
+def buildTestLoader(args, mode,shuffle=False,withSeg=False):
     datasetName = getattr(args, "dataset_{}".format(mode))
 
     resizedImgSize = 500 if args.big_images else 224
@@ -129,8 +136,12 @@ def buildTestLoader(args, mode,shuffle=False):
         normalizeFunc = transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
         transf = transforms.Compose([transf, normalizeFunc])
 
+    if withSeg:
+        datasetConst = imageDatasetWithSeg.ImageFolderWithSeg
+    else:
+        datasetConst = torchvision.datasets.ImageFolder
 
-    test_dataset = torchvision.datasets.ImageFolder("../data/{}".format(datasetName), transf)
+    test_dataset = datasetConst("../data/{}".format(datasetName), transf)
 
     if mode == "val" and args.dataset_train == args.dataset_val:
         np.random.seed(1)
@@ -194,6 +205,8 @@ def addArgs(argreader):
     argreader.parser.add_argument('--normalize_data', type=args.str2bool, metavar='S',
                                   help='To normalize the data using imagenet means and std before puting it between 0 and 1.')
 
+    argreader.parser.add_argument('--with_seg', type=args.str2bool, metavar='S',
+                                  help='To load segmentation along with image and target')
 
 
     return argreader

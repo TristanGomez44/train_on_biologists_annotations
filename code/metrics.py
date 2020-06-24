@@ -8,7 +8,7 @@ import torch.nn.functional as F
 import math
 
 import load_data
-
+import torchvision
 def updateMetrDict(metrDict,metrDictSample):
 
     if metrDict is None:
@@ -19,7 +19,7 @@ def updateMetrDict(metrDict,metrDictSample):
 
     return metrDict
 
-def binaryToMetrics(output,target,resDict):
+def binaryToMetrics(output,target,segmentation,resDict):
     ''' Computes metrics over a batch of targets and predictions
 
     Args:
@@ -49,6 +49,9 @@ def binaryToMetrics(output,target,resDict):
     if "attMaps" in resDict.keys():
         metDict["Sparsity"] = compAttMapSparsity(resDict["attMaps"])
 
+        if not segmentation is None:
+            metDict["IoU"] = compIoU(resDict["attMaps"],segmentation)
+
     return metDict
 
 def compAccuracy(output,target):
@@ -60,3 +63,21 @@ def compAttMapSparsity(attMaps):
     max = attMaps.max(dim=-1,keepdim=True)[0].max(dim=-2,keepdim=True)[0]
     attMaps = attMaps/(max+0.00001)
     return attMaps.mean(dim=(2,3)).sum().item()
+
+def compIoU(attentionMap,segmentation):
+
+    segmentation = (segmentation>0.5)
+
+    attentionMap_max = attentionMap.max(dim=-1,keepdim=True)[0].max(dim=-2,keepdim=True)[0]
+    attentionMap /= attentionMap_max
+    attentionMap = F.interpolate(attentionMap,size=(segmentation.size(-1)))
+
+    allIou = []
+
+    for thres in [0.5,0.75,0.9,0.95]:
+
+        iou = ((attentionMap>thres)*segmentation).sum(dim=(1,2,3)).float()/((attentionMap>thres) | segmentation).sum(dim=(1,2,3)).float()
+        allIou.append(iou.unsqueeze(0))
+
+    finalIou = torch.cat(allIou,dim=0).mean(dim=0).sum().item()
+    return finalIou

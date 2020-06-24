@@ -31,7 +31,7 @@ import warnings
 
 import torch.distributed as dist
 from torch.multiprocessing import Process
-
+import torchvision
 import time
 
 def epochSeqTr(model, optim, log_interval, loader, epoch, args, writer, **kwargs):
@@ -67,8 +67,17 @@ def epochSeqTr(model, optim, log_interval, loader, epoch, args, writer, **kwargs
             print("\t", processedImgNb, "/", len(loader.dataset))
 
         data, target = batch[0], batch[1]
+
+        if args.with_seg:
+            seg = batch[2]
+        else:
+            seg = None
+
         if args.cuda:
             data, target = data.cuda(), target.cuda()
+
+            if args.with_seg:
+                seg = seg.cuda()
 
         resDict = model(data)
 
@@ -92,7 +101,7 @@ def epochSeqTr(model, optim, log_interval, loader, epoch, args, writer, **kwargs
 
         # Metrics
         with torch.no_grad():
-            metDictSample = metrics.binaryToMetrics(output, target, resDict)
+            metDictSample = metrics.binaryToMetrics(output, target, seg,resDict)
         metDictSample["Loss"] = loss.detach().data.item()
         metrDict = metrics.updateMetrDict(metrDict, metDictSample)
 
@@ -199,14 +208,24 @@ def epochImgEval(model, log_interval, loader, epoch, args, writer, metricEarlySt
     else:
         latency_list,batchSize_list =None,None
 
-    for batch_idx, (data, target) in enumerate(loader):
+    for batch_idx, batch in enumerate(loader):
+        data, target = batch[:2]
 
         if (batch_idx % log_interval == 0):
             print("\t", batch_idx * len(data), "/", len(loader.dataset))
 
+
+        if args.with_seg:
+            seg=batch[2]
+        else:
+            seg=None
+
         # Puting tensors on cuda
         if args.cuda:
             data, target = data.cuda(), target.cuda()
+
+            if args.with_seg:
+                seg = seg.cuda()
 
         # Computing predictions
         if compute_latency:
@@ -233,7 +252,7 @@ def epochImgEval(model, log_interval, loader, epoch, args, writer, metricEarlySt
                                         batch_idx)
 
         # Metrics
-        metDictSample = metrics.binaryToMetrics(output, target, resDict)
+        metDictSample = metrics.binaryToMetrics(output, target, seg,resDict)
         metDictSample["Loss"] = loss.detach().data.item()
         metrDict = metrics.updateMetrDict(metrDict, metDictSample)
 
@@ -578,8 +597,8 @@ def run(args):
     if args.cuda:
         torch.cuda.manual_seed(args.seed)
 
-    trainLoader, trainDataset = load_data.buildTrainLoader(args)
-    valLoader = load_data.buildTestLoader(args, "val")
+    trainLoader, trainDataset = load_data.buildTrainLoader(args,withSeg=args.with_seg)
+    valLoader = load_data.buildTestLoader(args, "val",withSeg=args.with_seg)
 
     # Building the net
     net = modelBuilder.netBuilder(args)
@@ -653,7 +672,7 @@ def run(args):
             kwargsTest = kwargsVal
             kwargsTest["mode"] = "test"
 
-            testLoader = load_data.buildTestLoader(args, "test")
+            testLoader = load_data.buildTestLoader(args, "test",withSeg=args.with_seg)
 
             kwargsTest['loader'] = testLoader
 
