@@ -8,6 +8,7 @@ import scipy
 import torch
 import numpy as np
 import random
+from torchvision import transforms
 def collateSeq(batch):
 
     res = list(zip(*batch))
@@ -114,14 +115,12 @@ class DatasetFolder(VisionDataset):
         sampleSeg = self.loader(segPath)
         if self.transform is not None:
             seed = np.random.randint(2147483647)
-            torch.manual_seed(seed)
-            np.random.seed(seed)
-            random.seed(seed)
-            sampleSeg = self.transform(sampleSeg)
-            torch.manual_seed(seed)
-            np.random.seed(seed)
             random.seed(seed)
             sample = self.transform(sample)
+            random.seed(seed)
+            for t in self.transform.transforms:
+                if not type(t) is transforms.Normalize:
+                    sampleSeg = t(sampleSeg)
 
         if self.target_transform is not None:
             target = self.target_transform(target)
