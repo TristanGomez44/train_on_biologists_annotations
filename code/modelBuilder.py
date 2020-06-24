@@ -544,6 +544,8 @@ class CNN2D_simpleAttention(FirstModel):
                 features_agr = featureList.mean(dim=1)
                 featVecList.append(features_agr)
             features_agr = torch.cat(featVecList,dim=-1)
+
+            spatialWeights[spatialWeights<allFlatVals[:,-1].unsqueeze(-1).unsqueeze(-1).unsqueeze(-1)] = 0
         else:
             features_agr = self.avgpool(features_weig)
             features_agr = features_agr.view(features.size(0), -1)
