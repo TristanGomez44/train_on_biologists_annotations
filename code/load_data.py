@@ -166,7 +166,7 @@ def buildTestLoader(args, mode,shuffle=False,withSeg=False):
     testLoader = torch.utils.data.DataLoader(dataset=test_dataset, batch_size=args.val_batch_size,
                                              num_workers=args.num_workers,shuffle=shuffle)
 
-    return testLoader
+    return testLoader,test_dataset
 
 
 def addArgs(argreader):

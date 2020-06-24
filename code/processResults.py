@@ -126,7 +126,7 @@ def compRecField(architecture):
 
 def plotPointsImageDatasetGrid(exp_id,imgNb,epochs,model_ids,reduction_fact_list,inverse_xy,mode,nbClass,\
                                 useDropped_list,forceFeat,fullAttMap,threshold,maps_inds,plotId,luminosity,\
-                                receptive_field,cluster,args):
+                                receptive_field,cluster,nrows,args):
 
     imgSize = 224
 
@@ -135,8 +135,16 @@ def plotPointsImageDatasetGrid(exp_id,imgNb,epochs,model_ids,reduction_fact_list
 
     args.normalize_data = False
     args.val_batch_size = imgNb
-    imgLoader = load_data.buildTestLoader(args,mode,shuffle=False)
-    imgBatch,labels = next(iter(imgLoader))
+
+    if mode == "val":
+        imgLoader,_ = load_data.buildTestLoader(args,mode,shuffle=False)
+        inds = torch.arange(imgNb)
+        imgBatch,_ = next(iter(imgLoader))
+    else:
+        imgLoader,testDataset = load_data.buildTestLoader(args,mode,shuffle=False)
+        inds = torch.randint(len(testDataset),size=(imgNb,))
+        imgBatch = torch.cat([testDataset[ind][0].unsqueeze(0) for ind in inds],dim=0)
+
     cmPlasma = plt.get_cmap('plasma')
 
     if len(inverse_xy):
@@ -177,13 +185,13 @@ def plotPointsImageDatasetGrid(exp_id,imgNb,epochs,model_ids,reduction_fact_list
 
             if fullAttMap[j]:
                 ptsImageCopy = ptsImage.clone()
-                attMap = np.load(pointPaths[j])[i]
+                attMap = np.load(pointPaths[j])[inds[i]]
                 if attMap.shape[0] != 1:
                     attMap = attMap[maps_inds[j]:maps_inds[j]+1]
                 if not luminosity:
 
                     if cluster[j]:
-                        features = np.load(pointPaths[j].replace("attMaps","features"))[i]
+                        features = np.load(pointPaths[j].replace("attMaps","features"))[inds[i]]
                         attMap = umap.UMAP(n_components=3).fit_transform(features.transpose(1,2,0).reshape(features.shape[1]*features.shape[2],features.shape[0]))
                         attMap = (attMap-attMap.min())/(attMap.max()-attMap.min())
                         attMap = attMap.reshape(features.shape[1],features.shape[2],3)
@@ -194,7 +202,7 @@ def plotPointsImageDatasetGrid(exp_id,imgNb,epochs,model_ids,reduction_fact_list
                 ptsImageCopy = torch.tensor(resize(attMap, (ptsImageCopy.shape[1],ptsImageCopy.shape[2]),anti_aliasing=True,mode="constant",order=0)).permute(2,0,1).float().unsqueeze(0)
             else:
 
-                ptsOrig = torch.tensor(np.load(pointPaths[j]))[i]
+                ptsOrig = torch.tensor(np.load(pointPaths[j]))[inds[i]]
 
                 if (ptsOrig[:,:3] < 0).sum() > 0:
                     pts = (((ptsOrig[:,:3] + 1)/2)).long()
@@ -250,7 +258,7 @@ def plotPointsImageDatasetGrid(exp_id,imgNb,epochs,model_ids,reduction_fact_list
 
             gridImage = torch.cat((gridImage,ptsImageCopy),dim=0)
 
-    torchvision.utils.save_image(gridImage, "../vis/{}/points_grid_{}_{}.png".format(exp_id,mode,plotId), nrow=len(model_ids)+1,padding=5,pad_value=0.5)
+    torchvision.utils.save_image(gridImage, "../vis/{}/points_grid_{}_{}.png".format(exp_id,mode,plotId), nrow=(len(model_ids)+1)*nrows,padding=5,pad_value=0.5)
 
 def plotProbMaps(imgNb,args,norm=False):
 
@@ -686,7 +694,7 @@ def main(argv=None):
     argreader.parser.add_argument('--cluster',type=str2bool,nargs="*",metavar="BOOL",help='To cluster points with UMAP',default=[])
 
     argreader.parser.add_argument('--luminosity',type=str2bool,metavar="BOOL",help='To plot the attention maps not with a cmap but with luminosity',default=False)
-
+    argreader.parser.add_argument('--nrows',type=int,metavar="INT",help='The number of rows',default=1)
 
     ######################################## Find failure cases #########################################""
 
@@ -724,7 +732,7 @@ def main(argv=None):
             args.exp_id = "CUB3"
         plotPointsImageDatasetGrid(args.exp_id,args.image_nb,args.epoch_list,args.model_ids,args.reduction_fact_list,args.inverse_xy,args.mode,\
                                     args.class_nb,args.use_dropped_list,args.force_feat,args.full_att_map,args.use_threshold,args.maps_inds,args.plot_id,\
-                                    args.luminosity,args.receptive_field,args.cluster,args)
+                                    args.luminosity,args.receptive_field,args.cluster,args.nrows,args)
     if args.plot_prob_maps:
         plotProbMaps(args.image_nb,args,args.norm)
     if args.list_best_pred:

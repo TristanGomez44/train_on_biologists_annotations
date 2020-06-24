@@ -598,7 +598,7 @@ def run(args):
         torch.cuda.manual_seed(args.seed)
 
     trainLoader, trainDataset = load_data.buildTrainLoader(args,withSeg=args.with_seg)
-    valLoader = load_data.buildTestLoader(args, "val",withSeg=args.with_seg)
+    valLoader,_ = load_data.buildTestLoader(args, "val",withSeg=args.with_seg)
 
     # Building the net
     net = modelBuilder.netBuilder(args)
@@ -677,7 +677,7 @@ def run(args):
             kwargsTest = kwargsVal
             kwargsTest["mode"] = "test"
 
-            testLoader = load_data.buildTestLoader(args, "test",withSeg=args.with_seg)
+            testLoader,_ = load_data.buildTestLoader(args, "test",withSeg=args.with_seg)
 
             kwargsTest['loader'] = testLoader
 
