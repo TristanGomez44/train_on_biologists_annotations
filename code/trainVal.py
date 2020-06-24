@@ -641,6 +641,11 @@ def run(args):
                     scheduler.step()
             else:
                 if not args.no_val:
+                    if args.model_id_no_train == "":
+                        args.model_id_no_train = args.model_id
+                    if args.exp_id_no_train == "":
+                        args.exp_id_no_train = args.exp_id
+
                     net = preprocessAndLoadParams("../models/{}/model{}_epoch{}".format(args.exp_id_no_train, args.model_id_no_train, epoch),args.cuda,net,args.strict_init)
 
             if not args.no_val:
