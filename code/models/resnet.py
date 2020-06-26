@@ -221,10 +221,10 @@ class ResNet(nn.Module):
             raise ValueError("Wrong number of layer : ",layersNb)
 
         self.layersNb = layersNb
-
-        self.fc = nn.Linear(chan[0]*(2**(4-1)) * block.expansion, 1000)
-
         self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
+
+        self.fc = nn.Linear(chan[0]*(2**(4-1)) * block.expansion, num_classes)
+
 
         for m in self.modules():
             if isinstance(m, nn.Conv2d):
