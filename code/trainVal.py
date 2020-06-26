@@ -33,7 +33,7 @@ import torch.distributed as dist
 from torch.multiprocessing import Process
 import torchvision
 import time
-
+import gradcam
 def epochSeqTr(model, optim, log_interval, loader, epoch, args, writer, **kwargs):
     ''' Train a model during one epoch
 
@@ -101,7 +101,7 @@ def epochSeqTr(model, optim, log_interval, loader, epoch, args, writer, **kwargs
 
         # Metrics
         with torch.no_grad():
-            metDictSample = metrics.binaryToMetrics(output, target, seg,resDict)
+            metDictSample = metrics.binaryToMetrics(output, target, seg,resDict,not args.resnet_simple_att_pred_score,args.resnet_simple_att_score_pred_act_func)
         metDictSample["Loss"] = loss.detach().data.item()
         metrDict = metrics.updateMetrDict(metrDict, metDictSample)
 
@@ -252,7 +252,7 @@ def epochImgEval(model, log_interval, loader, epoch, args, writer, metricEarlySt
                                         batch_idx)
 
         # Metrics
-        metDictSample = metrics.binaryToMetrics(output, target, seg,resDict)
+        metDictSample = metrics.binaryToMetrics(output, target, seg,resDict,not args.resnet_simple_att_pred_score,args.resnet_simple_att_score_pred_act_func)
         metDictSample["Loss"] = loss.detach().data.item()
         metrDict = metrics.updateMetrDict(metrDict, metDictSample)
 
@@ -409,7 +409,10 @@ def preprocessAndLoadParams(init_path,cuda,net,strict):
     params = torch.load(init_path, map_location="cpu" if not cuda else None)
 
     params = addOrRemoveModule(params,net)
+    paramCount = len(params.keys())
     params = removeBadSizedParams(params,net)
+    if paramCount != len(params.keys()):
+        strict=False
     params = addFeatModZoom(params,net)
     params = changeOldNames(params,net)
 
@@ -627,7 +630,7 @@ def run(args):
         bestMetricVal = np.inf
         isBetter = lambda x, y: x < y
 
-    if not args.only_test:
+    if not args.only_test and not args.grad_cam:
         while epoch < args.epochs + 1 and worseEpochNb < args.max_worse_epoch_nb:
 
             kwargsTr["epoch"], kwargsVal["epoch"] = epoch, epoch
@@ -692,6 +695,35 @@ def run(args):
             with open("../results/{}/test_done.txt".format(args.exp_id),"a") as text_file:
                 print("{},{}".format(args.model_id,bestEpoch),file=text_file)
 
+
+    if args.grad_cam:
+        args.val_batch_size = 1
+        testLoader,_ = load_data.buildTestLoader(args, "test",withSeg=args.with_seg)
+        net = preprocessAndLoadParams("../models/{}/model{}_best_epoch{}".format(args.exp_id, args.model_id, bestEpoch),args.cuda,net,args.strict_init)
+        #resnet = torchvision.models.resnet18(pretrained=False,num_classes=args.class_nb)
+        #resnet.load_state_dict(net.firstModel.featMod.state_dict(),strict=False)
+        resnet = net.firstModel.featMod
+        resnet.fc = net.secondModel.linLay
+
+        grad_cam = gradcam.GradCam(model=resnet, feature_module=resnet.layer4, target_layer_names=["1"], use_cuda=args.cuda)
+
+        allMask = None
+        for batch_idx, batch in enumerate(testLoader):
+            data,target = batch[:2]
+            if (batch_idx % args.log_interval == 0):
+                print("\t", batch_idx * len(data), "/", len(testLoader.dataset))
+
+            if args.cuda:
+                data = data.cuda()
+            mask = grad_cam(data).detach().cpu()
+
+            if allMask is None:
+                allMask = mask
+            else:
+                allMask = torch.cat((allMask,mask),dim=0)
+
+        np.save("../results/{}/gradcam_{}_epoch{}_test.npy".format(args.exp_id,args.model_id,bestEpoch),allMask.detach().cpu().numpy())
+
 def updateSeedAndNote(args):
     if args.start_mode == "auto" and len(
             glob.glob("../models/{}/model{}_epoch*".format(args.exp_id, args.model_id))) > 0:
@@ -724,6 +756,7 @@ def main(argv=None):
 
     argreader.parser.add_argument('--do_test_again', type=str2bool, help='Does the test evaluation even if it has already been done')
     argreader.parser.add_argument('--compute_latency', type=str2bool, help='To write in a file the latency at each forward pass.')
+    argreader.parser.add_argument('--grad_cam', type=str2bool, help='To compute grad cam instead of training or testing.')
 
     argreader = addInitArgs(argreader)
     argreader = addOptimArgs(argreader)
