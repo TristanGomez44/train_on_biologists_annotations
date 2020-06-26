@@ -9,6 +9,10 @@ import math
 
 import load_data
 import torchvision
+
+import matplotlib.pyplot as plt
+plt.switch_backend('agg')
+
 def updateMetrDict(metrDict,metrDictSample):
 
     if metrDict is None:
@@ -19,7 +23,7 @@ def updateMetrDict(metrDict,metrDictSample):
 
     return metrDict
 
-def binaryToMetrics(output,target,segmentation,resDict):
+def binaryToMetrics(output,target,segmentation,resDict,normAtt=False,attentionAct="sigmoid"):
     ''' Computes metrics over a batch of targets and predictions
 
     Args:
@@ -47,10 +51,9 @@ def binaryToMetrics(output,target,segmentation,resDict):
             key = "predBilClusEns{}".format(i)
 
     if "attMaps" in resDict.keys():
-        metDict["Sparsity"] = compAttMapSparsity(resDict["attMaps"])
-
+        metDict["Sparsity"] = compAttMapSparsity(resDict["attMaps"].clone())
         if not segmentation is None:
-            metDict["IoU"] = compIoU(resDict["attMaps"],segmentation)
+            metDict["IoU"] = compIoU(resDict["attMaps"],segmentation,normAtt,attentionAct)
 
     return metDict
 
@@ -64,18 +67,27 @@ def compAttMapSparsity(attMaps):
     attMaps = attMaps/(max+0.00001)
     return attMaps.mean(dim=(2,3)).sum().item()
 
-def compIoU(attentionMap,segmentation):
+def compIoU(attentionMap,segmentation,normAtt,attentionAct):
 
     segmentation = (segmentation>0.5)
 
-    attentionMap_max = attentionMap.max(dim=-1,keepdim=True)[0].max(dim=-2,keepdim=True)[0]
-    attentionMap /= attentionMap_max
+    if normAtt:
+        thresholds = [2500]
+    else:
+        if attentionAct == "softmax":
+            thresholds = [0.5]
+        elif attentionAct == "relu":
+            thresholds = [0]
+        elif attentionAct == "sigmoid":
+            thresholds = [0.5]
+        else:
+            raise ValueError("Unkown activation function :",attentionAct)
+
     attentionMap = F.interpolate(attentionMap,size=(segmentation.size(-1)))
 
     allIou = []
 
-    for thres in [0.5,0.75,0.9,0.95]:
-
+    for thres in thresholds:
         iou = ((attentionMap>thres)*segmentation).sum(dim=(1,2,3)).float()/((attentionMap>thres) | segmentation).sum(dim=(1,2,3)).float()
         allIou.append(iou.unsqueeze(0))
 

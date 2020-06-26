@@ -153,18 +153,16 @@ def catMap(visualDict,fullMap,key="attMaps"):
     if key in visualDict.keys():
 
         if not type(visualDict[key]) is dict:
-            if key == "features" or key == "pn_reconst":
-                visualDict[key] = (visualDict[key]-visualDict[key].min())/(visualDict[key].max()-visualDict[key].min())
 
             #In case attention weights are not comprised between 0 and 1
             tens_min = visualDict[key].min(dim=-1,keepdim=True)[0].min(dim=-2,keepdim=True)[0].min(dim=-3,keepdim=True)[0]
             tens_max = visualDict[key].max(dim=-1,keepdim=True)[0].max(dim=-2,keepdim=True)[0].max(dim=-3,keepdim=True)[0]
-            visualDict[key] = (visualDict[key]-tens_min)/(tens_max-tens_min)
+            map = (visualDict[key]-tens_min)/(tens_max-tens_min)
 
             if fullMap is None:
-                fullMap = (visualDict[key].cpu()*255).byte()
+                fullMap = (map.cpu()*255).byte()
             else:
-                fullMap = torch.cat((fullMap,(visualDict[key].cpu()*255).byte()),dim=0)
+                fullMap = torch.cat((fullMap,(map.cpu()*255).byte()),dim=0)
 
         else:
             visualDict[key] = {layer:(visualDict[key][layer].cpu()*255).byte() for layer in visualDict[key].keys()}
