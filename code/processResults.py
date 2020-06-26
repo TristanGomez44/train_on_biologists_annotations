@@ -47,6 +47,7 @@ from torch import tensor
 import torch.nn.functional as F
 
 import umap
+from math import log10, floor
 
 def plotPointsImageDataset(imgNb,redFact,plotDepth,args):
 
@@ -126,8 +127,12 @@ def compRecField(architecture):
 
 def plotPointsImageDatasetGrid(exp_id,imgNb,epochs,model_ids,reduction_fact_list,inverse_xy,mode,nbClass,\
                                 useDropped_list,forceFeat,fullAttMap,threshold,maps_inds,plotId,luminosity,\
-                                receptive_field,cluster,nrows,args):
+                                receptive_field,cluster,gradcam,nrows,correctness,args):
 
+    if (correctness == "True" or correctness == "False") and len(model_ids)>1:
+        raise ValueError("correctness can only be used with a single model.")
+
+    torch.manual_seed(1)
     imgSize = 224
 
     ptsImage = torch.zeros((3,imgSize,imgSize))
@@ -135,20 +140,6 @@ def plotPointsImageDatasetGrid(exp_id,imgNb,epochs,model_ids,reduction_fact_list
 
     args.normalize_data = False
     args.val_batch_size = imgNb
-
-    if mode == "val":
-        imgLoader,_ = load_data.buildTestLoader(args,mode,shuffle=False)
-        inds = torch.arange(imgNb)
-        imgBatch,_ = next(iter(imgLoader))
-    else:
-        imgLoader,testDataset = load_data.buildTestLoader(args,mode,shuffle=False)
-        inds = torch.randint(len(testDataset),size=(imgNb,))
-        imgBatch = torch.cat([testDataset[ind][0].unsqueeze(0) for ind in inds],dim=0)
-
-    cmPlasma = plt.get_cmap('plasma')
-
-    if len(inverse_xy):
-        inverse_xy = [True for _ in range(len(model_ids))]
 
     if len(epochs) == 0:
         for j in range(len(model_ids)):
@@ -160,6 +151,35 @@ def plotPointsImageDatasetGrid(exp_id,imgNb,epochs,model_ids,reduction_fact_list
             fileName = os.path.basename(paths[0])
             epochs.append(utils.findLastNumbers(fileName))
 
+    if mode == "val":
+        imgLoader,_ = load_data.buildTestLoader(args,mode,shuffle=False)
+        inds = torch.arange(imgNb)
+        imgBatch,_ = next(iter(imgLoader))
+    else:
+        imgLoader,testDataset = load_data.buildTestLoader(args,mode,shuffle=False)
+
+        if (correctness == "True" or correctness == "False"):
+            targPreds = np.genfromtxt("../results/{}/{}_epoch{}.csv".format(exp_id,model_ids[0],epochs[0]),delimiter=",")[-len(testDataset):]
+            targ = targPreds[:,0]
+            preds = np.argmax(targPreds[:,1:],axis=1)
+            correct = (targ==preds)
+            if correctness == "True":
+                correctInd = torch.arange(len(testDataset))[correct]
+                inds = correctInd[torch.randperm(len(correctInd))][:imgNb]
+            else:
+                incorrectInd = torch.arange(len(testDataset))[~correct]
+                inds = incorrectInd[torch.randperm(len(incorrectInd))][:imgNb]
+        else:
+            inds = torch.randint(len(testDataset),size=(imgNb,))
+        imgBatch = torch.cat([testDataset[ind][0].unsqueeze(0) for ind in inds],dim=0)
+
+    cmPlasma = plt.get_cmap('plasma')
+
+    if len(inverse_xy):
+        inverse_xy = [True for _ in range(len(model_ids))]
+
+
+
     pointPaths,pointWeightPaths = [],[]
     for j in range(len(model_ids)):
 
@@ -168,6 +188,9 @@ def plotPointsImageDatasetGrid(exp_id,imgNb,epochs,model_ids,reduction_fact_list
             pointWeightPaths.append("../results/{}/points_dropped_{}_epoch{}_{}.npy".format(exp_id,model_ids[j],epochs[j],mode))
         elif fullAttMap[j]:
             pointPaths.append("../results/{}/attMaps_{}_epoch{}_{}.npy".format(exp_id,model_ids[j],epochs[j],mode))
+            pointWeightPaths.append("")
+        elif gradcam[j]:
+            pointPaths.append("../results/{}/gradcam_{}_epoch{}_{}.npy".format(exp_id,model_ids[j],epochs[j],mode))
             pointWeightPaths.append("")
         else:
             pointPaths.append("../results/{}/points_{}_epoch{}_{}.npy".format(exp_id,model_ids[j],epochs[j],mode))
@@ -183,9 +206,13 @@ def plotPointsImageDatasetGrid(exp_id,imgNb,epochs,model_ids,reduction_fact_list
 
         for j in range(len(pointPaths)):
 
-            if fullAttMap[j]:
+            if fullAttMap[j] or gradcam[j]:
                 ptsImageCopy = ptsImage.clone()
                 attMap = np.load(pointPaths[j])[inds[i]]
+
+                if gradcam[j]:
+                    attMap = (attMap-attMap.min())/(attMap.max()-attMap.min())
+
                 if attMap.shape[0] != 1:
                     attMap = attMap[maps_inds[j]:maps_inds[j]+1]
                 if not luminosity:
@@ -249,16 +276,16 @@ def plotPointsImageDatasetGrid(exp_id,imgNb,epochs,model_ids,reduction_fact_list
                 ptsImageCopy = F.conv_transpose2d(ptsImageCopy,rf_kernel,padding=rf_size//2)
                 ptsImageCopy = ptsImageCopy/ptsImageCopy.max()
 
-            if (not fullAttMap[j]) or (fullAttMap[j] and luminosity):
+            #if (not (fullAttMap[j] or gradcam[j])) or (fullAttMap[j] and luminosity):
 
-                if luminosity:
-                    ptsImageCopy = ptsImageCopy*imgBatch[i:i+1]
-                else:
-                    ptsImageCopy = 0.5*ptsImageCopy+0.5*imgBatch[i:i+1]
+            if luminosity:
+                ptsImageCopy = ptsImageCopy*imgBatch[i:i+1]
+            else:
+                ptsImageCopy = 0.8*ptsImageCopy+0.2*imgBatch[i:i+1].mean(dim=1,keepdim=True)
 
             gridImage = torch.cat((gridImage,ptsImageCopy),dim=0)
 
-    torchvision.utils.save_image(gridImage, "../vis/{}/points_grid_{}_{}.png".format(exp_id,mode,plotId), nrow=(len(model_ids)+1)*nrows,padding=5,pad_value=0.5)
+    torchvision.utils.save_image(gridImage, "../vis/{}/points_grid_{}_{}_corr={}.png".format(exp_id,mode,plotId,correctness), nrow=(len(model_ids)+1)*nrows,padding=5,pad_value=0.5)
 
 def plotProbMaps(imgNb,args,norm=False):
 
@@ -497,11 +524,16 @@ def em(x,k):
 
     return pi
 
-def compileTest(exp_id,id_to_label_dict):
+def round_sig(x, sig=2):
+    return round(x, sig-int(floor(log10(abs(x))))-1)
 
-    metricsToMax = {"accuracy":True,"latency":False,"sparsity":False}
-    header = 'Pixel weighting,Pixel selection,Classification,Accuracy'
+def compileTest(exp_id,id_to_label_dict,table_id,model_ids):
+
+    metricsToMax = {"accuracy":True,"latency":False,"sparsity":False,"iou":True}
     testFilePaths = glob.glob("../results/{}/*metrics_test*".format(exp_id))
+
+    if not model_ids is None:
+        testFilePaths = list(filter(lambda x:os.path.basename(x).replace("model","").split("_epoch")[0] in model_ids,testFilePaths))
 
     model_id_list = []
     perf_list = []
@@ -546,9 +578,8 @@ def compileTest(exp_id,id_to_label_dict):
         model_id_list[i] = ','.join(keys)
 
     latexTable = '\\begin{table}[t]  \n' + \
-                  '\\hspace{-3cm}  \n' + \
-                  '\\begin{tabular}{*6c}\\toprule  \n' + \
-                  'Pixel weighting & Pixel selection & Classification & Accuracy & Sparsity & Latency \\\\ \n' + \
+                  '\\begin{tabular}{*7c}\\toprule  \n' + \
+                  'Pixel weighting & Pixel selection & Classification & Accuracy & Latency & Sparsity & IoU \\\\ \n' + \
                   '\\hline \n'
 
     for key1 in sorted(dic):
@@ -573,10 +604,10 @@ def compileTest(exp_id,id_to_label_dict):
                 for l,metric in enumerate(bestPerf.keys()):
 
                     if not np.isnan(dic[key1][key2][key3][metric]):
-                        if round(dic[key1][key2][key3][metric],2) == round(bestPerf[metric],2):
-                            latexTable += "$\\mathbf{"+str(round(dic[key1][key2][key3][metric],2)) + "}$ "
+                        if round_sig(dic[key1][key2][key3][metric],2) == round_sig(bestPerf[metric],2):
+                            latexTable += "$\\mathbf{"+str(round_sig(dic[key1][key2][key3][metric],2)) + "}$ "
                         else:
-                            latexTable += "$"+str(round(dic[key1][key2][key3][metric],2)) + "$ "
+                            latexTable += "$"+str(round_sig(dic[key1][key2][key3][metric],2)) + "$ "
                     else:
                         latexTable += "-"
 
@@ -591,7 +622,7 @@ def compileTest(exp_id,id_to_label_dict):
 
     latexTable += "\\end{tabular} \n\\caption{} \n\\end{table}"
 
-    with open("../results/{}/test.csv".format(exp_id),"w") as text_file:
+    with open("../results/{}/performanceTable_{}.txt".format(exp_id,table_id),"w") as text_file:
         print(latexTable,file=text_file)
 
 def getTestPerf(path,accuracy_rawcrop):
@@ -609,20 +640,23 @@ def getTestPerf(path,accuracy_rawcrop):
         else:
             perf = perf[0]
         perf = float(perf.replace("tensor(",""))
-        return {"accuracy":perf,"sparsity":np.nan,"latency":np.nan}
+        return {"accuracy":perf,"sparsity":np.nan,"latency":np.nan,"iou":np.nan}
     else:
         perf = np.genfromtxt(path,delimiter=",",dtype=str)
-        metrics = ["accuracy","sparsity"]
+        print(perf)
+        metrics = ["accuracy","sparsity","iou"]
         if accuracy_rawcrop:
             metrics[0] = "accuracy_rawcrop"
 
         metrics_dict = {}
         for metric in metrics:
-            if accuracy_rawcrop and metric == "accuracy":
-                metrics_dict[metric] = float(perf[1][np.argwhere(perf[0] == "accuracy_rawcrop")])
+            if (perf[0] == metric).sum() > 0:
+                if accuracy_rawcrop and metric == "accuracy":
+                    metrics_dict[metric] = float(perf[1][np.argwhere(perf[0] == "accuracy_rawcrop")])
+                else:
+                    metrics_dict[metric] = float(perf[1][np.argwhere(perf[0] == metric)])
             else:
-                metrics_dict[metric] = float(perf[1][np.argwhere(perf[0] == metric)])
-
+                metrics_dict[metric] = np.nan
         latency_path = path.replace("model","latency_").replace("_metrics_test","")
         latency = np.genfromtxt(latency_path,delimiter=",")[3:-1,0].mean()
 
@@ -693,6 +727,11 @@ def main(argv=None):
     argreader.parser.add_argument('--receptive_field',type=str2bool,nargs="*",metavar="BOOL",help='To plot with the effective receptive field',default=[])
     argreader.parser.add_argument('--cluster',type=str2bool,nargs="*",metavar="BOOL",help='To cluster points with UMAP',default=[])
 
+    argreader.parser.add_argument('--gradcam',type=str2bool,nargs="*",metavar="BOOL",help='To plot gradcam instead of attention maps',default=[])
+    argreader.parser.add_argument('--correctness',type=str,metavar="CORRECT",help='Set this to True to only show image where the model has given a correct answer.',default=None)
+
+
+
     argreader.parser.add_argument('--luminosity',type=str2bool,metavar="BOOL",help='To plot the attention maps not with a cmap but with luminosity',default=False)
     argreader.parser.add_argument('--nrows',type=int,metavar="INT",help='The number of rows',default=1)
 
@@ -711,7 +750,10 @@ def main(argv=None):
 
     ######################################## Compile test performance ##################################
 
-    argreader.parser.add_argument('--compile_test',action="store_true",help='To compile the test performance of all model of an experiment. The --exp_id arg must be set.')
+    argreader.parser.add_argument('--compile_test',action="store_true",help='To compile the test performance of all model of an experiment. The --exp_id arg must be set. \
+                                    The --model_ids can be set to put only some models in the table')
+
+    argreader.parser.add_argument('--table_id',type=str,metavar="NAME",help='Name of the table file')
 
     ####################################### UMAP ############################################
 
@@ -730,9 +772,16 @@ def main(argv=None):
     if args.plot_points_image_dataset_grid:
         if args.exp_id == "default":
             args.exp_id = "CUB3"
+
+        if len(args.receptive_field) == 0:
+            args.receptive_field = [False for _ in range(len(args.model_ids))]
+        if len(args.gradcam) == 0:
+            args.gradcam = [False for _ in range(len(args.model_ids))]
+        if len(args.cluster) == 0:
+            args.cluster = [False for _ in range(len(args.model_ids))]
         plotPointsImageDatasetGrid(args.exp_id,args.image_nb,args.epoch_list,args.model_ids,args.reduction_fact_list,args.inverse_xy,args.mode,\
                                     args.class_nb,args.use_dropped_list,args.force_feat,args.full_att_map,args.use_threshold,args.maps_inds,args.plot_id,\
-                                    args.luminosity,args.receptive_field,args.cluster,args.nrows,args)
+                                    args.luminosity,args.receptive_field,args.cluster,args.gradcam,args.nrows,args.correctness,args)
     if args.plot_prob_maps:
         plotProbMaps(args.image_nb,args,args.norm)
     if args.list_best_pred:
@@ -752,15 +801,15 @@ def main(argv=None):
                             "1x1softmscale":"Score prediction - SoftMax","1x1softmscalenored":"Score prediction - SoftMax -- Stride=1",
                             "1x1softmscalenoredbigimg":"Score prediction - SoftMax -- Stride=1 -- Big Input Image",
                             "1x1relu":"Score prediction - ReLU",
-
+                            "normNoRed":"Norm - Stride = 2",
                             "noneHyp":"None - BS=12, Image size=448, StepLR",
-                            "bil":"Bilinear","bilreg001":"Bilinear (\\lambda=0.01)","bilreg01":"Bilinear (\\lambda=0.1)","bilreg1":"Bilinear (\\lambda=1)",
-                            "bilreg10":"Bilinear (\\lambda=10)","bilreg20":"Bilinear (\\lambda=20)","bilreg60":"Bilinear (\\lambda=60)",
+                            "bil":"Bilinear","bilreg001":"Bilinear ($\\lambda=0.01$)","bilreg01":"Bilinear ($\\lambda=0.1$)","bilreg1":"Bilinear ($\\lambda=1$)",
+                            "bilreg10":"Bilinear ($\\lambda=10$)","bilreg20":"Bilinear ($\\lambda=20$)","bilreg60":"Bilinear ($\\lambda=60$)",
                             "bilSigm":"Bilinear - Sigmoid","bilRelu":"Bilinear - ReLU","bilReluMany":"Bilinear - ReLU - 32 Maps",
                             "bilClus":"Bilinear - Clustering","bilClusEns":"Bilinear - Clustering + Ensembling","bilFeatNorm":"Bilinear - Feature normalisation",
                             "bilReluMany00001CL":"Bilinear - ReLU - 32 Maps - $\\lambda_{CL}=0,0001$","bilReluMany0001CL":"Bilinear - ReLU - 32 Maps - $\\lambda_{CL}=0,001$",
                             "patchnoredtext":"Patch (No Red) (Text. model)"}
 
-        compileTest(args.exp_id,id_to_label_dict)
+        compileTest(args.exp_id,id_to_label_dict,args.table_id,args.model_ids)
 if __name__ == "__main__":
     main()
