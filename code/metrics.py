@@ -88,7 +88,10 @@ def compIoU(attentionMap,segmentation,normAtt,attentionAct):
     allIou = []
 
     for thres in thresholds:
-        iou = ((attentionMap>thres)*segmentation).sum(dim=(1,2,3)).float()/((attentionMap>thres) | segmentation).sum(dim=(1,2,3)).float()
+        num = ((attentionMap>thres)*segmentation).sum(dim=(1,2,3)).float()
+        denom = ((attentionMap>thres) | segmentation).sum(dim=(1,2,3)).float()
+        iou = num/denom
+        iou[torch.isnan(iou)] = 0
         allIou.append(iou.unsqueeze(0))
 
     finalIou = torch.cat(allIou,dim=0).mean(dim=0).sum().item()

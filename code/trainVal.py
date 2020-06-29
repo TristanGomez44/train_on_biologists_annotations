@@ -87,7 +87,7 @@ def epochSeqTr(model, optim, log_interval, loader, epoch, args, writer, **kwargs
 
         output = resDict["pred"]
 
-        loss = computeLoss(args, output, target, resDict, data)
+        loss = computeLoss(args, output, target, resDict, data,seg)
 
         loss.backward()
 
@@ -115,6 +115,7 @@ def epochSeqTr(model, optim, log_interval, loader, epoch, args, writer, **kwargs
     if validBatch > 0:
 
         torch.save(model.state_dict(), "../models/{}/model{}_epoch{}".format(args.exp_id, args.model_id, epoch))
+
         if (not args.save_all) and os.path.exists(
                 "../models/{}/model{}_epoch{}".format(args.exp_id, args.model_id, epoch - 1)):
             os.remove("../models/{}/model{}_epoch{}".format(args.exp_id, args.model_id, epoch - 1))
@@ -124,7 +125,7 @@ def epochSeqTr(model, optim, log_interval, loader, epoch, args, writer, **kwargs
         totalTime = time.time() - start_time
         update.updateTimeCSV(epoch, "train", args.exp_id, args.model_id, totalTime, batch_idx)
 
-def computeLoss(args, output, target, resDict, data):
+def computeLoss(args, output, target, resDict, data,seg):
 
     loss = args.nll_weight * F.cross_entropy(output, target)
     if args.aux_mod_nll_weight > 0:
@@ -142,11 +143,10 @@ def computeLoss(args, output, target, resDict, data):
         drop_term = args.drop_nll_weight*F.cross_entropy(resDict["pred_drop"], target)
         loss += drop_term
     if args.center_loss_weight > 0:
-        center_term = F.mse_loss(resDict["feature_matrix"], resDict["feature_center_batch"],reduction="sum") / resDict["feature_matrix"].size(0)
-        print(loss.item(),center_term.item())
-        center_term *= args.center_loss_weight
-        loss += center_term
+        loss += args.center_loss_weight*F.mse_loss(resDict["feature_matrix"], resDict["feature_center_batch"],reduction="sum") / resDict["feature_matrix"].size(0)
 
+    if args.supervised_segm_weight > 0:
+        loss += args.supervised_segm_weight*supervisedSegTerm(resDict,args.resnet_simple_att_pred_score,args.resnet_simple_att_score_pred_act_func,seg)
     return loss
 
 def aux_model_loss_term(aux_model_weight, resDict, data, target):
@@ -160,6 +160,20 @@ def bil_backgr_term(bil_backgr_weight,bil_backgr_thres,resDict):
     pixelNb = size[0]*size[1]
     mean = resDict["attMaps"][:,-1].mean(dim=-1).mean(dim=-1)
     return -bil_backgr_weight*((mean<bil_backgr_thres)*mean).mean()
+
+def supervisedSegTerm(resDict,pred_score,attentionAct,gt_segMap):
+
+    if not pred_score:
+        max = 10000
+    else:
+        max = 1
+
+    gt_segMap = (gt_segMap.mean(dim=1,keepdim=True)>0.5).float()
+    segMap = torch.clamp(resDict["attMaps"]/max,0.001,0.999)
+    segMap = F.interpolate(segMap,size=(gt_segMap.size(-1)))
+
+    term = torch.nn.functional.binary_cross_entropy(segMap, gt_segMap)
+    return term
 
 def average_gradients(model):
     size = float(dist.get_world_size())
@@ -242,7 +256,7 @@ def epochImgEval(model, log_interval, loader, epoch, args, writer, metricEarlySt
         output = resDict["pred"]
 
         # Loss
-        loss = computeLoss(args, output, target, resDict, data)
+        loss = computeLoss(args, output, target, resDict, data,seg)
 
         # Other variables produced by the net
         intermVarDict = update.catIntermediateVariables(resDict, intermVarDict, validBatch, args.save_all)
@@ -580,6 +594,9 @@ def addLossTermArgs(argreader):
     argreader.parser.add_argument('--center_loss_weight', type=float, metavar='FLOAT',
                                   help='The weight of the center loss term in the loss function when using bilinear model.')
 
+    argreader.parser.add_argument('--supervised_segm_weight', type=float, metavar='FLOAT',
+                                  help='The weight of the supervised segmentation term.')
+
 
     return argreader
 
@@ -757,6 +774,7 @@ def main(argv=None):
     argreader.parser.add_argument('--do_test_again', type=str2bool, help='Does the test evaluation even if it has already been done')
     argreader.parser.add_argument('--compute_latency', type=str2bool, help='To write in a file the latency at each forward pass.')
     argreader.parser.add_argument('--grad_cam', type=str2bool, help='To compute grad cam instead of training or testing.')
+
 
     argreader = addInitArgs(argreader)
     argreader = addOptimArgs(argreader)
