@@ -81,7 +81,8 @@ class DataParallelModel(nn.DataParallel):
 
 class Model(nn.Module):
 
-    def __init__(self, firstModel, secondModel,nbFeat=512,drop_and_crop=False,zoom=False,zoom_max_sub_clouds=2,zoom_merge_preds=False,reducedImgSize=1):
+    def __init__(self, firstModel, secondModel,nbFeat=512,drop_and_crop=False,zoom=False,zoom_max_sub_clouds=2,zoom_merge_preds=False,reducedImgSize=1,\
+                        upscaledTest=False):
         super(Model, self).__init__()
         self.firstModel = firstModel
         self.secondModel = secondModel
@@ -93,13 +94,17 @@ class Model(nn.Module):
         self.drop_and_crop = drop_and_crop
         if drop_and_crop:
             self.bn = nn.BatchNorm2d(nbFeat, eps=0.001)
+        self.upscaledTest = upscaledTest
 
     def forward(self, origImgBatch):
 
-        if self.reducedImgSize == origImgBatch.size(-1):
+        if (not self.training) and self.upscaledTest:
             imgBatch = origImgBatch
         else:
-            imgBatch = F.interpolate(origImgBatch,size=(self.reducedImgSize,self.reducedImgSize))
+            if self.reducedImgSize == origImgBatch.size(-1):
+                imgBatch = origImgBatch
+            else:
+                imgBatch = F.interpolate(origImgBatch,size=(self.reducedImgSize,self.reducedImgSize))
 
         visResDict = self.firstModel(imgBatch)
 
@@ -569,6 +574,7 @@ def representativeVectors(x,nbVec):
     repreVecList = []
     simList = []
     for i in range(nbVec):
+        #Ajouter un seuil à partir de la 2e itération pour éviter de capturer le background
         raw_reprVec_norm,ind = raw_reprVec_score.max(dim=1,keepdim=True)
         raw_reprVec = x[torch.arange(x.size(0)).unsqueeze(1),ind]
         sim = (x*raw_reprVec).sum(dim=-1)/(norm*raw_reprVec_norm)
@@ -687,10 +693,17 @@ class SecondModel(nn.Module):
 
 class LinearSecondModel(SecondModel):
 
-    def __init__(self, nbFeat, nbFeatAux,nbClass, dropout,aux_model=False,zoom=False,zoom_max_sub_clouds=2,bil_cluster_ensemble=False):
+    def __init__(self, nbFeat, nbFeatAux,nbClass, dropout,aux_model=False,zoom=False,zoom_max_sub_clouds=2,bil_cluster_ensemble=False,hidLay=False,\
+                        bil_cluster_ensemble_gate=False):
         super(LinearSecondModel, self).__init__(nbFeat, nbClass)
         self.dropout = nn.Dropout(p=dropout)
         self.linLay = nn.Linear(self.nbFeat, self.nbClass)
+        if hidLay:
+            self.hidLay = nn.Sequential(nn.Linear(self.nbFeat,self.nbFeat),nn.ReLU())
+        else:
+            self.hidLay = None
+
+
         self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
 
         self.aux_model = aux_model
@@ -702,6 +715,12 @@ class LinearSecondModel(SecondModel):
             self.zoom_model = nn.Linear(zoom_max_sub_clouds*nbFeat,self.nbClass)
 
         self.bil_cluster_ensemble = bil_cluster_ensemble
+        self.bil_cluster_ensemble_gate = bil_cluster_ensemble_gate
+        if self.bil_cluster_ensemble_gate:
+            self.gate = nn.Linear(self.nbFeat,1)
+        else:
+            self.gate = None
+
     def forward(self, visResDict):
 
         if not self.bil_cluster_ensemble:
@@ -709,6 +728,9 @@ class LinearSecondModel(SecondModel):
 
             if len(x.size()) == 4:
                 x = self.avgpool(x).squeeze(-1).squeeze(-1)
+
+            if not self.hidLay is None:
+                x = self.hidLay(x)
 
             x = self.dropout(x)
             if x.size(-1) == self.nbFeat:
@@ -718,9 +740,19 @@ class LinearSecondModel(SecondModel):
             retDict = {"pred": x}
         else:
             predList = []
+            gateScoreList = []
             for featVec in visResDict["x"]:
+                if self.hidLay:
+                    featVec = self.hidLay(featVec)
                 predList.append(self.linLay(featVec).unsqueeze(0))
-            x = torch.cat(predList,dim=0).mean(dim=0)
+                if self.bil_cluster_ensemble_gate:
+                    gateScoreList.append(self.gate(featVec).unsqueeze(0))
+            if self.bil_cluster_ensemble_gate:
+                x = torch.cat(predList,dim=0)
+                gateScores = torch.softmax(torch.cat(gateScoreList,dim=0),dim=0)
+                x = (x*gateScores).sum(dim=0)
+            else:
+                x = torch.cat(predList,dim=0).mean(dim=0)
 
             retDict = {"pred": x}
             retDict.update({"predBilClusEns{}".format(i):predList[i][0] for i in range(len(predList))})
@@ -949,14 +981,15 @@ def netBuilder(args):
         raise ValueError("zoom must be used with linear second model")
 
     if args.second_mod == "linear":
-        secondModel = LinearSecondModel(nbFeat,nbFeatAux, args.class_nb, args.dropout,args.aux_model,bil_cluster_ensemble=args.bil_cluster_ensemble,**zoomArgs)
+        secondModel = LinearSecondModel(nbFeat,nbFeatAux, args.class_nb, args.dropout,args.aux_model,bil_cluster_ensemble=args.bil_cluster_ensemble,\
+                                        bil_cluster_ensemble_gate=args.bil_cluster_ensemble_gate,hidLay=args.hid_lay,**zoomArgs)
     else:
-        raise ValueError("Unknown temporal model type : ", args.second_mod)
+        raise ValueError("Unknown second model type : ", args.second_mod)
 
     ############### Whole Model ##########################
 
     net = Model(firstModel, secondModel,drop_and_crop=args.drop_and_crop,zoom=args.zoom,zoom_max_sub_clouds=args.zoom_max_sub_clouds,\
-                zoom_merge_preds=args.zoom_merge_preds,reducedImgSize=args.reduced_img_size)
+                zoom_merge_preds=args.zoom_merge_preds,reducedImgSize=args.reduced_img_size,upscaledTest=args.upscale_test)
 
     if args.cuda:
         net.cuda()
@@ -1083,4 +1116,9 @@ def addArgs(argreader):
     argreader.parser.add_argument('--drop_and_crop', type=args.str2bool, metavar='BOOL',
                                   help="To crop and drop part of the images where the attention is focused.")
 
+    argreader.parser.add_argument('--hid_lay', type=args.str2bool, metavar='BOOL',
+                                  help="To add a hiddent layer before the softmax layer")
+
+    argreader.parser.add_argument('--bil_cluster_ensemble_gate', type=args.str2bool, metavar='BOOL',
+                                  help="To add a gate network at the end of the cluster ensemble network.")
     return argreader
