@@ -125,7 +125,10 @@ def buildTrainLoader(args,transf=None,shuffle=True,withSeg=False):
 def buildTestLoader(args, mode,shuffle=False,withSeg=False):
     datasetName = getattr(args, "dataset_{}".format(mode))
 
-    resizedImgSize = 500 if args.big_images else 224
+    if args.upscale_test:
+        resizedImgSize = 312
+    else:
+        resizedImgSize = 500 if args.big_images else 224
 
     if args.old_preprocess:
         transf = transforms.Compose([transforms.Resize(int(resizedImgSize*1.14)), transforms.CenterCrop(resizedImgSize), transforms.ToTensor()])
@@ -199,6 +202,9 @@ def addArgs(argreader):
                                   help='To use the old images pre-processor.')
     argreader.parser.add_argument('--moredataaug_preprocess', type=args.str2bool, metavar='S',
                                   help='To apply color jitter and random rotation along random resized crop and horizontal flip')
+
+    argreader.parser.add_argument('--upscale_test', type=args.str2bool, metavar='S',
+                                  help='To increase test resolution from 224 to 312')
 
     argreader.parser.add_argument('--big_images', type=args.str2bool, metavar='S',
                                   help='To resize the images to 500 pixels instead of 224')
