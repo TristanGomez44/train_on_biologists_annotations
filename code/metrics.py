@@ -51,7 +51,8 @@ def binaryToMetrics(output,target,segmentation,resDict,normAtt=False,attentionAc
             key = "predBilClusEns{}".format(i)
 
     if "attMaps" in resDict.keys():
-        metDict["Sparsity"] = compAttMapSparsity(resDict["attMaps"].clone())
+        metDict["Sparsity"],metDict["Sparsity Normalised"] = compAttMapSparsity(resDict["attMaps"].clone(),segmentation.clone())
+
         if not segmentation is None:
             metDict["IoU"] = compIoU(resDict["attMaps"],segmentation,normAtt,attentionAct)
 
@@ -62,10 +63,19 @@ def compAccuracy(output,target):
     acc = (pred == target).float().sum()
     return acc.item()
 
-def compAttMapSparsity(attMaps):
+def compAttMapSparsity(attMaps,segmentation):
     max = attMaps.max(dim=-1,keepdim=True)[0].max(dim=-2,keepdim=True)[0]
     attMaps = attMaps/(max+0.00001)
-    return attMaps.mean(dim=(2,3)).sum().item()
+
+    if attMaps.size(1) > 1:
+        attMaps = attMaps.sum(dim=1,keepdim=True)
+
+    sparsity = attMaps.mean(dim=(2,3))
+
+    factor = segmentation.size(-1)/attMaps.size(-1)
+    sparsity_norm = sparsity/((segmentation>0.5).sum(dim=(1,2,3))/factor).float()
+
+    return sparsity.sum().item(),sparsity_norm.sum().item()
 
 def compIoU(attentionMap,segmentation,normAtt,attentionAct):
 
@@ -82,6 +92,9 @@ def compIoU(attentionMap,segmentation,normAtt,attentionAct):
             thresholds = [0.5]
         else:
             raise ValueError("Unkown activation function :",attentionAct)
+
+    if attentionMap.size(1) > 1:
+        attentionMap = attentionMap.sum(dim=1,keepdim=True)
 
     attentionMap = F.interpolate(attentionMap,size=(segmentation.size(-1)))
 
