@@ -127,7 +127,7 @@ def compRecField(architecture):
 
 def plotPointsImageDatasetGrid(exp_id,imgNb,epochs,model_ids,reduction_fact_list,inverse_xy,mode,nbClass,\
                                 useDropped_list,forceFeat,fullAttMap,threshold,maps_inds,plotId,luminosity,\
-                                receptive_field,cluster,gradcam,nrows,correctness,args):
+                                receptive_field,cluster,cluster_attention,pond_by_norm,gradcam,nrows,correctness,args):
 
     if (correctness == "True" or correctness == "False") and len(model_ids)>1:
         raise ValueError("correctness can only be used with a single model.")
@@ -178,8 +178,6 @@ def plotPointsImageDatasetGrid(exp_id,imgNb,epochs,model_ids,reduction_fact_list
     if len(inverse_xy):
         inverse_xy = [True for _ in range(len(model_ids))]
 
-
-
     pointPaths,pointWeightPaths = [],[]
     for j in range(len(model_ids)):
 
@@ -197,6 +195,23 @@ def plotPointsImageDatasetGrid(exp_id,imgNb,epochs,model_ids,reduction_fact_list
             pointWeightPaths.append("../results/{}/pointWeights_{}_epoch{}_{}.npy".format(exp_id,model_ids[j],epochs[j],mode))
 
     meanVecList = []
+
+    normDict = {}
+    for j in range(len(pointPaths)):
+        if pond_by_norm[j]:
+
+            if j>0 and model_ids[j] == model_ids[j-1] and pond_by_norm[j-1]:
+                normDict[j] = normDict[j-1]
+            else:
+                if not os.path.exists(pointPaths[j].replace("attMaps","norm")):
+                    features = np.load(pointPaths[j].replace("attMaps","features"))
+                    normDict[j] = np.sqrt(np.power(features,2).sum(axis=1,keepdims=True))
+                    np.save(pointPaths[j].replace("attMaps","norm"),normDict[j])
+                else:
+                    normDict[j] = np.load(pointPaths[j].replace("attMaps","norm"))
+        else:
+            normDict[j] = None
+
     for i in range(imgNb):
         print("Img",i)
         if gridImage is None:
@@ -215,13 +230,47 @@ def plotPointsImageDatasetGrid(exp_id,imgNb,epochs,model_ids,reduction_fact_list
 
                 if attMap.shape[0] != 1:
                     attMap = attMap[maps_inds[j]:maps_inds[j]+1]
-                if not luminosity:
+                    attMap = attMap.astype(float)
+                    attMap /= 255
+                    attMap *= 5
+                    attMap = torch.softmax(torch.tensor(attMap).float().view(-1),dim=-1).view(attMap.shape[0],attMap.shape[1],attMap.shape[2]).numpy()
+                    attMap = (attMap-attMap.min())/(attMap.max()-attMap.min())
 
+                if pond_by_norm[j]:
+                    norm = normDict[j][inds[i]]
+                    norm = norm/norm.max()
+                    attMap = norm*attMap
+                    #attMap = (attMap-attMap.min())/(attMap.max()-attMap.min())
+
+                if not luminosity:
                     if cluster[j]:
                         features = np.load(pointPaths[j].replace("attMaps","features"))[inds[i]]
                         attMap = umap.UMAP(n_components=3).fit_transform(features.transpose(1,2,0).reshape(features.shape[1]*features.shape[2],features.shape[0]))
                         attMap = (attMap-attMap.min())/(attMap.max()-attMap.min())
                         attMap = attMap.reshape(features.shape[1],features.shape[2],3)
+                    elif cluster_attention[j]:
+                        features = np.load(pointPaths[j].replace("attMaps","features"))[inds[i]]
+                        attMap = np.power(features,2).sum(axis=0,keepdims=True)
+                        print(attMap.shape,attMap.min(),attMap.mean(),attMap.max())
+                        if model_ids[j].lower().find("norm") != -1 or model_ids[j].lower().find("none") != -1:
+                            segMask = attMap>2500
+                        elif model_ids[j].lower().find("relu") != -1:
+                            segMask = attMap>0
+                        elif model_ids[j].lower().find("softm") != -1 or model_ids[j].lower().find("sigm") != -1:
+                            segMask = attMap>0.5
+                        else:
+                            raise ValueError("Unkown attention :",model_ids[j])
+                        flatSegMask = segMask.reshape(-1)
+
+                        features = features.transpose(1,2,0).reshape(features.shape[1]*features.shape[2],features.shape[0])
+
+                        print(segMask.shape,features.shape)
+
+                        embeddings = umap.UMAP(n_components=3).fit_transform(features[flatSegMask])
+                        embeddings = (embeddings-embeddings.min())/(embeddings.max()-embeddings.min())
+                        attMap = np.zeros_like(attMap)
+                        print(attMap.shape,segMask.shape,embeddings.shape)
+                        attMap[segMask] = embeddings
                     else:
                         attMap = cmPlasma(attMap[0])[:,:,:3]
                 else:
@@ -529,7 +578,7 @@ def round_sig(x, sig=2):
 
 def compileTest(exp_id,id_to_label_dict,table_id,model_ids):
 
-    metricsToMax = {"accuracy":True,"latency":False,"sparsity":False,"iou":True}
+    metricsToMax = {"accuracy":True,"latency":False,"sparsity":False,"sparsity_normalised":True,"iou":True}
     testFilePaths = glob.glob("../results/{}/*metrics_test*".format(exp_id))
 
     if not model_ids is None:
@@ -578,8 +627,8 @@ def compileTest(exp_id,id_to_label_dict,table_id,model_ids):
         model_id_list[i] = ','.join(keys)
 
     latexTable = '\\begin{table}[t]  \n' + \
-                  '\\begin{tabular}{*7c}\\toprule  \n' + \
-                  'Pixel weighting & Pixel selection & Classification & Accuracy & Latency & Sparsity & IoU \\\\ \n' + \
+                  '\\begin{tabular}{*8c}\\toprule  \n' + \
+                  'Pixel weighting & Pixel selection & Classification & Accuracy & Latency & Sparsity & Sparsity (Norm.) & IoU \\\\ \n' + \
                   '\\hline \n'
 
     for key1 in sorted(dic):
@@ -640,11 +689,11 @@ def getTestPerf(path,accuracy_rawcrop):
         else:
             perf = perf[0]
         perf = float(perf.replace("tensor(",""))
-        return {"accuracy":perf,"sparsity":np.nan,"latency":np.nan,"iou":np.nan}
+        return {"accuracy":perf,"sparsity":np.nan,"sparsity_normalised":np.nan,"latency":np.nan,"iou":np.nan}
     else:
         perf = np.genfromtxt(path,delimiter=",",dtype=str)
         print(perf)
-        metrics = ["accuracy","sparsity","iou"]
+        metrics = ["accuracy","sparsity","sparsity_normalised","iou"]
         if accuracy_rawcrop:
             metrics[0] = "accuracy_rawcrop"
 
@@ -726,6 +775,9 @@ def main(argv=None):
     argreader.parser.add_argument('--maps_inds',type=int,nargs="*",metavar="INT",help='The index of the attention map to use when there is several. If there only one or if there is none, set this to -1',default=[])
     argreader.parser.add_argument('--receptive_field',type=str2bool,nargs="*",metavar="BOOL",help='To plot with the effective receptive field',default=[])
     argreader.parser.add_argument('--cluster',type=str2bool,nargs="*",metavar="BOOL",help='To cluster points with UMAP',default=[])
+    argreader.parser.add_argument('--cluster_attention',type=str2bool,nargs="*",metavar="BOOL",help='To cluster attended points with UMAP',default=[])
+    argreader.parser.add_argument('--pond_by_norm',type=str2bool,nargs="*",metavar="BOOL",help='To also show the norm of pixels along with the attention weights.',default=[])
+
 
     argreader.parser.add_argument('--gradcam',type=str2bool,nargs="*",metavar="BOOL",help='To plot gradcam instead of attention maps',default=[])
     argreader.parser.add_argument('--correctness',type=str,metavar="CORRECT",help='Set this to True to only show image where the model has given a correct answer.',default=None)
@@ -779,9 +831,13 @@ def main(argv=None):
             args.gradcam = [False for _ in range(len(args.model_ids))]
         if len(args.cluster) == 0:
             args.cluster = [False for _ in range(len(args.model_ids))]
+        if len(args.cluster_attention) == 0:
+            args.cluster_attention = [False for _ in range(len(args.model_ids))]
+        if len(args.pond_by_norm) == 0:
+            args.pond_by_norm = [False for _ in range(len(args.model_ids))]
         plotPointsImageDatasetGrid(args.exp_id,args.image_nb,args.epoch_list,args.model_ids,args.reduction_fact_list,args.inverse_xy,args.mode,\
                                     args.class_nb,args.use_dropped_list,args.force_feat,args.full_att_map,args.use_threshold,args.maps_inds,args.plot_id,\
-                                    args.luminosity,args.receptive_field,args.cluster,args.gradcam,args.nrows,args.correctness,args)
+                                    args.luminosity,args.receptive_field,args.cluster,args.cluster_attention,args.pond_by_norm,args.gradcam,args.nrows,args.correctness,args)
     if args.plot_prob_maps:
         plotProbMaps(args.image_nb,args,args.norm)
     if args.list_best_pred:
@@ -802,7 +858,16 @@ def main(argv=None):
                             "1x1softmscalenoredbigimg":"Score prediction - SoftMax -- Stride=1 -- Big Input Image",
                             "1x1relu":"Score prediction - ReLU",
                             "normNoRed":"Norm - Stride = 2",
+                            "noneR50":"None - ResNet50",
                             "noneHyp":"None - BS=12, Image size=448, StepLR",
+                            "noneNoRedR50":"None - Stride=1 - ResNet50",
+                            "normNoAux":"Norm - No Aux",
+                            "normNoAuxR50":"Norm - No Aux - ResNet50",
+                            "normR50":"Norm - Resnet50",
+                            "1x1reluNA":"Score prediction - ReLU - NA","1x1softmscaleNA":"Score prediction - SoftMax - NA",
+                            "noneNoRedNA":"None - Stride=1 - NA","noneNoRedSupSegNA":"None - Stride=1 - SupSeg - NA",
+                            "noneNoRedSupSegNosClassNA":"None - Stride=1 - SupSeg - NoClass - NA",
+                            "noneR101":"None - ResNet101",
                             "bil":"Bilinear","bilreg001":"Bilinear ($\\lambda=0.01$)","bilreg01":"Bilinear ($\\lambda=0.1$)","bilreg1":"Bilinear ($\\lambda=1$)",
                             "bilreg10":"Bilinear ($\\lambda=10$)","bilreg20":"Bilinear ($\\lambda=20$)","bilreg60":"Bilinear ($\\lambda=60$)",
                             "bilSigm":"Bilinear - Sigmoid","bilRelu":"Bilinear - ReLU","bilReluMany":"Bilinear - ReLU - 32 Maps",
