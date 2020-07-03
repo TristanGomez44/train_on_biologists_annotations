@@ -694,15 +694,16 @@ class SecondModel(nn.Module):
 class LinearSecondModel(SecondModel):
 
     def __init__(self, nbFeat, nbFeatAux,nbClass, dropout,aux_model=False,zoom=False,zoom_max_sub_clouds=2,bil_cluster_ensemble=False,hidLay=False,\
-                        bil_cluster_ensemble_gate=False):
+                        bil_cluster_ensemble_gate=False,gate_drop=False,gate_randdrop=False):
         super(LinearSecondModel, self).__init__(nbFeat, nbClass)
         self.dropout = nn.Dropout(p=dropout)
-        self.linLay = nn.Linear(self.nbFeat, self.nbClass)
+
         if hidLay:
-            self.hidLay = nn.Sequential(nn.Linear(self.nbFeat,self.nbFeat),nn.ReLU())
+            self.hidLay = nn.Sequential(nn.Linear(self.nbFeat,self.nbFeat//2),nn.ReLU())
+            self.linLay = nn.Linear(self.nbFeat//2, self.nbClass)
         else:
             self.hidLay = None
-
+            self.linLay = nn.Linear(self.nbFeat, self.nbClass)
 
         self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
 
@@ -717,7 +718,12 @@ class LinearSecondModel(SecondModel):
         self.bil_cluster_ensemble = bil_cluster_ensemble
         self.bil_cluster_ensemble_gate = bil_cluster_ensemble_gate
         if self.bil_cluster_ensemble_gate:
-            self.gate = nn.Linear(self.nbFeat,1)
+            self.gate = nn.Linear(self.nbFeat//2,1) if hidLay else nn.Linear(self.nbFeat,1)
+
+            if gate_randdrop and gate_drop:
+                raise ValueError("Can't have gate_drop and gate_randdrop at the same time")
+            self.gate_randdrop = gate_randdrop
+            self.gate_drop = gate_drop
         else:
             self.gate = None
 
@@ -733,7 +739,7 @@ class LinearSecondModel(SecondModel):
                 x = self.hidLay(x)
 
             x = self.dropout(x)
-            if x.size(-1) == self.nbFeat:
+            if x.size(-1) == self.nbFeat or (x.size(-1) != self.nbFeat and (not self.zoom)):
                 x = self.linLay(x)
             else:
                 x = self.zoom_model(x)
@@ -750,6 +756,14 @@ class LinearSecondModel(SecondModel):
             if self.bil_cluster_ensemble_gate:
                 x = torch.cat(predList,dim=0)
                 gateScores = torch.softmax(torch.cat(gateScoreList,dim=0),dim=0)
+
+                if self.gate_drop and self.training:
+                    gateScores = gateScores*(gateScores < gateScores.max(dim=0)[0].unsqueeze(0))
+                elif self.gate_randdrop and self.training:
+                    gateScores = gateScores*(gateScores != gateScores[torch.randint(len(predList),size=(featVec.size(0),)),torch.arange(featVec.size(0))].unsqueeze(0))
+                if (self.gate_drop or self.gate_randdrop) and self.training:
+                    gateScores = gateScores/gateScores.sum(dim=0,keepdim=True)
+
                 x = (x*gateScores).sum(dim=0)
             else:
                 x = torch.cat(predList,dim=0).mean(dim=0)
@@ -982,7 +996,8 @@ def netBuilder(args):
 
     if args.second_mod == "linear":
         secondModel = LinearSecondModel(nbFeat,nbFeatAux, args.class_nb, args.dropout,args.aux_model,bil_cluster_ensemble=args.bil_cluster_ensemble,\
-                                        bil_cluster_ensemble_gate=args.bil_cluster_ensemble_gate,hidLay=args.hid_lay,**zoomArgs)
+                                        bil_cluster_ensemble_gate=args.bil_cluster_ensemble_gate,hidLay=args.hid_lay,gate_drop=args.bil_cluster_ensemble_gate_drop,\
+                                        gate_randdrop=args.bil_cluster_ensemble_gate_randdrop,**zoomArgs)
     else:
         raise ValueError("Unknown second model type : ", args.second_mod)
 
@@ -1121,4 +1136,9 @@ def addArgs(argreader):
 
     argreader.parser.add_argument('--bil_cluster_ensemble_gate', type=args.str2bool, metavar='BOOL',
                                   help="To add a gate network at the end of the cluster ensemble network.")
+    argreader.parser.add_argument('--bil_cluster_ensemble_gate_drop', type=args.str2bool, metavar='BOOL',
+                                  help="To drop the feature vector with the most important weight.")
+    argreader.parser.add_argument('--bil_cluster_ensemble_gate_randdrop', type=args.str2bool, metavar='BOOL',
+                                  help="To randomly drop one feature vector.")
+
     return argreader
