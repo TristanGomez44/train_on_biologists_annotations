@@ -565,7 +565,7 @@ class CNN2D_simpleAttention(FirstModel):
 
         return retDict
 
-def representativeVectors(x,nbVec):
+def representativeVectors(x,nbVec,applySoftMax=False):
     xOrigShape = x.size()
     x = x.permute(0,2,3,1).reshape(x.size(0),x.size(2)*x.size(3),x.size(1))
     norm = torch.sqrt(torch.pow(x,2).sum(dim=-1)) + 0.00001
@@ -578,7 +578,12 @@ def representativeVectors(x,nbVec):
         raw_reprVec_norm,ind = raw_reprVec_score.max(dim=1,keepdim=True)
         raw_reprVec = x[torch.arange(x.size(0)).unsqueeze(1),ind]
         sim = (x*raw_reprVec).sum(dim=-1)/(norm*raw_reprVec_norm)
-        simNorm = sim/sim.sum(dim=1,keepdim=True)
+
+        if applySoftMax:
+            simNorm = torch.softmax(sim,dim=1)
+        else:
+            simNorm = sim/sim.sum(dim=1,keepdim=True)
+
         reprVec = (x*simNorm.unsqueeze(-1)).sum(dim=1)
 
         repreVecList.append(reprVec)
@@ -592,7 +597,8 @@ class CNN2D_bilinearAttPool(FirstModel):
 
     def __init__(self, featModelName, pretrainedFeatMod=True, featMap=True, bigMaps=False, chan=64, attBlockNb=2,
                  attChan=16,inFeat=512,nb_parts=3,aux_model=False,score_pred_act_func="softmax",center_loss=False,\
-                 center_loss_beta=5e-2,num_classes=200,cuda=True,cluster=False,cluster_ensemble=False,normFeat=False,**kwargs):
+                 center_loss_beta=5e-2,num_classes=200,cuda=True,cluster=False,cluster_ensemble=False,applySoftmaxOnSim=False,\
+                 normFeat=False,**kwargs):
 
         super(CNN2D_bilinearAttPool, self).__init__(featModelName, pretrainedFeatMod, featMap, bigMaps, **kwargs)
         self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
@@ -617,7 +623,7 @@ class CNN2D_bilinearAttPool(FirstModel):
         else:
             self.attention_activation = None
             self.cluster_ensemble = cluster_ensemble
-
+            self.applySoftmaxOnSim = applySoftmaxOnSim
         self.aux_model = aux_model
 
         self.center_loss = center_loss
@@ -649,7 +655,7 @@ class CNN2D_bilinearAttPool(FirstModel):
             retDict["x_size"] = features_weig.size()
             features_agr = features_agr.view(features.size(0), -1)
         else:
-            vecList,simList = representativeVectors(features,self.nb_parts)
+            vecList,simList = representativeVectors(features,self.nb_parts,self.applySoftmaxOnSim)
             if not self.cluster_ensemble:
                 features_agr = torch.cat(vecList,dim=-1)
             else:
@@ -747,6 +753,7 @@ class LinearSecondModel(SecondModel):
         else:
             predList = []
             gateScoreList = []
+
             for featVec in visResDict["x"]:
                 if self.hidLay:
                     featVec = self.hidLay(featVec)
@@ -762,8 +769,9 @@ class LinearSecondModel(SecondModel):
                 elif self.gate_randdrop and self.training:
                     gateScores = gateScores*(gateScores != gateScores[torch.randint(len(predList),size=(featVec.size(0),)),torch.arange(featVec.size(0))].unsqueeze(0))
                 if (self.gate_drop or self.gate_randdrop) and self.training:
-                    gateScores = gateScores/gateScores.sum(dim=0,keepdim=True)
-
+                    #print(gateScores)
+                    gateScores = gateScores/(gateScores.sum(dim=0,keepdim=True)+0.00001)
+                    #print(gateScores)
                 x = (x*gateScores).sum(dim=0)
             else:
                 x = torch.cat(predList,dim=0).mean(dim=0)
@@ -933,7 +941,8 @@ def netBuilder(args):
             kwargs = {"inFeat":nbFeat,"aux_model":args.aux_model,"nb_parts":args.resnet_bil_nb_parts,\
                       "score_pred_act_func":args.resnet_simple_att_score_pred_act_func,
                       "center_loss":args.bil_center_loss,"center_loss_beta":args.bil_center_loss_beta,\
-                      "cuda":args.cuda,"cluster":args.bil_cluster,"cluster_ensemble":args.bil_cluster_ensemble,
+                      "cuda":args.cuda,"cluster":args.bil_cluster,"cluster_ensemble":args.bil_cluster_ensemble,\
+                      "applySoftmaxOnSim":args.apply_softmax_on_sim,\
                       "normFeat":args.bil_norm_feat}
             nbFeatAux = nbFeat
             if not args.bil_cluster_ensemble:
@@ -1125,6 +1134,9 @@ def addArgs(argreader):
                                   help="To have a cluster bilinear")
     argreader.parser.add_argument('--bil_cluster_ensemble', type=args.str2bool, metavar='BOOL',
                                   help="To classify each of the feature vector obtained and then aggregates those decision.")
+    argreader.parser.add_argument('--apply_softmax_on_sim', type=args.str2bool, metavar='BOOL',
+                                  help="Apply softmax on similarity computed during clustering.")
+
     argreader.parser.add_argument('--bil_norm_feat', type=args.str2bool, metavar='BOOL',
                                   help="To normalize feature before computing attention")
 
