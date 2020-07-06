@@ -51,10 +51,10 @@ def binaryToMetrics(output,target,segmentation,resDict,normAtt=False,attentionAc
             key = "predBilClusEns{}".format(i)
 
     if "attMaps" in resDict.keys():
-        metDict["Sparsity"],metDict["Sparsity Normalised"] = compAttMapSparsity(resDict["attMaps"].clone(),segmentation.clone())
+        metDict["Sparsity"],metDict["Sparsity Normalised"] = compAttMapSparsity(resDict["attMaps"].clone(),segmentation.clone() if not segmentation is None else None)
 
         if not segmentation is None:
-            metDict["IoU"] = compIoU(resDict["attMaps"],segmentation,normAtt,attentionAct)
+            metDict["IoS"] = compIoS(resDict["attMaps"],segmentation,normAtt,attentionAct)
 
     return metDict
 
@@ -72,12 +72,15 @@ def compAttMapSparsity(attMaps,segmentation):
 
     sparsity = attMaps.mean(dim=(2,3))
 
-    factor = segmentation.size(-1)/attMaps.size(-1)
-    sparsity_norm = sparsity/((segmentation>0.5).sum(dim=(1,2,3))/factor).float()
+    if not segmentation is None:
+        factor = segmentation.size(-1)/attMaps.size(-1)
+        sparsity_norm = sparsity/((segmentation>0.5).sum(dim=(1,2,3))/factor).float()
+    else:
+        sparsity_norm = torch.zeros_like(sparsity)
 
     return sparsity.sum().item(),sparsity_norm.sum().item()
 
-def compIoU(attentionMap,segmentation,normAtt,attentionAct):
+def compIoS(attentionMap,segmentation,normAtt,attentionAct):
 
     segmentation = (segmentation>0.5)
 
@@ -94,18 +97,18 @@ def compIoU(attentionMap,segmentation,normAtt,attentionAct):
             raise ValueError("Unkown activation function :",attentionAct)
 
     if attentionMap.size(1) > 1:
-        attentionMap = attentionMap.sum(dim=1,keepdim=True)
+        attentionMap = attentionMap.mean(dim=1,keepdim=True)
 
     attentionMap = F.interpolate(attentionMap,size=(segmentation.size(-1)))
 
-    allIou = []
+    allIos = []
 
     for thres in thresholds:
-        num = ((attentionMap>thres)*segmentation).sum(dim=(1,2,3)).float()
-        denom = ((attentionMap>thres) | segmentation).sum(dim=(1,2,3)).float()
-        iou = num/denom
-        iou[torch.isnan(iou)] = 0
-        allIou.append(iou.unsqueeze(0))
+        num = ((attentionMap>thres)*segmentation[:,0:1]).sum(dim=(1,2,3)).float()
+        denom = (attentionMap>thres).sum(dim=(1,2,3)).float()
+        ios = num/denom
+        ios[torch.isnan(ios)] = 0
+        allIos.append(ios.unsqueeze(0))
 
-    finalIou = torch.cat(allIou,dim=0).mean(dim=0).sum().item()
-    return finalIou
+    finalIos = torch.cat(allIos,dim=0).mean(dim=0).sum().item()
+    return finalIos
