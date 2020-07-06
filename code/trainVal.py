@@ -34,6 +34,9 @@ from torch.multiprocessing import Process
 import torchvision
 import time
 import gradcam
+
+import configparser
+
 def epochSeqTr(model, optim, log_interval, loader, epoch, args, writer, **kwargs):
     ''' Train a model during one epoch
 
@@ -108,7 +111,7 @@ def epochSeqTr(model, optim, log_interval, loader, epoch, args, writer, **kwargs
         validBatch += 1
         totalImgNb += target.size(0)
 
-        if validBatch > 15 and args.debug:
+        if validBatch > 3 and args.debug:
             break
 
     # If the training set is empty (which we might want to just evaluate the model), then allOut and allGT will still be None
@@ -228,7 +231,6 @@ def epochImgEval(model, log_interval, loader, epoch, args, writer, metricEarlySt
         if (batch_idx % log_interval == 0):
             print("\t", batch_idx * len(data), "/", len(loader.dataset))
 
-
         if args.with_seg:
             seg=batch[2]
         else:
@@ -270,12 +272,12 @@ def epochImgEval(model, log_interval, loader, epoch, args, writer, metricEarlySt
         metDictSample["Loss"] = loss.detach().data.item()
         metrDict = metrics.updateMetrDict(metrDict, metDictSample)
 
-        writePreds(output, target, epoch, args.exp_id, args.model_id, args.class_nb, batch_idx)
+        writePreds(output, target, epoch, args.exp_id, args.model_id, args.class_nb, batch_idx,mode)
 
         validBatch += 1
         totalImgNb += target.size(0)
 
-        if validBatch > 15 and args.debug:
+        if validBatch > 3 and args.debug:
             break
 
     intermVarDict = update.saveIntermediateVariables(intermVarDict, args.exp_id, args.model_id, epoch, mode,
@@ -296,8 +298,8 @@ def epochImgEval(model, log_interval, loader, epoch, args, writer, metricEarlySt
     return metrDict[metricEarlyStop]
 
 
-def writePreds(predBatch, targBatch, epoch, exp_id, model_id, class_nb, batch_idx):
-    csvPath = "../results/{}/{}_epoch{}.csv".format(exp_id, model_id, epoch)
+def writePreds(predBatch, targBatch, epoch, exp_id, model_id, class_nb, batch_idx,mode):
+    csvPath = "../results/{}/{}_epoch{}_{}.csv".format(exp_id, model_id, epoch,mode)
 
     if (batch_idx == 0 and epoch == 1) or not os.path.exists(csvPath):
         with open(csvPath, "w") as text_file:
@@ -725,6 +727,8 @@ def run(args):
         grad_cam = gradcam.GradCam(model=resnet, feature_module=resnet.layer4, target_layer_names=["1"], use_cuda=args.cuda)
 
         allMask = None
+        latency_list = []
+        batchSize_list = []
         for batch_idx, batch in enumerate(testLoader):
             data,target = batch[:2]
             if (batch_idx % args.log_interval == 0):
@@ -732,7 +736,11 @@ def run(args):
 
             if args.cuda:
                 data = data.cuda()
+
+            lat_start_time = time.time()
             mask = grad_cam(data).detach().cpu()
+            latency_list.append(time.time()-lat_start_time)
+            batchSize_list.append(data.size(0))
 
             if allMask is None:
                 allMask = mask
@@ -740,6 +748,11 @@ def run(args):
                 allMask = torch.cat((allMask,mask),dim=0)
 
         np.save("../results/{}/gradcam_{}_epoch{}_test.npy".format(args.exp_id,args.model_id,bestEpoch),allMask.detach().cpu().numpy())
+
+        latency_list = np.array(latency_list)[:,np.newaxis]
+        batchSize_list = np.array(batchSize_list)[:,np.newaxis]
+        latency_list = np.concatenate((latency_list,batchSize_list),axis=1)
+        np.savetxt("../results/{}/latencygradcam_{}_epoch{}.csv".format(args.exp_id,args.model_id,bestEpoch),latency_list,header="latency,batch_size",delimiter=",")
 
 def updateSeedAndNote(args):
     if args.start_mode == "auto" and len(
