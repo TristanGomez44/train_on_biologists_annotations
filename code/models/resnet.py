@@ -50,18 +50,23 @@ class BasicBlock(nn.Module):
     expansion = 1
 
     def __init__(self, inplanes, planes, stride=1, downsample=None, norm_layer=None,endRelu=True,dilation=1,groups=1,applyStrideOnAll=False,\
-                replaceBy1x1=False):
+                replaceBy1x1=False,replaceStrideByDilation=False):
         super(BasicBlock, self).__init__()
         if norm_layer is None:
             norm_layer = nn.BatchNorm2d
         # Both self.conv1 and self.downsample layers downsample the input when stride != 1
-        self.conv1 = conv3x3(inplanes, planes, stride,dilation,groups=groups)
+        if replaceStrideByDilation:
+            self.conv1 = conv3x3(inplanes, planes, stride=1,dilation=1,groups=groups)
+        else:
+            self.conv1 = conv3x3(inplanes, planes, stride,dilation,groups=groups)
+
         self.bn1 = norm_layer(planes)
         self.relu = nn.ReLU(inplace=True)
-        if replaceBy1x1:
-            self.conv2 = conv1x1(planes, planes,groups=groups,stride=stride if applyStrideOnAll else 1)
+
+        if replaceStrideByDilation:
+            self.conv2 = conv3x3(planes, planes,groups=groups,dilation=stride)
         else:
-            self.conv2 = conv3x3(planes, planes,groups=groups,stride=stride if applyStrideOnAll else 1)
+            self.conv2 = conv3x3(planes, planes,groups=groups)
 
         self.bn2 = norm_layer(planes)
         self.downsample = downsample
@@ -90,8 +95,13 @@ class BasicBlock(nn.Module):
 class Bottleneck(nn.Module):
     expansion = 4
 
-    def __init__(self, inplanes, planes, stride=1, downsample=None, norm_layer=None,endRelu=False,dilation=1,applyStrideOnAll=True,replaceBy1x1=False):
+    def __init__(self, inplanes, planes, stride=1, downsample=None, norm_layer=None,endRelu=False,dilation=1,applyStrideOnAll=True,replaceBy1x1=False,\
+                    replaceStrideByDilation=False):
         super(Bottleneck, self).__init__()
+
+        if replaceStrideByDilation:
+            raise ValueError("replaceStrideByDilation can't be used with Bottleneck")
+
         if norm_layer is None:
             norm_layer = nn.BatchNorm2d
         # Both self.conv2 and self.downsample layers downsample the input when stride != 1
@@ -182,7 +192,8 @@ class ResNet(nn.Module):
 
     def __init__(self, block, layers, num_classes=1000, zero_init_residual=False, norm_layer=None,maxPoolKer=(3,3),maxPoolPad=(1,1),stride=(2,2),\
                     featMap=False,chan=64,inChan=3,dilation=1,layerSizeReduce=True,preLayerSizeReduce=True,layersNb=4,attention=False,attChan=16,attBlockNb=1,\
-                    attActFunc="sigmoid",applyStrideOnAll=False,replaceBy1x1=False,reluOnLast=False,multiLevelFeat=False,multiLev_outChan=64,multiLev_cat=False):
+                    attActFunc="sigmoid",applyStrideOnAll=False,replaceBy1x1=False,reluOnLast=False,multiLevelFeat=False,multiLev_outChan=64,multiLev_cat=False,\
+                    replaceStrideByDilation=False):
 
         super(ResNet, self).__init__()
         if norm_layer is None:
@@ -209,13 +220,16 @@ class ResNet(nn.Module):
         self.replaceBy1x1 = replaceBy1x1
         #All layers are built but they will not necessarily be used
         self.layer1 = self._make_layer(block, chan[0], layers[0], stride=1,norm_layer=norm_layer,reluOnLast=reluOnLast if self.nbLayers==1 else True,\
-                                        dilation=1,applyStrideOnAll=applyStrideOnAll,replaceBy1x1=replaceBy1x1)
+                                        dilation=1,applyStrideOnAll=applyStrideOnAll,replaceBy1x1=replaceBy1x1,replaceStrideByDilation=replaceStrideByDilation)
         self.layer2 = self._make_layer(block, chan[1], layers[1], stride=1 if not layerSizeReduce else stride, norm_layer=norm_layer,\
-                                        reluOnLast=reluOnLast if self.nbLayers==2 else True,dilation=dilation[0],applyStrideOnAll=applyStrideOnAll,replaceBy1x1=replaceBy1x1)
+                                        reluOnLast=reluOnLast if self.nbLayers==2 else True,dilation=dilation[0],applyStrideOnAll=applyStrideOnAll,replaceBy1x1=replaceBy1x1,\
+                                        replaceStrideByDilation=replaceStrideByDilation)
         self.layer3 = self._make_layer(block, chan[2], layers[2], stride=1 if not layerSizeReduce else stride, norm_layer=norm_layer,\
-                                        reluOnLast=reluOnLast if self.nbLayers==3 else True,dilation=dilation[1],applyStrideOnAll=applyStrideOnAll,replaceBy1x1=replaceBy1x1)
+                                        reluOnLast=reluOnLast if self.nbLayers==3 else True,dilation=dilation[1],applyStrideOnAll=applyStrideOnAll,replaceBy1x1=replaceBy1x1,\
+                                        replaceStrideByDilation=replaceStrideByDilation)
         self.layer4 = self._make_layer(block, chan[3], layers[3], stride=1 if not layerSizeReduce else stride, norm_layer=norm_layer,\
-                                        reluOnLast=reluOnLast if self.nbLayers==4 else True,dilation=dilation[2],applyStrideOnAll=applyStrideOnAll,replaceBy1x1=replaceBy1x1)
+                                        reluOnLast=reluOnLast if self.nbLayers==4 else True,dilation=dilation[2],applyStrideOnAll=applyStrideOnAll,replaceBy1x1=replaceBy1x1,\
+                                        replaceStrideByDilation=replaceStrideByDilation)
 
         if layersNb<1 or layersNb>4:
             raise ValueError("Wrong number of layer : ",layersNb)
@@ -275,7 +289,7 @@ class ResNet(nn.Module):
             self.att_3 = nn.Sequential(self.att_conv1x1_3,self.att3,self.att_final_conv1x1,actFuncConstructor())
             self.att_4 = nn.Sequential(self.att_conv1x1_4,self.att4,self.att_final_conv1x1,actFuncConstructor())
 
-    def _make_layer(self, block, planes, blocks, stride=1, norm_layer=None,reluOnLast=False,dilation=1,applyStrideOnAll=False,replaceBy1x1=False):
+    def _make_layer(self, block, planes, blocks, stride=1, norm_layer=None,reluOnLast=False,dilation=1,applyStrideOnAll=False,replaceBy1x1=False,replaceStrideByDilation=False):
 
         if norm_layer is None:
             norm_layer = nn.BatchNorm2d
@@ -287,15 +301,15 @@ class ResNet(nn.Module):
             )
 
         layers = []
-        layers.append(block(self.inplanes, planes, stride, downsample, norm_layer,applyStrideOnAll=applyStrideOnAll,replaceBy1x1=replaceBy1x1))
+        layers.append(block(self.inplanes, planes, stride, downsample, norm_layer,applyStrideOnAll=applyStrideOnAll,replaceBy1x1=replaceBy1x1,replaceStrideByDilation=replaceStrideByDilation))
         self.inplanes = planes * block.expansion
 
         for i in range(1, blocks):
 
             if i == blocks-1:
-                layers.append(block(self.inplanes, planes, norm_layer=norm_layer,endRelu=reluOnLast,dilation=dilation,applyStrideOnAll=applyStrideOnAll,replaceBy1x1=replaceBy1x1))
+                layers.append(block(self.inplanes, planes, norm_layer=norm_layer,endRelu=reluOnLast,dilation=dilation,applyStrideOnAll=applyStrideOnAll,replaceBy1x1=replaceBy1x1,replaceStrideByDilation=replaceStrideByDilation))
             else:
-                layers.append(block(self.inplanes, planes, norm_layer=norm_layer,endRelu=True,dilation=dilation,applyStrideOnAll=applyStrideOnAll,replaceBy1x1=replaceBy1x1))
+                layers.append(block(self.inplanes, planes, norm_layer=norm_layer,endRelu=True,dilation=dilation,applyStrideOnAll=applyStrideOnAll,replaceBy1x1=replaceBy1x1,replaceStrideByDilation=replaceStrideByDilation))
 
         return nn.Sequential(*layers)
 
