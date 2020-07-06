@@ -253,7 +253,7 @@ def plotPointsImageDatasetGrid(exp_id,imgNb,epochs,model_ids,reduction_fact_list
                         attMap = np.power(features,2).sum(axis=0,keepdims=True)
                         print(attMap.shape,attMap.min(),attMap.mean(),attMap.max())
                         if model_ids[j].lower().find("norm") != -1 or model_ids[j].lower().find("none") != -1:
-                            segMask = attMap>2500
+                            segMask = attMap>25000
                         elif model_ids[j].lower().find("relu") != -1:
                             segMask = attMap>0
                         elif model_ids[j].lower().find("softm") != -1 or model_ids[j].lower().find("sigm") != -1:
@@ -264,13 +264,16 @@ def plotPointsImageDatasetGrid(exp_id,imgNb,epochs,model_ids,reduction_fact_list
 
                         features = features.transpose(1,2,0).reshape(features.shape[1]*features.shape[2],features.shape[0])
 
-                        print(segMask.shape,features.shape)
-
                         embeddings = umap.UMAP(n_components=3).fit_transform(features[flatSegMask])
                         embeddings = (embeddings-embeddings.min())/(embeddings.max()-embeddings.min())
-                        attMap = np.zeros_like(attMap)
-                        print(attMap.shape,segMask.shape,embeddings.shape)
+                        attMap = np.zeros((attMap.shape[0],attMap.shape[1],attMap.shape[2],3))
+                        origSize = attMap.shape
+
+                        attMap = attMap.reshape(-1,3)
+                        segMask = segMask.reshape(-1)
                         attMap[segMask] = embeddings
+                        attMap = attMap.reshape(origSize)[0]
+
                     else:
                         attMap = cmPlasma(attMap[0])[:,:,:3]
                 else:
@@ -420,29 +423,29 @@ def listBestPred(exp_id):
 
 def findHardImage(exp_id,dataset_size,threshold,datasetName,trainProp,nbClass):
 
-    allBestPredLists = sorted(glob.glob("../results/{}/bestPred_*".format(exp_id)))
+    bestPredList = sorted(glob.glob("../results/{}/*_test.csv".format(exp_id)))
+    bestPredList = list(filter(lambda x:x.find("metrics") == -1,bestPredList))
+
+    print(bestPredList)
 
     allAccuracy = []
     allClassErr = []
 
-    for bestPredList in allBestPredLists:
-        bestPredList = np.genfromtxt(bestPredList,dtype=str)
+    for i,bestPred in enumerate(bestPredList):
+        label = np.genfromtxt(bestPred,delimiter=",")[1:,0]
 
-        for i,bestPred in enumerate(bestPredList):
-            label = np.genfromtxt(bestPred,delimiter=",")[1:,0]
+        if len(label) == dataset_size:
+            bestPred = np.genfromtxt(bestPred,delimiter=",")[1:,1:].argmax(axis=1)
+            accuracy = (label==bestPred)
 
-            if len(label) == dataset_size:
-                bestPred = np.genfromtxt(bestPred,delimiter=",")[1:,1:].argmax(axis=1)
-                accuracy = (label==bestPred)
+            if accuracy.mean() >= threshold:
+                allAccuracy.append(accuracy[np.newaxis])
 
-                if accuracy.mean() >= threshold:
-                    allAccuracy.append(accuracy[np.newaxis])
+                classErr = np.zeros(nbClass)
 
-                    classErr = np.zeros(nbClass)
-
-                    for i in range(nbClass):
-                        classErr[i] = ((label==i)*(bestPred!=i)).sum()
-                    allClassErr.append(classErr[np.newaxis])
+                for i in range(nbClass):
+                    classErr[i] = ((label==i)*(bestPred!=i)).sum()
+                allClassErr.append(classErr[np.newaxis])
 
     print("Nb models :",len(allAccuracy))
     allAccuracy = np.concatenate(allAccuracy,axis=0)
@@ -465,8 +468,8 @@ def findHardImage(exp_id,dataset_size,threshold,datasetName,trainProp,nbClass):
     _, test_dataset = torch.utils.data.random_split(test_dataset, [int(totalLength * trainProp),
                                                                    totalLength - int(totalLength * trainProp)])
 
-    printImage("../vis/{}/failCases/".format(exp_id),sortedInds[:20],test_dataset)
-    printImage("../vis/{}/sucessCases/".format(exp_id),sortedInds[-20:],test_dataset)
+    printImage("../vis/{}/failCases/".format(exp_id),sortedInds[:200],test_dataset)
+    printImage("../vis/{}/sucessCases/".format(exp_id),sortedInds[-200:],test_dataset)
 
     allClassErr = np.concatenate(allClassErr,axis=0).mean(axis=0)
     plt.figure()
@@ -574,11 +577,14 @@ def em(x,k):
     return pi
 
 def round_sig(x, sig=2):
-    return round(x, sig-int(floor(log10(abs(x))))-1)
+    if x == 0:
+        return 0
+    else:
+        return round(x, sig-int(floor(log10(abs(x))))-1)
 
 def compileTest(exp_id,id_to_label_dict,table_id,model_ids):
 
-    metricsToMax = {"accuracy":True,"latency":False,"sparsity":False,"sparsity_normalised":True,"iou":True}
+    metricsToMax = {"accuracy":True,"latency":False,"sparsity":False,"sparsity_normalised":True,"ios":True}
     testFilePaths = glob.glob("../results/{}/*metrics_test*".format(exp_id))
 
     if not model_ids is None:
@@ -592,7 +598,7 @@ def compileTest(exp_id,id_to_label_dict,table_id,model_ids):
         model_id = os.path.basename(testFilePath).replace("model","").replace("_metrics_test.csv","")
         model_id = model_id.split("_epoch")[0]
 
-        accuracy_rawcrop = model_id.find("Drop") != -1 and model_id.find("Crop")
+        accuracy_rawcrop = model_id.find("Drop") != -1 and model_id.find("Crop") != -1
 
         test_perf = getTestPerf(testFilePath,accuracy_rawcrop)
 
@@ -600,6 +606,10 @@ def compileTest(exp_id,id_to_label_dict,table_id,model_ids):
         perf_list.append(test_perf)
 
     model_id_list = np.array(model_id_list)
+
+    for i in range(len(perf_list)):
+        print(perf_list[i],model_id_list[i])
+
     perf_list = {metric:np.array([perf_list[i][metric] for i in range(len(perf_list))]) for metric in metricsToMax.keys()}
 
     bestPerf = {}
@@ -628,7 +638,7 @@ def compileTest(exp_id,id_to_label_dict,table_id,model_ids):
 
     latexTable = '\\begin{table}[t]  \n' + \
                   '\\begin{tabular}{*8c}\\toprule  \n' + \
-                  'Pixel weighting & Pixel selection & Classification & Accuracy & Latency & Sparsity & Sparsity (Norm.) & IoU \\\\ \n' + \
+                  'Pixel weighting & Pixel selection & Classification & Accuracy & Latency & Sparsity & Sparsity (Norm.) & IoS \\\\ \n' + \
                   '\\hline \n'
 
     for key1 in sorted(dic):
@@ -653,6 +663,8 @@ def compileTest(exp_id,id_to_label_dict,table_id,model_ids):
                 for l,metric in enumerate(bestPerf.keys()):
 
                     if not np.isnan(dic[key1][key2][key3][metric]):
+                        print(dic[key1][key2][key3][metric],bestPerf[metric],2)
+                        print(round_sig(dic[key1][key2][key3][metric],2),round_sig(bestPerf[metric],2))
                         if round_sig(dic[key1][key2][key3][metric],2) == round_sig(bestPerf[metric],2):
                             latexTable += "$\\mathbf{"+str(round_sig(dic[key1][key2][key3][metric],2)) + "}$ "
                         else:
@@ -689,11 +701,12 @@ def getTestPerf(path,accuracy_rawcrop):
         else:
             perf = perf[0]
         perf = float(perf.replace("tensor(",""))
-        return {"accuracy":perf,"sparsity":np.nan,"sparsity_normalised":np.nan,"latency":np.nan,"iou":np.nan}
+        return {"accuracy":perf,"sparsity":np.nan,"sparsity_normalised":np.nan,"latency":np.nan,"ios":np.nan}
     else:
+
         perf = np.genfromtxt(path,delimiter=",",dtype=str)
-        print(perf)
-        metrics = ["accuracy","sparsity","sparsity_normalised","iou"]
+
+        metrics = ["accuracy","sparsity","sparsity_normalised","ios"]
         if accuracy_rawcrop:
             metrics[0] = "accuracy_rawcrop"
 
@@ -857,6 +870,7 @@ def main(argv=None):
                             "1x1softmscale":"Score prediction - SoftMax","1x1softmscalenored":"Score prediction - SoftMax -- Stride=1",
                             "1x1softmscalenoredbigimg":"Score prediction - SoftMax -- Stride=1 -- Big Input Image",
                             "1x1relu":"Score prediction - ReLU",
+                            "1x1NA":"Score prediction - No Aux",
                             "normNoRed":"Norm - Stride = 2",
                             "noneR50":"None - ResNet50",
                             "noneHyp":"None - BS=12, Image size=448, StepLR",
@@ -867,11 +881,19 @@ def main(argv=None):
                             "1x1reluNA":"Score prediction - ReLU - NA","1x1softmscaleNA":"Score prediction - SoftMax - NA",
                             "noneNoRedNA":"None - Stride=1 - NA","noneNoRedSupSegNA":"None - Stride=1 - SupSeg - NA",
                             "noneNoRedSupSegNosClassNA":"None - Stride=1 - SupSeg - NoClass - NA",
-                            "noneR101":"None - ResNet101",
+                            "noneR101":"None - ResNet101","normNoAuxR101":"None - No Aux. - ResNet101",
                             "bil":"Bilinear","bilreg001":"Bilinear ($\\lambda=0.01$)","bilreg01":"Bilinear ($\\lambda=0.1$)","bilreg1":"Bilinear ($\\lambda=1$)",
                             "bilreg10":"Bilinear ($\\lambda=10$)","bilreg20":"Bilinear ($\\lambda=20$)","bilreg60":"Bilinear ($\\lambda=60$)",
                             "bilSigm":"Bilinear - Sigmoid","bilRelu":"Bilinear - ReLU","bilReluMany":"Bilinear - ReLU - 32 Maps",
-                            "bilClus":"Bilinear - Clustering","bilClusEns":"Bilinear - Clustering + Ensembling","bilFeatNorm":"Bilinear - Feature normalisation",
+                            "bilClus":"Bilinear - Clustering","bilClusEns":"Bilinear - Clustering + Ensembling","bilClusEnsHidLay2": "Bil. - Clust + Ens - Hid. Lay.",
+                            "bilClusEnsHidLay2Gate": "Bil. - Clust + Ens - Hid. Lay. + Gate",
+                            "bilClusEnsGate":"Bil. - Clust + Ens - Gate",
+                            "bilClusEnsHidLay2GateDrop": "Bil. - Clust + Ens - Hid. Lay. + Gate + Drop",
+                            "bilClusEnsHidLay2GateRandDrop": "Bil. - Clust + Ens - Hid. Lay. + Gate + RandDrop",
+                            "bilClusEnsHidLay2GateSoftm":"Bil. - Clust + Ens - Hid. Lay. + Gate + Softm",
+                            "noneNoRedHidLay2":"None - Stride=1 - Hid. Lay.",
+                            "noneSTR1":"None - Stride=1 at test","noneSTR1DIL2":"None - Stride=1,Dil=2 at test",
+                            "bilFeatNorm":"Bilinear - Feature normalisation",
                             "bilReluMany00001CL":"Bilinear - ReLU - 32 Maps - $\\lambda_{CL}=0,0001$","bilReluMany0001CL":"Bilinear - ReLU - 32 Maps - $\\lambda_{CL}=0,001$",
                             "patchnoredtext":"Patch (No Red) (Text. model)"}
 
