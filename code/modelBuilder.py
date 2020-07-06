@@ -13,6 +13,7 @@ import matplotlib.pyplot as plt
 from models import deeplab
 from models import resnet
 from models import pointnet2
+from models import bagnet
 import torchvision
 
 try:
@@ -52,8 +53,9 @@ def buildFeatModel(featModelName, pretrainedFeatMod, featMap=True, bigMaps=False
                                          pretrained=pretrainedFeatMod, featMap=featMap, layerSizeReduce=layerSizeReduce,
                                          **kwargs)
     elif featModelName.find("resnet") != -1:
-        featModel = getattr(resnet, featModelName)(pretrained=pretrainedFeatMod, featMap=featMap,
-                                                   layerSizeReduce=layerSizeReduce, **kwargs)
+        featModel = getattr(resnet, featModelName)(pretrained=pretrainedFeatMod, featMap=featMap,layerSizeReduce=layerSizeReduce, **kwargs)
+    elif featModelName.find("bagnet") != -1:
+        featModel = getattr(bagnet, featModelName)(pretrained=pretrainedFeatMod,strides=[2,2,2,1] if layerSizeReduce else [2,2,1,1], **kwargs)
     else:
         raise ValueError("Unknown model type : ", featModelName)
 
@@ -923,13 +925,15 @@ def getResnetFeat(backbone_name, backbone_inplanes,deeplabv3_outchan):
         nbFeat = backbone_inplanes * 2 ** (2 - 1)
     elif backbone_name.find("resnet4") != -1:
         nbFeat = backbone_inplanes * 2 ** (1 - 1)
+    elif backbone_name.find("bagnet33") != -1:
+        nbFeat = 2048
     else:
         raise ValueError("Unkown backbone : {}".format(backbone_name))
     return nbFeat
 
 def netBuilder(args):
     ############### Visual Model #######################
-    if args.first_mod.find("resnet") != -1:
+    if args.first_mod.find("resnet") != -1 or args.first_mod.find("bagnet") != -1:
 
         if not args.multi_level_feat:
             nbFeat = getResnetFeat(args.first_mod, args.resnet_chan,args.deeplabv3_outchan)
@@ -974,21 +978,27 @@ def netBuilder(args):
             kwargs = {"aux_model":args.aux_model}
             nbFeatAux = nbFeat
 
-        firstModel = CNNconst(args.first_mod, args.pretrained_visual, featMap=True,chan=args.resnet_chan, stride=args.resnet_stride,
-                              dilation=args.resnet_dilation, \
-                              attChan=args.resnet_att_chan, attBlockNb=args.resnet_att_blocks_nb,
-                              attActFunc=args.resnet_att_act_func, \
-                              num_classes=args.class_nb, \
-                              layerSizeReduce=args.resnet_layer_size_reduce,
-                              preLayerSizeReduce=args.resnet_prelay_size_reduce, \
-                              applyStrideOnAll=args.resnet_apply_stride_on_all, \
-                              replaceBy1x1=args.resnet_replace_by_1x1,\
-                              reluOnLast=args.relu_on_last_layer,
-                              multiLevelFeat=args.multi_level_feat,\
-                              multiLev_outChan=args.multi_level_feat_outchan,\
-                              multiLev_cat=args.multi_level_feat_cat,\
-                              deeplabv3_outchan=args.deeplabv3_outchan,\
-                              **kwargs)
+        if args.first_mod.find("bagnet") == -1:
+            firstModel = CNNconst(args.first_mod, args.pretrained_visual, featMap=True,chan=args.resnet_chan, stride=args.resnet_stride,
+                                  dilation=args.resnet_dilation, \
+                                  attChan=args.resnet_att_chan, attBlockNb=args.resnet_att_blocks_nb,
+                                  attActFunc=args.resnet_att_act_func, \
+                                  num_classes=args.class_nb, \
+                                  layerSizeReduce=args.resnet_layer_size_reduce,
+                                  preLayerSizeReduce=args.resnet_prelay_size_reduce, \
+                                  applyStrideOnAll=args.resnet_apply_stride_on_all, \
+                                  replaceBy1x1=args.resnet_replace_by_1x1,\
+                                  reluOnLast=args.relu_on_last_layer,
+                                  multiLevelFeat=args.multi_level_feat,\
+                                  multiLev_outChan=args.multi_level_feat_outchan,\
+                                  multiLev_cat=args.multi_level_feat_cat,\
+                                  deeplabv3_outchan=args.deeplabv3_outchan,\
+                                  replaceStrideByDilation=args.resnet_replace_str_by_dil,\
+                                  **kwargs)
+        else:
+            firstModel = CNNconst(args.first_mod, args.pretrained_visual,
+                                    num_classes=args.class_nb,layerSizeReduce=args.resnet_layer_size_reduce,
+                                    **kwargs)
     else:
         raise ValueError("Unknown visual model type : ", args.first_mod)
 
@@ -1065,6 +1075,9 @@ def addArgs(argreader):
                                   help='The stride for the visual model when resnet is used')
     argreader.parser.add_argument('--resnet_dilation', type=int, metavar='INT',
                                   help='The dilation for the visual model when resnet is used')
+    argreader.parser.add_argument('--resnet_replace_str_by_dil', type=args.str2bool, metavar='INT',
+                                  help='To replace stride by dilation.')
+
 
     argreader.parser.add_argument('--resnet_layer_size_reduce', type=args.str2bool, metavar='INT',
                                   help='To apply a stride of 2 in the layer 2,3 and 4 when the resnet model is used.')
