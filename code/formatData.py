@@ -73,55 +73,56 @@ def formatEmbryo():
     trainPaths = allPaths[:len(allPaths)//2]
     testPaths = allPaths[len(allPaths)//2:]
 
-    #makeDataset(trainPaths,"train",prop=1.0/5)
+    makeDataset(trainPaths,"train",prop=1.0/5)
     makeDataset(testPaths,"test",prop=1.0/5)
 
 def makeDataset(paths,mode,prop):
 
-    if not os.path.exists("../data/embryo_img_{}/".format(mode)):
-        os.makedirs("../data/embryo_img_{}/".format(mode))
+	if not os.path.exists("../data/embryo_img_{}/".format(mode)):
+		os.makedirs("../data/embryo_img_{}/".format(mode))
 
-    for label in labelDict.keys():
-        if not os.path.exists("../data/embryo_img_{}/{}/".format(mode,label)):
-            os.makedirs("../data/embryo_img_{}/{}/".format(mode,label))
+	for label in labelDict.keys():
+		if not os.path.exists("../data/embryo_img_{}/{}/".format(mode,label)):
+			os.makedirs("../data/embryo_img_{}/{}/".format(mode,label))
 
-    print(mode)
-    for k,path in enumerate(paths):
+	print(mode)
+	for k,path in enumerate(paths):
 
-        timeStamps = torchvision.io.read_video_timestamps(path,pts_unit="sec")[0]
-        vidName = os.path.splitext(os.path.basename(path))[0]
-        print("\t",vidName,k,"/",len(paths))
+		timeStamps = torchvision.io.read_video_timestamps(path,pts_unit="sec")[0]
+		vidName = os.path.splitext(os.path.basename(path))[0]
+		print("\t",vidName,k,"/",len(paths))
 
-        if len(glob.glob("../data/embryo_img_{}/*/{}*".format(mode,vidName))) < len(timeStamps)*prop:
+		if len(glob.glob("../data/embryo_img_{}/*/{}*".format(mode,vidName))) < len(timeStamps)*prop:
 
-            annot = np.genfromtxt("../data/big/annotations/{}_phases.csv".format(vidName),delimiter=",",dtype="str")
+			if os.path.exists("../data/big/annotations/{}_phases.csv".format(vidName)):
+				annot = np.genfromtxt("../data/big/annotations/{}_phases.csv".format(vidName),delimiter=",",dtype="str")
 
-            startFr = int(annot[0,1])
+				startFr = int(annot[0,1])
 
-            endFr = -1
-            while endFr < len(timeStamps) - 1:
+				endFr = -1
+				while endFr < len(timeStamps) - 1:
 
-                endFr = startFr + 600
-                if endFr > len(timeStamps):
-                    endFr = len(timeStamps) - 1
+					endFr = startFr + 600
+					if endFr > len(timeStamps):
+						endFr = len(timeStamps) - 1
 
-                startTime = timeStamps[startFr]
-                endTime = timeStamps[endFr]
+					startTime = timeStamps[startFr]
+					endTime = timeStamps[endFr]
 
-                frames = torchvision.io.read_video(path,pts_unit="sec",start_pts=startTime,end_pts=endTime)[0]
-                #Removing top border
-                if frames.size(1) > frames.size(2):
-                    frames = frames[:,frames.size(1)-frames.size(2):]
+					frames = torchvision.io.read_video(path,pts_unit="sec",start_pts=startTime,end_pts=endTime)[0]
+					#Removing top border
+					if frames.size(1) > frames.size(2):
+						frames = frames[:,frames.size(1)-frames.size(2):]
 
-                #Removing time
-                frames[:,-30:] = 0
+					#Removing time
+					frames[:,-30:] = 0
 
-                for i,frame in enumerate(frames):
-                    if i%(1/prop) == 0:
-                        label = getClass(annot,startFr+i)
-                        cv2.imwrite("../data/embryo_img_{}/{}/{}_{}.png".format(mode,label,vidName,startFr+i),frame.numpy())
+					for i,frame in enumerate(frames):
+						if i%(1/prop) == 0:
+							label = getClass(annot,startFr+i)
+							cv2.imwrite("../data/embryo_img_{}/{}/{}_{}.png".format(mode,label,vidName,startFr+i),frame.numpy())
 
-                startFr = endFr + 1
+					startFr = endFr + 1
 
 def getClass(annot,i):
     for row in annot:
