@@ -232,7 +232,7 @@ def plotPointsImageDatasetGrid(exp_id,imgNb,epochs,model_ids,reduction_fact_list
                     attMap = attMap[maps_inds[j]:maps_inds[j]+1]
                     attMap = attMap.astype(float)
                     attMap /= 255
-                    attMap *= 5
+                    attMap *= 3
                     attMap = torch.softmax(torch.tensor(attMap).float().view(-1),dim=-1).view(attMap.shape[0],attMap.shape[1],attMap.shape[2]).numpy()
                     attMap = (attMap-attMap.min())/(attMap.max()-attMap.min())
 
@@ -747,6 +747,43 @@ def umapPlot(exp_id,model_id):
         plt.scatter(features_emb[:,0],features_emb[:,1],color=cm(features_norm)[:,:3])
         plt.savefig("../vis/{}/umap_{}_img{}.png".format(exp_id,model_id,i))
 
+def latency(exp_id):
+
+    model_ids = []
+    latencies = []
+    latFiles = sorted(glob.glob("../results/{}/latency*".format(exp_id)))
+    for latFile in latFiles:
+        latency = np.genfromtxt(latFile,delimiter=",")[3:-1,0].mean()
+        model_id = os.path.basename(latFile).replace("latency_","").split("epoch")[0][:-1]
+
+        latencies.append(latency)
+        model_ids.append(model_id)
+
+    csv = np.concatenate((np.array(model_ids)[:,np.newaxis],np.array(latencies)[:,np.newaxis].astype(str)),axis=1)
+    np.savetxt("../results/{}/latencies.csv".format(exp_id),csv,fmt='%s, %s,')
+
+def param_nb(exp_id):
+
+    weightFiles = glob.glob("../models/{}/*best*".format(exp_id))
+    model_ids = []
+    paramNbList = []
+    for i,weightFile in enumerate(weightFiles):
+
+        print(i,"/",len(weightFiles),weightFile)
+
+        state_dict = torch.load(weightFile,map_location=torch.device('cpu'))
+
+        paramCount = 0
+        for param in state_dict.keys():
+            if torch.is_tensor(state_dict[param]):
+                paramCount += state_dict[param].numel()
+
+        model_ids.append(os.path.basename(weightFile).replace("model","").split("best")[0][:-1])
+        paramNbList.append(paramCount)
+
+    csv = np.concatenate((np.array(model_ids)[:,np.newaxis],np.array(paramNbList)[:,np.newaxis].astype(str)),axis=1)
+    np.savetxt("../results/{}/param_nb.csv".format(exp_id),csv,fmt='%s, %s,')
+
 def main(argv=None):
 
     #Getting arguments from config file and command line
@@ -824,6 +861,11 @@ def main(argv=None):
 
     argreader.parser.add_argument('--umap',action="store_true",help='To plot features using UMAP')
 
+    ###################################### Latency  ########################################
+
+    argreader.parser.add_argument('--latency',action="store_true",help='To create a table with all the latencies')
+    argreader.parser.add_argument('--param_nb',action="store_true",help='To create a table with all the parameter number')
+
     argreader = load_data.addArgs(argreader)
 
     #Reading the comand line arg
@@ -861,6 +903,10 @@ def main(argv=None):
         efficiencyPlot(args.exp_id,args.model_ids,args.epoch_list)
     if args.umap:
         umapPlot(args.exp_id,args.model_id)
+    if args.latency:
+        latency(args.exp_id)
+    if args.param_nb:
+        param_nb(args.exp_id)
     if args.compile_test:
 
         id_to_label_dict = {"1x1":"Score prediction","none":"None","noneNoRed":"None - Stride=1","sobel":"Sobel","patchsim":"Patch Similarity","norm":"Norm","normDropCrop":"Norm + WS-DAN",
