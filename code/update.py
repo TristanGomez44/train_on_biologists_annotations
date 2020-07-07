@@ -103,36 +103,36 @@ def updateTimeCSV(epoch,mode,exp_id,model_id,totalTime,batch_idx):
             print(str(epoch)+","+str(totalTime),file=text_file)
 
 def catIntermediateVariables(visualDict,intermVarDict,nbVideos, save_all):
-    if save_all:
-        intermVarDict["fullAttMap"] = catMap(visualDict,intermVarDict["fullAttMap"],key="attMaps")
-        intermVarDict["fullFeatMapSeq"] = catMap(visualDict,intermVarDict["fullFeatMapSeq"],key="features")
-        intermVarDict["fullPointsSeq"] = catPointsSeq(visualDict,intermVarDict["fullPointsSeq"],key="points")
-        intermVarDict["fullPointsSeqDropped"] = catPointsSeq(visualDict,intermVarDict["fullPointsSeqDropped"],key="points_dropped")
-        intermVarDict["fullPointsWeightSeq"] = catPointsSeq(visualDict,intermVarDict["fullPointsWeightSeq"],key="pointWeights")
 
-        intermVarDict["fullPointsSeq_pureText"] = catPointsSeq(visualDict,intermVarDict["fullPointsSeq_pureText"],key="points_puretext")
-        intermVarDict["fullPointsWeightSeq_pureText"] = catPointsSeq(visualDict,intermVarDict["fullPointsWeightSeq_pureText"],key="pointWeights_puretext")
+    intermVarDict["fullAttMap"] = catMap(visualDict,intermVarDict["fullAttMap"],key="attMaps")
+    intermVarDict["fullFeatMapSeq"] = catMap(visualDict,intermVarDict["fullFeatMapSeq"],key="features")
+    intermVarDict["fullPointsSeq"] = catPointsSeq(visualDict,intermVarDict["fullPointsSeq"],key="points")
+    intermVarDict["fullPointsSeqDropped"] = catPointsSeq(visualDict,intermVarDict["fullPointsSeqDropped"],key="points_dropped")
+    intermVarDict["fullPointsWeightSeq"] = catPointsSeq(visualDict,intermVarDict["fullPointsWeightSeq"],key="pointWeights")
 
-        if nbVideos < 6:
-            intermVarDict["fullPNReconstSeq"] = catMap(visualDict,intermVarDict["fullPNReconstSeq"],key="pn_reconst")
-        intermVarDict["fullProbMap"] = catMap(visualDict,intermVarDict["fullProbMap"],key="prob_map")
-        intermVarDict["fullReconstSeq"] = catMap(visualDict,intermVarDict["fullReconstSeq"],key="reconst")
+    intermVarDict["fullPointsSeq_pureText"] = catPointsSeq(visualDict,intermVarDict["fullPointsSeq_pureText"],key="points_puretext")
+    intermVarDict["fullPointsWeightSeq_pureText"] = catPointsSeq(visualDict,intermVarDict["fullPointsWeightSeq_pureText"],key="pointWeights_puretext")
+
+    intermVarDict["fullProbMap"] = catMap(visualDict,intermVarDict["fullProbMap"],key="prob_map")
+    intermVarDict["fullReconstSeq"] = catMap(visualDict,intermVarDict["fullReconstSeq"],key="reconst")
 
     return intermVarDict
 
 def saveIntermediateVariables(intermVarDict,exp_id,model_id,epoch,mode="val",save_all=True):
-    if save_all:
-        intermVarDict["fullAttMap"] = saveMap(intermVarDict["fullAttMap"],exp_id,model_id,epoch,mode,key="attMaps")
-        intermVarDict["fullPointsSeq"] =  savePointsSeq(intermVarDict["fullPointsSeq"],exp_id,model_id,epoch,mode,key="points")
-        intermVarDict["fullPointsSeqDropped"] =  savePointsSeq(intermVarDict["fullPointsSeqDropped"],exp_id,model_id,epoch,mode,key="points_dropped")
-        intermVarDict["fullPointsWeightSeq"] =  savePointsSeq(intermVarDict["fullPointsWeightSeq"],exp_id,model_id,epoch,mode,key="pointWeights")
 
-        intermVarDict["fullPointsSeq_pureText"] =  savePointsSeq(intermVarDict["fullPointsSeq_pureText"],exp_id,model_id,epoch,mode,key="points_puretext")
-        intermVarDict["fullPointsWeightSeq_pureText"] =  savePointsSeq(intermVarDict["fullPointsWeightSeq_pureText"],exp_id,model_id,epoch,mode,key="pointWeights_puretext")
+    intermVarDict["fullAttMap"] = saveMap(intermVarDict["fullAttMap"],exp_id,model_id,epoch,mode,key="attMaps")
+    intermVarDict["fullFeatMapSeq"] = saveMap(intermVarDict["fullFeatMapSeq"],exp_id,model_id,epoch,mode,key="features")
+    intermVarDict["fullPointsSeq"] =  savePointsSeq(intermVarDict["fullPointsSeq"],exp_id,model_id,epoch,mode,key="points")
+    intermVarDict["fullPointsSeqDropped"] =  savePointsSeq(intermVarDict["fullPointsSeqDropped"],exp_id,model_id,epoch,mode,key="points_dropped")
+    intermVarDict["fullPointsWeightSeq"] =  savePointsSeq(intermVarDict["fullPointsWeightSeq"],exp_id,model_id,epoch,mode,key="pointWeights")
 
-        intermVarDict["fullPNReconstSeq"] = saveMap(intermVarDict["fullPNReconstSeq"],exp_id,model_id,epoch,mode,key="pn_reconst")
-        intermVarDict["fullProbMap"] = saveMap(intermVarDict["fullProbMap"],exp_id,model_id,epoch,mode,key="prob_map")
-        intermVarDict["fullReconstSeq"] = saveMap(intermVarDict["fullReconstSeq"],exp_id,model_id,epoch,mode,key="reconst")
+    intermVarDict["fullPointsSeq_pureText"] =  savePointsSeq(intermVarDict["fullPointsSeq_pureText"],exp_id,model_id,epoch,mode,key="points_puretext")
+    intermVarDict["fullPointsWeightSeq_pureText"] =  savePointsSeq(intermVarDict["fullPointsWeightSeq_pureText"],exp_id,model_id,epoch,mode,key="pointWeights_puretext")
+
+    intermVarDict["fullPNReconstSeq"] = saveMap(intermVarDict["fullPNReconstSeq"],exp_id,model_id,epoch,mode,key="pn_reconst")
+    intermVarDict["fullProbMap"] = saveMap(intermVarDict["fullProbMap"],exp_id,model_id,epoch,mode,key="prob_map")
+    intermVarDict["fullReconstSeq"] = saveMap(intermVarDict["fullReconstSeq"],exp_id,model_id,epoch,mode,key="reconst")
+
     return intermVarDict
 
 def catPointsSeq(visualDict,fullPointsSeq,key="points"):

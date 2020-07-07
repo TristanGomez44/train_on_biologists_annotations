@@ -31,7 +31,6 @@ import warnings
 
 import torch.distributed as dist
 from torch.multiprocessing import Process
-import torchvision
 import time
 import gradcam
 
@@ -261,7 +260,8 @@ def epochImgEval(model, log_interval, loader, epoch, args, writer, metricEarlySt
         loss = computeLoss(args, output, target, resDict, data,seg)
 
         # Other variables produced by the net
-        intermVarDict = update.catIntermediateVariables(resDict, intermVarDict, validBatch, args.save_all)
+        if mode == "test":
+            intermVarDict = update.catIntermediateVariables(resDict, intermVarDict, validBatch, args.save_all)
 
         # Harware occupation
         update.updateHardWareOccupation(args.debug, args.benchmark, args.cuda, epoch, mode, args.exp_id, args.model_id,
@@ -280,8 +280,9 @@ def epochImgEval(model, log_interval, loader, epoch, args, writer, metricEarlySt
         if validBatch > 3 and args.debug:
             break
 
-    intermVarDict = update.saveIntermediateVariables(intermVarDict, args.exp_id, args.model_id, epoch, mode,
-                                                     args.save_all)
+    if mode == "test":
+        intermVarDict = update.saveIntermediateVariables(intermVarDict, args.exp_id, args.model_id, epoch, mode,
+                                                        args.save_all)
 
     writeSummaries(metrDict, totalImgNb, writer, epoch, mode, args.model_id, args.exp_id)
 
@@ -719,8 +720,6 @@ def run(args):
         args.val_batch_size = 1
         testLoader,_ = load_data.buildTestLoader(args, "test",withSeg=args.with_seg)
         net = preprocessAndLoadParams("../models/{}/model{}_best_epoch{}".format(args.exp_id, args.model_id, bestEpoch),args.cuda,net,args.strict_init)
-        #resnet = torchvision.models.resnet18(pretrained=False,num_classes=args.class_nb)
-        #resnet.load_state_dict(net.firstModel.featMod.state_dict(),strict=False)
         resnet = net.firstModel.featMod
         resnet.fc = net.secondModel.linLay
 
