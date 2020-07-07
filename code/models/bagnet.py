@@ -104,7 +104,7 @@ class BagNet(nn.Module):
     def forward(self, x):
         # Wouldn't it be great if we had pipes?
         retDict = {}
-        
+
         x = self.conv1(x)
         x = self.conv2(x)
         x = self.bn1(x)
@@ -125,6 +125,11 @@ class BagNet(nn.Module):
         retDict["x"] = x
         return retDict
 
+def removeTopLayer(params):
+    params.pop("fc.weight")
+    params.pop("fc.bias")
+    return params
+
 def bagnet33(pretrained=False, strides=[2, 2, 2, 1], **kwargs):
     """Constructs a Bagnet-33 model.
     Args:
@@ -132,7 +137,9 @@ def bagnet33(pretrained=False, strides=[2, 2, 2, 1], **kwargs):
     """
     model = BagNet(Bottleneck, [3, 4, 6, 3], strides=strides, kernel3=[1,1,1,1], **kwargs)
     if pretrained:
-        model.load_state_dict(model_zoo.load_url(model_urls['bagnet33']))
+        params = model_zoo.load_url(model_urls['bagnet33'])
+        params = removeTopLayer(params)
+        model.load_state_dict(params,strict=False)
     return model
 
 def bagnet17(pretrained=False, strides=[2, 2, 2, 1], **kwargs):
@@ -142,7 +149,9 @@ def bagnet17(pretrained=False, strides=[2, 2, 2, 1], **kwargs):
     """
     model = BagNet(Bottleneck, [3, 4, 6, 3], strides=strides, kernel3=[1,1,1,0], **kwargs)
     if pretrained:
-        model.load_state_dict(model_zoo.load_url(model_urls['bagnet17']))
+        params = model_zoo.load_url(model_urls['bagnet17'])
+        params = removeTopLayer(params)
+        model.load_state_dict(params,strict=False)
     return model
 
 def bagnet9(pretrained=False, strides=[2, 2, 2, 1], **kwargs):
@@ -152,5 +161,7 @@ def bagnet9(pretrained=False, strides=[2, 2, 2, 1], **kwargs):
     """
     model = BagNet(Bottleneck, [3, 4, 6, 3], strides=strides, kernel3=[1,1,0,0], **kwargs)
     if pretrained:
-        model.load_state_dict(model_zoo.load_url(model_urls['bagnet9']))
+        params = model_zoo.load_url(model_urls['bagnet9'])
+        params = removeTopLayer(params)
+        model.load_state_dict(params,strict=False)
     return model
