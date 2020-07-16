@@ -567,11 +567,34 @@ class CNN2D_simpleAttention(FirstModel):
 
         return retDict
 
-def representativeVectors(x,nbVec,applySoftMax=False):
+
+def mapToHeatMap(batch,i,name):
+
+    import matplotlib.pyplot as plt
+    plt.switch_backend('agg')
+    cmPlasma = plt.get_cmap('plasma')
+
+    map = batch[i].permute(1,2,0).cpu().detach().numpy()
+    map = torch.tensor(cmPlasma(map[:,:,0])[:,:,:3]).permute(2,0,1)
+
+    torchvision.utils.save_image(map,"../vis/repreVecSchema_{}.png".format(name))
+
+def representativeVectors(x,nbVec,applySoftMax=False,softmCoeff=1,softmSched=False,softmSched_interpCoeff=0,no_refine=False,randVec=False,unnorm=False):
     xOrigShape = x.size()
+
+    normNotFlat = torch.sqrt(torch.pow(x,2).sum(dim=1,keepdim=True))
+    normNotFlatMax = normNotFlat.max(dim=-1,keepdim=True)[0].max(dim=-2,keepdim=True)[0]
+    normNotFlat = normNotFlat/normNotFlatMax
+    #torchvision.utils.save_image(normNotFlat,"../vis/repreVecSchema_norm.png")
+    #mapToHeatMap(normNotFlat,52,"norm")
+
     x = x.permute(0,2,3,1).reshape(x.size(0),x.size(2)*x.size(3),x.size(1))
     norm = torch.sqrt(torch.pow(x,2).sum(dim=-1)) + 0.00001
-    raw_reprVec_score = norm.clone()
+
+    if randVec:
+        raw_reprVec_score = torch.rand(norm.size()).to(norm.device)
+    else:
+        raw_reprVec_score = norm.clone()
 
     repreVecList = []
     simList = []
@@ -582,16 +605,33 @@ def representativeVectors(x,nbVec,applySoftMax=False):
         sim = (x*raw_reprVec).sum(dim=-1)/(norm*raw_reprVec_norm)
 
         if applySoftMax:
-            simNorm = torch.softmax(sim,dim=1)
+            if softmSched:
+                simNorm = (1-softmSched_interpCoeff)*(sim/sim.sum(dim=1,keepdim=True))+softmSched_interpCoeff*torch.softmax(softmCoeff*sim,dim=1)
+            else:
+                simNorm = torch.softmax(softmCoeff*sim,dim=1)
         else:
-            simNorm = sim/sim.sum(dim=1,keepdim=True)
+            if unnorm:
+                simMax,simMin = sim.max(dim=1,keepdim=True)[0],sim.min(dim=1,keepdim=True)[0]
+                simNorm = (sim-simMin)/(simMax-simMin)
+                simNorm = simNorm*norm
+            else:
+                simNorm = sim/sim.sum(dim=1,keepdim=True)
 
         reprVec = (x*simNorm.unsqueeze(-1)).sum(dim=1)
 
-        repreVecList.append(reprVec)
-        raw_reprVec_score = (1-sim)*raw_reprVec_score
+        if not no_refine:
+            repreVecList.append(reprVec)
+        else:
+            repreVecList.append(raw_reprVec[:,0])
 
-        simList.append(sim.reshape(sim.size(0),1,xOrigShape[2],xOrigShape[3]))
+        if randVec:
+            raw_reprVec_score = torch.rand(norm.size()).to(norm.device)
+        else:
+            raw_reprVec_score = (1-sim)*raw_reprVec_score
+
+        simReshaped = sim.reshape(sim.size(0),1,xOrigShape[2],xOrigShape[3])
+
+        simList.append(simReshaped)
 
     return repreVecList,simList
 
@@ -600,7 +640,7 @@ class CNN2D_bilinearAttPool(FirstModel):
     def __init__(self, featModelName, pretrainedFeatMod=True, featMap=True, bigMaps=False, chan=64, attBlockNb=2,
                  attChan=16,inFeat=512,nb_parts=3,aux_model=False,score_pred_act_func="softmax",center_loss=False,\
                  center_loss_beta=5e-2,num_classes=200,cuda=True,cluster=False,cluster_ensemble=False,applySoftmaxOnSim=False,\
-                 normFeat=False,**kwargs):
+                 softmCoeff=1,softmSched=False,normFeat=False,no_refine=False,rand_vec=False,unnorm=False,**kwargs):
 
         super(CNN2D_bilinearAttPool, self).__init__(featModelName, pretrainedFeatMod, featMap, bigMaps, **kwargs)
         self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
@@ -626,6 +666,9 @@ class CNN2D_bilinearAttPool(FirstModel):
             self.attention_activation = None
             self.cluster_ensemble = cluster_ensemble
             self.applySoftmaxOnSim = applySoftmaxOnSim
+            self.no_refine = no_refine
+            self.rand_vec = rand_vec
+            self.unnorm = unnorm
         self.aux_model = aux_model
 
         self.center_loss = center_loss
@@ -633,6 +676,10 @@ class CNN2D_bilinearAttPool(FirstModel):
             self.center_loss_beta = center_loss_beta
             self.feature_center = torch.zeros(num_classes, nb_parts * inFeat)
             self.feature_center = self.feature_center.cuda() if cuda else self.feature_center
+
+        self.softmSched = softmSched
+        self.softmSched_interpCoeff = 0
+        self.softmCoeff = softmCoeff
 
     def forward(self, x):
         # N x C x H x L
@@ -657,7 +704,8 @@ class CNN2D_bilinearAttPool(FirstModel):
             retDict["x_size"] = features_weig.size()
             features_agr = features_agr.view(features.size(0), -1)
         else:
-            vecList,simList = representativeVectors(features,self.nb_parts,self.applySoftmaxOnSim)
+            vecList,simList = representativeVectors(features,self.nb_parts,self.applySoftmaxOnSim,self.softmCoeff,self.softmSched,\
+                                                    self.softmSched_interpCoeff,self.no_refine,self.rand_vec,self.unnorm)
             if not self.cluster_ensemble:
                 features_agr = torch.cat(vecList,dim=-1)
             else:
@@ -947,6 +995,11 @@ def netBuilder(args):
                       "center_loss":args.bil_center_loss,"center_loss_beta":args.bil_center_loss_beta,\
                       "cuda":args.cuda,"cluster":args.bil_cluster,"cluster_ensemble":args.bil_cluster_ensemble,\
                       "applySoftmaxOnSim":args.apply_softmax_on_sim,\
+                      "softmCoeff":args.softm_coeff,\
+                      "softmSched":args.bil_clus_soft_sched,\
+                      "no_refine":args.bil_cluster_norefine,\
+                      "rand_vec":args.bil_cluster_randvec,\
+                      "unnorm":args.bil_clust_unnorm,\
                       "normFeat":args.bil_norm_feat}
             nbFeatAux = nbFeat
             if not args.bil_cluster_ensemble:
@@ -1149,6 +1202,10 @@ def addArgs(argreader):
                                   help="To classify each of the feature vector obtained and then aggregates those decision.")
     argreader.parser.add_argument('--apply_softmax_on_sim', type=args.str2bool, metavar='BOOL',
                                   help="Apply softmax on similarity computed during clustering.")
+    argreader.parser.add_argument('--softm_coeff', type=float, metavar='BOOL',
+                                  help="The softmax temperature. The higher it is, the sharper weights will be.")
+    argreader.parser.add_argument('--bil_clust_unnorm', type=args.str2bool, metavar='BOOL',
+                                  help="To mulitply similarity by norm to make weights superior to 1.")
 
     argreader.parser.add_argument('--bil_norm_feat', type=args.str2bool, metavar='BOOL',
                                   help="To normalize feature before computing attention")
@@ -1165,5 +1222,11 @@ def addArgs(argreader):
                                   help="To drop the feature vector with the most important weight.")
     argreader.parser.add_argument('--bil_cluster_ensemble_gate_randdrop', type=args.str2bool, metavar='BOOL',
                                   help="To randomly drop one feature vector.")
+
+    argreader.parser.add_argument('--bil_cluster_norefine', type=args.str2bool, metavar='BOOL',
+                                  help="To not refine feature vectors by using similar vectors.")
+    argreader.parser.add_argument('--bil_cluster_randvec', type=args.str2bool, metavar='BOOL',
+                                  help="To select random vectors as initial estimation instead of vectors with high norms.")
+
 
     return argreader
