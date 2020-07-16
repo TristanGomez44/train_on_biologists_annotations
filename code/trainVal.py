@@ -558,6 +558,10 @@ def addOptimArgs(argreader):
 
     argreader.parser.add_argument('--optim', type=str, metavar='OPTIM',
                                   help='the optimizer to use (default: \'SGD\')')
+
+    argreader.parser.add_argument('--bil_clus_soft_sched', type=args.str2bool, metavar='BOOL',
+                                  help='Added schedule to increase temperature of the softmax of the bilinear cluster model.')
+
     return argreader
 
 
@@ -653,6 +657,9 @@ def run(args):
     if not args.only_test and not args.grad_cam:
         while epoch < args.epochs + 1 and worseEpochNb < args.max_worse_epoch_nb:
 
+            if args.bil_clus_soft_sched:
+                update.updateBilClusSoftmSched(net,epoch,args.epochs)
+
             kwargsTr["epoch"], kwargsVal["epoch"] = epoch, epoch
             kwargsTr["model"], kwargsVal["model"] = net, net
 
@@ -708,6 +715,9 @@ def run(args):
 
             kwargsTest["model"] = net
             kwargsTest["epoch"] = bestEpoch
+
+            if args.bil_clus_soft_sched:
+                update.updateBilClusSoftmSched(net,args.epochs,args.epochs)
 
             with torch.no_grad():
                 testFunc(**kwargsTest)
