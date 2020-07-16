@@ -2,6 +2,7 @@ import math
 import torch.nn as nn
 from torch.utils import model_zoo
 
+import torch
 
 model_urls = {
     'bagnet9': 'https://bitbucket.org/wielandbrendel/bag-of-feature-pretrained-models/raw/249e8fa82c0913623a807d9d35eeab9da7dcc2a8/bagnet8-34f4ccd2.pth.tar',
@@ -137,7 +138,7 @@ def bagnet33(pretrained=False, strides=[2, 2, 2, 1], **kwargs):
     """
     model = BagNet(Bottleneck, [3, 4, 6, 3], strides=strides, kernel3=[1,1,1,1], **kwargs)
     if pretrained:
-        params = model_zoo.load_url(model_urls['bagnet33'])
+        params = model_zoo.load_url(model_urls['bagnet33'],map_location="cpu" if not torch.cuda.is_available() else None)
         params = removeTopLayer(params)
         model.load_state_dict(params,strict=False)
     return model
@@ -149,7 +150,7 @@ def bagnet17(pretrained=False, strides=[2, 2, 2, 1], **kwargs):
     """
     model = BagNet(Bottleneck, [3, 4, 6, 3], strides=strides, kernel3=[1,1,1,0], **kwargs)
     if pretrained:
-        params = model_zoo.load_url(model_urls['bagnet17'])
+        params = model_zoo.load_url(model_urls['bagnet17'],map_location="cpu" if not torch.cuda.is_available() else None)
         params = removeTopLayer(params)
         model.load_state_dict(params,strict=False)
     return model
@@ -161,7 +162,7 @@ def bagnet9(pretrained=False, strides=[2, 2, 2, 1], **kwargs):
     """
     model = BagNet(Bottleneck, [3, 4, 6, 3], strides=strides, kernel3=[1,1,0,0], **kwargs)
     if pretrained:
-        params = model_zoo.load_url(model_urls['bagnet9'])
+        params = model_zoo.load_url(model_urls['bagnet9'],map_location="cpu" if not torch.cuda.is_available() else None)
         params = removeTopLayer(params)
         model.load_state_dict(params,strict=False)
     return model
