@@ -127,7 +127,7 @@ def compRecField(architecture):
 
 def plotPointsImageDatasetGrid(exp_id,imgNb,epochs,model_ids,reduction_fact_list,inverse_xy,mode,nbClass,\
                                 useDropped_list,forceFeat,fullAttMap,threshold,maps_inds,plotId,luminosity,\
-                                receptive_field,cluster,cluster_attention,pond_by_norm,gradcam,nrows,correctness,args):
+                                receptive_field,cluster,cluster_attention,pond_by_norm,gradcam,nrows,correctness,agregateMultiAtt,args):
 
     if (correctness == "True" or correctness == "False") and len(model_ids)>1:
         raise ValueError("correctness can only be used with a single model.")
@@ -152,9 +152,10 @@ def plotPointsImageDatasetGrid(exp_id,imgNb,epochs,model_ids,reduction_fact_list
             epochs.append(utils.findLastNumbers(fileName))
 
     if mode == "val":
-        imgLoader,_ = load_data.buildTestLoader(args,mode,shuffle=False)
+        imgLoader,testDataset = load_data.buildTestLoader(args,mode,shuffle=True)
         inds = torch.arange(imgNb)
         imgBatch,_ = next(iter(imgLoader))
+        #imgBatch = torch.cat([testDataset[ind][0].unsqueeze(0) for ind in inds],dim=0)
     else:
         imgLoader,testDataset = load_data.buildTestLoader(args,mode,shuffle=False)
 
@@ -229,12 +230,28 @@ def plotPointsImageDatasetGrid(exp_id,imgNb,epochs,model_ids,reduction_fact_list
                     attMap = (attMap-attMap.min())/(attMap.max()-attMap.min())
 
                 if attMap.shape[0] != 1:
-                    attMap = attMap[maps_inds[j]:maps_inds[j]+1]
-                    attMap = attMap.astype(float)
-                    attMap /= 255
-                    attMap *= 3
-                    attMap = torch.softmax(torch.tensor(attMap).float().view(-1),dim=-1).view(attMap.shape[0],attMap.shape[1],attMap.shape[2]).numpy()
-                    attMap = (attMap-attMap.min())/(attMap.max()-attMap.min())
+                    if attMap.shape[0] == 3 or attMap.shape[0] == 4:
+
+                        allAttMap = []
+                        for l in range(3):
+                            attMap_l = attMap[l:l+1]
+                            attMap_l = attMap_l.astype(float)
+                            attMap_l /= 255
+                            attMap_l *= 6
+                            attMap_l = torch.softmax(torch.tensor(attMap_l).float().view(-1),dim=-1).view(attMap_l.shape[0],attMap_l.shape[1],attMap_l.shape[2]).numpy()
+                            attMap_l = (attMap_l-attMap_l.min())/(attMap_l.max()-attMap_l.min())
+                            allAttMap.append(attMap_l)
+                        attMap = np.concatenate(allAttMap,axis=0)
+                        if agregateMultiAtt[j]:
+                            attMap = attMap.mean(axis=0,keepdims=True)
+                            attMap = (attMap-attMap.min())/(attMap.max()-attMap.min())
+                    else:
+                        attMap = attMap[maps_inds[j]:maps_inds[j]+1]
+                        attMap = attMap.astype(float)
+                        attMap /= 255
+                        attMap *= 3
+                        attMap = torch.softmax(torch.tensor(attMap).float().view(-1),dim=-1).view(attMap.shape[0],attMap.shape[1],attMap.shape[2]).numpy()
+                        attMap = (attMap-attMap.min())/(attMap.max()-attMap.min())
 
                 if pond_by_norm[j]:
                     norm = normDict[j][inds[i]]
@@ -275,7 +292,10 @@ def plotPointsImageDatasetGrid(exp_id,imgNb,epochs,model_ids,reduction_fact_list
                         attMap = attMap.reshape(origSize)[0]
 
                     else:
-                        attMap = cmPlasma(attMap[0])[:,:,:3]
+                        if attMap.shape[0] == 1:
+                            attMap = cmPlasma(attMap[0])[:,:,:3]
+                        else:
+                            attMap = np.transpose(attMap,(1,2,0))
                 else:
                     attMap = attMap[0][:,:,np.newaxis]
                 ptsImageCopy = torch.tensor(resize(attMap, (ptsImageCopy.shape[1],ptsImageCopy.shape[2]),anti_aliasing=True,mode="constant",order=0)).permute(2,0,1).float().unsqueeze(0)
@@ -828,11 +848,9 @@ def main(argv=None):
     argreader.parser.add_argument('--cluster_attention',type=str2bool,nargs="*",metavar="BOOL",help='To cluster attended points with UMAP',default=[])
     argreader.parser.add_argument('--pond_by_norm',type=str2bool,nargs="*",metavar="BOOL",help='To also show the norm of pixels along with the attention weights.',default=[])
 
-
     argreader.parser.add_argument('--gradcam',type=str2bool,nargs="*",metavar="BOOL",help='To plot gradcam instead of attention maps',default=[])
     argreader.parser.add_argument('--correctness',type=str,metavar="CORRECT",help='Set this to True to only show image where the model has given a correct answer.',default=None)
-
-
+    argreader.parser.add_argument('--agregate_multi_att',type=str2bool,nargs="*",metavar="BOOL",help='Set this to True to agregate the multiple attention map when there\'s several.',default=None)
 
     argreader.parser.add_argument('--luminosity',type=str2bool,metavar="BOOL",help='To plot the attention maps not with a cmap but with luminosity',default=False)
     argreader.parser.add_argument('--nrows',type=int,metavar="INT",help='The number of rows',default=1)
@@ -890,9 +908,13 @@ def main(argv=None):
             args.cluster_attention = [False for _ in range(len(args.model_ids))]
         if len(args.pond_by_norm) == 0:
             args.pond_by_norm = [False for _ in range(len(args.model_ids))]
+        if len(args.agregate_multi_att) == 0:
+            args.agregate_multi_att = [False for _ in range(len(args.model_ids))]
+
         plotPointsImageDatasetGrid(args.exp_id,args.image_nb,args.epoch_list,args.model_ids,args.reduction_fact_list,args.inverse_xy,args.mode,\
                                     args.class_nb,args.use_dropped_list,args.force_feat,args.full_att_map,args.use_threshold,args.maps_inds,args.plot_id,\
-                                    args.luminosity,args.receptive_field,args.cluster,args.cluster_attention,args.pond_by_norm,args.gradcam,args.nrows,args.correctness,args)
+                                    args.luminosity,args.receptive_field,args.cluster,args.cluster_attention,args.pond_by_norm,args.gradcam,args.nrows,\
+                                    args.correctness,args.agregate_multi_att,args)
     if args.plot_prob_maps:
         plotProbMaps(args.image_nb,args,args.norm)
     if args.list_best_pred:
