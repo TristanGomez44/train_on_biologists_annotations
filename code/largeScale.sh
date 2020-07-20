@@ -32,6 +32,18 @@ case $1 in
   "clusCatUnorm")
     python trainVal.py -c model_cub4.config --exp_id CUB5 --model_id bilClusCatUnorm --epochs 300  --aux_model False --aux_mod_nll_weight 0 --first_mod $2   --resnet_bilinear True --bil_cluster True --bil_cluster_ensemble False --bil_clust_unnorm True
     ;;
+  "clusCatUpByNorSim")
+    python trainVal.py -c model_cub4.config --exp_id CUB5 --model_id bilClusCatUpByNormSim --epochs 300  --aux_model False --aux_mod_nll_weight 0 --first_mod $2   --resnet_bilinear True --bil_cluster True --bil_cluster_ensemble False --bil_clust_update_sco_by_norm_sim True
+    ;;
+  "clusCatUpSM2")
+    python trainVal.py -c model_cub4.config --exp_id CUB5 --model_id bilClusCatSM2 --epochs 300  --aux_model False --aux_mod_nll_weight 0 --first_mod $2   --resnet_bilinear True --bil_cluster True --bil_cluster_ensemble False --apply_softmax_on_sim True --softm_coeff 2
+    ;;
+  "clusCatUpSM2-UpByNorSim")
+    python trainVal.py -c model_cub4.config --exp_id CUB5 --model_id bilClusCatSM2-UpByNorSim --epochs 300  --aux_model False --aux_mod_nll_weight 0 --first_mod $2   --resnet_bilinear True --bil_cluster True --bil_cluster_ensemble False --apply_softmax_on_sim True --softm_coeff 2 --bil_clust_update_sco_by_norm_sim True
+    ;;
+  "clusCatUpSM2-UpByNorSim-Unnorm")
+    python trainVal.py -c model_cub4.config --exp_id CUB5 --model_id bilClusCatSM2-UpByNorSim-Unnorm --epochs 300  --aux_model False --aux_mod_nll_weight 0 --first_mod $2   --resnet_bilinear True --bil_cluster True --bil_cluster_ensemble False --apply_softmax_on_sim True --softm_coeff 2 --bil_clust_update_sco_by_norm_sim True --bil_clust_unnorm True
+    ;;
   "clusCatNoRef")
     python trainVal.py -c model_cub4.config --exp_id CUB5 --model_id bilClusCatNoRef --epochs 300  --aux_model False --aux_mod_nll_weight 0 --first_mod $2   --resnet_bilinear True --bil_cluster True --bil_cluster_ensemble False --bil_cluster_norefine True
     ;;

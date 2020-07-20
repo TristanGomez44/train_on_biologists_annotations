@@ -12,7 +12,6 @@ import matplotlib.pyplot as plt
 
 from models import deeplab
 from models import resnet
-from models import pointnet2
 from models import bagnet
 import torchvision
 
@@ -579,14 +578,11 @@ def mapToHeatMap(batch,i,name):
 
     torchvision.utils.save_image(map,"../vis/repreVecSchema_{}.png".format(name))
 
-def representativeVectors(x,nbVec,applySoftMax=False,softmCoeff=1,softmSched=False,softmSched_interpCoeff=0,no_refine=False,randVec=False,unnorm=False):
+def representativeVectors(x,nbVec,applySoftMax=False,softmCoeff=1,softmSched=False,softmSched_interpCoeff=0,no_refine=False,randVec=False,unnorm=False,\
+                            update_sco_by_norm_sim=False):
     xOrigShape = x.size()
 
     normNotFlat = torch.sqrt(torch.pow(x,2).sum(dim=1,keepdim=True))
-    normNotFlatMax = normNotFlat.max(dim=-1,keepdim=True)[0].max(dim=-2,keepdim=True)[0]
-    normNotFlat = normNotFlat/normNotFlatMax
-    #torchvision.utils.save_image(normNotFlat,"../vis/repreVecSchema_norm.png")
-    #mapToHeatMap(normNotFlat,52,"norm")
 
     x = x.permute(0,2,3,1).reshape(x.size(0),x.size(2)*x.size(3),x.size(1))
     norm = torch.sqrt(torch.pow(x,2).sum(dim=-1)) + 0.00001
@@ -599,7 +595,6 @@ def representativeVectors(x,nbVec,applySoftMax=False,softmCoeff=1,softmSched=Fal
     repreVecList = []
     simList = []
     for i in range(nbVec):
-        #Ajouter un seuil à partir de la 2e itération pour éviter de capturer le background
         raw_reprVec_norm,ind = raw_reprVec_score.max(dim=1,keepdim=True)
         raw_reprVec = x[torch.arange(x.size(0)).unsqueeze(1),ind]
         sim = (x*raw_reprVec).sum(dim=-1)/(norm*raw_reprVec_norm)
@@ -610,14 +605,12 @@ def representativeVectors(x,nbVec,applySoftMax=False,softmCoeff=1,softmSched=Fal
             else:
                 simNorm = torch.softmax(softmCoeff*sim,dim=1)
         else:
-            if unnorm:
-                simMax,simMin = sim.max(dim=1,keepdim=True)[0],sim.min(dim=1,keepdim=True)[0]
-                simNorm = (sim-simMin)/(simMax-simMin)
-                simNorm = simNorm*norm
-            else:
-                simNorm = sim/sim.sum(dim=1,keepdim=True)
+            simNorm = sim/sim.sum(dim=1,keepdim=True)
 
-        reprVec = (x*simNorm.unsqueeze(-1)).sum(dim=1)
+        if unnorm:
+            reprVec = (x*(simNorm*norm).unsqueeze(-1)).sum(dim=1)
+        else:
+            reprVec = (x*simNorm.unsqueeze(-1)).sum(dim=1)
 
         if not no_refine:
             repreVecList.append(reprVec)
@@ -627,7 +620,10 @@ def representativeVectors(x,nbVec,applySoftMax=False,softmCoeff=1,softmSched=Fal
         if randVec:
             raw_reprVec_score = torch.rand(norm.size()).to(norm.device)
         else:
-            raw_reprVec_score = (1-sim)*raw_reprVec_score
+            if update_sco_by_norm_sim:
+                raw_reprVec_score = (1-simNorm)*raw_reprVec_score
+            else:
+                raw_reprVec_score = (1-sim)*raw_reprVec_score
 
         simReshaped = sim.reshape(sim.size(0),1,xOrigShape[2],xOrigShape[3])
 
@@ -640,7 +636,8 @@ class CNN2D_bilinearAttPool(FirstModel):
     def __init__(self, featModelName, pretrainedFeatMod=True, featMap=True, bigMaps=False, chan=64, attBlockNb=2,
                  attChan=16,inFeat=512,nb_parts=3,aux_model=False,score_pred_act_func="softmax",center_loss=False,\
                  center_loss_beta=5e-2,num_classes=200,cuda=True,cluster=False,cluster_ensemble=False,applySoftmaxOnSim=False,\
-                 softmCoeff=1,softmSched=False,normFeat=False,no_refine=False,rand_vec=False,unnorm=False,**kwargs):
+                 softmCoeff=1,softmSched=False,normFeat=False,no_refine=False,rand_vec=False,unnorm=False,update_sco_by_norm_sim=False,\
+                 **kwargs):
 
         super(CNN2D_bilinearAttPool, self).__init__(featModelName, pretrainedFeatMod, featMap, bigMaps, **kwargs)
         self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
@@ -669,6 +666,8 @@ class CNN2D_bilinearAttPool(FirstModel):
             self.no_refine = no_refine
             self.rand_vec = rand_vec
             self.unnorm = unnorm
+            self.update_sco_by_norm_sim = update_sco_by_norm_sim
+
         self.aux_model = aux_model
 
         self.center_loss = center_loss
@@ -705,7 +704,7 @@ class CNN2D_bilinearAttPool(FirstModel):
             features_agr = features_agr.view(features.size(0), -1)
         else:
             vecList,simList = representativeVectors(features,self.nb_parts,self.applySoftmaxOnSim,self.softmCoeff,self.softmSched,\
-                                                    self.softmSched_interpCoeff,self.no_refine,self.rand_vec,self.unnorm)
+                                                    self.softmSched_interpCoeff,self.no_refine,self.rand_vec,self.unnorm,self.update_sco_by_norm_sim)
             if not self.cluster_ensemble:
                 features_agr = torch.cat(vecList,dim=-1)
             else:
@@ -1000,6 +999,7 @@ def netBuilder(args):
                       "no_refine":args.bil_cluster_norefine,\
                       "rand_vec":args.bil_cluster_randvec,\
                       "unnorm":args.bil_clust_unnorm,\
+                      "update_sco_by_norm_sim":args.bil_clust_update_sco_by_norm_sim,\
                       "normFeat":args.bil_norm_feat}
             nbFeatAux = nbFeat
             if not args.bil_cluster_ensemble:
@@ -1206,6 +1206,9 @@ def addArgs(argreader):
                                   help="The softmax temperature. The higher it is, the sharper weights will be.")
     argreader.parser.add_argument('--bil_clust_unnorm', type=args.str2bool, metavar='BOOL',
                                   help="To mulitply similarity by norm to make weights superior to 1.")
+
+    argreader.parser.add_argument('--bil_clust_update_sco_by_norm_sim', type=args.str2bool, metavar='BOOL',
+                                  help="To update score using normalised similarity.")
 
     argreader.parser.add_argument('--bil_norm_feat', type=args.str2bool, metavar='BOOL',
                                   help="To normalize feature before computing attention")
