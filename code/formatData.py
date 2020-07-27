@@ -8,6 +8,7 @@ import os
 import numpy as np
 import cv2
 import warnings
+from shutil import copyfile
 
 labelDict = {"tPB2":0,"tPNa":1,"tPNf":2,"t2":3,"t3":4,"t4":5,"t5":6,"t6":7,"t7":8,"t8":9,"t9+":10,"tM":11,"tSB":12,"tB":13,"tEB":14,"tHB":15}
 
@@ -132,19 +133,50 @@ def getClass(annot,i):
 
     raise ValueError("Couldn't find label for annot file",annot,",frame ",i)
 
+def formatAircraft(path):
+
+	setDict = {"trainval":"train","test":"test"}
+
+	for set in ["trainval","test"]:
+		print(set)
+		rows = np.genfromtxt(os.path.join(path,"images_variant_{}.txt".format(set)),delimiter=",",dtype=str)
+
+		for i in range(len(rows)):
+
+			if set == "trainval":
+				if i%600 == 0:
+					print("\t",i)
+			else:
+				print(i)
+				
+			splitted_row = rows[i].split(" ")
+			name = splitted_row[0]
+			label = " ".join(splitted_row[1:])
+
+			if not os.path.exists("../data/aircraft_{}/{}/".format(setDict[set],label)):
+				os.makedirs("../data/aircraft_{}/{}/".format(setDict[set],label))
+
+			copyfile(os.path.join(path,"images","{}.jpg".format(name)), "../data/aircraft_{}/{}/{}.jpg".format(setDict[set],label,name))
+
 def main(argv=None):
 
-    #Getting arguments from config file and command row
-    #Building the arg reader
-    argreader = ArgReader(argv)
+	#Getting arguments from config file and command row
+	#Building the arg reader
+	argreader = ArgReader(argv)
 
-    #Reading the comand row arg
-    argreader.getRemainingArgs()
+	argreader.parser.add_argument('--embryo',action="store_true",help='To format the embryo dataset')
+	argreader.parser.add_argument('--aircraft',type=str,help='To format the aircraft dataset',metavar="PATH",default="")
 
-    #Getting the args from command row and config file
-    args = argreader.args
+	#Reading the comand row arg
+	argreader.getRemainingArgs()
 
-    formatEmbryo()
+	#Getting the args from command row and config file
+	args = argreader.args
+
+	if args.embryo:
+		formatEmbryo()
+	if args.aircraft != "":
+		formatAircraft(args.aircraft)
 
 if __name__ == "__main__":
     main()
