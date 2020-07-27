@@ -39,7 +39,6 @@ from PIL import ImageFont
 from PIL import ImageDraw
 
 import torchvision
-import torch_cluster
 
 from torch.distributions.normal import Normal
 from torch import tensor
@@ -152,7 +151,7 @@ def plotPointsImageDatasetGrid(exp_id,imgNb,epochs,model_ids,reduction_fact_list
             epochs.append(utils.findLastNumbers(fileName))
 
     if mode == "val":
-        imgLoader,testDataset = load_data.buildTestLoader(args,mode,shuffle=True)
+        imgLoader,testDataset = load_data.buildTestLoader(args,mode,shuffle=False)
         inds = torch.arange(imgNb)
         imgBatch,_ = next(iter(imgLoader))
         #imgBatch = torch.cat([testDataset[ind][0].unsqueeze(0) for ind in inds],dim=0)
@@ -257,7 +256,6 @@ def plotPointsImageDatasetGrid(exp_id,imgNb,epochs,model_ids,reduction_fact_list
                     norm = normDict[j][inds[i]]
                     norm = norm/norm.max()
                     attMap = norm*attMap
-                    #attMap = (attMap-attMap.min())/(attMap.max()-attMap.min())
 
                 if not luminosity:
                     if cluster[j]:
@@ -333,7 +331,6 @@ def plotPointsImageDatasetGrid(exp_id,imgNb,epochs,model_ids,reduction_fact_list
                     if cluster[j]:
                         ptsWeights = umap.UMAP(n_components=3).fit_transform(ptsOrig[:,3:].cpu().detach().numpy())
                         ptsWeights = (ptsWeights-ptsWeights.min())/(ptsWeights.max()-ptsWeights.min())
-                        #ptsWeights = np.concatenate((np.zeros((ptsWeights.shape[0],1)),ptsWeights),axis=-1)
                     else:
                         ptsWeights = cmPlasma(ptsWeights)[:,:3]
 
@@ -347,8 +344,6 @@ def plotPointsImageDatasetGrid(exp_id,imgNb,epochs,model_ids,reduction_fact_list
                 rf_kernel = compRFKernel(rf_size)
                 ptsImageCopy = F.conv_transpose2d(ptsImageCopy,rf_kernel,padding=rf_size//2)
                 ptsImageCopy = ptsImageCopy/ptsImageCopy.max()
-
-            #if (not (fullAttMap[j] or gradcam[j])) or (fullAttMap[j] and luminosity):
 
             if luminosity:
                 ptsImageCopy = ptsImageCopy*imgBatch[i:i+1]
@@ -507,7 +502,6 @@ def findHardImage(exp_id,dataset_size,threshold,datasetName,trainProp,nbClass):
     plt.figure()
     plt.plot(ratioList,allAccuracy,"*")
     plt.savefig("../vis/{}/ratioAcc.png".format(exp_id))
-
 
 def printImage(path,indexs,test_dataset):
     if not os.path.exists(path):
@@ -746,7 +740,6 @@ def getTestPerf(path,accuracy_rawcrop):
 
         return metrics_dict
 
-
 def umapPlot(exp_id,model_id):
     cm = plt.get_cmap('plasma')
     bestPaths = sorted(glob.glob("../models/{}/*{}*best*".format(exp_id,model_id)))
@@ -966,5 +959,6 @@ def main(argv=None):
                             "patchnoredtext":"Patch (No Red) (Text. model)"}
 
         compileTest(args.exp_id,id_to_label_dict,args.table_id,args.model_ids)
+
 if __name__ == "__main__":
     main()
