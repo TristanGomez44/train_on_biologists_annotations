@@ -9,7 +9,9 @@ import numpy as np
 import cv2
 import warnings
 from shutil import copyfile
-
+from scipy.io import loadmat
+import subprocess
+import sys
 labelDict = {"tPB2":0,"tPNa":1,"tPNf":2,"t2":3,"t3":4,"t4":5,"t5":6,"t6":7,"t7":8,"t8":9,"t9+":10,"tM":11,"tSB":12,"tB":13,"tEB":14,"tHB":15}
 
 def getNoAnnotVideos():
@@ -148,7 +150,7 @@ def formatAircraft(path):
 					print("\t",i)
 			else:
 				print(i)
-				
+
 			splitted_row = rows[i].split(" ")
 			name = splitted_row[0]
 			label = " ".join(splitted_row[1:])
@@ -158,6 +160,60 @@ def formatAircraft(path):
 
 			copyfile(os.path.join(path,"images","{}.jpg".format(name)), "../data/aircraft_{}/{}/{}.jpg".format(setDict[set],label,name))
 
+def formatCars(imgsPath,annotPath):
+
+	if not os.path.exists("../data/cars_train"):
+		subprocess.call("tar -xzf {} -C ../data/".format(imgsPath),shell=True)
+
+	if not os.path.exists("../data/cars_train"):
+		os.makedirs("../data/cars_train")
+	if not os.path.exists("../data/cars_test"):
+		os.makedirs("../data/cars_test")
+
+	mat = loadmat(annotPath)
+	for i,row in enumerate(mat["annotations"][0]):
+
+		if i%100 == 0:
+			print(i)
+
+		path,label,isTrain = row[0].item(),row[-2].item(),row[-1].item()
+		folder = "cars_train" if isTrain else "cars_test"
+		filename = os.path.basename(path)
+
+		if not os.path.exists("../data/{}/{}/{}".format(folder,label,filename)):
+
+			if not os.path.exists("../data/{}/{}/".format(folder,label)):
+				os.makedirs("../data/{}/{}/".format(folder,label))
+
+			copyfile("../data/"+path,"../data/{}/{}/{}".format(folder,label,filename))
+
+def formatDogs(imgsPath,trainTestSplitPath):
+
+	if not os.path.exists("../data/Images/"):
+		subprocess.call("tar -xf {} -C ../data/".format(imgsPath),shell=True)
+	if not os.path.exists("../data/train_list.mat"):
+		subprocess.call("tar -xf {} -C ../data/".format(trainTestSplitPath),shell=True)
+
+	trainImgs = [ row[0].item() for row in loadmat("../data/train_list.mat")["annotation_list"] ]
+	testImgs = [ row[0].item() for row in loadmat("../data/test_list.mat")["annotation_list"] ]
+
+	imgsList = [trainImgs,testImgs]
+	folders = ["dogs_train","dogs_test"]
+
+	for i,folder in enumerate(folders):
+
+		imgs = imgsList[i]
+
+		for path in imgs:
+
+			label,filename = path.split("/")
+
+			if not os.path.exists("../data/{}/{}/".format(folder,label)):
+				os.makedirs("../data/{}/{}/".format(folder,label))
+
+			copyfile("../data/Images/"+path+".jpg","../data/{}/{}/{}.jpg".format(folder,label,filename))
+
+
 def main(argv=None):
 
 	#Getting arguments from config file and command row
@@ -166,6 +222,8 @@ def main(argv=None):
 
 	argreader.parser.add_argument('--embryo',action="store_true",help='To format the embryo dataset')
 	argreader.parser.add_argument('--aircraft',type=str,help='To format the aircraft dataset',metavar="PATH",default="")
+	argreader.parser.add_argument('--cars',type=str,nargs=2,help='To format the cars dataset',metavar="PATH")
+	argreader.parser.add_argument('--dogs',type=str,nargs=2,help='To format the dogs dataset',metavar="PATH")
 
 	#Reading the comand row arg
 	argreader.getRemainingArgs()
@@ -177,6 +235,9 @@ def main(argv=None):
 		formatEmbryo()
 	if args.aircraft != "":
 		formatAircraft(args.aircraft)
-
+	if not args.cars is None:
+		formatCars(*args.cars)
+	if not args.dogs is None:
+		formatDogs(*args.dogs)
 if __name__ == "__main__":
     main()
