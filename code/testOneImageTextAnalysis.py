@@ -7,8 +7,6 @@ from args import ArgReader
 from tensorboardX import SummaryWriter
 import torchvision
 import sys
-import transfSimCLR
-import nt_xent
 from args import str2bool
 import numpy as np
 import cv2
@@ -20,12 +18,9 @@ from skimage import img_as_ubyte
 import matplotlib.cm as cm
 import time
 import skimage.feature
-import torch_cluster
-from skimage import img_as_ubyte
 from scipy import ndimage
 from skimage.transform import resize
 import scipy.ndimage.filters as filters
-import torch_geometric
 import torch.nn.functional as F
 from sklearn.manifold import TSNE
 import umap
@@ -34,19 +29,10 @@ def main(argv=None):
     # Building the arg reader
     argreader = ArgReader(argv)
 
-    argreader.parser.add_argument('--layer', type=int,
-                                  help="The encoding layer to use for feature similarity.",default=4)
-
-    argreader.parser.add_argument('--last_conv_decod', type=str2bool,
-                                  help="Compute the prob map on the last conv layer of the decoder",default=False)
-
-    argreader.parser.add_argument('--lay_1_conv_decod', type=str2bool,
-                                  help="Compute the prob map on the feature of layer 1 of the decoder",default=False)
-
     argreader.parser.add_argument('--patch_sim', type=str2bool,
-                                  help="To run a small experiment with an untrained CNN",default=False)
+                                  help="To run a small experiment with an untrained CNN",default=True)
     argreader.parser.add_argument('--patch_sim_resnet', type=str2bool,
-                                  help="To use resnet for the patch similarity experiment",default=False)
+                                  help="To use resnet for the patch similarity experiment",default=True)
     argreader.parser.add_argument('--patch_sim_usemodel', type=str2bool,
                                   help="Set this to False to compare directly pixels",default=True)
 
@@ -54,47 +40,35 @@ def main(argv=None):
                                   help="The resnet to use",default="resnet18")
 
     argreader.parser.add_argument('--patch_sim_relu_on_simple', type=str2bool,
-                                  help="To add relu when using the simple CNN",default=False)
+                                  help="To add relu when using the simple CNN",default=True)
 
     argreader.parser.add_argument('--patch_sim_pretr_res', type=str2bool,
                                   help="To have the patch sim resnet pretrained on Imagenet",default=False)
     argreader.parser.add_argument('--patch_size', type=int,
-                                  help="The patch size for the patch similarity exp",default=50)
+                                  help="The patch size for the patch similarity exp",default=10)
     argreader.parser.add_argument('--patch_stride', type=int,
-                                  help="The patch stride for the patch similarity exp",default=50)
-
-    argreader.parser.add_argument('--patch_sim_full', type=str2bool,
-                                  help="To compute similarity with every patch in the image, not just the neighbors.",default=True)
-    argreader.parser.add_argument('--patch_sim_neig_mode_ker_size', type=int,
-                                  help="The kernel size when working in neighbor mode",default=3)
-
-    argreader.parser.add_argument('--patch_sim_paral_mode', type=str2bool,
-                                  help="To compute patch similarity in parralel (requries more ram but faster) instead of in sequential.",default=True)
+                                  help="The patch stride for the patch similarity exp",default=5)
 
     argreader.parser.add_argument('--patch_sim_group_nb', type=int,
-                                  help="To compute gram matrix by grouping features using a random partitions to reduce RAM load.",default=1)
+                                  help="To compute gram matrix by grouping features using a random partitions to reduce RAM load.",default=4)
 
     argreader.parser.add_argument('--patch_sim_out_path', type=str,
-                                  help="The output path")
+                                  help="The output path",default="../../embyovis/")
 
-    argreader.parser.add_argument('--patch_sim_kertype', type=str,
-                                  help="Kernel type. Can be linear, squarred or constant.",default="linear")
     argreader.parser.add_argument('--patch_sim_gram_order', type=int,
                                   help="If 2, computes correlation between feature maps. If 1, computes average of feature maps.",default=1)
-    argreader.parser.add_argument('--patch_sim_knn_classes', type=int,
-                                  help="The number of classes when using k nearest neighbors.",default=10)
 
     argreader.parser.add_argument('--data_batch_index', type=int,
                                   help="The index of the batch to process first",default=0)
 
     argreader.parser.add_argument('--patch_sim_neighsim_nb_iter', type=int,
-                                  help="The number of times to apply neighbor similarity averaging ",default=1)
+                                  help="The number of times to apply neighbor similarity averaging ",default=3)
     argreader.parser.add_argument('--patch_sim_neighsim_softmax', type=str2bool,
-                                  help="Whether or not to use softmax to weight neighbors",default=False)
+                                  help="Whether or not to use softmax to weight neighbors",default=True)
     argreader.parser.add_argument('--patch_sim_neighsim_softmax_fact', type=int,
-                                  help="Whether or not to use softmax to weight neighbors",default=1)
+                                  help="Whether or not to use softmax to weight neighbors",default=10)
 
-    argreader.parser.add_argument('--patch_sim_weight_by_neigsim', type=str2bool,
+    argreader.parser.add_argument('--patch_sim_weight_by_neigsim',type=str2bool,
                                   help="To weight a neighbor by similarity",default=True)
     argreader.parser.add_argument('--patch_sim_update_rate_by_cossim', type=str2bool,
                                   help="To define the update rate of the feature using the cossim map.",default=False)
@@ -104,7 +78,7 @@ def main(argv=None):
                                   help="The dilation of the neighborhood",default=1)
 
     argreader.parser.add_argument('--crop', type=str2bool,
-                                  help="To preprocess images by randomly cropping them",default=True)
+                                  help="To preprocess images by randomly cropping them",default=False)
     argreader.parser.add_argument('--shuffle', type=str2bool,
                                   help="To shuffle dataset",default=True)
 
@@ -119,8 +93,6 @@ def main(argv=None):
                                   help="To process the image using a second patch size,stride",default=False)
     argreader.parser.add_argument('--patch_size_second', type=int,
                                   help="Patch size for the second processing",default=20)
-    argreader.parser.add_argument('--patch_stride_second', type=int,
-                                  help="Patch stride for the second processing",default=20)
     argreader.parser.add_argument('--random_farthest', type=str2bool,
                                   help="During neighbor refininement, randomly replace a pixel with its farthest neighbor instead of its closest. ",default=False)
     argreader.parser.add_argument('--random_farthest_prop', type=float,
@@ -130,14 +102,11 @@ def main(argv=None):
     argreader.parser.add_argument('--patch_sim_neiref_repr_vectors', type=str2bool,
                                   help="To use representative vectors when --patch_sim_neiref_neisimavgsize > 1",default=False)
 
-
     argreader.parser.add_argument('--patch_sim_neiref_norm_feat', type=str2bool,
                                   help="To normalize feature before applying neighbor refining",default=False)
 
-
     argreader.parser.add_argument('--repr_vec', type=str2bool,
                                   help="To run the representative vectors experiment",default=False)
-
 
     argreader = trainVal.addInitArgs(argreader)
     argreader = trainVal.addOptimArgs(argreader)
@@ -199,65 +168,16 @@ def main(argv=None):
                         "neigAvgSize":args.patch_sim_neiref_neisimavgsize,"reprVec":args.patch_sim_neiref_repr_vectors,"normFeat":args.patch_sim_neiref_norm_feat}
             neighSimMod = buildModule(True,NeighSim,args.cuda,args.multi_gpu,kwargsNeiSim)
 
-            representativeVectorsMod = buildModule(True,RepresentativeVectors,args.cuda,args.multi_gpu,{})
+            representativeVectorsMod = buildModule(True,RepresentativeVectors,args.cuda,args.multi_gpu,{"nbVec":3})
             computeTotalSimMod = buildModule(True,ComputeTotalSim,args.cuda,args.multi_gpu,{})
 
             print("Start !")
             start = time.time()
 
-            def textLimit(patch,secondParse=False):
+            feat,distMapAgreg,neighSim,refFeatList = textLimit(patch)
 
-                kwargsNet["inChan"] = patch.size(1)
-                patchMod = buildModule(True,PatchSimCNN,args.cuda,args.multi_gpu,kwargsNet)
-                gram_mat = patchMod(patch)
-                gram_mat = gram_mat.view(data.size(0),-1,args.patch_sim_group_nb,gram_mat.size(2))
-                gram_mat = gram_mat.permute(0,2,1,3)
-                distMapAgreg,feat = cosimMap(gram_mat)
-                neighSim,refFeatList = neighSimMod(feat)
-                if args.multi_scale:
-                    multiScaleKer = torch.ones((feat.size(1),1,21,21)).to(feat.device)
-                    multiScaleKer /= (feat.size(-2)*feat.size(-1))
-                    multiScaleFeat = F.conv2d(feat,multiScaleKer,groups=feat.size(1),padding=21//2)
+            simListRepr = representativeVectorsMod(refFeatList[-1])
 
-                    kwargsNeiSim["neighDilation"] = 5
-                    neighSimMod_multiscale = buildModule(True,NeighSim,args.cuda,args.multi_gpu,kwargsNeiSim)
-                    #neighSim_small,refFeat_small = neighSimMod_multiscale(multiScaleFeat)
-                    refFeat_small = multiScaleFeat
-                    neighSim_small = simMap = computeTotalSim(multiScaleFeat,1)
-
-                else:
-                    neighSim_small,refFeat_small = None,None
-
-                return feat,distMapAgreg,neighSim,neighSim_small,refFeatList,refFeat_small
-
-            feat,distMapAgreg,neighSim,neighSim_small,refFeatList,refFeat_small = textLimit(patch)
-
-            #if args.patch_sim_neiref_neisimavgsize > 1:
-                #refFeatRepList = []
-                #neighSimRepList = []
-                #for i in range(len(refFeatList)):
-                #    featRepr = representativeVectorsMod(refFeatList[i],args.patch_sim_neiref_neisimavgsize)
-                #    refFeatRepList.append(featRepr)
-                #    neighSimRepList.append(computeTotalSimMod(featRepr,args.patch_sim_neiref_neisimavgsize))
-            #else:
-            #    refFeatRepList = None
-            #    neighSimRepList = None
-
-            if args.second_parse:
-                feat_patch = refFeatList[-1].unfold(2, args.patch_size_second, args.patch_stride_second).unfold(3, args.patch_size_second,args.patch_stride_second).permute(0,2,3,1,4,5)
-                origFeatPatchSize = feat_patch.size()
-                feat_patch = feat_patch.reshape(feat_patch.size(0)*feat_patch.size(1)*feat_patch.size(2),feat_patch.size(3),feat_patch.size(4),feat_patch.size(5))
-                _,featDistMapAgreg,featNeighSim,featNeighSim_small,featRefFeat,_ = textLimit(feat_patch)
-            else:
-                featNeighSim,featNeighSim_small,featRefFeat = None,None,None
-
-            if args.second_scale:
-                patch_second = data.unfold(2, args.patch_size_second, args.patch_stride_second).unfold(3, args.patch_size_second,args.patch_stride_second).permute(0,2,3,1,4,5)
-                origSecondPatchSize = patch_second.size()
-                patch_second = patch_second.reshape(patch_second.size(0)*patch_second.size(1)*patch_second.size(2),patch_second.size(3),patch_second.size(4),patch_second.size(5))
-                secondDistMapAgreg,secondNeighSim,secondNeighSim_small,secondRefFeat,_ = textLimit(patch_second)
-            else:
-                secondDistMapAgreg,secondNeighSim,secondRefFeat = None,None,None
             print("End ",time.time()-start)
 
             if not os.path.exists("../vis/{}/".format(args.exp_id)):
@@ -278,32 +198,7 @@ def main(argv=None):
             if not os.path.exists(os.path.join(args.patch_sim_out_path,"simMaps",args.model_id)):
                 os.makedirs(os.path.join(args.patch_sim_out_path,"simMaps",args.model_id))
 
-            if not secondNeighSim is None:
-                for i in range(len(neighSim)):
-                    neighSim[i] = (neighSim[i]-neighSim[i].min())/(neighSim[i].max()-neighSim[i].min())
-                    secondNeighSim[i] = (secondNeighSim[i]-secondNeighSim[i].min())/(secondNeighSim[i].max()-secondNeighSim[i].min())
-
-                firstAndSecondNeighSim_mean = 0.5*neighSim+0.5*torch.nn.functional.interpolate(secondNeighSim, size=(neighSim.size(-2),neighSim.size(-1)),mode="bilinear",align_corners=False)
-                firstAndSecondNeighSim_max = torch.min(neighSim,torch.nn.functional.interpolate(secondNeighSim, size=(neighSim.size(-2),neighSim.size(-1)),mode="bilinear",align_corners=False))
-                firstAndSecondNeighSim_min = torch.max(neighSim,torch.nn.functional.interpolate(secondNeighSim, size=(neighSim.size(-2),neighSim.size(-1)),mode="bilinear",align_corners=False))
-
             neighSim = neighSim.detach().cpu().numpy()
-
-            #if not neighSimRepList is None:
-            #    for i in range(len(neighSimRepList)):
-            #        neighSimRepList[i] = neighSimRepList[i].detach().cpu().numpy()
-
-            if not neighSim_small is None:
-                neighSim_small = neighSim_small.detach().cpu().numpy()
-
-            if not featNeighSim is None:
-                featNeighSim = featNeighSim.detach().cpu().numpy()
-
-            if not secondNeighSim is None:
-                secondNeighSim = secondNeighSim.detach().cpu().numpy()
-                firstAndSecondNeighSim_mean = firstAndSecondNeighSim_mean.detach().cpu().numpy()
-                firstAndSecondNeighSim_max = firstAndSecondNeighSim_max.detach().cpu().numpy()
-                firstAndSecondNeighSim_min = firstAndSecondNeighSim_min.detach().cpu().numpy()
 
             for i,img in enumerate(data):
 
@@ -330,7 +225,7 @@ def main(argv=None):
                 simMapPath = os.path.join(args.patch_sim_out_path,"simMaps",args.model_id,str(i+args.data_batch_index*args.batch_size))
 
                 writeAllImg(distMapAgreg,neighSim,i,simMapPath,"sparseNeighSim_step0")
-                dimRedList(refFeatList,simMapPath,i,"neiRef")
+                #dimRedList(refFeatList,simMapPath,i,"neiRef")
 
                 #if not refFeatRepList is None:
                 #    dimRedList(refFeatRepList,simMapPath,i,"neiRef_repr")
@@ -338,9 +233,11 @@ def main(argv=None):
                 #        pathPNG = os.path.join(simMapPath,"sparseNeighSim_step{}_repr".format(len(neighSimRepList)-1-j))
                 #        plotImg(neighSimRepList[j][i][0],pathPNG,cmap="gray")
 
+                writeReprVecSimMaps(simListRepr,i,simMapPath)
+
                 if not neighSim_small is None:
                     writeAllImg(None,neighSim_small,i,simMapPath,"sparseNeighSim_step0_x2")
-                    dimRed(refFeat_small,simMapPath,i,"neiRef_small")
+                    #dimRed(refFeat_small,simMapPath,i,"neiRef_small")
 
                 if not featNeighSim is None:
                     writeAllImg(featDistMapAgreg,featNeighSim,i,simMapPath,"sparseNeighSim_step0_feat")
@@ -351,127 +248,24 @@ def main(argv=None):
                     writeAllImg(None,firstAndSecondNeighSim_min,i,simMapPath,"sparseNeighSim_step0_firstAndSecond_min")
                     writeAllImg(None,firstAndSecondNeighSim_max,i,simMapPath,"sparseNeighSim_step0_firstAndSecond_max")
 
-    elif args.repr_vec:
+def writeReprVecSimMaps(simListRepr,i,simMapPath):
+    path = os.path.join(simMapPath,"reprVecSimMaps.png")
+    img_np = simListRepr[i].permute(1,2,0).cpu().detach().numpy()
+    img_np = (img_np-img_np.min())/(img_np.max()-img_np.min())
+    cv2.imwrite(path,img_np)
 
-        #img = torch.rand((2,3,50,50))
-        img = torch.zeros((1,3,50,50))
-        img[0,1,:,:] = 1
+def textLimit(patch,secondParse=False):
 
-        img[0,1,:5,:5] = 0
-        img[0,0,:5,:5] = 50
+    kwargsNet["inChan"] = patch.size(1)
+    patchMod = buildModule(True,PatchSimCNN,args.cuda,args.multi_gpu,kwargsNet)
 
-        img[0,:,-5:,:-5:] = 0
-        img[0,2,-5:,:-5:] = 25
+    gram_mat = patchMod(patch)
+    gram_mat = gram_mat.view(data.size(0),-1,args.patch_sim_group_nb,gram_mat.size(2))
+    gram_mat = gram_mat.permute(0,2,1,3)
+    distMapAgreg,feat = cosimMap(gram_mat)
+    neighSim,refFeatList = neighSimMod(feat)
 
-        n = 3
-
-        reprVecMod = RepresentativeVectors(n)
-        reprVecList = reprVecMod(img)
-
-        img_reprVecList = []
-        for reprVec in reprVecList:
-            img_reprVec = reprVec.unsqueeze(-1).unsqueeze(-1)
-            img_reprVec = torch.nn.functional.interpolate(img_reprVec, size=224)
-
-            img_reprVecList.append(img_reprVec)
-
-        img = torch.nn.functional.interpolate(img, size=224)
-        img_mean = torch.nn.functional.interpolate(img.mean(dim=(2,3),keepdim=True), size=224)
-        img = torch.cat([img,img_mean]+img_reprVecList,dim=0)
-
-        torchvision.utils.save_image(img,"../vis/repreVec.png",nrow=(n+3)*img.size(0))
-        #torchvision.utils.save_image(img_mean,"../vis/repreVec_initial_Image_mean.png")
-        #torchvision.utils.save_image(img_reprVec,"../vis/repreVec.png")
-
-class RepresentativeVectors(torch.nn.Module):
-    def __init__(self,nbVec):
-        super(RepresentativeVectors,self).__init__()
-        self.nbVec = nbVec
-    def forward(self,x):
-
-        x = x.permute(0,2,3,1).reshape(x.size(0),x.size(2)*x.size(3),x.size(1))
-        norm = torch.sqrt(torch.pow(x,2).sum(dim=-1))
-        #Adding small constant to prevent zero division
-        norm += 0.00001
-        raw_reprVec_score = norm
-
-        repreVecList = []
-
-        for i in range(self.nbVec):
-            raw_reprVec_norm,ind = raw_reprVec_score.max(dim=1,keepdim=True)
-            raw_reprVec = x[torch.arange(x.size(0)).unsqueeze(1),ind]
-            sim = (x*raw_reprVec).sum(dim=-1)/(norm*raw_reprVec_norm)
-            simNorm = sim/sim.sum(dim=1,keepdim=True)
-            reprVec = (x*simNorm.unsqueeze(-1)).sum(dim=1)
-
-            repreVecList.append(reprVec)
-            raw_reprVec_score = (1-sim)*raw_reprVec_score
-
-        return repreVecList
-
-def representativeVectorsPatch(x,kerSize=5):
-
-    #x = torch.ones(1,1,kerSize,kerSize)
-    #x = torch.normal(torch.ones(1,1,kerSize,kerSize), 0.001*torch.ones(1,1,kerSize,kerSize))
-    #x[0,0,0,0] = -1
-    origShape = x.size()
-    #print(x.size())
-    patch = F.unfold(x,kerSize,padding=kerSize//2)+0.00001
-    #print("unfold",patch.size())
-    patch = patch.permute(0,2,1)
-    #print("permute",patch.size())
-    patch = patch.reshape(origShape[0],origShape[2],origShape[3],origShape[1],kerSize,kerSize)
-    #print("reshape",patch.size())
-    patch = patch.reshape(patch.size(0)*patch.size(1)*patch.size(2),patch.size(3),patch.size(4)*patch.size(5))
-    #print("reshape",patch.size())
-    patch = patch.permute(0,2,1)
-    #print("permute",patch.size())
-    #print("patch size before norm",patch.size())
-
-    patchNorm = patch/torch.sqrt(torch.pow(patch,2).sum(dim=-1,keepdim=True))
-    sim = (patchNorm*patchNorm[:,patch.size(1)//2:patch.size(1)//2+1]).sum(dim=-1,keepdim=True)
-    #print(patchNorm.size(),patchNorm[:,patch.size(1)//2:patch.size(1)//2+1].size(),(patchNorm*patchNorm[:,patch.size(1)//2:patch.size(1)//2+1]).size())
-    #print("sim",sim.max(),sim.min(),sim.mean())
-    #sim = (sim+1)/2
-    sim = torch.softmax(50*sim,dim=1)
-    #sim = sim/sim.sum(dim=1,keepdim=True)
-    #print("sim",sim.max(),sim.min(),sim.mean())
-
-    reshapedPatch = patch.reshape(origShape[0],origShape[-2],origShape[-1],patch.size(-2),patch.size(-1))
-
-    #print(patch.size(),sim.size())
-    #print("Computing the ponderated average")
-    reprVec = (patch*sim).sum(dim=1,keepdim=True)
-    #print(reprVec.size())
-    reprVec = reprVec.reshape(origShape[0],origShape[2],origShape[3],reprVec.size(-2),reprVec.size(-1))
-    #print(reprVec.size())
-    reprVec = reprVec.squeeze(dim=-2)
-    #print(reprVec.size())
-    reprVec = reprVec.permute(0,3,1,2)
-    #print(x.size(),reprVec.size())
-
-    #sys.exit(0)
-
-    reprVecNoWei = patch.mean(dim=1,keepdim=True)
-    reprVecNoWei = reprVecNoWei.reshape(origShape[0],origShape[2],origShape[3],reprVecNoWei.size(-2),reprVecNoWei.size(-1))
-    reprVecNoWei = reprVecNoWei.squeeze(dim=-2)
-    reprVecNoWei = reprVecNoWei.permute(0,3,1,2)
-
-    '''
-    print(reprVecNoWei.min(dim=-1)[0].min(dim=-1)[0].min(dim=-1)[0])
-    print(reshapedPatch.min(dim=-1)[0].min(dim=-1)[0].min(dim=-1)[0].min(dim=-1)[0])
-    print(reprVec.min(dim=-1)[0].min(dim=-1)[0].min(dim=-1)[0])
-    print(x.min(dim=-1)[0].min(dim=-1)[0].min(dim=-1)[0])
-
-    print(reprVecNoWei.max(dim=-1)[0].max(dim=-1)[0].max(dim=-1)[0])
-    print(reshapedPatch.max(dim=-1)[0].max(dim=-1)[0].max(dim=-1)[0].max(dim=-1)[0])
-    print(reprVec.max(dim=-1)[0].max(dim=-1)[0].max(dim=-1)[0])
-    print(x.max(dim=-1)[0].max(dim=-1)[0].max(dim=-1)[0])
-
-    sys.exit(0)
-    '''
-
-    return reprVec
+    return feat,distMapAgreg,neighSim,refFeatList
 
 def writeAllImg(distMapAgreg,neighSim,i,simMapPath,name):
     if not distMapAgreg is None:
@@ -652,7 +446,6 @@ def plotImg(img,path,cmap="gray"):
     plt.savefig(path)
     plt.close()
 
-
 class ComputeTotalSim(torch.nn.Module):
     def __init__(self):
         super(ComputeTotalSim,self).__init__()
@@ -804,7 +597,6 @@ def computeNeighborsCoord(neighRadius):
 
     return coord
 
-
 def compositeShiftFeat(coord,features):
 
     if coord[0] != 0:
@@ -874,8 +666,6 @@ def shiftFeat(where,features,dilation=1,neigAvgSize=1,reprVec=False):
     maskShift = maskShift.mean(dim=1,keepdim=True)
     return featuresShift,maskShift
 
-
-
 def applyDiffKer_CosSimi(direction,features,dilation=1,neigAvgSize=1,reprVec=False):
     origFeatSize = features.size()
     featNb = origFeatSize[1]
@@ -924,7 +714,6 @@ def computeTotalSim(features,dilation,neigAvgSize=1,reprVec=False):
     vertiDiff,_,_,_,_ = applyDiffKer_CosSimi("vertical",features,dilation,neigAvgSize,reprVec)
     totalDiff = (horizDiff + vertiDiff)/2
     return totalDiff
-
 
 class NeighSim(torch.nn.Module):
     def __init__(self,cuda,groupNb,nbIter,softmax,softmax_fact,weightByNeigSim,updateRateByCossim,neighRadius,neighDilation,random_farthest,random_farthest_prop,\
@@ -1091,9 +880,6 @@ def normResizeSave(destination,name,tensorToSave,i,min=None,max=None,size=336,im
         else:
             destination.add_image(name+"_{}".format(j) if suff else name, grid, i)
 
-
-
-
 def graham(feat,gramOrder):
 
     feat = feat.reshape(feat.size(0),feat.size(1),feat.size(2)*feat.size(3))
@@ -1112,6 +898,38 @@ def graham(feat,gramOrder):
     else:
         raise ValueError("Unkown gram order :",gramOrder)
     return gram
+
+class RepresentativeVectors(torch.nn.Module):
+    def __init__(self,nbVec):
+        super(RepresentativeVectors,self).__init__()
+        self.nbVec = nbVec
+    def forward(self,x):
+        _,simList = representativeVectors(x,self.nbVec)
+        print(simList[0].size())
+        simList = torch.cat(simList,dim=1)
+        return simList
+
+def representativeVectors(x,nbVec):
+    xOrigShape = x.size()
+    normNotFlat = torch.sqrt(torch.pow(x,2).sum(dim=1,keepdim=True))
+    x = x.permute(0,2,3,1).reshape(x.size(0),x.size(2)*x.size(3),x.size(1))
+    norm = torch.sqrt(torch.pow(x,2).sum(dim=-1)) + 0.00001
+    raw_reprVec_score = torch.rand(norm.size()).to(norm.device)
+
+    repreVecList = []
+    simList = []
+    for i in range(nbVec):
+        raw_reprVec_norm,ind = raw_reprVec_score.max(dim=1,keepdim=True)
+        raw_reprVec = x[torch.arange(x.size(0)).unsqueeze(1),ind]
+        sim = (x*raw_reprVec).sum(dim=-1)/(norm*raw_reprVec_norm)
+        simNorm = torch.softmax(2*sim,dim=1)
+        reprVec = (x*simNorm.unsqueeze(-1)).sum(dim=1)
+        repreVecList.append(reprVec)
+        raw_reprVec_score = (1-simNorm)*raw_reprVec_score
+        simReshaped = sim.reshape(sim.size(0),1,xOrigShape[2],xOrigShape[3])
+        simList.append(simReshaped)
+
+    return repreVecList,simList
 
 if __name__ == "__main__":
     main()
