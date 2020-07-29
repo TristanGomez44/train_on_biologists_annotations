@@ -174,9 +174,9 @@ def main(argv=None):
             print("Start !")
             start = time.time()
 
-            feat,distMapAgreg,neighSim,refFeatList = textLimit(patch)
+            feat,distMapAgreg,neighSim,refFeatList = textLimit(patch,data,cosimMap,neighSimMod,kwargsNet,args)
 
-            simListRepr = representativeVectorsMod(refFeatList[-1])
+            simListRepr = representativeVectorsMod(refFeatList[-1],1-neighSim[:,-1].unsqueeze(1))
 
             print("End ",time.time()-start)
 
@@ -207,25 +207,26 @@ def main(argv=None):
 
                 img = (img-img.min())/(img.max()-img.min())
 
-                plotImg(img.detach().cpu().permute(1,2,0).numpy(),os.path.join(args.patch_sim_out_path,"imgs","{}.png".format(i+args.data_batch_index*args.batch_size)))
+                #plotImg(img.detach().cpu().permute(1,2,0).numpy(),os.path.join(args.patch_sim_out_path,"imgs","{}.png".format(i+args.data_batch_index*args.batch_size)))
 
-                resizedImg = resize(img.detach().cpu().permute(1,2,0).numpy().mean(axis=-1), (100,100),anti_aliasing=True,mode="constant",order=0)*255
-                edges = ~skimage.feature.canny(resizedImg,sigma=3)
-                plotImg(edges,os.path.join(args.patch_sim_out_path,"edges","{}.png".format(i+args.data_batch_index*args.batch_size)))
+                #resizedImg = resize(img.detach().cpu().permute(1,2,0).numpy().mean(axis=-1), (100,100),anti_aliasing=True,mode="constant",order=0)*255
+                #edges = ~skimage.feature.canny(resizedImg,sigma=3)
+                #plotImg(edges,os.path.join(args.patch_sim_out_path,"edges","{}.png".format(i+args.data_batch_index*args.batch_size)))
 
-                sobel = sobelFunc(img.detach().cpu().permute(1,2,0).numpy().mean(axis=-1))
-                plotImg(sobel,os.path.join(args.patch_sim_out_path,"sobel","{}.png".format(i+args.data_batch_index*args.batch_size)))
+                #sobel = sobelFunc(img.detach().cpu().permute(1,2,0).numpy().mean(axis=-1))
+                #plotImg(sobel,os.path.join(args.patch_sim_out_path,"sobel","{}.png".format(i+args.data_batch_index*args.batch_size)))
 
-                sobel = sobelFunc(img.detach().cpu().permute(1,2,0).numpy().mean(axis=-1))
-                minima,_,_ = computeMinima(sobel)
-                plotImg(255-((255-sobel)*minima),os.path.join(args.patch_sim_out_path,"sobel","nms-{}.png".format(i+args.data_batch_index*args.batch_size)))
-
-                topk(sobel,minima,os.path.join(args.patch_sim_out_path,"sobel"),"{}".format(i+args.data_batch_index*args.batch_size))
+                #sobel = sobelFunc(img.detach().cpu().permute(1,2,0).numpy().mean(axis=-1))
+                #minima,_,_ = computeMinima(sobel)
+                #plotImg(255-((255-sobel)*minima),os.path.join(args.patch_sim_out_path,"sobel","nms-{}.png".format(i+args.data_batch_index*args.batch_size)))
+                #topk(sobel,minima,os.path.join(args.patch_sim_out_path,"sobel"),"{}".format(i+args.data_batch_index*args.batch_size))
 
                 simMapPath = os.path.join(args.patch_sim_out_path,"simMaps",args.model_id,str(i+args.data_batch_index*args.batch_size))
 
                 writeAllImg(distMapAgreg,neighSim,i,simMapPath,"sparseNeighSim_step0")
-                #dimRedList(refFeatList,simMapPath,i,"neiRef")
+
+                if i<14:
+                    dimRedList(refFeatList,simMapPath,i,"neiRef")
 
                 #if not refFeatRepList is None:
                 #    dimRedList(refFeatRepList,simMapPath,i,"neiRef_repr")
@@ -235,26 +236,13 @@ def main(argv=None):
 
                 writeReprVecSimMaps(simListRepr,i,simMapPath)
 
-                if not neighSim_small is None:
-                    writeAllImg(None,neighSim_small,i,simMapPath,"sparseNeighSim_step0_x2")
-                    #dimRed(refFeat_small,simMapPath,i,"neiRef_small")
-
-                if not featNeighSim is None:
-                    writeAllImg(featDistMapAgreg,featNeighSim,i,simMapPath,"sparseNeighSim_step0_feat")
-
-                if not secondNeighSim is None:
-                    writeAllImg(secondDistMapAgreg,secondNeighSim,i,simMapPath,"sparseNeighSim_step0_second")
-                    writeAllImg(None,firstAndSecondNeighSim_mean,i,simMapPath,"sparseNeighSim_step0_firstAndSecond_mean")
-                    writeAllImg(None,firstAndSecondNeighSim_min,i,simMapPath,"sparseNeighSim_step0_firstAndSecond_min")
-                    writeAllImg(None,firstAndSecondNeighSim_max,i,simMapPath,"sparseNeighSim_step0_firstAndSecond_max")
-
 def writeReprVecSimMaps(simListRepr,i,simMapPath):
     path = os.path.join(simMapPath,"reprVecSimMaps.png")
     img_np = simListRepr[i].permute(1,2,0).cpu().detach().numpy()
-    img_np = (img_np-img_np.min())/(img_np.max()-img_np.min())
+    img_np = 255*(img_np-img_np.min())/(img_np.max()-img_np.min())
     cv2.imwrite(path,img_np)
 
-def textLimit(patch,secondParse=False):
+def textLimit(patch,data,cosimMap,neighSimMod,kwargsNet,args):
 
     kwargsNet["inChan"] = patch.size(1)
     patchMod = buildModule(True,PatchSimCNN,args.cuda,args.multi_gpu,kwargsNet)
@@ -903,18 +891,23 @@ class RepresentativeVectors(torch.nn.Module):
     def __init__(self,nbVec):
         super(RepresentativeVectors,self).__init__()
         self.nbVec = nbVec
-    def forward(self,x):
-        _,simList = representativeVectors(x,self.nbVec)
+    def forward(self,x,neighSim):
+        _,simList = representativeVectors(x,self.nbVec,prior=neighSim)
         print(simList[0].size())
         simList = torch.cat(simList,dim=1)
         return simList
 
-def representativeVectors(x,nbVec):
+def representativeVectors(x,nbVec,prior=None):
     xOrigShape = x.size()
     normNotFlat = torch.sqrt(torch.pow(x,2).sum(dim=1,keepdim=True))
     x = x.permute(0,2,3,1).reshape(x.size(0),x.size(2)*x.size(3),x.size(1))
     norm = torch.sqrt(torch.pow(x,2).sum(dim=-1)) + 0.00001
-    raw_reprVec_score = torch.rand(norm.size()).to(norm.device)
+
+    if prior is None:
+        raw_reprVec_score = torch.rand(norm.size()).to(norm.device)
+    else:
+        prior = prior.reshape(prior.size(0),-1)
+        raw_reprVec_score = prior.clone()
 
     repreVecList = []
     simList = []
