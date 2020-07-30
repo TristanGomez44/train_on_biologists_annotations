@@ -13,6 +13,7 @@ import matplotlib.pyplot as plt
 from models import deeplab
 from models import resnet
 from models import bagnet
+from models import hrnet
 import torchvision
 
 try:
@@ -55,6 +56,8 @@ def buildFeatModel(featModelName, pretrainedFeatMod, featMap=True, bigMaps=False
         featModel = getattr(resnet, featModelName)(pretrained=pretrainedFeatMod, featMap=featMap,layerSizeReduce=layerSizeReduce, **kwargs)
     elif featModelName.find("bagnet") != -1:
         featModel = getattr(bagnet, featModelName)(pretrained=pretrainedFeatMod,strides=[2,2,2,1] if layerSizeReduce else [2,2,1,1], **kwargs)
+    elif featModelName == "hrnet":
+        featModel = hrnet.get_cls_net()
     else:
         raise ValueError("Unknown model type : ", featModelName)
 
@@ -974,13 +977,15 @@ def getResnetFeat(backbone_name, backbone_inplanes,deeplabv3_outchan):
         nbFeat = backbone_inplanes * 2 ** (1 - 1)
     elif backbone_name.find("bagnet33") != -1:
         nbFeat = 2048
+    elif backbone_name == "hrnet":
+        nbFeat = 44
     else:
         raise ValueError("Unkown backbone : {}".format(backbone_name))
     return nbFeat
 
 def netBuilder(args):
     ############### Visual Model #######################
-    if args.first_mod.find("resnet") != -1 or args.first_mod.find("bagnet") != -1:
+    if args.first_mod.find("resnet") != -1 or args.first_mod.find("bagnet") != -1 or args.first_mod=="hrnet":
 
         if not args.multi_level_feat:
             nbFeat = getResnetFeat(args.first_mod, args.resnet_chan,args.deeplabv3_outchan)
@@ -1031,7 +1036,7 @@ def netBuilder(args):
             kwargs = {"aux_model":args.aux_model}
             nbFeatAux = nbFeat
 
-        if args.first_mod.find("bagnet") == -1:
+        if args.first_mod.find("bagnet") == -1 and args.first_mod.find("hrnet") == -1:
             firstModel = CNNconst(args.first_mod, args.pretrained_visual, featMap=True,chan=args.resnet_chan, stride=args.resnet_stride,
                                   dilation=args.resnet_dilation, \
                                   attChan=args.resnet_att_chan, attBlockNb=args.resnet_att_blocks_nb,
