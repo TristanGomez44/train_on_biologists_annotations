@@ -45,7 +45,7 @@ def main(argv=None):
     argreader.parser.add_argument('--patch_sim_pretr_res', type=str2bool,
                                   help="To have the patch sim resnet pretrained on Imagenet",default=False)
     argreader.parser.add_argument('--patch_size', type=int,
-                                  help="The patch size for the patch similarity exp",default=10)
+                                  help="The patch size for the patch similarity exp",default=5)
     argreader.parser.add_argument('--patch_stride', type=int,
                                   help="The patch stride for the patch similarity exp",default=5)
 
@@ -108,6 +108,9 @@ def main(argv=None):
     argreader.parser.add_argument('--repr_vec', type=str2bool,
                                   help="To run the representative vectors experiment",default=False)
 
+    argreader.parser.add_argument('--centered_feat', type=str2bool,
+                              help="To center the features before cosine similarity",default=False)
+
     argreader = trainVal.addInitArgs(argreader)
     argreader = trainVal.addOptimArgs(argreader)
     argreader = trainVal.addValArgs(argreader)
@@ -128,6 +131,10 @@ def main(argv=None):
         args.pn_topk_euclinorm = False
         args.texture_encoding = True
         args.big_images = True
+        args.batch_size = 32
+        args.multi_gpu = True
+        args.patch_sim_group_nb = 1
+        args.data_batch_index = 1
 
         net = modelBuilder.netBuilder(args)
         kwargs = {"momentum":args.momentum} if args.optim == "SGD" else {}
@@ -165,7 +172,8 @@ def main(argv=None):
                         "softmax":args.patch_sim_neighsim_softmax,"softmax_fact":args.patch_sim_neighsim_softmax_fact,\
                         "weightByNeigSim":args.patch_sim_weight_by_neigsim,"updateRateByCossim":args.patch_sim_update_rate_by_cossim,"neighRadius":args.patch_sim_neighradius,\
                         "neighDilation":args.patch_sim_neighdilation,"random_farthest":args.random_farthest,"random_farthest_prop":args.random_farthest_prop,\
-                        "neigAvgSize":args.patch_sim_neiref_neisimavgsize,"reprVec":args.patch_sim_neiref_repr_vectors,"normFeat":args.patch_sim_neiref_norm_feat}
+                        "neigAvgSize":args.patch_sim_neiref_neisimavgsize,"reprVec":args.patch_sim_neiref_repr_vectors,"normFeat":args.patch_sim_neiref_norm_feat,\
+                        "centered":args.centered_feat}
             neighSimMod = buildModule(True,NeighSim,args.cuda,args.multi_gpu,kwargsNeiSim)
 
             representativeVectorsMod = buildModule(True,RepresentativeVectors,args.cuda,args.multi_gpu,{"nbVec":3})
@@ -251,6 +259,11 @@ def textLimit(patch,data,cosimMap,neighSimMod,kwargsNet,args):
     gram_mat = gram_mat.view(data.size(0),-1,args.patch_sim_group_nb,gram_mat.size(2))
     gram_mat = gram_mat.permute(0,2,1,3)
     distMapAgreg,feat = cosimMap(gram_mat)
+
+    print(feat.size())
+    featAvgNorm = torch.abs(feat).sum(dim=1,keepdim=True).mean(dim=(2,3),keepdim=True)
+    feat = feat + 0.001*featAvgNorm*torch.normal(torch.zeros(feat.size()),torch.ones(feat.size())).to(feat.device)
+
     neighSim,refFeatList = neighSimMod(feat)
 
     return feat,distMapAgreg,neighSim,refFeatList
@@ -281,12 +294,20 @@ def dimRed(refFeat,simMapPath,i,name):
     refFeat_emb = umap.UMAP(n_components=3).fit_transform(refFeat[i].view(refFeat[i].size(0),-1).permute(1,0).cpu().detach().numpy())
     refFeat_emb = refFeat_emb.reshape((refFeat[i].size(1),refFeat[i].size(2),3))
     refFeat_emb = (refFeat_emb-refFeat_emb.min())/(refFeat_emb.max()-refFeat_emb.min())
+
     plt.figure(figsize=(10,10))
     plt.imshow(refFeat_emb)
     plt.subplots_adjust(left=0, right=1, top=1, bottom=0)
     plt.savefig(os.path.join(simMapPath,"{}_tsne_img.png".format(name)))
     plt.close()
 
+    refFeat_emb_tens = torch.tensor(refFeat_emb).to(refFeat.device).permute(2,0,1).unsqueeze(0)
+    neighSim = computeTotalSim(refFeat_emb_tens,1,1,False)[0,0].detach().cpu().numpy()
+    plt.figure(figsize=(10,10))
+    plt.imshow(neighSim)
+    plt.subplots_adjust(left=0, right=1, top=1, bottom=0)
+    plt.savefig(os.path.join(simMapPath,"{}_tsne_img_cosim.png".format(name)))
+    plt.close()
 
 def dimRedList(refFeatList,simMapPath,i,name):
 
@@ -319,20 +340,28 @@ def dimRedList(refFeatList,simMapPath,i,name):
         plt.savefig(os.path.join(simMapPath,"{}_{}_tsne_img.png".format(name,j)))
         plt.close()
 
-            #norm = torch.sqrt(torch.pow(refFeatList_ex[j],2).sum(dim=0)).cpu().detach().numpy()
-            #plt.figure(figsize=(10,10))
-            #plt.imshow(norm)
-            #plt.subplots_adjust(left=0, right=1, top=1, bottom=0)
-            #plt.savefig(os.path.join(simMapPath,"{}_{}_norm.png".format(name,j)))
-            #plt.close()
-            #norm = (norm-norm.min())/(norm.max()-norm.min())
+        #refFeat_emb_tens = torch.tensor(refFeat_emb[j]).to(refFeatList[0].device).permute(2,0,1).unsqueeze(0)
+        #neighSim = computeTotalSim(refFeat_emb_tens,1,1,False)[0,0].detach().cpu().numpy()
+        #plt.figure(figsize=(10,10))
+        #plt.imshow(neighSim,cmap="gray")
+        #plt.subplots_adjust(left=0, right=1, top=1, bottom=0)
+        #plt.savefig(os.path.join(simMapPath,"{}_tsne_img_cosim.png".format(name)))
+        #plt.close()
 
-            #emb_norm = norm[:,:,np.newaxis]*refFeat_emb[j]
-            #plt.figure(figsize=(10,10))
-            #plt.imshow(emb_norm)
-            #plt.subplots_adjust(left=0, right=1, top=1, bottom=0)
-            #plt.savefig(os.path.join(simMapPath,"{}_{}_tsne_img_norm.png".format(name,j)))
-            #plt.close()
+        #norm = torch.sqrt(torch.pow(refFeatList_ex[j],2).sum(dim=0)).cpu().detach().numpy()
+        #plt.figure(figsize=(10,10))
+        #plt.imshow(norm)
+        #plt.subplots_adjust(left=0, right=1, top=1, bottom=0)
+        #plt.savefig(os.path.join(simMapPath,"{}_{}_norm.png".format(name,j)))
+        #plt.close()
+        #norm = (norm-norm.min())/(norm.max()-norm.min())
+
+        #emb_norm = norm[:,:,np.newaxis]*refFeat_emb[j]
+        #plt.figure(figsize=(10,10))
+        #plt.imshow(emb_norm)
+        #plt.subplots_adjust(left=0, right=1, top=1, bottom=0)
+        #plt.savefig(os.path.join(simMapPath,"{}_{}_tsne_img_norm.png".format(name,j)))
+        #plt.close()
 
 def normList(refFeatListFull,simMapPath,i,name):
 
@@ -654,9 +683,12 @@ def shiftFeat(where,features,dilation=1,neigAvgSize=1,reprVec=False):
     maskShift = maskShift.mean(dim=1,keepdim=True)
     return featuresShift,maskShift
 
-def applyDiffKer_CosSimi(direction,features,dilation=1,neigAvgSize=1,reprVec=False):
+def applyDiffKer_CosSimi(direction,features,dilation=1,neigAvgSize=1,reprVec=False,centered=False,eucli=False):
     origFeatSize = features.size()
     featNb = origFeatSize[1]
+
+    if centered:
+        features = features - features.mean(dim=-1,keepdim=True).mean(dim=-2,keepdim=True)
 
     if type(direction) is str:
         if direction == "horizontal":
@@ -692,20 +724,25 @@ def applyDiffKer_CosSimi(direction,features,dilation=1,neigAvgSize=1,reprVec=Fal
     #    print(featuresShift2.min().item(),featuresShift2.mean().item(),featuresShift2.max().item())
     #    sys.exit(0)
 
-    sim = (featuresShift1*featuresShift2*maskShift1*maskShift2).sum(dim=1,keepdim=True)
-    sim /= torch.sqrt(torch.pow(maskShift1*featuresShift1,2).sum(dim=1,keepdim=True))*torch.sqrt(torch.pow(maskShift2*featuresShift2,2).sum(dim=1,keepdim=True))
+    if eucli:
+        sim = torch.sqrt(torch.pow(featuresShift1-featuresShift2,2).sum(dim=1,keepdim=True))*maskShift1*maskShift2
+        sim /= torch.sqrt(torch.pow(featuresShift1,2).sum(dim=1,keepdim=True))
+        sim = 1-(sim/sim.max(dim=-1,keepdim=True)[0].max(dim=-2,keepdim=True)[0])
+    else:
+        sim = (featuresShift1*featuresShift2*maskShift1*maskShift2).sum(dim=1,keepdim=True)
+        sim /= torch.sqrt(torch.pow(maskShift1*featuresShift1,2).sum(dim=1,keepdim=True))*torch.sqrt(torch.pow(maskShift2*featuresShift2,2).sum(dim=1,keepdim=True))
 
     return sim,featuresShift1,featuresShift2,maskShift1,maskShift2
 
-def computeTotalSim(features,dilation,neigAvgSize=1,reprVec=False):
-    horizDiff,_,_,_,_ = applyDiffKer_CosSimi("horizontal",features,dilation,neigAvgSize,reprVec)
-    vertiDiff,_,_,_,_ = applyDiffKer_CosSimi("vertical",features,dilation,neigAvgSize,reprVec)
+def computeTotalSim(features,dilation,neigAvgSize=1,reprVec=False,centered=False,eucli=False):
+    horizDiff,_,_,_,_ = applyDiffKer_CosSimi("horizontal",features,dilation,neigAvgSize,reprVec,centered,eucli)
+    vertiDiff,_,_,_,_ = applyDiffKer_CosSimi("vertical",features,dilation,neigAvgSize,reprVec,centered,eucli)
     totalDiff = (horizDiff + vertiDiff)/2
     return totalDiff
 
 class NeighSim(torch.nn.Module):
     def __init__(self,cuda,groupNb,nbIter,softmax,softmax_fact,weightByNeigSim,updateRateByCossim,neighRadius,neighDilation,random_farthest,random_farthest_prop,\
-                        neigAvgSize,reprVec,normFeat):
+                        neigAvgSize,reprVec,normFeat,centered=False):
         super(NeighSim,self).__init__()
 
         self.directions = computeNeighborsCoord(neighRadius)
@@ -716,6 +753,7 @@ class NeighSim(torch.nn.Module):
         self.nbIter = nbIter
         self.softmax = softmax
         self.softmax_fact = softmax_fact
+        self.centered = centered
 
         self.weightByNeigSim = weightByNeigSim
         self.updateRateByCossim = updateRateByCossim
@@ -740,7 +778,7 @@ class NeighSim(torch.nn.Module):
         allFeatShift = []
         for direction in self.directions:
             if self.weightByNeigSim:
-                sim,featuresShift1,_,maskShift1,_ = applyDiffKer_CosSimi(direction*dilation,features,1,self.neigAvgSize,self.reprVec)
+                sim,featuresShift1,_,maskShift1,_ = applyDiffKer_CosSimi(direction*dilation,features,1,self.neigAvgSize,self.reprVec,self.centered)
                 allSim.append(sim*maskShift1)
             else:
                 featuresShift1,maskShift1 = shiftFeat(direction,features,1)
@@ -756,7 +794,7 @@ class NeighSim(torch.nn.Module):
         if self.normFeat:
             features = features/torch.sqrt(torch.pow(features,2).sum(dim=1,keepdim=True))
 
-        simMap = computeTotalSim(features,1,self.neigAvgSize,self.reprVec)
+        simMap = computeTotalSim(features,1,self.neigAvgSize,self.reprVec,self.centered,eucli=True)
         simMapList = [simMap]
         featList = [features]
 
@@ -790,7 +828,7 @@ class NeighSim(torch.nn.Module):
                 features = features/torch.sqrt(torch.pow(features,2).sum(dim=1,keepdim=True))
 
             featList.append(features)
-            simMap = computeTotalSim(features,1,self.neigAvgSize,self.reprVec)
+            simMap = computeTotalSim(features,1,self.neigAvgSize,self.reprVec,self.centered,eucli=True)
             simMapList.append(simMap)
 
         simMapList = torch.cat(simMapList,dim=1).unsqueeze(1)
