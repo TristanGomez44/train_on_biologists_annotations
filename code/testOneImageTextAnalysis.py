@@ -174,6 +174,7 @@ def main(argv=None):
                         "neighDilation":args.patch_sim_neighdilation,"random_farthest":args.random_farthest,"random_farthest_prop":args.random_farthest_prop,\
                         "neigAvgSize":args.patch_sim_neiref_neisimavgsize,"reprVec":args.patch_sim_neiref_repr_vectors,"normFeat":args.patch_sim_neiref_norm_feat,\
                         "centered":args.centered_feat}
+
             neighSimMod = buildModule(True,NeighSim,args.cuda,args.multi_gpu,kwargsNeiSim)
 
             representativeVectorsMod = buildModule(True,RepresentativeVectors,args.cuda,args.multi_gpu,{"nbVec":3})
@@ -235,7 +236,7 @@ def main(argv=None):
 
                 if i<14:
                     dimRedList(refFeatList,simMapPath,i,"neiRef")
-
+                    plotNorm(refFeatList,i,simMapPath)
                 #if not refFeatRepList is None:
                 #    dimRedList(refFeatRepList,simMapPath,i,"neiRef_repr")
                 #    for j in range(len(neighSimRepList)):
@@ -244,6 +245,12 @@ def main(argv=None):
 
                 writeReprVecSimMaps(simListRepr,i,simMapPath)
 
+def plotNorm(refFeatList,i,simMapPath):
+
+    for j in range(len(refFeatList)):
+        norm = torch.sqrt(torch.pow(refFeatList[j][i:i+1],2).sum(dim=1))[0].detach().cpu().numpy()
+        plotImg(norm,os.path.join(simMapPath,"norm_{}.png".format(j)),cmap="gray")
+
 def writeReprVecSimMaps(simListRepr,i,simMapPath):
     path = os.path.join(simMapPath,"reprVecSimMaps.png")
     img_np = simListRepr[i].permute(1,2,0).cpu().detach().numpy()
@@ -251,21 +258,25 @@ def writeReprVecSimMaps(simListRepr,i,simMapPath):
     cv2.imwrite(path,img_np)
 
 def textLimit(patch,data,cosimMap,neighSimMod,kwargsNet,args):
+    neighSimList = []
+    for i in range(20):
+        kwargsNet["inChan"] = patch.size(1)
+        patchMod = buildModule(True,PatchSimCNN,args.cuda,args.multi_gpu,kwargsNet)
 
-    kwargsNet["inChan"] = patch.size(1)
-    patchMod = buildModule(True,PatchSimCNN,args.cuda,args.multi_gpu,kwargsNet)
+        gram_mat = patchMod(patch)
+        gram_mat = gram_mat.view(data.size(0),-1,args.patch_sim_group_nb,gram_mat.size(2))
+        gram_mat = gram_mat.permute(0,2,1,3)
+        distMapAgreg,feat = cosimMap(gram_mat)
 
-    gram_mat = patchMod(patch)
-    gram_mat = gram_mat.view(data.size(0),-1,args.patch_sim_group_nb,gram_mat.size(2))
-    gram_mat = gram_mat.permute(0,2,1,3)
-    distMapAgreg,feat = cosimMap(gram_mat)
+        #print(feat.size())
+        #featAvgNorm = torch.abs(feat).sum(dim=1,keepdim=True).mean(dim=(2,3),keepdim=True)
+        #feat = feat + 0.001*featAvgNorm*torch.normal(torch.zeros(feat.size()),torch.ones(feat.size())).to(feat.device)
 
-    print(feat.size())
-    featAvgNorm = torch.abs(feat).sum(dim=1,keepdim=True).mean(dim=(2,3),keepdim=True)
-    feat = feat + 0.001*featAvgNorm*torch.normal(torch.zeros(feat.size()),torch.ones(feat.size())).to(feat.device)
+        neighSim,refFeatList = neighSimMod(feat)
 
-    neighSim,refFeatList = neighSimMod(feat)
+        neighSimList.append(neighSim)
 
+    neighSim = torch.cat(neighSimList,dim=1).mean(dim=1,keepdim=True)
     return feat,distMapAgreg,neighSim,refFeatList
 
 def writeAllImg(distMapAgreg,neighSim,i,simMapPath,name):
@@ -790,6 +801,14 @@ class NeighSim(torch.nn.Module):
         return allSim,allFeatShift
 
     def forward(self,features):
+
+        #featAvgNorm = torch.abs(features).sum(dim=1,keepdim=True).mean(dim=(2,3),keepdim=True)
+        #noise = torch.normal(torch.zeros(features.size(0),1,features.size(2),features.size(2)),\
+        #                      torch.ones(features.size(0),1,features.size(2),features.size(2))).to(features.device)
+
+        #print(features.min(),features.mean(),features.max())
+        #features = features*(1+0.0005*featAvgNorm*noise)
+        #print("after",features.min(),features.mean(),features.max())
 
         if self.normFeat:
             features = features/torch.sqrt(torch.pow(features,2).sum(dim=1,keepdim=True))
