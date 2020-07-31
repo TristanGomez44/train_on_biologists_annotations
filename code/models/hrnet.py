@@ -524,5 +524,5 @@ def get_cls_net(**kwargs):
                         "FUSE_METHOD": "SUM"}}
 
     model = HighResolutionNet(config, **kwargs)
-    model.init_weights()
+    model.init_weights("models/hrnetv2_w44_imagenet_pretrained.pth")
     return model
