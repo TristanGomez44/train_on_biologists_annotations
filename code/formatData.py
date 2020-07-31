@@ -145,11 +145,8 @@ def formatAircraft(path):
 
 		for i in range(len(rows)):
 
-			if set == "trainval":
-				if i%600 == 0:
-					print("\t",i)
-			else:
-				print(i)
+			if i%600 == 0:
+				print("\t",i)
 
 			splitted_row = rows[i].split(" ")
 			name = splitted_row[0]
