@@ -493,36 +493,104 @@ class HighResolutionNet(nn.Module):
             self.load_state_dict(model_dict)
 
 
-def get_cls_net(**kwargs):
-    config = {
-        "STAGE1" :     {"NUM_MODULES": 1,
-                        "NUM_RANCHES": 1,
-                        "BLOCK": "BOTTLENECK",
-                        "NUM_BLOCKS":[4],
-                        "NUM_CHANNELS":[64],
-                        "FUSE_METHOD": "SUM"},
+def get_cls_net(w=44,**kwargs):
+    if w == 4:
+        config = {
+            "STAGE1" :     {"NUM_MODULES": 1,
+                            "NUM_RANCHES": 1,
+                            "BLOCK": "BOTTLENECK",
+                            "NUM_BLOCKS":[4],
+                            "NUM_CHANNELS":[64],
+                            "FUSE_METHOD": "SUM"},
 
-        "STAGE2":      {"NUM_MODULES": 1,
-                        "NUM_BRANCHES": 2,
-                        "BLOCK": "BASIC",
-                        "NUM_BLOCKS":[4,4],
-                        "NUM_CHANNELS":[44,88],
-                        "FUSE_METHOD": "SUM"},
+            "STAGE2":      {"NUM_MODULES": 1,
+                            "NUM_BRANCHES": 2,
+                            "BLOCK": "BASIC",
+                            "NUM_BLOCKS":[4,4],
+                            "NUM_CHANNELS":[44,88],
+                            "FUSE_METHOD": "SUM"},
 
-        "STAGE3":      {"NUM_MODULES": 4,
-                        "NUM_BRANCHES": 3,
-                        "BLOCK": "BASIC",
-                        "NUM_BLOCKS":[4,4,4],
-                        "NUM_CHANNELS":[44,88,176],
-                        "FUSE_METHOD": "SUM"},
+            "STAGE3":      {"NUM_MODULES": 4,
+                            "NUM_BRANCHES": 3,
+                            "BLOCK": "BASIC",
+                            "NUM_BLOCKS":[4,4,4],
+                            "NUM_CHANNELS":[44,88,176],
+                            "FUSE_METHOD": "SUM"},
 
-        "STAGE4":      {"NUM_MODULES": 3,
-                        "NUM_BRANCHES": 4,
-                        "BLOCK": "BASIC",
-                        "NUM_BLOCKS":[4,4,4,4],
-                        "NUM_CHANNELS":[44,88,176,352],
-                        "FUSE_METHOD": "SUM"}}
+            "STAGE4":      {"NUM_MODULES": 3,
+                            "NUM_BRANCHES": 4,
+                            "BLOCK": "BASIC",
+                            "NUM_BLOCKS":[4,4,4,4],
+                            "NUM_CHANNELS":[44,88,176,352],
+                            "FUSE_METHOD": "SUM"}}
 
-    model = HighResolutionNet(config, **kwargs)
-    model.init_weights("models/hrnetv2_w44_imagenet_pretrained.pth")
+        model = HighResolutionNet(config, **kwargs)
+        model.init_weights("models/hrnetv2_w44_imagenet_pretrained.pth")
+    elif w == 64:
+        config = {
+            "STAGE1" :     {"NUM_MODULES": 1,
+                            "NUM_RANCHES": 1,
+                            "BLOCK": "BOTTLENECK",
+                            "NUM_BLOCKS":[4],
+                            "NUM_CHANNELS":[64],
+                            "FUSE_METHOD": "SUM"},
+
+            "STAGE2":      {"NUM_MODULES": 1,
+                            "NUM_BRANCHES": 2,
+                            "BLOCK": "BASIC",
+                            "NUM_BLOCKS":[4,4],
+                            "NUM_CHANNELS":[64,128],
+                            "FUSE_METHOD": "SUM"},
+
+            "STAGE3":      {"NUM_MODULES": 4,
+                            "NUM_BRANCHES": 3,
+                            "BLOCK": "BASIC",
+                            "NUM_BLOCKS":[4,4,4],
+                            "NUM_CHANNELS":[64,128,256],
+                            "FUSE_METHOD": "SUM"},
+
+            "STAGE4":      {"NUM_MODULES": 3,
+                            "NUM_BRANCHES": 4,
+                            "BLOCK": "BASIC",
+                            "NUM_BLOCKS":[4,4,4,4],
+                            "NUM_CHANNELS":[64,128,256,512],
+                            "FUSE_METHOD": "SUM"}}
+
+        model = HighResolutionNet(config, **kwargs)
+        model.init_weights("models/hrnetv2_w64_imagenet_pretrained.pth")
+    elif w == 18:
+        config = {
+            "STAGE1" :     {"NUM_MODULES": 1,
+                            "NUM_RANCHES": 1,
+                            "BLOCK": "BOTTLENECK",
+                            "NUM_BLOCKS":[1],
+                            "NUM_CHANNELS":[32],
+                            "FUSE_METHOD": "SUM"},
+
+            "STAGE2":      {"NUM_MODULES": 1,
+                            "NUM_BRANCHES": 2,
+                            "BLOCK": "BASIC",
+                            "NUM_BLOCKS":[2,2],
+                            "NUM_CHANNELS":[16,32],
+                            "FUSE_METHOD": "SUM"},
+
+            "STAGE3":      {"NUM_MODULES": 1,
+                            "NUM_BRANCHES": 3,
+                            "BLOCK": "BASIC",
+                            "NUM_BLOCKS":[2,2,2],
+                            "NUM_CHANNELS":[16,32,64],
+                            "FUSE_METHOD": "SUM"},
+
+            "STAGE4":      {"NUM_MODULES": 1,
+                            "NUM_BRANCHES": 4,
+                            "BLOCK": "BASIC",
+                            "NUM_BLOCKS":[2,2,2,2],
+                            "NUM_CHANNELS":[16,32,64,128],
+                            "FUSE_METHOD": "SUM"}}
+
+        model = HighResolutionNet(config, **kwargs)
+        model.init_weights("models/hrnet_w18_small_model_v1.pth")
+    else:
+        raise ValueError("Unkown HR model w = ",w)
+
     return model

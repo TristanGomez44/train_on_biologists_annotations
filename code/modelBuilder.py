@@ -58,6 +58,10 @@ def buildFeatModel(featModelName, pretrainedFeatMod, featMap=True, bigMaps=False
         featModel = getattr(bagnet, featModelName)(pretrained=pretrainedFeatMod,strides=[2,2,2,1] if layerSizeReduce else [2,2,1,1], **kwargs)
     elif featModelName == "hrnet":
         featModel = hrnet.get_cls_net()
+    elif featModelName == "hrnet64":
+        featModel = hrnet.get_cls_net(w=64)
+    elif featModelName == "hrnet18":
+        featModel = hrnet.get_cls_net(w=18)
     else:
         raise ValueError("Unknown model type : ", featModelName)
 
@@ -979,13 +983,17 @@ def getResnetFeat(backbone_name, backbone_inplanes,deeplabv3_outchan):
         nbFeat = 2048
     elif backbone_name == "hrnet":
         nbFeat = 44
+    elif backbone_name == "hrnet64":
+        nbFeat = 64
+    elif backbone_name == "hrnet18":
+        nbFeat = 16
     else:
         raise ValueError("Unkown backbone : {}".format(backbone_name))
     return nbFeat
 
 def netBuilder(args):
     ############### Visual Model #######################
-    if args.first_mod.find("resnet") != -1 or args.first_mod.find("bagnet") != -1 or args.first_mod=="hrnet":
+    if args.first_mod.find("resnet") != -1 or args.first_mod.find("bagnet") != -1 or args.first_mod.find("hrnet") != -1:
 
         if not args.multi_level_feat:
             nbFeat = getResnetFeat(args.first_mod, args.resnet_chan,args.deeplabv3_outchan)
