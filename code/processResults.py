@@ -34,7 +34,6 @@ from skimage import img_as_ubyte
 from scipy import stats
 import math
 from PIL import ImageEnhance
-from PIL import Image
 from PIL import ImageFont
 from PIL import ImageDraw
 
@@ -150,6 +149,22 @@ def plotPointsImageDatasetGrid(exp_id,imgNb,epochs,model_ids,reduction_fact_list
             fileName = os.path.basename(paths[0])
             epochs.append(utils.findLastNumbers(fileName))
 
+    pointPaths,pointWeightPaths = [],[]
+    for j in range(len(model_ids)):
+
+        if useDropped_list[j]:
+            pointPaths.append("../results/{}/points_dropped_{}_epoch{}_{}.npy".format(exp_id,model_ids[j],epochs[j],mode))
+            pointWeightPaths.append("../results/{}/points_dropped_{}_epoch{}_{}.npy".format(exp_id,model_ids[j],epochs[j],mode))
+        elif fullAttMap[j]:
+            pointPaths.append("../results/{}/attMaps_{}_epoch{}_{}.npy".format(exp_id,model_ids[j],epochs[j],mode))
+            pointWeightPaths.append("")
+        elif gradcam[j]:
+            pointPaths.append("../results/{}/gradcam_{}_epoch{}_{}.npy".format(exp_id,model_ids[j],epochs[j],mode))
+            pointWeightPaths.append("")
+        else:
+            pointPaths.append("../results/{}/points_{}_epoch{}_{}.npy".format(exp_id,model_ids[j],epochs[j],mode))
+            pointWeightPaths.append("../results/{}/pointWeights_{}_epoch{}_{}.npy".format(exp_id,model_ids[j],epochs[j],mode))
+
     if mode == "val":
         imgLoader,testDataset = load_data.buildTestLoader(args,mode,shuffle=False)
         inds = torch.arange(imgNb)
@@ -170,29 +185,13 @@ def plotPointsImageDatasetGrid(exp_id,imgNb,epochs,model_ids,reduction_fact_list
                 incorrectInd = torch.arange(len(testDataset))[~correct]
                 inds = incorrectInd[torch.randperm(len(incorrectInd))][:imgNb]
         else:
-            inds = torch.randint(len(testDataset),size=(imgNb,))
+            inds = torch.randint(len(np.load(pointPaths[0])),size=(imgNb,))
         imgBatch = torch.cat([testDataset[ind][0].unsqueeze(0) for ind in inds],dim=0)
 
     cmPlasma = plt.get_cmap('plasma')
 
     if len(inverse_xy):
         inverse_xy = [True for _ in range(len(model_ids))]
-
-    pointPaths,pointWeightPaths = [],[]
-    for j in range(len(model_ids)):
-
-        if useDropped_list[j]:
-            pointPaths.append("../results/{}/points_dropped_{}_epoch{}_{}.npy".format(exp_id,model_ids[j],epochs[j],mode))
-            pointWeightPaths.append("../results/{}/points_dropped_{}_epoch{}_{}.npy".format(exp_id,model_ids[j],epochs[j],mode))
-        elif fullAttMap[j]:
-            pointPaths.append("../results/{}/attMaps_{}_epoch{}_{}.npy".format(exp_id,model_ids[j],epochs[j],mode))
-            pointWeightPaths.append("")
-        elif gradcam[j]:
-            pointPaths.append("../results/{}/gradcam_{}_epoch{}_{}.npy".format(exp_id,model_ids[j],epochs[j],mode))
-            pointWeightPaths.append("")
-        else:
-            pointPaths.append("../results/{}/points_{}_epoch{}_{}.npy".format(exp_id,model_ids[j],epochs[j],mode))
-            pointWeightPaths.append("../results/{}/pointWeights_{}_epoch{}_{}.npy".format(exp_id,model_ids[j],epochs[j],mode))
 
     meanVecList = []
 
@@ -212,12 +211,22 @@ def plotPointsImageDatasetGrid(exp_id,imgNb,epochs,model_ids,reduction_fact_list
         else:
             normDict[j] = None
 
+    fnt = ImageFont.truetype("Pillow/Tests/fonts/FreeMono.ttf", 40)
     for i in range(imgNb):
         print("Img",i)
+
+        img = imgBatch[i:i+1]
+
+        imgPIL = Image.fromarray((255*img[0].permute(1,2,0).numpy()).astype("uint8"))
+        imgDraw = ImageDraw.Draw(imgPIL)
+        imgDraw.rectangle([(0,0), (50, 40)],fill="white")
+        imgDraw.text((0,0), str(i+1), font=fnt,fill=(0,0,0))
+        img = torch.tensor(np.array(imgPIL)).permute(2,0,1).unsqueeze(0).float()/255
+
         if gridImage is None:
-            gridImage = imgBatch[i:i+1]
+            gridImage = img
         else:
-            gridImage = torch.cat((gridImage,imgBatch[i:i+1]),dim=0)
+            gridImage = torch.cat((gridImage,img),dim=0)
 
         for j in range(len(pointPaths)):
 
@@ -236,7 +245,7 @@ def plotPointsImageDatasetGrid(exp_id,imgNb,epochs,model_ids,reduction_fact_list
                             attMap_l = attMap[l:l+1]
                             attMap_l = attMap_l.astype(float)
                             attMap_l /= 255
-                            attMap_l *= 6
+                            attMap_l *= 4
                             attMap_l = torch.softmax(torch.tensor(attMap_l).float().view(-1),dim=-1).view(attMap_l.shape[0],attMap_l.shape[1],attMap_l.shape[2]).numpy()
                             attMap_l = (attMap_l-attMap_l.min())/(attMap_l.max()-attMap_l.min())
                             allAttMap.append(attMap_l)
@@ -843,7 +852,7 @@ def main(argv=None):
 
     argreader.parser.add_argument('--gradcam',type=str2bool,nargs="*",metavar="BOOL",help='To plot gradcam instead of attention maps',default=[])
     argreader.parser.add_argument('--correctness',type=str,metavar="CORRECT",help='Set this to True to only show image where the model has given a correct answer.',default=None)
-    argreader.parser.add_argument('--agregate_multi_att',type=str2bool,nargs="*",metavar="BOOL",help='Set this to True to agregate the multiple attention map when there\'s several.',default=None)
+    argreader.parser.add_argument('--agregate_multi_att',type=str2bool,nargs="*",metavar="BOOL",help='Set this to True to agregate the multiple attention map when there\'s several.',default=[])
 
     argreader.parser.add_argument('--luminosity',type=str2bool,metavar="BOOL",help='To plot the attention maps not with a cmap but with luminosity',default=False)
     argreader.parser.add_argument('--nrows',type=int,metavar="INT",help='The number of rows',default=1)
