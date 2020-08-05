@@ -14,6 +14,12 @@ case $1 in
   "clusCatHR")
     python trainVal.py -c model_cub4.config --exp_id CUB5 --model_id bilClusCatHR --epochs 300  --aux_model False --aux_mod_nll_weight 0 --first_mod $2   --resnet_bilinear True --bil_cluster True --bil_cluster_ensemble False
     ;;
+  "clusCatHR64")
+    python trainVal.py -c model_cub4.config --exp_id CUB5 --model_id bilClusCatHR64 --epochs 300  --aux_model False --aux_mod_nll_weight 0 --first_mod $2   --resnet_bilinear True --bil_cluster True --bil_cluster_ensemble False
+    ;;
+  "clusCatHR18")
+    python trainVal.py -c model_cub4.config --exp_id CUB5 --model_id bilClusCatHR18 --epochs 300  --aux_model False --aux_mod_nll_weight 0 --first_mod $2   --resnet_bilinear True --bil_cluster True --bil_cluster_ensemble False
+    ;;
   "clusCat8")
     python trainVal.py -c model_cub4.config --exp_id CUB5 --model_id bilClusCat_8 --epochs 300  --aux_model False --aux_mod_nll_weight 0 --first_mod $2   --resnet_bilinear True --bil_cluster True --bil_cluster_ensemble False --resnet_bil_nb_parts 8
     ;;
