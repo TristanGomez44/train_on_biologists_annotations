@@ -239,14 +239,10 @@ def plotPointsImageDatasetGrid(exp_id,imgNb,epochs,model_ids,reduction_fact_list
 
                 if attMap.shape[0] != 1:
                     if attMap.shape[0] == 3 or attMap.shape[0] == 4:
-
                         allAttMap = []
                         for l in range(3):
                             attMap_l = attMap[l:l+1]
                             attMap_l = attMap_l.astype(float)
-                            attMap_l /= 255
-                            attMap_l *= 4
-                            attMap_l = torch.softmax(torch.tensor(attMap_l).float().view(-1),dim=-1).view(attMap_l.shape[0],attMap_l.shape[1],attMap_l.shape[2]).numpy()
                             attMap_l = (attMap_l-attMap_l.min())/(attMap_l.max()-attMap_l.min())
                             allAttMap.append(attMap_l)
                         attMap = np.concatenate(allAttMap,axis=0)
