@@ -50,7 +50,7 @@ def main(argv=None):
                                   help="The patch stride for the patch similarity exp",default=5)
 
     argreader.parser.add_argument('--patch_sim_group_nb', type=int,
-                                  help="To compute gram matrix by grouping features using a random partitions to reduce RAM load.",default=4)
+                                  help="To compute gram matrix by grouping features using a random partitions to reduce RAM load.",default=1)
 
     argreader.parser.add_argument('--patch_sim_out_path', type=str,
                                   help="The output path",default="../../embyovis/")
@@ -151,6 +151,7 @@ def main(argv=None):
             for i in range(args.data_batch_index):
                 data,target =next(iter(trainLoader))
 
+        data = data[2:4]
 
         with torch.no_grad():
 
@@ -185,7 +186,7 @@ def main(argv=None):
 
             feat,distMapAgreg,neighSim,refFeatList = textLimit(patch,data,cosimMap,neighSimMod,kwargsNet,args)
 
-            simListRepr = representativeVectorsMod(refFeatList[-1],1-neighSim[:,-1].unsqueeze(1))
+            simListRepr = representativeVectorsMod(refFeatList[-1])
 
             print("End ",time.time()-start)
 
@@ -211,39 +212,39 @@ def main(argv=None):
 
             for i,img in enumerate(data):
 
-                if not os.path.exists(os.path.join(args.patch_sim_out_path,"simMaps",args.model_id,"{}".format(i+args.data_batch_index*args.batch_size))):
-                    os.makedirs(os.path.join(args.patch_sim_out_path,"simMaps",args.model_id,"{}".format(i+args.data_batch_index*args.batch_size)))
+                if i < 2:
+                    if not os.path.exists(os.path.join(args.patch_sim_out_path,"simMaps",args.model_id,"{}".format(i+args.data_batch_index*args.batch_size))):
+                        os.makedirs(os.path.join(args.patch_sim_out_path,"simMaps",args.model_id,"{}".format(i+args.data_batch_index*args.batch_size)))
 
-                img = (img-img.min())/(img.max()-img.min())
+                    img = (img-img.min())/(img.max()-img.min())
 
-                #plotImg(img.detach().cpu().permute(1,2,0).numpy(),os.path.join(args.patch_sim_out_path,"imgs","{}.png".format(i+args.data_batch_index*args.batch_size)))
+                    plotImg(img.detach().cpu().permute(1,2,0).numpy(),os.path.join(args.patch_sim_out_path,"imgs","{}.png".format(i+args.data_batch_index*args.batch_size)))
 
-                #resizedImg = resize(img.detach().cpu().permute(1,2,0).numpy().mean(axis=-1), (100,100),anti_aliasing=True,mode="constant",order=0)*255
-                #edges = ~skimage.feature.canny(resizedImg,sigma=3)
-                #plotImg(edges,os.path.join(args.patch_sim_out_path,"edges","{}.png".format(i+args.data_batch_index*args.batch_size)))
+                    #resizedImg = resize(img.detach().cpu().permute(1,2,0).numpy().mean(axis=-1), (100,100),anti_aliasing=True,mode="constant",order=0)*255
+                    #edges = ~skimage.feature.canny(resizedImg,sigma=3)
+                    #plotImg(edges,os.path.join(args.patch_sim_out_path,"edges","{}.png".format(i+args.data_batch_index*args.batch_size)))
 
-                #sobel = sobelFunc(img.detach().cpu().permute(1,2,0).numpy().mean(axis=-1))
-                #plotImg(sobel,os.path.join(args.patch_sim_out_path,"sobel","{}.png".format(i+args.data_batch_index*args.batch_size)))
+                    #sobel = sobelFunc(img.detach().cpu().permute(1,2,0).numpy().mean(axis=-1))
+                    #plotImg(sobel,os.path.join(args.patch_sim_out_path,"sobel","{}.png".format(i+args.data_batch_index*args.batch_size)))
 
-                #sobel = sobelFunc(img.detach().cpu().permute(1,2,0).numpy().mean(axis=-1))
-                #minima,_,_ = computeMinima(sobel)
-                #plotImg(255-((255-sobel)*minima),os.path.join(args.patch_sim_out_path,"sobel","nms-{}.png".format(i+args.data_batch_index*args.batch_size)))
-                #topk(sobel,minima,os.path.join(args.patch_sim_out_path,"sobel"),"{}".format(i+args.data_batch_index*args.batch_size))
+                    #sobel = sobelFunc(img.detach().cpu().permute(1,2,0).numpy().mean(axis=-1))
+                    #minima,_,_ = computeMinima(sobel)
+                    #plotImg(255-((255-sobel)*minima),os.path.join(args.patch_sim_out_path,"sobel","nms-{}.png".format(i+args.data_batch_index*args.batch_size)))
+                    #topk(sobel,minima,os.path.join(args.patch_sim_out_path,"sobel"),"{}".format(i+args.data_batch_index*args.batch_size))
 
-                simMapPath = os.path.join(args.patch_sim_out_path,"simMaps",args.model_id,str(i+args.data_batch_index*args.batch_size))
+                    simMapPath = os.path.join(args.patch_sim_out_path,"simMaps",args.model_id,str(i+args.data_batch_index*args.batch_size))
 
-                writeAllImg(distMapAgreg,neighSim,i,simMapPath,"sparseNeighSim_step0")
+                    writeAllImg(distMapAgreg,neighSim,i,simMapPath,"sparseNeighSim_step0")
 
-                if i<14:
                     dimRedList(refFeatList,simMapPath,i,"neiRef")
                     plotNorm(refFeatList,i,simMapPath)
-                #if not refFeatRepList is None:
-                #    dimRedList(refFeatRepList,simMapPath,i,"neiRef_repr")
-                #    for j in range(len(neighSimRepList)):
-                #        pathPNG = os.path.join(simMapPath,"sparseNeighSim_step{}_repr".format(len(neighSimRepList)-1-j))
-                #        plotImg(neighSimRepList[j][i][0],pathPNG,cmap="gray")
+                    #if not refFeatRepList is None:
+                    #    dimRedList(refFeatRepList,simMapPath,i,"neiRef_repr")
+                    #    for j in range(len(neighSimRepList)):
+                    #        pathPNG = os.path.join(simMapPath,"sparseNeighSim_step{}_repr".format(len(neighSimRepList)-1-j))
+                    #        plotImg(neighSimRepList[j][i][0],pathPNG,cmap="gray")
 
-                writeReprVecSimMaps(simListRepr,i,simMapPath)
+                    writeReprVecSimMaps(simListRepr,i,simMapPath)
 
 def plotNorm(refFeatList,i,simMapPath):
 
@@ -258,25 +259,34 @@ def writeReprVecSimMaps(simListRepr,i,simMapPath):
     cv2.imwrite(path,img_np)
 
 def textLimit(patch,data,cosimMap,neighSimMod,kwargsNet,args):
-    neighSimList = []
-    for i in range(20):
-        kwargsNet["inChan"] = patch.size(1)
-        patchMod = buildModule(True,PatchSimCNN,args.cuda,args.multi_gpu,kwargsNet)
+    #neighSimList = []
+    #for i in range(20):
+    kwargsNet["inChan"] = patch.size(1)
+    patchMod = buildModule(True,PatchSimCNN,args.cuda,args.multi_gpu,kwargsNet)
 
-        gram_mat = patchMod(patch)
-        gram_mat = gram_mat.view(data.size(0),-1,args.patch_sim_group_nb,gram_mat.size(2))
-        gram_mat = gram_mat.permute(0,2,1,3)
-        distMapAgreg,feat = cosimMap(gram_mat)
+    gram_mat = patchMod(patch)
+    gram_mat = gram_mat.view(data.size(0),-1,args.patch_sim_group_nb,gram_mat.size(2))
+    gram_mat = gram_mat.permute(0,2,1,3)
+    distMapAgreg,feat = cosimMap(gram_mat)
 
-        #print(feat.size())
-        #featAvgNorm = torch.abs(feat).sum(dim=1,keepdim=True).mean(dim=(2,3),keepdim=True)
-        #feat = feat + 0.001*featAvgNorm*torch.normal(torch.zeros(feat.size()),torch.ones(feat.size())).to(feat.device)
+    neighSim,refFeatList = neighSimMod(feat)
 
-        neighSim,refFeatList = neighSimMod(feat)
+    #neighSimLast = neighSim[:,-1]
+    #neighSimLast = neighSimLast.cpu().detach().numpy()
+    #neighSimImgList = []
+    #for j in range(len(neighSim)):
+    #    neighSimImg = cv2.equalizeHist((neighSimLast[j]*255).astype("uint8")).astype("float")/255
+    #    neighSimImg = torch.tensor(neighSimImg).unsqueeze(0).unsqueeze(0)
+    #    neighSimImgList.append(neighSimImg)
+    #neighSim = torch.cat(neighSimImgList,dim=0)
+    #neighSimList.append(neighSim)
 
-        neighSimList.append(neighSim)
+    #neighSimList.append(neighSim[:,-1].unsqueeze(1))
 
-    neighSim = torch.cat(neighSimList,dim=1).mean(dim=1,keepdim=True)
+    #neighSim = torch.cat(neighSimList,dim=1).mean(dim=1,keepdim=True)
+
+    #neighSim = torch.pow(neighSim,1/8)
+
     return feat,distMapAgreg,neighSim,refFeatList
 
 def writeAllImg(distMapAgreg,neighSim,i,simMapPath,name):
@@ -948,9 +958,9 @@ class RepresentativeVectors(torch.nn.Module):
     def __init__(self,nbVec):
         super(RepresentativeVectors,self).__init__()
         self.nbVec = nbVec
-    def forward(self,x,neighSim):
-        _,simList = representativeVectors(x,self.nbVec,prior=neighSim)
-        print(simList[0].size())
+    def forward(self,x):
+        _,simList = representativeVectors(x,self.nbVec)
+
         simList = torch.cat(simList,dim=1)
         return simList
 
