@@ -24,6 +24,10 @@ import scipy.ndimage.filters as filters
 import torch.nn.functional as F
 from sklearn.manifold import TSNE
 import umap
+
+torch.backends.cudnn.benchmark = False
+torch.backends.cudnn.enabled = False
+
 def main(argv=None):
     # Getting arguments from config file and command line
     # Building the arg reader
@@ -178,7 +182,7 @@ def main(argv=None):
 
             neighSimMod = buildModule(True,NeighSim,args.cuda,args.multi_gpu,kwargsNeiSim)
 
-            representativeVectorsMod = buildModule(True,RepresentativeVectors,args.cuda,args.multi_gpu,{"nbVec":3})
+            representativeVectorsMod = buildModule(True,RepresentativeVectors,args.cuda,args.multi_gpu,{"nbVec":10})
             computeTotalSimMod = buildModule(True,ComputeTotalSim,args.cuda,args.multi_gpu,{})
 
             print("Start !")
@@ -236,7 +240,7 @@ def main(argv=None):
 
                     writeAllImg(distMapAgreg,neighSim,i,simMapPath,"sparseNeighSim_step0")
 
-                    dimRedList(refFeatList,simMapPath,i,"neiRef")
+                    #dimRedList(refFeatList,simMapPath,i,"neiRef")
                     plotNorm(refFeatList,i,simMapPath)
                     #if not refFeatRepList is None:
                     #    dimRedList(refFeatRepList,simMapPath,i,"neiRef_repr")
@@ -253,10 +257,12 @@ def plotNorm(refFeatList,i,simMapPath):
         plotImg(norm,os.path.join(simMapPath,"norm_{}.png".format(j)),cmap="gray")
 
 def writeReprVecSimMaps(simListRepr,i,simMapPath):
-    path = os.path.join(simMapPath,"reprVecSimMaps.png")
-    img_np = simListRepr[i].permute(1,2,0).cpu().detach().numpy()
-    img_np = 255*(img_np-img_np.min())/(img_np.max()-img_np.min())
-    cv2.imwrite(path,img_np)
+    for j in range(len(simListRepr[i])):
+        path = os.path.join(simMapPath,"reprVecSimMaps_v{}.png".format(j))
+
+        img_np = simListRepr[i,j].cpu().detach().numpy()
+        img_np = 255*(img_np-img_np.min())/(img_np.max()-img_np.min())
+        cv2.imwrite(path,img_np)
 
 def textLimit(patch,data,cosimMap,neighSimMod,kwargsNet,args):
     #neighSimList = []
@@ -965,6 +971,17 @@ class RepresentativeVectors(torch.nn.Module):
         return simList
 
 def representativeVectors(x,nbVec,prior=None):
+
+    print(x.size())
+    emb_list = []
+    for i in range(len(x)):
+        print(x[i].reshape(x[i].size(0),-1).permute(1,0).size())
+        emb = umap.UMAP(n_components=3).fit_transform(x[i].reshape(x[i].size(0),-1).permute(1,0).cpu().detach().numpy())
+        emb = torch.tensor(emb).to(x.device).reshape(x[i].size(-2),x[i].size(-1),-1).permute(2,0,1).unsqueeze(0)
+        emb_list.append(emb)
+    x = torch.cat(emb_list,dim=0)
+    print("Aft",x.size())
+
     xOrigShape = x.size()
     normNotFlat = torch.sqrt(torch.pow(x,2).sum(dim=1,keepdim=True))
     x = x.permute(0,2,3,1).reshape(x.size(0),x.size(2)*x.size(3),x.size(1))
@@ -972,6 +989,8 @@ def representativeVectors(x,nbVec,prior=None):
 
     if prior is None:
         raw_reprVec_score = torch.rand(norm.size()).to(norm.device)
+        #raw_reprVec_score = torch.ones_like(norm).to(norm.device)
+        #raw_reprVec_score[:,norm.size(-1)//2] = 2
     else:
         prior = prior.reshape(prior.size(0),-1)
         raw_reprVec_score = prior.clone()
@@ -981,11 +1000,17 @@ def representativeVectors(x,nbVec,prior=None):
     for i in range(nbVec):
         raw_reprVec_norm,ind = raw_reprVec_score.max(dim=1,keepdim=True)
         raw_reprVec = x[torch.arange(x.size(0)).unsqueeze(1),ind]
+        #sim = (x*raw_reprVec).sum(dim=-1)/(norm*raw_reprVec_norm)
+        #simNorm = torch.softmax(2*sim,dim=1)
+
+        #sim = torch.sqrt(torch.pow(x-raw_reprVec,2).sum(dim=-1))
         sim = (x*raw_reprVec).sum(dim=-1)/(norm*raw_reprVec_norm)
-        simNorm = torch.softmax(2*sim,dim=1)
+        simNorm = sim/sim.sum(dim=1,keepdim=True)
+
         reprVec = (x*simNorm.unsqueeze(-1)).sum(dim=1)
         repreVecList.append(reprVec)
-        raw_reprVec_score = (1-simNorm)*raw_reprVec_score
+
+        raw_reprVec_score = (1-sim)*raw_reprVec_score
         simReshaped = sim.reshape(sim.size(0),1,xOrigShape[2],xOrigShape[3])
         simList.append(simReshaped)
 
