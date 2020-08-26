@@ -37,6 +37,7 @@ import matplotlib.pyplot as plt
 plt.switch_backend('agg')
 
 import random
+import math
 
 def buildFeatModel(featModelName, pretrainedFeatMod, featMap=True, bigMaps=False, layerSizeReduce=False, stride=2,dilation=1,deeplabv3_outchan=64, **kwargs):
     ''' Build a visual feature model
@@ -644,6 +645,7 @@ class CNN2D_bilinearAttPool(FirstModel):
                  attChan=16,inFeat=512,nb_parts=3,aux_model=False,score_pred_act_func="softmax",center_loss=False,\
                  center_loss_beta=5e-2,num_classes=200,cuda=True,cluster=False,cluster_ensemble=False,applySoftmaxOnSim=False,\
                  softmCoeff=1,softmSched=False,normFeat=False,no_refine=False,rand_vec=False,unnorm=False,update_sco_by_norm_sim=False,\
+                 vect_gate=False,\
                  **kwargs):
 
         super(CNN2D_bilinearAttPool, self).__init__(featModelName, pretrainedFeatMod, featMap, bigMaps, **kwargs)
@@ -687,6 +689,13 @@ class CNN2D_bilinearAttPool(FirstModel):
         self.softmSched_interpCoeff = 0
         self.softmCoeff = softmCoeff
 
+        self.vect_gate = vect_gate
+        if self.vect_gate:
+            self.vect_gate_proto = torch.nn.Parameter(torch.zeros(nb_parts,inFeat),requires_grad=True)
+            stdv = 1. / math.sqrt(self.vect_gate_proto.size(1))
+            self.vect_gate_proto.data.uniform_(-stdv, stdv)
+            #self.vect_gate_proto = nn.Linear(inFeat,nb_parts,bias=False)
+
     def forward(self, x):
         # N x C x H x L
         self.batchSize = x.size(0)
@@ -713,7 +722,38 @@ class CNN2D_bilinearAttPool(FirstModel):
             vecList,simList = representativeVectors(features,self.nb_parts,self.applySoftmaxOnSim,self.softmCoeff,self.softmSched,\
                                                     self.softmSched_interpCoeff,self.no_refine,self.rand_vec,self.unnorm,self.update_sco_by_norm_sim)
             if not self.cluster_ensemble:
-                features_agr = torch.cat(vecList,dim=-1)
+                if self.vect_gate:
+                    features_agr = torch.cat(vecList,dim=0)
+                    features_agr = features_agr.unsqueeze(1).reshape(features_agr.size(0)//self.nb_parts,self.nb_parts,features_agr.size(1))
+
+                    featNorm = torch.sqrt(torch.pow(features_agr,2).sum(dim=-1,keepdim=True))
+                    vect_gate_proto_norm = torch.sqrt(torch.pow(self.vect_gate_proto,2).sum(dim=-1,keepdim=True))
+                    #print(featNorm.mean(),vect_gate_proto_norm.mean())
+                    # (N 3 1 512) x (1 1 3 512) -> (N 3 3 1)
+                    #sim = (features.unsqueeze(2) * self.vect_gate_proto.unsqueeze(0).unsqueeze(1)).sum(dim=-1,keepdim=True)
+                    #sim = self.vect_gate_proto(features).unsqueeze(-1)
+                    #print(sim.mean())
+                    #sim = sim/(featNorm.unsqueeze(2) * vect_gate_proto_norm.unsqueeze(0).unsqueeze(1))
+                    #print(sim.mean())
+                    # (N 3 1 512) x (N 3 3 1) -> (N 3 3 512)
+                    #features_agr = (features.unsqueeze(2) * torch.softmax(sim,dim=-1)).sum(dim=-2)
+                    #print(features.mean(),features_agr.mean())
+                    # (N 3 512)
+                    #features_agr = features_agr.reshape(features_agr.size(0),-1)
+                    #print(features_agr.mean())
+
+                    # (N 1 3 512) x (1 3 1 512) -> (N 3 3 1)
+                    sim = (features_agr.unsqueeze(1) * self.vect_gate_proto.unsqueeze(0).unsqueeze(2)).sum(dim=-1,keepdim=True)
+                    sim = sim/(featNorm.unsqueeze(2) * vect_gate_proto_norm.unsqueeze(0).unsqueeze(1))
+
+                    # (N 1 3 512) x (N 3 3 1) -> (N 3 3)
+                    features_agr = (features_agr.unsqueeze(1) * torch.softmax(sim,dim=-2)).sum(dim=-2)
+                    features_agr = features_agr.reshape(features_agr.size(0),-1)
+                    print(features_agr.mean().item())
+
+                else:
+                    features_agr = torch.cat(vecList,dim=-1)
+
             else:
                 features_agr = vecList
 
@@ -825,9 +865,7 @@ class LinearSecondModel(SecondModel):
                 elif self.gate_randdrop and self.training:
                     gateScores = gateScores*(gateScores != gateScores[torch.randint(len(predList),size=(featVec.size(0),)),torch.arange(featVec.size(0))].unsqueeze(0))
                 if (self.gate_drop or self.gate_randdrop) and self.training:
-                    #print(gateScores)
                     gateScores = gateScores/(gateScores.sum(dim=0,keepdim=True)+0.00001)
-                    #print(gateScores)
                 x = (x*gateScores).sum(dim=0)
             else:
                 x = torch.cat(predList,dim=0).mean(dim=0)
@@ -1013,7 +1051,8 @@ def netBuilder(args):
                       "rand_vec":args.bil_cluster_randvec,\
                       "unnorm":args.bil_clust_unnorm,\
                       "update_sco_by_norm_sim":args.bil_clust_update_sco_by_norm_sim,\
-                      "normFeat":args.bil_norm_feat}
+                      "normFeat":args.bil_norm_feat,\
+                      "vect_gate":args.bil_clus_vect_gate}
             nbFeatAux = nbFeat
             if not args.bil_cluster_ensemble:
                 nbFeat *= args.resnet_bil_nb_parts
@@ -1219,6 +1258,8 @@ def addArgs(argreader):
                                   help="The softmax temperature. The higher it is, the sharper weights will be.")
     argreader.parser.add_argument('--bil_clust_unnorm', type=args.str2bool, metavar='BOOL',
                                   help="To mulitply similarity by norm to make weights superior to 1.")
+    argreader.parser.add_argument('--bil_clus_vect_gate', type=args.str2bool, metavar='BOOL',
+                                  help="To add a gate that reorder the vectors.")
 
     argreader.parser.add_argument('--bil_clust_update_sco_by_norm_sim', type=args.str2bool, metavar='BOOL',
                                   help="To update score using normalised similarity.")
