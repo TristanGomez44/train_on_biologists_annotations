@@ -125,7 +125,8 @@ def compRecField(architecture):
 
 def plotPointsImageDatasetGrid(exp_id,imgNb,epochs,model_ids,reduction_fact_list,inverse_xy,mode,nbClass,\
                                 useDropped_list,forceFeat,fullAttMap,threshold,maps_inds,plotId,luminosity,\
-                                receptive_field,cluster,cluster_attention,pond_by_norm,gradcam,nrows,correctness,agregateMultiAtt,args):
+                                receptive_field,cluster,cluster_attention,pond_by_norm,gradcam,nrows,correctness,\
+                                agregateMultiAtt,plotVecEmb,args):
 
     if (correctness == "True" or correctness == "False") and len(model_ids)>1:
         raise ValueError("correctness can only be used with a single model.")
@@ -211,6 +212,16 @@ def plotPointsImageDatasetGrid(exp_id,imgNb,epochs,model_ids,reduction_fact_list
         else:
             normDict[j] = None
 
+    vecEmb_list = []
+    for j in range(len(pointPaths)):
+        if plotVecEmb[j]:
+            vecEmb = np.load("../results/{}/vecEmb_{}_test.npy".format(exp_id,model_ids[j]))
+            vecEmb = (vecEmb-vecEmb.min())/(vecEmb.max()-vecEmb.min())
+            vecEmb_list.append(vecEmb)
+            print(vecEmb.min(),vecEmb.mean(),vecEmb.max())
+        else:
+            vecEmb_list.append(None)
+
     fnt = ImageFont.truetype("Pillow/Tests/fonts/FreeMono.ttf", 40)
     for i in range(imgNb):
         print("Img",i)
@@ -239,15 +250,21 @@ def plotPointsImageDatasetGrid(exp_id,imgNb,epochs,model_ids,reduction_fact_list
 
                 if attMap.shape[0] != 1:
                     if attMap.shape[0] == 3 or attMap.shape[0] == 4:
-                        allAttMap = []
-                        for l in range(3):
-                            attMap_l = attMap[l:l+1]
-                            attMap_l = attMap_l.astype(float)
-                            attMap_l = (attMap_l-attMap_l.min())/(attMap_l.max()-attMap_l.min())
-                            allAttMap.append(attMap_l)
-                        attMap = np.concatenate(allAttMap,axis=0)
+                        #allAttMap = []
+                        #for l in range(3):
+                        #    attMap_l = attMap[l:l+1]
+                        #    attMap_l = attMap_l.astype(float)
+                        #    attMap_l = (attMap_l-attMap_l.min())/(attMap_l.max()-attMap_l.min())
+                        #    allAttMap.append(attMap_l)
+                        #attMap = np.concatenate(allAttMap,axis=0)
+                        attMap = (attMap-attMap.min())/(attMap.max()-attMap.min())
+
                         if agregateMultiAtt[j]:
                             attMap = attMap.mean(axis=0,keepdims=True)
+                            attMap = (attMap-attMap.min())/(attMap.max()-attMap.min())
+                        elif plotVecEmb[j]:
+                            #print(attMap[0:1].shape,vecEmb_list[j][inds[i]][0][:,np.newaxis,np.newaxis].shape)
+                            attMap = attMap[0:1]*vecEmb_list[j][inds[i]][0][:,np.newaxis,np.newaxis]
                             attMap = (attMap-attMap.min())/(attMap.max()-attMap.min())
                     else:
                         attMap = attMap[maps_inds[j]:maps_inds[j]+1]
@@ -271,7 +288,7 @@ def plotPointsImageDatasetGrid(exp_id,imgNb,epochs,model_ids,reduction_fact_list
                     elif cluster_attention[j]:
                         features = np.load(pointPaths[j].replace("attMaps","features"))[inds[i]]
                         attMap = np.power(features,2).sum(axis=0,keepdims=True)
-                        print(attMap.shape,attMap.min(),attMap.mean(),attMap.max())
+
                         if model_ids[j].lower().find("norm") != -1 or model_ids[j].lower().find("none") != -1:
                             segMask = attMap>25000
                         elif model_ids[j].lower().find("relu") != -1:
@@ -802,6 +819,38 @@ def param_nb(exp_id):
     csv = np.concatenate((np.array(model_ids)[:,np.newaxis],np.array(paramNbList)[:,np.newaxis].astype(str)),axis=1)
     np.savetxt("../results/{}/param_nb.csv".format(exp_id),csv,fmt='%s, %s,')
 
+def agrVec(exp_id,model_id):
+
+    attMaps = torch.tensor(np.load(glob.glob("../results/{}/attMaps_{}_epoch*_test.npy".format(exp_id,model_id))[0]))
+    attMaps = attMaps.float()/attMaps.sum(dim=(2,3),keepdim=True)
+
+    attMaps_chunks = torch.split(attMaps, 20)
+
+    feat = torch.tensor(np.load(glob.glob("../results/{}/features_{}_epoch*_test.npy".format(exp_id,model_id))[0]))
+    feat_chunks = torch.split(feat, 20)
+
+
+    allVec = None
+    for i,(attMaps,feat) in enumerate(zip(attMaps_chunks,feat_chunks)):
+
+        if i % 10 == 0:
+            print(i,"/",len(attMaps_chunks))
+
+        vectors = (attMaps.unsqueeze(2)*feat.unsqueeze(1)).sum(dim=(3,4))
+        vectors = vectors.reshape(vectors.size(0)*vectors.size(1),vectors.size(2))
+
+        if allVec is None:
+            allVec = vectors
+        else:
+            allVec = torch.cat((allVec,vectors),dim=0)
+
+    print("Starting UMAP computation")
+    allVec_emb = umap.UMAP(n_components=3).fit_transform(allVec.numpy())
+
+    allVec_emb = allVec_emb.reshape(allVec_emb.shape[0]//attMaps.size(1),attMaps.size(1),allVec_emb.shape[1])
+    print(allVec_emb.shape)
+    np.save("../results/{}/vecEmb_{}_test.npy".format(exp_id,model_id),allVec_emb)
+
 def main(argv=None):
 
     #Getting arguments from config file and command line
@@ -851,6 +900,8 @@ def main(argv=None):
     argreader.parser.add_argument('--agregate_multi_att',type=str2bool,nargs="*",metavar="BOOL",help='Set this to True to agregate the multiple attention map when there\'s several.',default=[])
 
     argreader.parser.add_argument('--luminosity',type=str2bool,metavar="BOOL",help='To plot the attention maps not with a cmap but with luminosity',default=False)
+    argreader.parser.add_argument('--plot_vec_emb',type=str2bool,nargs="*",metavar="BOOL",help='To plot the vector embeddings computed using UMAP on images from test set',default=[])
+
     argreader.parser.add_argument('--nrows',type=int,metavar="INT",help='The number of rows',default=1)
 
     ######################################## Find failure cases #########################################""
@@ -882,6 +933,10 @@ def main(argv=None):
     argreader.parser.add_argument('--latency',action="store_true",help='To create a table with all the latencies')
     argreader.parser.add_argument('--param_nb',action="store_true",help='To create a table with all the parameter number')
 
+    ###################################### Agregated vectors plot #####################################################
+
+    argreader.parser.add_argument('--agr_vec',action="store_true",help='To plot all the agregated vector from test set in a 2D graph using UMAP.')
+
     argreader = load_data.addArgs(argreader)
 
     #Reading the comand line arg
@@ -908,11 +963,13 @@ def main(argv=None):
             args.pond_by_norm = [False for _ in range(len(args.model_ids))]
         if len(args.agregate_multi_att) == 0:
             args.agregate_multi_att = [False for _ in range(len(args.model_ids))]
+        if len(args.plot_vec_emb) ==  0:
+            args.plot_vec_emb = [False for _ in range(len(args.model_ids))]
 
         plotPointsImageDatasetGrid(args.exp_id,args.image_nb,args.epoch_list,args.model_ids,args.reduction_fact_list,args.inverse_xy,args.mode,\
                                     args.class_nb,args.use_dropped_list,args.force_feat,args.full_att_map,args.use_threshold,args.maps_inds,args.plot_id,\
                                     args.luminosity,args.receptive_field,args.cluster,args.cluster_attention,args.pond_by_norm,args.gradcam,args.nrows,\
-                                    args.correctness,args.agregate_multi_att,args)
+                                    args.correctness,args.agregate_multi_att,args.plot_vec_emb,args)
     if args.plot_prob_maps:
         plotProbMaps(args.image_nb,args,args.norm)
     if args.list_best_pred:
@@ -964,6 +1021,7 @@ def main(argv=None):
                             "patchnoredtext":"Patch (No Red) (Text. model)"}
 
         compileTest(args.exp_id,id_to_label_dict,args.table_id,args.model_ids)
-
+    if args.agr_vec:
+        agrVec(args.exp_id,args.model_id)
 if __name__ == "__main__":
     main()
