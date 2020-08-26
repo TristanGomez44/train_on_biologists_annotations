@@ -31,7 +31,7 @@ def get_gpu_memory_map():
 
 def updateBilClusSoftmSched(net,epoch,max_epoch):
     net.softmSched_interpCoeff = epoch*1.0/max_epoch
-    print(net.softmSched_interpCoeff)
+
 def updateBestModel(metricVal,bestMetricVal,exp_id,model_id,bestEpoch,epoch,net,isBetter,worseEpochNb):
 
     if isBetter(metricVal,bestMetricVal):
