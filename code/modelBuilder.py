@@ -603,7 +603,8 @@ def representativeVectors(x,nbVec,applySoftMax=False,softmCoeff=1,softmSched=Fal
     repreVecList = []
     simList = []
     for i in range(nbVec):
-        raw_reprVec_norm,ind = raw_reprVec_score.max(dim=1,keepdim=True)
+        _,ind = raw_reprVec_score.max(dim=1,keepdim=True)
+        raw_reprVec_norm = norm[torch.arange(x.size(0)).unsqueeze(1),ind]
         raw_reprVec = x[torch.arange(x.size(0)).unsqueeze(1),ind]
         sim = (x*raw_reprVec).sum(dim=-1)/(norm*raw_reprVec_norm)
 
@@ -693,7 +694,7 @@ class CNN2D_bilinearAttPool(FirstModel):
         if self.vect_gate:
             self.vect_gate_proto = torch.nn.Parameter(torch.zeros(nb_parts,inFeat),requires_grad=True)
             stdv = 1. / math.sqrt(self.vect_gate_proto.size(1))
-            self.vect_gate_proto.data.uniform_(-stdv, stdv)
+            self.vect_gate_proto.data.uniform_(0, 2*stdv)
             #self.vect_gate_proto = nn.Linear(inFeat,nb_parts,bias=False)
 
     def forward(self, x):
@@ -719,6 +720,7 @@ class CNN2D_bilinearAttPool(FirstModel):
             retDict["x_size"] = features_weig.size()
             features_agr = features_agr.view(features.size(0), -1)
         else:
+
             vecList,simList = representativeVectors(features,self.nb_parts,self.applySoftmaxOnSim,self.softmCoeff,self.softmSched,\
                                                     self.softmSched_interpCoeff,self.no_refine,self.rand_vec,self.unnorm,self.update_sco_by_norm_sim)
             if not self.cluster_ensemble:
@@ -728,6 +730,7 @@ class CNN2D_bilinearAttPool(FirstModel):
 
                     featNorm = torch.sqrt(torch.pow(features_agr,2).sum(dim=-1,keepdim=True))
                     vect_gate_proto_norm = torch.sqrt(torch.pow(self.vect_gate_proto,2).sum(dim=-1,keepdim=True))
+
                     #print(featNorm.mean(),vect_gate_proto_norm.mean())
                     # (N 3 1 512) x (1 1 3 512) -> (N 3 3 1)
                     #sim = (features.unsqueeze(2) * self.vect_gate_proto.unsqueeze(0).unsqueeze(1)).sum(dim=-1,keepdim=True)
@@ -744,12 +747,12 @@ class CNN2D_bilinearAttPool(FirstModel):
 
                     # (N 1 3 512) x (1 3 1 512) -> (N 3 3 1)
                     sim = (features_agr.unsqueeze(1) * self.vect_gate_proto.unsqueeze(0).unsqueeze(2)).sum(dim=-1,keepdim=True)
+
                     sim = sim/(featNorm.unsqueeze(2) * vect_gate_proto_norm.unsqueeze(0).unsqueeze(1))
 
                     # (N 1 3 512) x (N 3 3 1) -> (N 3 3)
                     features_agr = (features_agr.unsqueeze(1) * torch.softmax(sim,dim=-2)).sum(dim=-2)
                     features_agr = features_agr.reshape(features_agr.size(0),-1)
-                    print(features_agr.mean().item())
 
                 else:
                     features_agr = torch.cat(vecList,dim=-1)

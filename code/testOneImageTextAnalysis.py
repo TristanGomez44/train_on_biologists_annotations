@@ -1023,10 +1023,10 @@ def representativeVectors(x,nbVec,prior=None,unifSample=False):
 
         if unifSample:
             ind = i*(x.size(1)//nbVec)
-            print(ind,norm.size())
             raw_reprVec_norm = norm[:,ind].unsqueeze(-1)
         else:
-            raw_reprVec_norm,ind = raw_reprVec_score.max(dim=1,keepdim=True)
+            _,ind = raw_reprVec_score.max(dim=1,keepdim=True)
+            raw_reprVec_norm = norm[torch.arange(x.size(0)).unsqueeze(1),ind]
 
         raw_reprVec = x[torch.arange(x.size(0)).unsqueeze(1),ind]
         #sim = (x*raw_reprVec).sum(dim=-1)/(norm*raw_reprVec_norm)
