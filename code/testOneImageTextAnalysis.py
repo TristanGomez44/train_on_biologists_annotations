@@ -114,6 +114,12 @@ def main(argv=None):
 
     argreader.parser.add_argument('--centered_feat', type=str2bool,
                               help="To center the features before cosine similarity",default=False)
+    argreader.parser.add_argument('--unif_sample', type=str2bool,
+                              help="To use uniform sampling to select reference pixels when computing representative vectors.",default=False)
+
+    argreader.parser.add_argument('--redundacy', type=str2bool,
+                              help="To compute pixel redundacy",default=False)
+
 
     argreader = trainVal.addInitArgs(argreader)
     argreader = trainVal.addOptimArgs(argreader)
@@ -182,7 +188,7 @@ def main(argv=None):
 
             neighSimMod = buildModule(True,NeighSim,args.cuda,args.multi_gpu,kwargsNeiSim)
 
-            representativeVectorsMod = buildModule(True,RepresentativeVectors,args.cuda,args.multi_gpu,{"nbVec":10})
+            representativeVectorsMod = buildModule(True,RepresentativeVectors,args.cuda,args.multi_gpu,{"nbVec":10,"unifSample":args.unif_sample})
             computeTotalSimMod = buildModule(True,ComputeTotalSim,args.cuda,args.multi_gpu,{})
 
             print("Start !")
@@ -191,6 +197,9 @@ def main(argv=None):
             feat,distMapAgreg,neighSim,refFeatList = textLimit(patch,data,cosimMap,neighSimMod,kwargsNet,args)
 
             simListRepr = representativeVectorsMod(refFeatList[-1])
+
+            if args.redundacy:
+                simListReprAgr = (simListRepr*simListRepr.sum(dim=(2,3),keepdim=True)).sum(dim=1,keepdim=True)
 
             print("End ",time.time()-start)
 
@@ -249,6 +258,18 @@ def main(argv=None):
                     #        plotImg(neighSimRepList[j][i][0],pathPNG,cmap="gray")
 
                     writeReprVecSimMaps(simListRepr,i,simMapPath)
+
+                    if args.redundacy:
+                        writeRed(simListReprAgr,i,simMapPath)
+
+def writeRed(simListReprAgr,i,simMapPath):
+
+    img = simListReprAgr[i,0]
+
+    img = (255*(img-img.min())/(img.max()-img.min()))
+    img = img.cpu().numpy()
+
+    plotImg(img,os.path.join(simMapPath,"redun.png"))
 
 def plotNorm(refFeatList,i,simMapPath):
 
@@ -961,16 +982,17 @@ def graham(feat,gramOrder):
     return gram
 
 class RepresentativeVectors(torch.nn.Module):
-    def __init__(self,nbVec):
+    def __init__(self,nbVec,unifSample):
         super(RepresentativeVectors,self).__init__()
         self.nbVec = nbVec
+        self.unifSample = unifSample
     def forward(self,x):
-        _,simList = representativeVectors(x,self.nbVec)
+        _,simList = representativeVectors(x,self.nbVec,unifSample=self.unifSample)
 
         simList = torch.cat(simList,dim=1)
         return simList
 
-def representativeVectors(x,nbVec,prior=None):
+def representativeVectors(x,nbVec,prior=None,unifSample=False):
 
     print(x.size())
     emb_list = []
@@ -998,7 +1020,14 @@ def representativeVectors(x,nbVec,prior=None):
     repreVecList = []
     simList = []
     for i in range(nbVec):
-        raw_reprVec_norm,ind = raw_reprVec_score.max(dim=1,keepdim=True)
+
+        if unifSample:
+            ind = i*(x.size(1)//nbVec)
+            print(ind,norm.size())
+            raw_reprVec_norm = norm[:,ind].unsqueeze(-1)
+        else:
+            raw_reprVec_norm,ind = raw_reprVec_score.max(dim=1,keepdim=True)
+
         raw_reprVec = x[torch.arange(x.size(0)).unsqueeze(1),ind]
         #sim = (x*raw_reprVec).sum(dim=-1)/(norm*raw_reprVec_norm)
         #simNorm = torch.softmax(2*sim,dim=1)
