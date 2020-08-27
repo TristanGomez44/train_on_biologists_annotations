@@ -17,6 +17,10 @@ case $1 in
   "clusCatVecGate")
     python trainVal.py -c model_cub4.config --exp_id CUB5 --model_id bilClusCatVecGate --epochs 300  --aux_model False --aux_mod_nll_weight 0 --first_mod $2   --resnet_bilinear True --bil_cluster True --bil_cluster_ensemble False --bil_clus_vect_gate True
     ;;
+  "clusCatVecGate-init")
+    python trainVal.py -c model_cub4.config --exp_id CUB5 --model_id bilClusCatVecGateInit --epochs 300  --aux_model False --aux_mod_nll_weight 0 --first_mod $2   --resnet_bilinear True --bil_cluster True --bil_cluster_ensemble False --bil_clus_vect_gate True \
+                                              --start_mode fine_tune --init_path ../models/CUB5/modelbilClusCatFixed_best_epoch144
+    ;;
   "clusCatHR")
     python trainVal.py -c model_cub4.config --exp_id CUB5 --model_id bilClusCatHR --epochs 300  --aux_model False --aux_mod_nll_weight 0 --first_mod $2   --resnet_bilinear True --bil_cluster True --bil_cluster_ensemble False
     ;;
