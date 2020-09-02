@@ -188,7 +188,7 @@ def main(argv=None):
 
             neighSimMod = buildModule(True,NeighSim,args.cuda,args.multi_gpu,kwargsNeiSim)
 
-            representativeVectorsMod = buildModule(True,RepresentativeVectors,args.cuda,args.multi_gpu,{"nbVec":10,"unifSample":args.unif_sample})
+            representativeVectorsMod = buildModule(True,RepresentativeVectors,args.cuda,args.multi_gpu,{"nbVec":100,"unifSample":args.unif_sample})
             computeTotalSimMod = buildModule(True,ComputeTotalSim,args.cuda,args.multi_gpu,{})
 
             print("Start !")
@@ -199,7 +199,14 @@ def main(argv=None):
             simListRepr = representativeVectorsMod(refFeatList[-1])
 
             if args.redundacy:
-                simListReprAgr = (simListRepr*simListRepr.sum(dim=(2,3),keepdim=True)).sum(dim=1,keepdim=True)
+                #simListReprAgr = (simListRepr*simListRepr.sum(dim=(2,3),keepdim=True)).sum(dim=1,keepdim=True)
+                simListReprAgr = (simListRepr*simListRepr.sum(dim=(2,3),keepdim=True)).max(dim=1,keepdim=True)[0]
+
+                simListReprAgr_max = simListReprAgr.max(dim=-1,keepdim=True)[0].max(dim=-2,keepdim=True)[0]
+                simListReprAgr_min = simListReprAgr.min(dim=-1,keepdim=True)[0].min(dim=-2,keepdim=True)[0]
+                simListReprAgr_norm = (simListReprAgr-simListReprAgr_min)/(simListReprAgr_max-simListReprAgr_min)
+
+                neighSim_red = torch.pow(neighSim[:,-1].unsqueeze(1),1/(2.5*simListReprAgr_norm+1))
 
             print("End ",time.time()-start)
 
@@ -250,7 +257,7 @@ def main(argv=None):
                     writeAllImg(distMapAgreg,neighSim,i,simMapPath,"sparseNeighSim_step0")
 
                     #dimRedList(refFeatList,simMapPath,i,"neiRef")
-                    plotNorm(refFeatList,i,simMapPath)
+                    #plotNorm(refFeatList,i,simMapPath)
                     #if not refFeatRepList is None:
                     #    dimRedList(refFeatRepList,simMapPath,i,"neiRef_repr")
                     #    for j in range(len(neighSimRepList)):
@@ -260,16 +267,19 @@ def main(argv=None):
                     writeReprVecSimMaps(simListRepr,i,simMapPath)
 
                     if args.redundacy:
-                        writeRed(simListReprAgr,i,simMapPath)
+                        writeRed(simListReprAgr,neighSim_red,i,simMapPath)
 
-def writeRed(simListReprAgr,i,simMapPath):
+def writeRed(simListReprAgr,neighSim_red,i,simMapPath):
 
     img = simListReprAgr[i,0]
-
     img = (255*(img-img.min())/(img.max()-img.min()))
     img = img.cpu().numpy()
-
     plotImg(img,os.path.join(simMapPath,"redun.png"))
+
+    img = neighSim_red[i,0]
+    img = (255*(img-img.min())/(img.max()-img.min()))
+    img = img.cpu().numpy()
+    plotImg(img,os.path.join(simMapPath,"redun_neighSim.png"))
 
 def plotNorm(refFeatList,i,simMapPath):
 
@@ -283,7 +293,9 @@ def writeReprVecSimMaps(simListRepr,i,simMapPath):
 
         img_np = simListRepr[i,j].cpu().detach().numpy()
         img_np = 255*(img_np-img_np.min())/(img_np.max()-img_np.min())
-        cv2.imwrite(path,img_np)
+
+        plotImg(img_np,path)
+        #cv2.imwrite(path,img_np)
 
 def textLimit(patch,data,cosimMap,neighSimMod,kwargsNet,args):
     #neighSimList = []
@@ -325,19 +337,7 @@ def writeAllImg(distMapAgreg,neighSim,i,simMapPath,name):
         pathPNG = os.path.join(simMapPath,name.replace("step0","step{}".format(len(neighSim[i])-1-j)))
         plotImg(neighSim[i][j],pathPNG,cmap="gray")
 
-    #j = len(neighSim[i])-1
-    #minima,minimaV,minimaH = computeMinima(neighSim[i][-1])
-    #topk(neighSim[i][j],minima,simMapPath,name)
-
 def dimRed(refFeat,simMapPath,i,name):
-
-    #refFeat_emb = umap.UMAP().fit_transform(refFeat[i].view(refFeat[i].size(0),-1).permute(1,0).cpu().detach().numpy())
-
-    #plt.figure()
-    #plt.scatter(refFeat_emb[:,0],refFeat_emb[:,1],alpha=0.1,edgecolors=None)
-    #plt.subplots_adjust(left=0, right=1, top=1, bottom=0)
-    #plt.savefig(os.path.join(simMapPath,"{}_tsne.png".format(name)))
-    #plt.close()
 
     refFeat_emb = umap.UMAP(n_components=3).fit_transform(refFeat[i].view(refFeat[i].size(0),-1).permute(1,0).cpu().detach().numpy())
     refFeat_emb = refFeat_emb.reshape((refFeat[i].size(1),refFeat[i].size(2),3))
@@ -359,15 +359,6 @@ def dimRed(refFeat,simMapPath,i,name):
 
 def dimRedList(refFeatList,simMapPath,i,name):
 
-    #refFeat_emb = umap.UMAP().fit_transform(refFeat[i].view(refFeat[i].size(0),-1).permute(1,0).cpu().detach().numpy())
-
-    #plt.figure()
-    #plt.scatter(refFeat_emb[:,0],refFeat_emb[:,1],alpha=0.1,edgecolors=None)
-    #plt.subplots_adjust(left=0, right=1, top=1, bottom=0)
-    #plt.savefig(os.path.join(simMapPath,"{}_tsne.png".format(name)))
-    #plt.close()
-
-    #if not os.path.exists(os.path.join(simMapPath,"{}_{}_tsne_img.png".format(name,0))):
     refFeatList_ex = [refFeatList[j][i] for j in range(len(refFeatList))]
     for j in range(len(refFeatList_ex)):
         refFeatList_ex[j] = refFeatList_ex[j].unsqueeze(0)
@@ -725,9 +716,6 @@ def shiftFeat(where,features,dilation=1,neigAvgSize=1,reprVec=False):
         else:
             featuresShift = F.conv2d(featuresShift,torch.ones(featuresShift.size(1),1,neigAvgSize,neigAvgSize).to(featuresShift.device)/(neigAvgSize*neigAvgSize),groups=featuresShift.size(1),padding=neigAvgSize//2)
 
-        #print(featuresShift.min().item(),featuresShift.mean().item(),featuresShift.max().item())
-        #sys.exit(0)
-
     maskShift = maskShift.mean(dim=1,keepdim=True)
     return featuresShift,maskShift
 
@@ -765,12 +753,6 @@ def applyDiffKer_CosSimi(direction,features,dilation=1,neigAvgSize=1,reprVec=Fal
     else:
         featuresShift1,maskShift1 = compositeShiftFeat(direction,features)
         featuresShift2,maskShift2 = shiftFeat("none",features)
-
-    #if direction == "horizontal":
-    #    print(neigAvgSize,reprVec)
-    #    print(featuresShift1.min().item(),featuresShift1.mean().item(),featuresShift1.max().item())
-    #    print(featuresShift2.min().item(),featuresShift2.mean().item(),featuresShift2.max().item())
-    #    sys.exit(0)
 
     if eucli:
         sim = torch.sqrt(torch.pow(featuresShift1-featuresShift2,2).sum(dim=1,keepdim=True))*maskShift1*maskShift2
@@ -838,14 +820,6 @@ class NeighSim(torch.nn.Module):
         return allSim,allFeatShift
 
     def forward(self,features):
-
-        #featAvgNorm = torch.abs(features).sum(dim=1,keepdim=True).mean(dim=(2,3),keepdim=True)
-        #noise = torch.normal(torch.zeros(features.size(0),1,features.size(2),features.size(2)),\
-        #                      torch.ones(features.size(0),1,features.size(2),features.size(2))).to(features.device)
-
-        #print(features.min(),features.mean(),features.max())
-        #features = features*(1+0.0005*featAvgNorm*noise)
-        #print("after",features.min(),features.mean(),features.max())
 
         if self.normFeat:
             features = features/torch.sqrt(torch.pow(features,2).sum(dim=1,keepdim=True))
@@ -994,15 +968,12 @@ class RepresentativeVectors(torch.nn.Module):
 
 def representativeVectors(x,nbVec,prior=None,unifSample=False):
 
-    print(x.size())
     emb_list = []
     for i in range(len(x)):
-        print(x[i].reshape(x[i].size(0),-1).permute(1,0).size())
-        emb = umap.UMAP(n_components=3).fit_transform(x[i].reshape(x[i].size(0),-1).permute(1,0).cpu().detach().numpy())
+        emb = umap.UMAP(n_components=3,random_state=1).fit_transform(x[i].reshape(x[i].size(0),-1).permute(1,0).cpu().detach().numpy())
         emb = torch.tensor(emb).to(x.device).reshape(x[i].size(-2),x[i].size(-1),-1).permute(2,0,1).unsqueeze(0)
         emb_list.append(emb)
     x = torch.cat(emb_list,dim=0)
-    print("Aft",x.size())
 
     xOrigShape = x.size()
     normNotFlat = torch.sqrt(torch.pow(x,2).sum(dim=1,keepdim=True))
@@ -1032,7 +1003,8 @@ def representativeVectors(x,nbVec,prior=None,unifSample=False):
         #sim = (x*raw_reprVec).sum(dim=-1)/(norm*raw_reprVec_norm)
         #simNorm = torch.softmax(2*sim,dim=1)
 
-        #sim = torch.sqrt(torch.pow(x-raw_reprVec,2).sum(dim=-1))
+        #dist = torch.sqrt(torch.pow(x-raw_reprVec,2).sum(dim=-1))
+        #sim = (dist.max(dim=-1,keepdim=True)[0]-dist)
         sim = (x*raw_reprVec).sum(dim=-1)/(norm*raw_reprVec_norm)
         simNorm = sim/sim.sum(dim=1,keepdim=True)
 
