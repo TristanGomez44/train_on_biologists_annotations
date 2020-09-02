@@ -8,6 +8,7 @@ import torch
 import numpy as np
 
 from skimage.transform import resize
+from skimage import img_as_ubyte
 import matplotlib.pyplot as plt
 plt.switch_backend('agg')
 
@@ -29,7 +30,7 @@ import configparser
 
 import matplotlib.patheffects as path_effects
 import imageio
-from skimage import img_as_ubyte
+
 
 from scipy import stats
 import math
@@ -46,6 +47,9 @@ import torch.nn.functional as F
 
 import umap
 from math import log10, floor
+
+import io
+import skimage
 
 def plotPointsImageDataset(imgNb,redFact,plotDepth,args):
 
@@ -771,7 +775,7 @@ def umapPlot(exp_id,model_id):
 
     bestEpoch = utils.findNumbers(os.path.basename(bestPath).split("best")[-1])
     features = np.load("../results/{}/points_{}_epoch{}_val.npy".format(exp_id,model_id,bestEpoch))[:,:,3:]
-    print(features.shape)
+
     for i in range(10):
         #feat = features[i].transpose(1,2,0).reshape(features[i].shape[1]*features[i].shape[2],features[i].shape[0])
         feat = features[i]
@@ -819,37 +823,250 @@ def param_nb(exp_id):
     csv = np.concatenate((np.array(model_ids)[:,np.newaxis],np.array(paramNbList)[:,np.newaxis].astype(str)),axis=1)
     np.savetxt("../results/{}/param_nb.csv".format(exp_id),csv,fmt='%s, %s,')
 
-def agrVec(exp_id,model_id):
+def get_img_from_fig(fig, dpi=180):
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", dpi=dpi)
+    buf.seek(0)
+    img_arr = np.frombuffer(buf.getvalue(), dtype=np.uint8)
+    buf.close()
+    img = cv2.imdecode(img_arr, 1)
+    img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+    return img
+
+def normalize(img):
+    img_min = img.min(dim=-1,keepdim=True)[0].min(dim=-2,keepdim=True)[0]
+    img_max = img.max(dim=-1,keepdim=True)[0].max(dim=-2,keepdim=True)[0]
+    return (img - img_min)/(img_max - img_min)
+
+def agrVec(exp_id,model_id,args,classNb=20,redDim=2):
 
     attMaps = torch.tensor(np.load(glob.glob("../results/{}/attMaps_{}_epoch*_test.npy".format(exp_id,model_id))[0]))
     attMaps = attMaps.float()/attMaps.sum(dim=(2,3),keepdim=True)
 
-    attMaps_chunks = torch.split(attMaps, 20)
-
     feat = torch.tensor(np.load(glob.glob("../results/{}/features_{}_epoch*_test.npy".format(exp_id,model_id))[0]))
-    feat_chunks = torch.split(feat, 20)
 
+    norm = torch.tensor(np.load(glob.glob("../results/{}/norm_{}_epoch*_test.npy".format(exp_id,model_id))[0]))
 
-    allVec = None
-    for i,(attMaps,feat) in enumerate(zip(attMaps_chunks,feat_chunks)):
+    targetPaths = glob.glob("../results/{}/{}_epoch*_test.csv".format(exp_id,model_id))
 
-        if i % 10 == 0:
-            print(i,"/",len(attMaps_chunks))
+    true_labels = np.genfromtxt(targetPaths[0],delimiter=",")[1:len(feat)+1,0]
+    pred = np.genfromtxt(targetPaths[0],delimiter=",")[1:len(feat)+1,1:]
+    labels = pred.argmax(axis=1)
+    entropy = -(torch.softmax(torch.tensor(pred),dim=1)*F.log_softmax(torch.tensor(pred), dim=1)).sum(dim=1).numpy()
 
-        vectors = (attMaps.unsqueeze(2)*feat.unsqueeze(1)).sum(dim=(3,4))
-        vectors = vectors.reshape(vectors.size(0)*vectors.size(1),vectors.size(2))
+    _,testDataset = load_data.buildTestLoader(args,"test",shuffle=False)
+    imgBatch = torch.cat([testDataset[i][0].unsqueeze(0) for i in range(len(labels))],dim=0)
 
-        if allVec is None:
-            allVec = vectors
-        else:
-            allVec = torch.cat((allVec,vectors),dim=0)
+    if not os.path.exists("../results/{}/objSize_{}_test.npy".format(exp_id,model_id)):
+        imgTestPaths = sorted(glob.glob("../data/{}/*/*.jpg".format(args.dataset_test)))
+        imgSeg = list(map(lambda x:cv2.imread(x.replace("test","seg").replace(".jpg",".png")),imgTestPaths))
+        imgSize = imgBatch.size(-1)
+        #Resize
+        imgSeg = list(map(lambda x:resize(x,(imgSize,imgSize*x.shape[1]//x.shape[0])) if x.shape[0] < x.shape[1] \
+                              else resize(x,(imgSize*x.shape[0]//x.shape[1],imgSize)),imgSeg))
+        #Center Crop
+        for i in range(len(imgSeg)):
+            if imgSeg[i].shape[0] < imgSeg[i].shape[1]:
+                imgSeg[i] = imgSeg[i][:,(imgSeg[i].shape[1]-imgSeg[i].shape[0])//2:-(imgSeg[i].shape[1]-imgSeg[i].shape[0])//2]
+            elif imgSeg[i].shape[1] < imgSeg[i].shape[0]:
+                imgSeg[i] = imgSeg[i][(imgSeg[i].shape[0]-imgSeg[i].shape[1])//2:-(imgSeg[i].shape[0]-imgSeg[i].shape[1])//2,:]
 
-    print("Starting UMAP computation")
-    allVec_emb = umap.UMAP(n_components=3).fit_transform(allVec.numpy())
+        #Sum
+        imgSeg = list(map(lambda x:(x.astype("float")/255).sum(),imgSeg))
 
-    allVec_emb = allVec_emb.reshape(allVec_emb.shape[0]//attMaps.size(1),attMaps.size(1),allVec_emb.shape[1])
-    print(allVec_emb.shape)
-    np.save("../results/{}/vecEmb_{}_test.npy".format(exp_id,model_id),allVec_emb)
+        imgSeg = np.array(imgSeg)[:len(labels)]
+        np.save("../results/{}/objSize_{}_test.npy".format(exp_id,model_id),imgSeg)
+        imgSeg = torch.tensor(imgSeg)
+
+    else:
+        imgSeg = torch.tensor(np.load("../results/{}/objSize_{}_test.npy".format(exp_id,model_id)))
+
+    attMaps = attMaps[labels==true_labels]
+    feat = feat[labels==true_labels]
+    norm = norm[labels==true_labels]
+    imgBatch = imgBatch[labels==true_labels]
+    imgSeg = imgSeg[labels==true_labels]
+    entropy = entropy[labels==true_labels]
+    labels = labels[labels==true_labels]
+
+    attMaps,feat,norm,imgBatch,imgSeg,entropy,labels = attMaps[labels<classNb],feat[labels<classNb],\
+                                                        norm[labels<classNb],imgBatch[labels<classNb],\
+                                                        imgSeg[labels<classNb],entropy[labels<classNb],\
+                                                        labels[labels<classNb]
+
+    allAttMaps = attMaps.reshape(attMaps.size(0)*attMaps.size(1),1,attMaps.size(2),attMaps.size(3))
+    allNorm = np.repeat(norm,3,1).reshape(norm.shape[0]*3,1,norm.shape[-2],norm.shape[-2])
+    imgBatch = imgBatch.unsqueeze(1).expand(-1,3,-1,-1,-1)
+    imgSeg = imgSeg.unsqueeze(1).expand(-1,3)
+    allImgSeg = imgSeg.reshape(imgSeg.size(0)*3)
+    allImgBatch = imgBatch.reshape(imgBatch.size(0)*3,imgBatch.size(2),imgBatch.size(3),imgBatch.size(4))
+
+    labels = np.repeat(labels[:,np.newaxis],attMaps.size(1),axis=1)
+    labels = labels.reshape(-1)
+    entropy = np.repeat(entropy[:,np.newaxis],attMaps.size(1),axis=1)
+    entropy = entropy.reshape(-1)
+
+    labels_cat = []
+
+    if classNb <= 20:
+        cm = plt.get_cmap('tab20')
+    else:
+        cm = plt.get_cmap('rainbow')
+
+    attMaps_chunks = torch.split(attMaps, 50)
+    feat_chunks = torch.split(feat, 50)
+
+    if not os.path.exists("../results/{}/umap_{}.npy".format(exp_id,model_id)):
+
+        allVec = None
+        for i,(attMaps,feat) in enumerate(zip(attMaps_chunks,feat_chunks)):
+
+            if i % 10 == 0:
+                print(i,"/",len(attMaps_chunks))
+
+            vectors = (attMaps.unsqueeze(2)*feat.unsqueeze(1)).sum(dim=(3,4))
+            vectors = vectors.reshape(vectors.size(0)*vectors.size(1),vectors.size(2))
+
+            #vectors = feat.float().mean(dim=(2,3))
+
+            #vectors = feat.permute(0,2,3,1).reshape(feat.size(0),feat.size(2)*feat.size(3),feat.size(1))
+            #vectors = vectors[:,torch.arange(feat.size(-1)*feat.size(-2)) % 300 == 0]
+            #vectors = vectors.reshape(vectors.size(0)*vectors.size(1),vectors.size(2))
+
+            if allVec is None:
+                allVec = vectors
+            else:
+                allVec = torch.cat((allVec,vectors),dim=0)
+
+        print("Starting UMAP computation")
+
+        allVec_emb = umap.UMAP(n_components=redDim,random_state=0).fit_transform(allVec.numpy())
+        np.save("../results/{}/umap_{}.npy".format(exp_id,model_id),allVec_emb)
+
+        norm_vec = torch.sqrt(torch.pow(allVec,2).sum(dim=1))
+        np.save("../results/{}/normVec_{}_test.npy".format(exp_id,model_id),norm_vec)
+
+    else:
+        allVec_emb = np.load("../results/{}/umap_{}.npy".format(exp_id,model_id))
+        norm_vec = np.load("../results/{}/normVec_{}_test.npy".format(exp_id,model_id))
+
+    allVec_emb = allVec_emb - allVec_emb.mean(axis=0,keepdims=True)
+
+    plt.figure()
+    plt.scatter(allVec_emb[:,0],allVec_emb[:,1],color=cm(labels*1.0/labels.max()))
+    plt.savefig("../vis/{}/umap_{}.png".format(exp_id,model_id))
+    plt.close()
+
+    corrList = []
+    corrNormBySegList = []
+    corrList_spar = []
+    corrNormBySegList_spar = []
+    corrList_norm = []
+    for labelInd in range(classNb):
+        print("Class",labelInd)
+
+        allVec_emb_norm = np.sqrt(np.power(allVec_emb[labels == labelInd],2).sum(axis=-1))
+        sortedInds = np.argsort(allVec_emb_norm)
+
+        norm = allNorm[labels == labelInd]
+        norm = norm/norm.max(dim=-1,keepdim=True)[0].max(dim=-2,keepdim=True)[0]
+
+        attMaps = normalize(allAttMaps[labels == labelInd])
+        imgBatch = normalize(allImgBatch[labels == labelInd])
+        imgSeg = allImgSeg[labels == labelInd]
+
+        attMaps = attMaps*norm
+        attMaps = F.interpolate(attMaps,imgBatch.size(-1))
+
+        classColor = cm(labels[labels==labelInd][0]*1.0/labels.max())
+
+        if not os.path.exists("../vis/{}/umap_{}_class{}.gif".format(exp_id,model_id,labelInd)):
+            with imageio.get_writer("../vis/{}/umap_{}_class{}.gif".format(exp_id,model_id,labelInd), mode='I',duration=1) as writer:
+
+                for i,pts in enumerate(allVec_emb[labels == labelInd][sortedInds]):
+                    fig = plt.figure()
+                    plt.scatter(allVec_emb[:,0],allVec_emb[:,1],color=cm(labels*1.0/labels.max()))
+                    plt.scatter(allVec_emb[labels==labelInd,0],allVec_emb[labels==labelInd,1],color=classColor)
+                    plt.scatter(pts[np.newaxis,0],pts[np.newaxis,1],color="black",marker="*")
+                    #plt.savefig("../vis/{}/umap_{}_class{}_pts{}.png".format(exp_id,model_id,labelInd,i))
+                    twoDPlot = get_img_from_fig(fig, dpi=90)
+                    plt.close()
+
+                    classColor_np = np.array(classColor[:-1])
+
+                    attMaps_moreLight = attMaps[sortedInds[i]]*classColor_np[:,np.newaxis,np.newaxis]
+                    attMaps_moreLight = attMaps_moreLight/attMaps_moreLight.reshape(-1).max()
+                    #plt.figure()
+                    img = imgBatch[sortedInds[i]]*(attMaps_moreLight*0.95+0.05)
+                    img = img.permute(1,2,0).numpy()
+                    #plt.imshow(img)
+                    #plt.savefig("../vis/{}/img_class{}_pts{}.png".format(exp_id,labelInd,i))
+                    #plt.close()
+
+                    img_res = skimage.transform.resize(img, (twoDPlot.shape[0],twoDPlot.shape[0]))*255
+                    fullFig = np.concatenate((twoDPlot,img_res),axis=1)
+                    #cv2.imwrite("../vis/{}/fullFig_class{}_pts{}.png".format(exp_id,labelInd,i),fullFig[:,:,::-1])
+                    writer.append_data(img_as_ubyte(fullFig.astype("uint8")))
+
+        avgAttAct = attMaps.mean(dim=(1,2,3))
+        spars = (attMaps/attMaps.max(dim=-1,keepdim=True)[0].max(dim=-2,keepdim=True)[0]).mean(dim=(1,2,3))
+
+        plt.figure()
+        plt.xlabel("Distance to cloud center")
+        plt.ylabel("Average activation of the attention map")
+        plt.scatter(allVec_emb_norm,avgAttAct,color=classColor)
+        plt.savefig("../vis/{}/distToCloud_vs_attAct_{}_class{}.png".format(exp_id,model_id,labelInd))
+        plt.close()
+
+        plt.figure()
+        plt.xlabel("Distance to cloud center")
+        plt.ylabel("Average activation of the attention map (normalised by object size)")
+        plt.scatter(allVec_emb_norm,avgAttAct/imgSeg,color=classColor)
+        plt.savefig("../vis/{}/distToCloud_vs_attAct_{}_class{}_normByObjSize.png".format(exp_id,model_id,labelInd))
+        plt.close()
+
+        plt.figure()
+        plt.xlabel("Distance to cloud center")
+        plt.ylabel("Sparsity of the attention map")
+        plt.scatter(allVec_emb_norm,spars,color=classColor)
+        plt.savefig("../vis/{}/distToCloud_vs_spars_{}_class{}.png".format(exp_id,model_id,labelInd))
+        plt.close()
+
+        plt.figure()
+        plt.xlabel("Distance to cloud center")
+        plt.ylabel("Sparsity of the attention map (normalised by object size)")
+        plt.scatter(allVec_emb_norm,spars/imgSeg,color=classColor)
+        plt.savefig("../vis/{}/distToCloud_vs_spars_{}_class{}_normByObjSize.png".format(exp_id,model_id,labelInd))
+        plt.close()
+
+        plt.figure()
+        plt.xlabel("Distance to cloud center")
+        plt.ylabel("Norm of the vector")
+        print(allVec_emb_norm.shape,norm_vec[labels==labelInd].shape)
+        plt.scatter(allVec_emb_norm,norm_vec[labels==labelInd],color=classColor)
+        plt.savefig("../vis/{}/distToCloud_vs_norm_{}_class{}_normByObjSize.png".format(exp_id,model_id,labelInd))
+        plt.close()
+
+        corrList.append(np.corrcoef(allVec_emb_norm,avgAttAct)[0,1])
+        corrNormBySegList.append(np.corrcoef(allVec_emb_norm,avgAttAct/imgSeg)[0,1])
+        corrList_spar.append(np.corrcoef(allVec_emb_norm,spars)[0,1])
+        corrNormBySegList_spar.append(np.corrcoef(allVec_emb_norm,spars/imgSeg)[0,1])
+        corrList_norm.append(np.corrcoef(allVec_emb_norm,norm_vec[labels==labelInd])[0,1])
+
+    corrList = np.array(corrList)
+    corrNormBySegList = np.array(corrNormBySegList)
+    corrList_spar = np.array(corrList_spar)
+    corrNormBySegList_spar = np.array(corrNormBySegList_spar)
+    corrList_norm = np.array(corrList_norm)
+
+    fullCSV = np.concatenate((np.arange(classNb)[:,np.newaxis],corrList[:,np.newaxis],corrNormBySegList[:,np.newaxis]),axis=1)
+    np.savetxt("../results/{}/distToCloud_vs_attAct_corr_{}.csv".format(exp_id,model_id),fullCSV)
+
+    fullCSV = np.concatenate((np.arange(classNb)[:,np.newaxis],corrList_spar[:,np.newaxis],corrNormBySegList_spar[:,np.newaxis]),axis=1)
+    np.savetxt("../results/{}/distToCloud_vs_spars_corr_{}.csv".format(exp_id,model_id),fullCSV)
+
+    fullCSV = np.concatenate((np.arange(classNb)[:,np.newaxis],corrList_norm[:,np.newaxis]),axis=1)
+    np.savetxt("../results/{}/distToCloud_vs_norm_corr_{}.csv".format(exp_id,model_id),fullCSV)
 
 def main(argv=None):
 
@@ -936,6 +1153,7 @@ def main(argv=None):
     ###################################### Agregated vectors plot #####################################################
 
     argreader.parser.add_argument('--agr_vec',action="store_true",help='To plot all the agregated vector from test set in a 2D graph using UMAP.')
+    argreader.parser.add_argument('--class_ind',type=int,metavar="NAME",help='Class index to plot.',default=None)
 
     argreader = load_data.addArgs(argreader)
 
@@ -1022,6 +1240,6 @@ def main(argv=None):
 
         compileTest(args.exp_id,id_to_label_dict,args.table_id,args.model_ids)
     if args.agr_vec:
-        agrVec(args.exp_id,args.model_id)
+        agrVec(args.exp_id,args.model_id,args)
 if __name__ == "__main__":
     main()
