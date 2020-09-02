@@ -728,25 +728,11 @@ class CNN2D_bilinearAttPool(FirstModel):
                     features_agr = torch.cat(vecList,dim=0)
                     features_agr = features_agr.unsqueeze(1).reshape(features_agr.size(0)//self.nb_parts,self.nb_parts,features_agr.size(1))
 
-                    featNorm = torch.sqrt(torch.pow(features_agr,2).sum(dim=-1,keepdim=True))
-                    vect_gate_proto_norm = torch.sqrt(torch.pow(self.vect_gate_proto,2).sum(dim=-1,keepdim=True))
-
-                    #print(featNorm.mean(),vect_gate_proto_norm.mean())
-                    # (N 3 1 512) x (1 1 3 512) -> (N 3 3 1)
-                    #sim = (features.unsqueeze(2) * self.vect_gate_proto.unsqueeze(0).unsqueeze(1)).sum(dim=-1,keepdim=True)
-                    #sim = self.vect_gate_proto(features).unsqueeze(-1)
-                    #print(sim.mean())
-                    #sim = sim/(featNorm.unsqueeze(2) * vect_gate_proto_norm.unsqueeze(0).unsqueeze(1))
-                    #print(sim.mean())
-                    # (N 3 1 512) x (N 3 3 1) -> (N 3 3 512)
-                    #features_agr = (features.unsqueeze(2) * torch.softmax(sim,dim=-1)).sum(dim=-2)
-                    #print(features.mean(),features_agr.mean())
-                    # (N 3 512)
-                    #features_agr = features_agr.reshape(features_agr.size(0),-1)
-                    #print(features_agr.mean())
-
                     # (N 1 3 512) x (1 3 1 512) -> (N 3 3 1)
                     sim = (features_agr.unsqueeze(1) * self.vect_gate_proto.unsqueeze(0).unsqueeze(2)).sum(dim=-1,keepdim=True)
+
+                    featNorm = torch.sqrt(torch.pow(features_agr,2).sum(dim=-1,keepdim=True))
+                    vect_gate_proto_norm = torch.sqrt(torch.pow(self.vect_gate_proto,2).sum(dim=-1,keepdim=True))
 
                     sim = sim/(featNorm.unsqueeze(2) * vect_gate_proto_norm.unsqueeze(0).unsqueeze(1))
 
