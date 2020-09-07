@@ -838,7 +838,7 @@ def normalize(img):
     img_max = img.max(dim=-1,keepdim=True)[0].max(dim=-2,keepdim=True)[0]
     return (img - img_min)/(img_max - img_min)
 
-def agrVec(exp_id,model_id,args,classNb=20,redDim=2):
+def agrVec(exp_id,model_id,args,classMin=0,classMax=19,redDim=2):
 
     attMaps = torch.tensor(np.load(glob.glob("../results/{}/attMaps_{}_epoch*_test.npy".format(exp_id,model_id))[0]))
     attMaps = attMaps.float()/attMaps.sum(dim=(2,3),keepdim=True)
@@ -889,10 +889,10 @@ def agrVec(exp_id,model_id,args,classNb=20,redDim=2):
     entropy = entropy[labels==true_labels]
     labels = labels[labels==true_labels]
 
-    attMaps,feat,norm,imgBatch,imgSeg,entropy,labels = attMaps[labels<classNb],feat[labels<classNb],\
-                                                        norm[labels<classNb],imgBatch[labels<classNb],\
-                                                        imgSeg[labels<classNb],entropy[labels<classNb],\
-                                                        labels[labels<classNb]
+    attMaps,feat,norm,imgBatch,imgSeg,entropy,labels = attMaps[(classMin<=labels) * (labels<=classMax)],feat[(classMin<=labels) * (labels<=classMax)],\
+                                                        norm[(classMin<=labels) * (labels<=classMax)],imgBatch[(classMin<=labels) * (labels<=classMax)],\
+                                                        imgSeg[(classMin<=labels) * (labels<=classMax)],entropy[(classMin<=labels) * (labels<=classMax)],\
+                                                        labels[(classMin<=labels) * (labels<=classMax)]
 
     allAttMaps = attMaps.reshape(attMaps.size(0)*attMaps.size(1),1,attMaps.size(2),attMaps.size(3))
     allNorm = np.repeat(norm,3,1).reshape(norm.shape[0]*3,1,norm.shape[-2],norm.shape[-2])
@@ -908,6 +908,7 @@ def agrVec(exp_id,model_id,args,classNb=20,redDim=2):
 
     labels_cat = []
 
+    classNb = classMax - classMin + 1
     if classNb <= 20:
         cm = plt.get_cmap('tab20')
     else:
@@ -916,7 +917,7 @@ def agrVec(exp_id,model_id,args,classNb=20,redDim=2):
     attMaps_chunks = torch.split(attMaps, 50)
     feat_chunks = torch.split(feat, 50)
 
-    if not os.path.exists("../results/{}/umap_{}.npy".format(exp_id,model_id)):
+    if not os.path.exists("../results/{}/umap_{}_{}to{}.png".format(exp_id,model_id,classMin,classMax)):
 
         allVec = None
         for i,(attMaps,feat) in enumerate(zip(attMaps_chunks,feat_chunks)):
@@ -924,14 +925,14 @@ def agrVec(exp_id,model_id,args,classNb=20,redDim=2):
             if i % 10 == 0:
                 print(i,"/",len(attMaps_chunks))
 
-            vectors = (attMaps.unsqueeze(2)*feat.unsqueeze(1)).sum(dim=(3,4))
-            vectors = vectors.reshape(vectors.size(0)*vectors.size(1),vectors.size(2))
+            #vectors = (attMaps.unsqueeze(2)*feat.unsqueeze(1)).sum(dim=(3,4))
+            #vectors = vectors.reshape(vectors.size(0)*vectors.size(1),vectors.size(2))
 
             #vectors = feat.float().mean(dim=(2,3))
 
-            #vectors = feat.permute(0,2,3,1).reshape(feat.size(0),feat.size(2)*feat.size(3),feat.size(1))
-            #vectors = vectors[:,torch.arange(feat.size(-1)*feat.size(-2)) % 300 == 0]
-            #vectors = vectors.reshape(vectors.size(0)*vectors.size(1),vectors.size(2))
+            vectors = feat.permute(0,2,3,1).reshape(feat.size(0),feat.size(2)*feat.size(3),feat.size(1))
+            vectors = vectors[:,torch.arange(feat.size(-1)*feat.size(-2)) % 300 == 0]
+            vectors = vectors.reshape(vectors.size(0)*vectors.size(1),vectors.size(2))
 
             if allVec is None:
                 allVec = vectors
@@ -941,20 +942,27 @@ def agrVec(exp_id,model_id,args,classNb=20,redDim=2):
         print("Starting UMAP computation")
 
         allVec_emb = umap.UMAP(n_components=redDim,random_state=0).fit_transform(allVec.numpy())
-        np.save("../results/{}/umap_{}.npy".format(exp_id,model_id),allVec_emb)
+        np.save("../results/{}/umap_{}_{}to{}.npy".format(exp_id,model_id,classMin,classMax),allVec_emb)
 
-        norm_vec = torch.sqrt(torch.pow(allVec,2).sum(dim=1))
+        norm_vec = torch.sqrt(torch.pow(allVec,2).sum(dim=1).float())
         np.save("../results/{}/normVec_{}_test.npy".format(exp_id,model_id),norm_vec)
 
     else:
-        allVec_emb = np.load("../results/{}/umap_{}.npy".format(exp_id,model_id))
+        allVec_emb = np.load("../results/{}/umap_{}_{}to{}.npy".format(exp_id,model_id,classMin,classMax))
         norm_vec = np.load("../results/{}/normVec_{}_test.npy".format(exp_id,model_id))
 
     allVec_emb = allVec_emb - allVec_emb.mean(axis=0,keepdims=True)
 
+    labels = labels - labels.min()
+
     plt.figure()
-    plt.scatter(allVec_emb[:,0],allVec_emb[:,1],color=cm(labels*1.0/labels.max()))
-    plt.savefig("../vis/{}/umap_{}.png".format(exp_id,model_id))
+
+    if len(list(set(labels))) == 1:
+        plt.scatter(allVec_emb[:,0],allVec_emb[:,1])
+    else:
+        plt.scatter(allVec_emb[:,0],allVec_emb[:,1],color=cm(labels*1.0/labels.max()))
+    plt.title("Class {} to {}".format(classMin,classMax))
+    plt.savefig("../vis/{}/umap_{}_{}to{}.png".format(exp_id,model_id,classMin,classMax))
     plt.close()
 
     corrList = []
@@ -978,16 +986,24 @@ def agrVec(exp_id,model_id,args,classNb=20,redDim=2):
         attMaps = attMaps*norm
         attMaps = F.interpolate(attMaps,imgBatch.size(-1))
 
-        classColor = cm(labels[labels==labelInd][0]*1.0/labels.max())
+        if len(list(set(labels))) > 1:
+            classColor = cm(labels[labels==labelInd][0]*1.0/labels.max())
+        else:
+            classColor = cm(0)
 
         if not os.path.exists("../vis/{}/umap_{}_class{}.gif".format(exp_id,model_id,labelInd)):
             with imageio.get_writer("../vis/{}/umap_{}_class{}.gif".format(exp_id,model_id,labelInd), mode='I',duration=1) as writer:
 
                 for i,pts in enumerate(allVec_emb[labels == labelInd][sortedInds]):
                     fig = plt.figure()
-                    plt.scatter(allVec_emb[:,0],allVec_emb[:,1],color=cm(labels*1.0/labels.max()))
-                    plt.scatter(allVec_emb[labels==labelInd,0],allVec_emb[labels==labelInd,1],color=classColor)
-                    plt.scatter(pts[np.newaxis,0],pts[np.newaxis,1],color="black",marker="*")
+                    if len(list(set(labels))) > 1:
+                        plt.scatter(allVec_emb[:,0],allVec_emb[:,1],color=cm(labels*1.0/labels.max()))
+                        plt.scatter(allVec_emb[labels==labelInd,0],allVec_emb[labels==labelInd,1],color=classColor)
+                        plt.scatter(pts[np.newaxis,0],pts[np.newaxis,1],color="black",marker="*")
+                    else:
+                        plt.scatter(allVec_emb[labels==labelInd,0],allVec_emb[labels==labelInd,1])
+                        plt.scatter(pts[np.newaxis,0],pts[np.newaxis,1],color="black",marker="*")
+
                     #plt.savefig("../vis/{}/umap_{}_class{}_pts{}.png".format(exp_id,model_id,labelInd,i))
                     twoDPlot = get_img_from_fig(fig, dpi=90)
                     plt.close()
@@ -1153,7 +1169,8 @@ def main(argv=None):
     ###################################### Agregated vectors plot #####################################################
 
     argreader.parser.add_argument('--agr_vec',action="store_true",help='To plot all the agregated vector from test set in a 2D graph using UMAP.')
-    argreader.parser.add_argument('--class_ind',type=int,metavar="NAME",help='Class index to plot.',default=None)
+    argreader.parser.add_argument('--class_min',type=int,metavar="NAME",help='Minimum class index to plot.',default=None)
+    argreader.parser.add_argument('--class_max',type=int,metavar="NAME",help='Maximum class index to plot.',default=None)
 
     argreader = load_data.addArgs(argreader)
 
@@ -1240,6 +1257,6 @@ def main(argv=None):
 
         compileTest(args.exp_id,id_to_label_dict,args.table_id,args.model_ids)
     if args.agr_vec:
-        agrVec(args.exp_id,args.model_id,args)
+        agrVec(args.exp_id,args.model_id,args,args.class_min,args.class_max)
 if __name__ == "__main__":
     main()
