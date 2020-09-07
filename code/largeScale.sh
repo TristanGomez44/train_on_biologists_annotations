@@ -81,6 +81,9 @@ case $1 in
   "clus")
     python trainVal.py -c model_cub4.config --exp_id CUB5 --model_id bilClus    --epochs 300  --aux_model False --aux_mod_nll_weight 0 --first_mod $2   --resnet_bilinear True --bil_cluster True --bil_cluster_ensemble True --bil_cluster_ensemble_gate True
     ;;
+  "clus-fixed")
+    python trainVal.py -c model_cub4.config --exp_id CUB5 --model_id bilClusFixed    --epochs 300  --aux_model False --aux_mod_nll_weight 0 --first_mod $2   --resnet_bilinear True --bil_cluster True --bil_cluster_ensemble True --bil_cluster_ensemble_gate True
+    ;;
   "none")
     python trainVal.py -c model_cub4.config --exp_id CUB5 --model_id none       --epochs 300  --aux_model False --aux_mod_nll_weight 0 --first_mod $2   --resnet_layer_size_reduce True
     ;;
