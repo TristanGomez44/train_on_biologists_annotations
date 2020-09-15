@@ -23,16 +23,14 @@ from skimage.transform import resize
 import scipy.ndimage.filters as filters
 import torch.nn.functional as F
 from sklearn.manifold import TSNE
+from sklearn.decomposition import PCA
+import cuml
 import umap
 
 torch.backends.cudnn.benchmark = False
 torch.backends.cudnn.enabled = False
 
-def main(argv=None):
-    # Getting arguments from config file and command line
-    # Building the arg reader
-    argreader = ArgReader(argv)
-
+def addArgs(argreader):
     argreader.parser.add_argument('--patch_sim', type=str2bool,
                                   help="To run a small experiment with an untrained CNN",default=True)
     argreader.parser.add_argument('--patch_sim_resnet', type=str2bool,
@@ -122,6 +120,22 @@ def main(argv=None):
     argreader.parser.add_argument('--redundacy', type=str2bool,
                               help="To compute pixel redundacy",default=False)
 
+    argreader.parser.add_argument('--umap_nei_nb', type=int,
+                              help="UMAP Neighbors number parameter.",default=15)
+    argreader.parser.add_argument('--umap_min_dist', type=float,
+                              help="UMAP Minimum distance parameter.",default=0.1)
+    argreader.parser.add_argument('--apply_umap', type=str2bool,
+                              help="To apply UMAP before computing representative vectors.",default=True)
+
+    return argreader
+
+def main(argv=None):
+    # Getting arguments from config file and command line
+    # Building the arg reader
+    argreader = ArgReader(argv)
+
+    argreader = addArgs(argreader)
+
     argreader = trainVal.addInitArgs(argreader)
     argreader = trainVal.addOptimArgs(argreader)
     argreader = trainVal.addValArgs(argreader)
@@ -148,6 +162,7 @@ def main(argv=None):
         args.texture_encoding = True
         args.big_images = True
         args.batch_size = 32
+        args.val_batch_size = 32
         args.multi_gpu = True
         args.patch_sim_group_nb = 1
         #args.data_batch_index = 1
@@ -158,13 +173,14 @@ def main(argv=None):
             transf = "identity"
 
         trainLoader, _ = load_data.buildTrainLoader(args,transf=transf,shuffle=args.shuffle)
+        #trainLoader, _ = load_data.buildTestLoader(args, "test",shuffle=args.shuffle)
 
         data,target =next(iter(trainLoader))
         if args.data_batch_index>0:
             for i in range(args.data_batch_index):
                 data,target =next(iter(trainLoader))
 
-        data = data[0:4]
+        #data = data[:32]
 
         with torch.no_grad():
 
@@ -190,7 +206,10 @@ def main(argv=None):
 
             neighSimMod = buildModule(True,NeighSim,args.cuda,args.multi_gpu,kwargsNeiSim)
 
-            representativeVectorsMod = buildModule(True,RepresentativeVectors,args.cuda,args.multi_gpu,{"nbVec":10,"unifSample":args.unif_sample,"onlySimSample":args.only_sim_sample})
+            repreKwargs = {"nbVec":10,"unifSample":args.unif_sample,"onlySimSample":args.only_sim_sample,"umapNeiNb":args.umap_nei_nb,\
+                            "umapMinDist":args.umap_min_dist}
+
+            representativeVectorsMod = buildModule(True,RepresentativeVectors,args.cuda,args.multi_gpu,repreKwargs)
             computeTotalSimMod = buildModule(True,ComputeTotalSim,args.cuda,args.multi_gpu,{})
 
             print("Start !")
@@ -200,13 +219,13 @@ def main(argv=None):
 
             #for umap in [True,False]:
             reprVecStart = time.time()
-            reprVec,simListRepr,selectedPos = representativeVectorsMod(refFeatList[-1],applyUMAP=True)
+            reprVec,simListRepr,selectedPos = representativeVectorsMod(refFeatList[-1],applyUMAP=args.apply_umap)
             print("Time to compute representative vectors",time.time()-reprVecStart)
-            _,simListReprNoUMAP,_ = representativeVectorsMod(refFeatList[-1],applyUMAP=False)
-            simListRepr_flat = simListReprNoUMAP.view(simListReprNoUMAP.size(0)*simListReprNoUMAP.size(1),1,simListReprNoUMAP.size(2),simListReprNoUMAP.size(3))
-            neighSim_redCosSim = computeTotalSim(simListRepr_flat,1,eucli=True)
-            neighSim_redCosSim = neighSim_redCosSim.view(simListReprNoUMAP.size(0),simListReprNoUMAP.size(1),neighSim_redCosSim.size(2),neighSim_redCosSim.size(3))
-            neighSim_redCosSimNoUMAP = neighSim_redCosSim.mean(dim=1,keepdim=True)
+            #_,simListReprNoUMAP,_ = representativeVectorsMod(refFeatList[-1],applyUMAP=False)
+            #simListRepr_flat = simListReprNoUMAP.view(simListReprNoUMAP.size(0)*simListReprNoUMAP.size(1),1,simListReprNoUMAP.size(2),simListReprNoUMAP.size(3))
+            #neighSim_redCosSim = computeTotalSim(simListRepr_flat,1,eucli=True)
+            #neighSim_redCosSim = neighSim_redCosSim.view(simListReprNoUMAP.size(0),simListReprNoUMAP.size(1),neighSim_redCosSim.size(2),neighSim_redCosSim.size(3))
+            #neighSim_redCosSimNoUMAP = neighSim_redCosSim.mean(dim=1,keepdim=True)
 
             if args.redundacy:
                 simListReprAgr = (simListRepr*simListRepr.sum(dim=(2,3),keepdim=True)).sum(dim=1,keepdim=True)
@@ -267,23 +286,25 @@ def main(argv=None):
 
             neighSim = neighSim.detach().cpu().numpy()
 
+            simMapPath = os.path.join(args.patch_sim_out_path,"simMaps",args.model_id,str(i+args.data_batch_index*args.batch_size))
+
             for i,img in enumerate(data):
 
                 #if i < 9:
                 if not os.path.exists(os.path.join(args.patch_sim_out_path,"simMaps",args.model_id,"{}".format(i+args.data_batch_index*args.batch_size))):
                     os.makedirs(os.path.join(args.patch_sim_out_path,"simMaps",args.model_id,"{}".format(i+args.data_batch_index*args.batch_size)))
 
-                img = (img-img.min())/(img.max()-img.min())
+                #img = (img-img.min())/(img.max()-img.min())
 
-                plotImg(img.detach().cpu().permute(1,2,0).numpy(),os.path.join(args.patch_sim_out_path,"imgs","{}.png".format(i+args.data_batch_index*args.batch_size)))
+                #plotImg(img.detach().cpu().permute(1,2,0).numpy(),os.path.join(args.patch_sim_out_path,"imgs","{}.png".format(i+args.data_batch_index*args.batch_size)))
 
                 #resizedImg = resize(img.detach().cpu().permute(1,2,0).numpy().mean(axis=-1), (100,100),anti_aliasing=True,mode="constant",order=0)*255
-                edges = ~skimage.feature.canny(img.detach().cpu().permute(1,2,0).numpy().mean(axis=-1),sigma=1)
-                plotImg(edges,os.path.join(args.patch_sim_out_path,"edges","sig1_{}.png".format(i+args.data_batch_index*args.batch_size)))
-                edges = ~skimage.feature.canny(img.detach().cpu().permute(1,2,0).numpy().mean(axis=-1),sigma=3)
-                plotImg(edges,os.path.join(args.patch_sim_out_path,"edges","sig3_{}.png".format(i+args.data_batch_index*args.batch_size)))
-                edges = ~skimage.feature.canny(img.detach().cpu().permute(1,2,0).numpy().mean(axis=-1),sigma=9)
-                plotImg(edges,os.path.join(args.patch_sim_out_path,"edges","sig9_{}.png".format(i+args.data_batch_index*args.batch_size)))
+                #edges = ~skimage.feature.canny(img.detach().cpu().permute(1,2,0).numpy().mean(axis=-1),sigma=1)
+                #plotImg(edges,os.path.join(args.patch_sim_out_path,"edges","sig1_{}.png".format(i+args.data_batch_index*args.batch_size)))
+                #edges = ~skimage.feature.canny(img.detach().cpu().permute(1,2,0).numpy().mean(axis=-1),sigma=3)
+                #plotImg(edges,os.path.join(args.patch_sim_out_path,"edges","sig3_{}.png".format(i+args.data_batch_index*args.batch_size)))
+                #edges = ~skimage.feature.canny(img.detach().cpu().permute(1,2,0).numpy().mean(axis=-1),sigma=9)
+                #plotImg(edges,os.path.join(args.patch_sim_out_path,"edges","sig9_{}.png".format(i+args.data_batch_index*args.batch_size)))
 
                 #sobel = sobelFunc(img.detach().cpu().permute(1,2,0).numpy().mean(axis=-1))
                 #plotImg(sobel,os.path.join(args.patch_sim_out_path,"sobel","{}.png".format(i+args.data_batch_index*args.batch_size)))
@@ -311,9 +332,28 @@ def main(argv=None):
                     writeRed(simListReprAgr,neighSim_red,neighSim_redCosSim,coverageList,neighSim_redRefCosSim,neighSim_redRefEucli,i,simMapPath)
                     normAndPlot(selectedPos[i,0],os.path.join(simMapPath,"selPos.png"))
 
-                normAndPlot(neighSim_redCosSimNoUMAP[i,0],os.path.join(simMapPath,"redun_neighSimCosSimNoUMAP.png"))
+                #normAndPlot(neighSim_redCosSimNoUMAP[i,0],os.path.join(simMapPath,"redun_neighSimCosSimNoUMAP.png"))
 
                 #writeRed(neighSim_redCosSim,i,simMapPath)
+
+
+def dimRedBatch(data,simMapPath):
+
+    print(data.size())
+
+    origSize = data.size()
+    data = data.permute(0,2,3,1).reshape(-1,data.size(1)).cpu().detach().numpy()
+
+    # (X 3)
+    print(data.shape)
+    emb = umap.UMAP(n_components=3).fit_transform(data)
+
+    # (N H W 3)
+    emb = emb.reshape((origSize[0],origSize[2],origSize[3],3))
+    emb = (255*(emb-emb.min())/(emb.max()-emb.min())).astype("uint8")
+
+    for i in range(len(emb)):
+        plotImg(emb[i],os.path.join(simMapPath,"umapBatch_{}".format(i)))
 
 def normAndPlot(img,simMapPath,norm=True):
     if norm:
@@ -360,6 +400,7 @@ def textLimit(patch,data,cosimMap,neighSimMod,kwargsNet,args):
         gram_mat = gram_mat.view(data.size(0),-1,args.patch_sim_group_nb,gram_mat.size(2))
         gram_mat = gram_mat.permute(0,2,1,3)
         distMapAgreg,feat = cosimMap(gram_mat)
+        print("Feat size",feat.size())
     else:
         feat = patchMod(data)
         distMapAgreg = computeTotalSim(feat,1)
@@ -369,22 +410,6 @@ def textLimit(patch,data,cosimMap,neighSimMod,kwargsNet,args):
     refFeatStart = time.time()
     neighSim,refFeatList = neighSimMod(feat)
     print("Time to refine features",time.time()-refFeatStart)
-
-    #neighSimLast = neighSim[:,-1]
-    #neighSimLast = neighSimLast.cpu().detach().numpy()
-    #neighSimImgList = []
-    #for j in range(len(neighSim)):
-    #    neighSimImg = cv2.equalizeHist((neighSimLast[j]*255).astype("uint8")).astype("float")/255
-    #    neighSimImg = torch.tensor(neighSimImg).unsqueeze(0).unsqueeze(0)
-    #    neighSimImgList.append(neighSimImg)
-    #neighSim = torch.cat(neighSimImgList,dim=0)
-    #neighSimList.append(neighSim)
-
-    #neighSimList.append(neighSim[:,-1].unsqueeze(1))
-
-    #neighSim = torch.cat(neighSimList,dim=1).mean(dim=1,keepdim=True)
-
-    #neighSim = torch.pow(neighSim,1/8)
 
     return feat,distMapAgreg,neighSim,refFeatList
 
@@ -638,7 +663,7 @@ class PatchSimCNN(torch.nn.Module):
                 kwargs["chan"] = [kwargs["chan"]//4 for _ in range(4)]
                 self.featMod = modelBuilder.buildFeatModel(resType, pretr, True, False,**kwargs)
             else:
-                if resType.find("bagnet33") == -1:
+                if resType.find("bagnet") == -1:
                     kwargs["chan"] = kwargs["chan"]//2
                     self.featMod = modelBuilder.buildFeatModel(resType, pretr, True, False,**kwargs)
                 else:
@@ -1022,25 +1047,31 @@ def graham(feat,gramOrder):
     return gram
 
 class RepresentativeVectors(torch.nn.Module):
-    def __init__(self,nbVec,unifSample,onlySimSample):
+    def __init__(self,nbVec,unifSample,onlySimSample,umapNeiNb,umapMinDist):
         super(RepresentativeVectors,self).__init__()
         self.nbVec = nbVec
         self.unifSample = unifSample
         self.onlySimSample = onlySimSample
+        self.umapNeiNb = umapNeiNb
+        self.umapMinDist = umapMinDist
+
     def forward(self,x,applyUMAP=True):
-        vecList,simList,selectedPos = representativeVectors(x,self.nbVec,unifSample=self.unifSample,onlySimSample=self.onlySimSample,applyUMAP=applyUMAP)
+        vecList,simList,selectedPos = representativeVectors(x,self.nbVec,unifSample=self.unifSample,onlySimSample=self.onlySimSample,applyUMAP=applyUMAP,\
+                                                            umapNeiNb=self.umapNeiNb,umapMinDist=self.umapMinDist)
 
         vecList = list(map(lambda x:x.unsqueeze(1),vecList))
         vecList = torch.cat(vecList,dim=1)
         simList = torch.cat(simList,dim=1)
         return vecList,simList,selectedPos
 
-def representativeVectors(x,nbVec,prior=None,unifSample=False,onlySimSample=False,applyUMAP=True):
+def representativeVectors(x,nbVec,prior=None,unifSample=False,onlySimSample=False,applyUMAP=True,umapNeiNb=15,umapMinDist=0.1):
 
     if applyUMAP:
         emb_list = []
         for i in range(len(x)):
-            emb = umap.UMAP(n_components=32,random_state=1).fit_transform(x[i].reshape(x[i].size(0),-1).permute(1,0).cpu().detach().numpy())
+            #emb = PCA(n_components=2,random_state=1).fit_transform(x[i].reshape(x[i].size(0),-1).permute(1,0).cpu().detach().numpy())
+            #emb = umap.UMAP(n_components=2,random_state=1,n_neighbors=umapNeiNb,min_dist=umapMinDist).fit_transform(x[i].reshape(x[i].size(0),-1).permute(1,0).cpu().detach().numpy())
+            emb = cuml.UMAP(n_components=2,n_neighbors=umapNeiNb,min_dist=umapMinDist).fit_transform(x[i].reshape(x[i].size(0),-1).permute(1,0).contiguous().cpu().detach().numpy())
             emb = torch.tensor(emb).to(x.device).reshape(x[i].size(-2),x[i].size(-1),-1).permute(2,0,1).unsqueeze(0)
             emb_list.append(emb)
         x = torch.cat(emb_list,dim=0)
