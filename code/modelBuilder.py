@@ -107,73 +107,75 @@ class Model(nn.Module):
 
     def forward(self, origImgBatch):
 
-        if (not self.training) and self.upscaledTest:
-            imgBatch = origImgBatch
-        else:
-            if self.reducedImgSize == origImgBatch.size(-1):
+        if not self.firstModel is None:
+            if (not self.training) and self.upscaledTest:
                 imgBatch = origImgBatch
             else:
-                imgBatch = F.interpolate(origImgBatch,size=(self.reducedImgSize,self.reducedImgSize))
+                if self.reducedImgSize == origImgBatch.size(-1):
+                    imgBatch = origImgBatch
+                else:
+                    imgBatch = F.interpolate(origImgBatch,size=(self.reducedImgSize,self.reducedImgSize))
 
-        visResDict = self.firstModel(imgBatch)
+            visResDict = self.firstModel(imgBatch)
+            resDict = self.secondModel(visResDict)
+            resDict = merge(visResDict,resDict)
 
-        resDict = self.secondModel(visResDict)
+            if self.zoom:
 
-        resDict = merge(visResDict,resDict)
+                if len(visResDict["x"].size()) == 4:
+                    xSize = visResDict["x"].size()
+                else:
+                    xSize = visResDict["x_size"]
 
-        if self.zoom:
+                subCloudInd,countList = self.splitCloud(resDict['points'],xSize)
 
-            if len(visResDict["x"].size()) == 4:
-                xSize = visResDict["x"].size()
-            else:
-                xSize = visResDict["x_size"]
+                croppedImg,_,_,_,_,bboxNbs = self.computeZoom(origImgBatch,xSize,resDict['points'],subCloudInd,countList)
 
-            subCloudInd,countList = self.splitCloud(resDict['points'],xSize)
+                cumBboxNbs = torch.cumsum(torch.tensor([0]+bboxNbs).to(origImgBatch),dim=0).long()
+                visResDict_zoom = self.firstModel(croppedImg,zoom=True)
 
-            croppedImg,_,_,_,_,bboxNbs = self.computeZoom(origImgBatch,xSize,resDict['points'],subCloudInd,countList)
+                predBatch = visResDict_zoom["x"]
 
-            cumBboxNbs = torch.cumsum(torch.tensor([0]+bboxNbs).to(origImgBatch),dim=0).long()
-            visResDict_zoom = self.firstModel(croppedImg,zoom=True)
+                predList = [[predBatch[cumBboxNbs[i]+j].unsqueeze(0) for j in range(bboxNbs[i])] for i in range(len(origImgBatch))]
 
-            predBatch = visResDict_zoom["x"]
+                #Padding for image in which there is less than the required number of sub cloud
+                predList = [torch.cat((torch.cat(predList[i],dim=-1),torch.zeros((1,self.nbFeat*(self.subcloudNb-bboxNbs[i]))).to(origImgBatch.device)),dim=-1) for i in range(len(origImgBatch))]
+                predBatch = torch.cat(predList,dim=0)
+                visResDict_zoom["x"] = predBatch
 
-            predList = [[predBatch[cumBboxNbs[i]+j].unsqueeze(0) for j in range(bboxNbs[i])] for i in range(len(origImgBatch))]
+                resDict_zoom = self.secondModel(visResDict_zoom)
+                resDict_zoom = merge(visResDict_zoom,resDict_zoom)
+                resDict = merge(resDict_zoom,resDict,"zoom")
 
-            #Padding for image in which there is less than the required number of sub cloud
-            predList = [torch.cat((torch.cat(predList[i],dim=-1),torch.zeros((1,self.nbFeat*(self.subcloudNb-bboxNbs[i]))).to(origImgBatch.device)),dim=-1) for i in range(len(origImgBatch))]
-            predBatch = torch.cat(predList,dim=0)
-            visResDict_zoom["x"] = predBatch
+                resDict.pop('x_size_zoom', None)
 
-            resDict_zoom = self.secondModel(visResDict_zoom)
-            resDict_zoom = merge(visResDict_zoom,resDict_zoom)
-            resDict = merge(resDict_zoom,resDict,"zoom")
+                if self.zoom_merge_preds:
+                    resDict["pred"] = 0.5*resDict["pred"]+0.5*resDict["pred_zoom"]
+                    resDict.pop('pred_zoom', None)
 
-            resDict.pop('x_size_zoom', None)
+            elif self.drop_and_crop:
 
-            if self.zoom_merge_preds:
-                resDict["pred"] = 0.5*resDict["pred"]+0.5*resDict["pred_zoom"]
-                resDict.pop('pred_zoom', None)
+                if self.firstModel.topk:
+                    features = resDict["features"]
+                    features = self.bn(features)
+                    attMaps = torch.mean(F.relu(features, inplace=True), dim=1, keepdim=True)
+                else:
+                    attMaps = resDict["attMaps"]
 
-        elif self.drop_and_crop:
+                with torch.no_grad():
+                    crop_images = batch_augment(origImgBatch, resDict["attMaps"], mode='crop', theta=(0.4, 0.6), padding_ratio=0.1)
+                resDict["pred_crop"] = self.secondModel(self.firstModel(crop_images))["pred"]
 
-            if self.firstModel.topk:
-                features = resDict["features"]
-                features = self.bn(features)
-                attMaps = torch.mean(F.relu(features, inplace=True), dim=1, keepdim=True)
-            else:
-                attMaps = resDict["attMaps"]
+                resDict["pred_rawcrop"] = (resDict["pred_crop"]+resDict["pred"])/2
 
-            with torch.no_grad():
-                crop_images = batch_augment(origImgBatch, resDict["attMaps"], mode='crop', theta=(0.4, 0.6), padding_ratio=0.1)
-            resDict["pred_crop"] = self.secondModel(self.firstModel(crop_images))["pred"]
+                with torch.no_grad():
+                    drop_images = batch_augment(origImgBatch, resDict["attMaps"], mode='drop', theta=(0.2, 0.5))
+                resDict["pred_drop"] = self.secondModel(self.firstModel(drop_images))["pred"]
 
-            resDict["pred_rawcrop"] = (resDict["pred_crop"]+resDict["pred"])/2
+            resDict.pop('x_size', None)
+        else:
+            resDict = self.secondModel(origImgBatch)
 
-            with torch.no_grad():
-                drop_images = batch_augment(origImgBatch, resDict["attMaps"], mode='drop', theta=(0.2, 0.5))
-            resDict["pred_drop"] = self.secondModel(self.firstModel(drop_images))["pred"]
-
-        resDict.pop('x_size', None)
         return resDict
 
     def computeZoom(self,origImg,xSize,pts,subCloudInd,countList):
@@ -586,8 +588,8 @@ def mapToHeatMap(batch,i,name):
 
     torchvision.utils.save_image(map,"../vis/repreVecSchema_{}.png".format(name))
 
-def representativeVectors(x,nbVec,applySoftMax=False,softmCoeff=1,softmSched=False,softmSched_interpCoeff=0,no_refine=False,randVec=False,unnorm=False,\
-                            update_sco_by_norm_sim=False):
+def representativeVectors(x,nbVec,applySoftMax=False,softmCoeff=1,softmSched=False,softmSched_interpCoeff=0,no_refine=False,randVec=False,unnorm=False,update_sco_by_norm_sim=False):
+
     xOrigShape = x.size()
 
     normNotFlat = torch.sqrt(torch.pow(x,2).sum(dim=1,keepdim=True))
@@ -695,7 +697,6 @@ class CNN2D_bilinearAttPool(FirstModel):
             self.vect_gate_proto = torch.nn.Parameter(torch.zeros(nb_parts,inFeat),requires_grad=True)
             stdv = 1. / math.sqrt(self.vect_gate_proto.size(1))
             self.vect_gate_proto.data.uniform_(0, 2*stdv)
-            #self.vect_gate_proto = nn.Linear(inFeat,nb_parts,bias=False)
 
     def forward(self, x):
         # N x C x H x L
@@ -736,10 +737,9 @@ class CNN2D_bilinearAttPool(FirstModel):
 
                     sim = sim/(featNorm.unsqueeze(2) * vect_gate_proto_norm.unsqueeze(0).unsqueeze(1))
 
-                    # (N 1 3 512) x (N 3 3 1) -> (N 3 3)
+                    # (N 1 3 512) x (N 3 3 1) -> (N 3 3 512) -> (N 3 512)
                     features_agr = (features_agr.unsqueeze(1) * torch.softmax(sim,dim=-2)).sum(dim=-2)
                     features_agr = features_agr.reshape(features_agr.size(0),-1)
-
                 else:
                     features_agr = torch.cat(vecList,dim=-1)
 
@@ -867,6 +867,26 @@ class LinearSecondModel(SecondModel):
 
         return retDict
 
+class DeepSecondModel(SecondModel):
+
+    def __init__(self, nbFeat, nbClass, dropout,hidSizes=[512,1024]):
+        super(DeepSecondModel, self).__init__(nbFeat, nbClass)
+        self.dropout = nn.Dropout(p=dropout)
+
+        layerSizes = [nbFeat] + hidSizes + [nbClass]
+
+        self.layers = [nn.Sequential(nn.Linear(layerSizes[i],layerSizes[i+1]),nn.Dropout(p=dropout),nn.ReLU()) for i in range(len(layerSizes)-2)]
+        self.layers.append(nn.Linear(layerSizes[-2],layerSizes[-1]))
+        self.layers = nn.Sequential(*self.layers)
+
+    def forward(self,x):
+        origSize = x.size()
+        x = x.view(x.size(0)*x.size(1),x.size(2))
+        x = self.layers(x)
+        x = x.view(origSize[0],origSize[1],x.size(-1))
+        x = x.mean(dim=1)
+        return {"pred":x}
+
 def sagpoolLayer(inChan):
     return pointnet2.SAModule(1, 0.2, pointnet2.MLP_linEnd([inChan+3,64,1]))
 
@@ -906,85 +926,6 @@ def applySagPool(module,retDict,batchSize,drop,dropRatio):
     retDict["pointfeatures"] = nodeWeight*retDict["pointfeatures"]
     return retDict
 
-class ReinforcePointExtractor(nn.Module):
-
-    def __init__(self, cuda, nbFeat, point_nb, encoderChan, hasLinearProb, use_baseline, reinf_linear_only):
-
-        super(ReinforcePointExtractor, self).__init__()
-
-        self.conv1x1 = nn.Conv2d(nbFeat, encoderChan, kernel_size=1, stride=1)
-        self.point_extracted = point_nb
-        self.hasLinearProb = hasLinearProb
-        self.use_baseline = use_baseline
-
-        if self.hasLinearProb:
-            self.lin_prob = nn.Conv2d(encoderChan, 1, kernel_size=1, stride=1)
-
-        self.reinf_linear_only = reinf_linear_only
-        if use_baseline:
-            self.baseline_linear = nn.Linear(nbFeat, 1)
-
-    def forward(self, featureMaps):
-
-        # Because of zero padding, the border are very active, so we remove it.
-        featureMaps = featureMaps[:, :, 3:-3, 3:-3]
-        pointFeaturesMap = self.conv1x1(featureMaps)
-
-        if self.hasLinearProb:
-            if self.reinf_linear_only:
-                x = self.lin_prob(pointFeaturesMap.detach())
-            else:
-                x = self.lin_prob(pointFeaturesMap)
-            flatX = x.view(x.size(0), -1)
-            # probs = F.softmax(flatX, dim=(1))+_EPSILON
-            flatX = torch.sigmoid(flatX)
-            probs = flatX / (flatX.sum(dim=1, keepdim=True) +_EPSILON)
-            # probs = flatX / flatX.sum(dim=-1, keepdim=True)[0]
-        else:
-            x = torch.pow(pointFeaturesMap, 2).sum(dim=1, keepdim=True)
-
-        # flatInds = torch.distributions.categorical.Categorical(probs=probs).sample(torch.tensor([self.point_extracted]))
-        _, flatInds = torch.topk(probs, self.point_extracted, dim=-1, largest=True)
-
-
-        abs, ord = (flatInds % x.shape[-1], flatInds // x.shape[-1])
-
-        retDict = {}
-
-        pointFeat = mapToList(pointFeaturesMap, abs, ord)
-
-        depth = torch.zeros(abs.size(0), abs.size(1), 1).to(x.device)
-
-        abs, ord = abs.unsqueeze(-1).float(), ord.unsqueeze(-1).float()
-        points = torch.cat((abs, ord, depth), dim=-1).float()
-        retDict['points'] = torch.cat((abs, ord, depth, pointFeat), dim=-1).float()
-        retDict["batch"] = torch.arange(points.size(0)).unsqueeze(1).expand(points.size(0), points.size(1)).reshape(-1).to(points.device)
-        retDict["pos"] = points.reshape(points.size(0) * points.size(1), points.size(2))
-        retDict["pointfeatures"] = pointFeat.reshape(pointFeat.size(0) * pointFeat.size(1), pointFeat.size(2))
-        retDict["probs"] = probs
-        retDict["flatInds"] = flatInds
-
-        if self.use_baseline:
-            retDict["baseFeat"] = featureMaps.mean(dim=-1).mean(dim=-1)
-            retDict["baseline"] = F.relu((self.baseline_linear(retDict['baseFeat'].detach())))
-
-        return retDict
-
-    def updateDict(self, device):
-
-        if not device in self.ordKerDict.keys():
-            self.ordKerDict[device] = self.ordKer.to(device)
-            self.absKerDict[device] = self.absKer.to(device)
-            self.spatialWeightKerDict[device] = self.spatialWeightKer.to(device)
-
-class ClusterModel(nn.Module):
-    def __init__(self, nb_cluster):
-        super(ClusterModel, self).__init__()
-        pass
-
-    def forward(self, retDict):
-        return retDict
-
 def getLayerNb(backbone_name):
     if backbone_name.find("9") != -1:
         return 2
@@ -1020,86 +961,90 @@ def getResnetFeat(backbone_name, backbone_inplanes,deeplabv3_outchan):
 
 def netBuilder(args):
     ############### Visual Model #######################
-    if args.first_mod.find("resnet") != -1 or args.first_mod.find("bagnet") != -1 or args.first_mod.find("hrnet") != -1:
 
-        if not args.multi_level_feat:
-            nbFeat = getResnetFeat(args.first_mod, args.resnet_chan,args.deeplabv3_outchan)
+    if not args.repr_vec:
+        if args.first_mod.find("resnet") != -1 or args.first_mod.find("bagnet") != -1 or args.first_mod.find("hrnet") != -1:
+
+            if not args.multi_level_feat:
+                nbFeat = getResnetFeat(args.first_mod, args.resnet_chan,args.deeplabv3_outchan)
+            else:
+                nbFeat = args.multi_level_feat_outchan
+
+            if args.resnet_bilinear:
+                CNNconst = CNN2D_bilinearAttPool
+                kwargs = {"inFeat":nbFeat,"aux_model":args.aux_model,"nb_parts":args.resnet_bil_nb_parts,\
+                          "score_pred_act_func":args.resnet_simple_att_score_pred_act_func,
+                          "center_loss":args.bil_center_loss,"center_loss_beta":args.bil_center_loss_beta,\
+                          "cuda":args.cuda,"cluster":args.bil_cluster,"cluster_ensemble":args.bil_cluster_ensemble,\
+                          "applySoftmaxOnSim":args.apply_softmax_on_sim,\
+                          "softmCoeff":args.softm_coeff,\
+                          "softmSched":args.bil_clus_soft_sched,\
+                          "no_refine":args.bil_cluster_norefine,\
+                          "rand_vec":args.bil_cluster_randvec,\
+                          "unnorm":args.bil_clust_unnorm,\
+                          "update_sco_by_norm_sim":args.bil_clust_update_sco_by_norm_sim,\
+                          "normFeat":args.bil_norm_feat,\
+                          "vect_gate":args.bil_clus_vect_gate}
+                nbFeatAux = nbFeat
+                if not args.bil_cluster_ensemble:
+                    nbFeat *= args.resnet_bil_nb_parts
+            elif args.resnet_simple_att:
+                CNNconst = CNN2D_simpleAttention
+                kwargs = {"inFeat":nbFeat,
+                          "topk": args.resnet_simple_att_topk,
+                          "topk_pxls_nb": args.resnet_simple_att_topk_pxls_nb,
+                          "topk_enc_chan":args.resnet_simple_att_topk_enc_chan,
+                          "sagpool":args.resnet_simple_att_topk_sagpool,
+                          "sagpool_drop":args.resnet_simple_att_topk_sagpool_drop,
+                          "sagpool_drop_ratio":args.resnet_simple_att_topk_sagpool_ratio,
+                          "norm_points":args.norm_points,\
+                          "predictScore":args.resnet_simple_att_pred_score,
+                          "score_pred_act_func":args.resnet_simple_att_score_pred_act_func,
+                          "aux_model":args.aux_model,\
+                          "zoom_tied_models":args.zoom_tied_models,\
+                          "zoom_model_no_topk":args.zoom_model_no_topk}
+                if args.resnet_simple_att_topk_enc_chan != -1:
+                    nbFeat = args.resnet_simple_att_topk_enc_chan
+
+                nbFeatAux = nbFeat
+                if type(args.resnet_simple_att_topk_pxls_nb) is list and len(args.resnet_simple_att_topk_pxls_nb) > 1:
+                    nbFeat *= len(args.resnet_simple_att_topk_pxls_nb)
+            else:
+                CNNconst = CNN2D
+                kwargs = {"aux_model":args.aux_model}
+                nbFeatAux = nbFeat
+
+            if args.first_mod.find("bagnet") == -1 and args.first_mod.find("hrnet") == -1:
+                firstModel = CNNconst(args.first_mod, args.pretrained_visual, featMap=True,chan=args.resnet_chan, stride=args.resnet_stride,
+                                      dilation=args.resnet_dilation, \
+                                      attChan=args.resnet_att_chan, attBlockNb=args.resnet_att_blocks_nb,
+                                      attActFunc=args.resnet_att_act_func, \
+                                      num_classes=args.class_nb, \
+                                      layerSizeReduce=args.resnet_layer_size_reduce,
+                                      preLayerSizeReduce=args.resnet_prelay_size_reduce, \
+                                      applyStrideOnAll=args.resnet_apply_stride_on_all, \
+                                      replaceBy1x1=args.resnet_replace_by_1x1,\
+                                      reluOnLast=args.relu_on_last_layer,
+                                      multiLevelFeat=args.multi_level_feat,\
+                                      multiLev_outChan=args.multi_level_feat_outchan,\
+                                      multiLev_cat=args.multi_level_feat_cat,\
+                                      deeplabv3_outchan=args.deeplabv3_outchan,\
+                                      replaceStrideByDilation=args.resnet_replace_str_by_dil,\
+                                      **kwargs)
+            else:
+                firstModel = CNNconst(args.first_mod, args.pretrained_visual,
+                                        num_classes=args.class_nb,layerSizeReduce=args.resnet_layer_size_reduce,
+                                        **kwargs)
         else:
-            nbFeat = args.multi_level_feat_outchan
+            raise ValueError("Unknown visual model type : ", args.first_mod)
 
-        if args.resnet_bilinear:
-            CNNconst = CNN2D_bilinearAttPool
-            kwargs = {"inFeat":nbFeat,"aux_model":args.aux_model,"nb_parts":args.resnet_bil_nb_parts,\
-                      "score_pred_act_func":args.resnet_simple_att_score_pred_act_func,
-                      "center_loss":args.bil_center_loss,"center_loss_beta":args.bil_center_loss_beta,\
-                      "cuda":args.cuda,"cluster":args.bil_cluster,"cluster_ensemble":args.bil_cluster_ensemble,\
-                      "applySoftmaxOnSim":args.apply_softmax_on_sim,\
-                      "softmCoeff":args.softm_coeff,\
-                      "softmSched":args.bil_clus_soft_sched,\
-                      "no_refine":args.bil_cluster_norefine,\
-                      "rand_vec":args.bil_cluster_randvec,\
-                      "unnorm":args.bil_clust_unnorm,\
-                      "update_sco_by_norm_sim":args.bil_clust_update_sco_by_norm_sim,\
-                      "normFeat":args.bil_norm_feat,\
-                      "vect_gate":args.bil_clus_vect_gate}
-            nbFeatAux = nbFeat
-            if not args.bil_cluster_ensemble:
-                nbFeat *= args.resnet_bil_nb_parts
-        elif args.resnet_simple_att:
-            CNNconst = CNN2D_simpleAttention
-            kwargs = {"inFeat":nbFeat,
-                      "topk": args.resnet_simple_att_topk,
-                      "topk_pxls_nb": args.resnet_simple_att_topk_pxls_nb,
-                      "topk_enc_chan":args.resnet_simple_att_topk_enc_chan,
-                      "sagpool":args.resnet_simple_att_topk_sagpool,
-                      "sagpool_drop":args.resnet_simple_att_topk_sagpool_drop,
-                      "sagpool_drop_ratio":args.resnet_simple_att_topk_sagpool_ratio,
-                      "norm_points":args.norm_points,\
-                      "predictScore":args.resnet_simple_att_pred_score,
-                      "score_pred_act_func":args.resnet_simple_att_score_pred_act_func,
-                      "aux_model":args.aux_model,\
-                      "zoom_tied_models":args.zoom_tied_models,\
-                      "zoom_model_no_topk":args.zoom_model_no_topk}
-            if args.resnet_simple_att_topk_enc_chan != -1:
-                nbFeat = args.resnet_simple_att_topk_enc_chan
+        if args.freeze_visual:
+            for param in firstModel.parameters():
+                param.requires_grad = False
 
-            nbFeatAux = nbFeat
-            if type(args.resnet_simple_att_topk_pxls_nb) is list and len(args.resnet_simple_att_topk_pxls_nb) > 1:
-                nbFeat *= len(args.resnet_simple_att_topk_pxls_nb)
-
-        else:
-            CNNconst = CNN2D
-            kwargs = {"aux_model":args.aux_model}
-            nbFeatAux = nbFeat
-
-        if args.first_mod.find("bagnet") == -1 and args.first_mod.find("hrnet") == -1:
-            firstModel = CNNconst(args.first_mod, args.pretrained_visual, featMap=True,chan=args.resnet_chan, stride=args.resnet_stride,
-                                  dilation=args.resnet_dilation, \
-                                  attChan=args.resnet_att_chan, attBlockNb=args.resnet_att_blocks_nb,
-                                  attActFunc=args.resnet_att_act_func, \
-                                  num_classes=args.class_nb, \
-                                  layerSizeReduce=args.resnet_layer_size_reduce,
-                                  preLayerSizeReduce=args.resnet_prelay_size_reduce, \
-                                  applyStrideOnAll=args.resnet_apply_stride_on_all, \
-                                  replaceBy1x1=args.resnet_replace_by_1x1,\
-                                  reluOnLast=args.relu_on_last_layer,
-                                  multiLevelFeat=args.multi_level_feat,\
-                                  multiLev_outChan=args.multi_level_feat_outchan,\
-                                  multiLev_cat=args.multi_level_feat_cat,\
-                                  deeplabv3_outchan=args.deeplabv3_outchan,\
-                                  replaceStrideByDilation=args.resnet_replace_str_by_dil,\
-                                  **kwargs)
-        else:
-            firstModel = CNNconst(args.first_mod, args.pretrained_visual,
-                                    num_classes=args.class_nb,layerSizeReduce=args.resnet_layer_size_reduce,
-                                    **kwargs)
     else:
-        raise ValueError("Unknown visual model type : ", args.first_mod)
-
-    if args.freeze_visual:
-        for param in firstModel.parameters():
-            param.requires_grad = False
-
+        firstModel=None
+        nbFeat = np.load("../results/{}_reprVec.npy".format(args.dataset_train.split("/")[-1])).shape[-1]
     ############### Second Model #######################
 
     zoomArgs= {"zoom":args.zoom,"zoom_max_sub_clouds":args.zoom_max_sub_clouds}
@@ -1111,6 +1056,8 @@ def netBuilder(args):
         secondModel = LinearSecondModel(nbFeat,nbFeatAux, args.class_nb, args.dropout,args.aux_model,bil_cluster_ensemble=args.bil_cluster_ensemble,\
                                         bil_cluster_ensemble_gate=args.bil_cluster_ensemble_gate,hidLay=args.hid_lay,gate_drop=args.bil_cluster_ensemble_gate_drop,\
                                         gate_randdrop=args.bil_cluster_ensemble_gate_randdrop,**zoomArgs)
+    elif args.second_mod == "deepLinear":
+        secondModel = DeepSecondModel(nbFeat,args.class_nb,args.dropout)
     else:
         raise ValueError("Unknown second model type : ", args.second_mod)
 

@@ -17,6 +17,7 @@ from random import Random
 import albumentations
 import scipy.io
 import imageDatasetWithSeg
+import reprVecDataset
 
 class Partition(object):
 
@@ -53,7 +54,8 @@ class DataPartitioner(object):
 
 
 
-def buildTrainLoader(args,transf=None,shuffle=True,withSeg=False):
+def buildTrainLoader(args,transf=None,shuffle=True,withSeg=False,reprVec=False):
+
     normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
     resizedImgSize = 500 if args.big_images else 224
     if transf is None:
@@ -83,12 +85,17 @@ def buildTrainLoader(args,transf=None,shuffle=True,withSeg=False):
     if transf == "identity":
         transf = transforms.Compose([transforms.Resize((resizedImgSize,resizedImgSize)), transforms.ToTensor()])
 
-    if withSeg:
+    if reprVec:
+        datasetConst = reprVecDataset.ReprVec
+        datasetArgs = ["../data/{}".format(args.dataset_train)]
+    elif withSeg:
         datasetConst = imageDatasetWithSeg.ImageFolderWithSeg
+        datasetArgs = ["../data/{}".format(args.dataset_train),transf]
     else:
         datasetConst = torchvision.datasets.ImageFolder
+        datasetArgs = ["../data/{}".format(args.dataset_train),transf]
 
-    train_dataset = datasetConst("../data/{}".format(args.dataset_train), transf)
+    train_dataset = datasetConst(*datasetArgs)
 
     totalLength = len(train_dataset)
 
@@ -122,7 +129,7 @@ def buildTrainLoader(args,transf=None,shuffle=True,withSeg=False):
     return trainLoader, train_dataset
 
 
-def buildTestLoader(args, mode,shuffle=False,withSeg=False):
+def buildTestLoader(args, mode,shuffle=False,withSeg=False,reprVec=False):
     datasetName = getattr(args, "dataset_{}".format(mode))
 
     if args.upscale_test:
@@ -139,12 +146,17 @@ def buildTestLoader(args, mode,shuffle=False,withSeg=False):
         normalizeFunc = transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
         transf = transforms.Compose([transf, normalizeFunc])
 
-    if withSeg:
+    if reprVec:
+        datasetConst = reprVecDataset.ReprVec
+        datasetArgs = ["../data/{}".format(args.dataset_train)]
+    elif withSeg:
         datasetConst = imageDatasetWithSeg.ImageFolderWithSeg
+        datasetArgs = ["../data/{}".format(args.dataset_train),transf]
     else:
         datasetConst = torchvision.datasets.ImageFolder
+        datasetArgs = ["../data/{}".format(args.dataset_train),transf]
 
-    test_dataset = datasetConst("../data/{}".format(datasetName), transf)
+    test_dataset = datasetConst(*datasetArgs)
 
     if mode == "val" and args.dataset_train == args.dataset_val:
         np.random.seed(1)
@@ -214,5 +226,7 @@ def addArgs(argreader):
     argreader.parser.add_argument('--with_seg', type=args.str2bool, metavar='S',
                                   help='To load segmentation along with image and target')
 
+    argreader.parser.add_argument('--repr_vec', type=args.str2bool, metavar='S',
+                                  help='To use representative vectors instead of raw image.')
 
     return argreader
