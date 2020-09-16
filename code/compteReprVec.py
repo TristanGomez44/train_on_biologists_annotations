@@ -24,7 +24,7 @@ def main(argv=None):
     args = argreader.args
 
     #trainLoader, _ = load_data.buildTrainLoader(args,transf=transf,shuffle=args.shuffle)
-    args.train_prop = 1
+    args.train_prop = 100
     trainLoader, _ = load_data.buildTrainLoader(args,transf="identity",shuffle=False)
     testLoader,_ = load_data.buildTestLoader(args, "test")
 
@@ -49,6 +49,7 @@ def main(argv=None):
 
     for j,dataLoader in enumerate([trainLoader,testLoader]):
         allReprVec = None
+        print("Dataset",j)
         for i,(data,target) in enumerate(dataLoader):
 
             with torch.no_grad():
@@ -66,7 +67,7 @@ def main(argv=None):
                     allReprVec = torch.cat((allReprVec,reprVec),dim=0)
 
             if i % 10 == 0:
-                print(i,data.size(0)*i)
+                print("\t",i,data.size(0)*i)
 
         np.save("../results/{}_reprVec.npy".format([args.dataset_train,args.dataset_test][j]),allReprVec.cpu().numpy())
 
