@@ -204,7 +204,6 @@ class ResNet(nn.Module):
 
         self.inplanes = chan[0]
 
-        print("Building resnet : ",inChan,layerSizeReduce)
         self.conv1 = nn.Conv2d(inChan, chan[0], kernel_size=7, stride=1 if not preLayerSizeReduce else stride,bias=False,padding=3)
         self.bn1 = norm_layer(chan[0])
         self.relu = nn.ReLU(inplace=True)
