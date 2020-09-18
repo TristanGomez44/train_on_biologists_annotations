@@ -107,8 +107,6 @@ def addArgs(argreader):
     argreader.parser.add_argument('--patch_sim_neiref_norm_feat', type=str2bool,
                                   help="To normalize feature before applying neighbor refining",default=False)
 
-    argreader.parser.add_argument('--repr_vec', type=str2bool,
-                                  help="To run the representative vectors experiment",default=False)
 
     argreader.parser.add_argument('--centered_feat', type=str2bool,
                               help="To center the features before cosine similarity",default=False)
@@ -295,7 +293,6 @@ def main(argv=None):
                     os.makedirs(os.path.join(args.patch_sim_out_path,"simMaps",args.model_id,"{}".format(i+args.data_batch_index*args.batch_size)))
 
                 #img = (img-img.min())/(img.max()-img.min())
-
                 #plotImg(img.detach().cpu().permute(1,2,0).numpy(),os.path.join(args.patch_sim_out_path,"imgs","{}.png".format(i+args.data_batch_index*args.batch_size)))
 
                 #resizedImg = resize(img.detach().cpu().permute(1,2,0).numpy().mean(axis=-1), (100,100),anti_aliasing=True,mode="constant",order=0)*255
