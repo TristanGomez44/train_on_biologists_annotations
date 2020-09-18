@@ -867,32 +867,6 @@ class LinearSecondModel(SecondModel):
 
         return retDict
 
-class DeepSecondModel(SecondModel):
-
-    def __init__(self, nbFeat, nbClass, dropout,hidSizes=[512,1024],reprVecInDrop=0.5):
-        super(DeepSecondModel, self).__init__(nbFeat, nbClass)
-        self.dropout = nn.Dropout(p=dropout)
-
-        layerSizes = [nbFeat] + hidSizes + [nbClass]
-
-        self.layers = [nn.Sequential(nn.Linear(layerSizes[i],layerSizes[i+1]),nn.Dropout(p=dropout),nn.ReLU()) for i in range(len(layerSizes)-2)]
-        self.layers.append(nn.Linear(layerSizes[-2],layerSizes[-1]))
-        self.layers = nn.Sequential(*self.layers)
-
-        self.inDrop = reprVecInDrop
-
-    def forward(self,x):
-
-        if self.training:
-            x = x[:,:int(x.size(1)*(1-self.inDrop))].contiguous()
-
-        origSize = x.size()
-
-        x = x.view(x.size(0)*x.size(1),x.size(2))
-        x = self.layers(x)
-        x = x.view(origSize[0],origSize[1],x.size(-1))
-        x = x.mean(dim=1)
-        return {"pred":x}
 
 def sagpoolLayer(inChan):
     return pointnet2.SAModule(1, 0.2, pointnet2.MLP_linEnd([inChan+3,64,1]))
@@ -1063,8 +1037,6 @@ def netBuilder(args):
         secondModel = LinearSecondModel(nbFeat,nbFeatAux, args.class_nb, args.dropout,args.aux_model,bil_cluster_ensemble=args.bil_cluster_ensemble,\
                                         bil_cluster_ensemble_gate=args.bil_cluster_ensemble_gate,hidLay=args.hid_lay,gate_drop=args.bil_cluster_ensemble_gate_drop,\
                                         gate_randdrop=args.bil_cluster_ensemble_gate_randdrop,**zoomArgs)
-    elif args.second_mod == "deepLinear":
-        secondModel = DeepSecondModel(nbFeat,args.class_nb,args.dropout,reprVecInDrop=args.repr_vec_in_drop)
     else:
         raise ValueError("Unknown second model type : ", args.second_mod)
 

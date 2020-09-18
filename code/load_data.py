@@ -17,7 +17,6 @@ from random import Random
 import albumentations
 import scipy.io
 import imageDatasetWithSeg
-import reprVecDataset
 
 class Partition(object):
 
@@ -85,10 +84,7 @@ def buildTrainLoader(args,transf=None,shuffle=True,withSeg=False,reprVec=False):
     if transf == "identity":
         transf = transforms.Compose([transforms.Resize((resizedImgSize,resizedImgSize)), transforms.ToTensor()])
 
-    if reprVec:
-        datasetConst = reprVecDataset.ReprVec
-        datasetArgs = ["../data/{}".format(args.dataset_train)]
-    elif withSeg:
+    if withSeg:
         datasetConst = imageDatasetWithSeg.ImageFolderWithSeg
         datasetArgs = ["../data/{}".format(args.dataset_train),transf]
     else:
@@ -146,10 +142,7 @@ def buildTestLoader(args, mode,shuffle=False,withSeg=False,reprVec=False):
         normalizeFunc = transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
         transf = transforms.Compose([transf, normalizeFunc])
 
-    if reprVec:
-        datasetConst = reprVecDataset.ReprVec
-        datasetArgs = ["../data/{}".format(args.dataset_train)]
-    elif withSeg:
+    if withSeg:
         datasetConst = imageDatasetWithSeg.ImageFolderWithSeg
         datasetArgs = ["../data/{}".format(args.dataset_train),transf]
     else:
