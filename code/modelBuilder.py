@@ -869,7 +869,7 @@ class LinearSecondModel(SecondModel):
 
 class DeepSecondModel(SecondModel):
 
-    def __init__(self, nbFeat, nbClass, dropout,hidSizes=[512,1024]):
+    def __init__(self, nbFeat, nbClass, dropout,hidSizes=[512,1024],reprVecInDrop=0.5):
         super(DeepSecondModel, self).__init__(nbFeat, nbClass)
         self.dropout = nn.Dropout(p=dropout)
 
@@ -879,8 +879,15 @@ class DeepSecondModel(SecondModel):
         self.layers.append(nn.Linear(layerSizes[-2],layerSizes[-1]))
         self.layers = nn.Sequential(*self.layers)
 
+        self.inDrop = reprVecInDrop
+
     def forward(self,x):
+
+        if self.training:
+            x = x[:,:int(x.size(1)*(1-self.inDrop))].contiguous()
+
         origSize = x.size()
+
         x = x.view(x.size(0)*x.size(1),x.size(2))
         x = self.layers(x)
         x = x.view(origSize[0],origSize[1],x.size(-1))
@@ -1057,7 +1064,7 @@ def netBuilder(args):
                                         bil_cluster_ensemble_gate=args.bil_cluster_ensemble_gate,hidLay=args.hid_lay,gate_drop=args.bil_cluster_ensemble_gate_drop,\
                                         gate_randdrop=args.bil_cluster_ensemble_gate_randdrop,**zoomArgs)
     elif args.second_mod == "deepLinear":
-        secondModel = DeepSecondModel(nbFeat,args.class_nb,args.dropout)
+        secondModel = DeepSecondModel(nbFeat,args.class_nb,args.dropout,reprVecInDrop=args.repr_vec_in_drop)
     else:
         raise ValueError("Unknown second model type : ", args.second_mod)
 
@@ -1081,6 +1088,9 @@ def addArgs(argreader):
 
     argreader.parser.add_argument('--dropout', type=float, metavar='D',
                                   help='The dropout amount on each layer of the RNN except the last one')
+
+    argreader.parser.add_argument('--repr_vec_in_drop', type=float, metavar='S',
+                                  help='The percentage of representative vectors dropped during training.')
 
     argreader.parser.add_argument('--second_mod', type=str, metavar='MOD',
                                   help='The temporal model. Can be "linear", "lstm" or "score_conv".')
@@ -1220,6 +1230,8 @@ def addArgs(argreader):
                                   help="To not refine feature vectors by using similar vectors.")
     argreader.parser.add_argument('--bil_cluster_randvec', type=args.str2bool, metavar='BOOL',
                                   help="To select random vectors as initial estimation instead of vectors with high norms.")
+
+
 
 
     return argreader
