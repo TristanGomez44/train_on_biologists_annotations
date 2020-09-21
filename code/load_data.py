@@ -17,6 +17,7 @@ from random import Random
 import albumentations
 import scipy.io
 import imageDatasetWithSeg
+import reprVecDataset
 
 class Partition(object):
 
@@ -74,6 +75,13 @@ def buildTrainLoader(args,transf=None,shuffle=True,withSeg=False,reprVec=False):
                 torchvision.transforms.ColorJitter(brightness=0.1, contrast=0.1, saturation=0.1, hue=0.1),
                 torchvision.transforms.Lambda(lambda x:albTransfFunc(image=np.asarray(x))["image"]),
                 transforms.ToTensor()])
+        elif args.ws_dan_preprocess:
+            tranf = transforms.Compose([
+                transforms.Resize(size=(int(448 / 0.875), int(448 / 0.875))),
+                transforms.RandomCrop(448),
+                transforms.RandomHorizontalFlip(0.5),
+                transforms.ColorJitter(brightness=0.126, saturation=0.5),
+                transforms.ToTensor()])
         else:
             transf = transforms.Compose([transforms.Resize(resizedImgSize), transforms.RandomCrop(resizedImgSize, padding=0, pad_if_needed=True),
                                          transforms.RandomHorizontalFlip(), transforms.ToTensor()])
@@ -84,7 +92,10 @@ def buildTrainLoader(args,transf=None,shuffle=True,withSeg=False,reprVec=False):
     if transf == "identity":
         transf = transforms.Compose([transforms.Resize((resizedImgSize,resizedImgSize)), transforms.ToTensor()])
 
-    if withSeg:
+    if reprVec:
+        datasetConst = reprVecDataset.ReprVec
+        datasetArgs = ["../data/{}".format(args.dataset_train)]
+    elif withSeg:
         datasetConst = imageDatasetWithSeg.ImageFolderWithSeg
         datasetArgs = ["../data/{}".format(args.dataset_train),transf]
     else:
@@ -135,6 +146,11 @@ def buildTestLoader(args, mode,shuffle=False,withSeg=False,reprVec=False):
 
     if args.old_preprocess:
         transf = transforms.Compose([transforms.Resize(int(resizedImgSize*1.14)), transforms.CenterCrop(resizedImgSize), transforms.ToTensor()])
+    elif args.ws_dan_preprocess:
+        transforms.Compose([
+            transforms.Resize(size=(int(448 / 0.875), int(448 / 0.875))),
+            transforms.CenterCrop(448),
+            transforms.ToTensor()])
     else:
         transf = transforms.Compose([transforms.Resize(resizedImgSize), transforms.CenterCrop(resizedImgSize), transforms.ToTensor()])
 
@@ -142,7 +158,10 @@ def buildTestLoader(args, mode,shuffle=False,withSeg=False,reprVec=False):
         normalizeFunc = transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
         transf = transforms.Compose([transf, normalizeFunc])
 
-    if withSeg:
+    if reprVec:
+        datasetConst = reprVecDataset.ReprVec
+        datasetArgs = ["../data/{}".format(args.dataset_train)]
+    elif withSeg:
         datasetConst = imageDatasetWithSeg.ImageFolderWithSeg
         datasetArgs = ["../data/{}".format(args.dataset_train),transf]
     else:
@@ -207,6 +226,8 @@ def addArgs(argreader):
                                   help='To use the old images pre-processor.')
     argreader.parser.add_argument('--moredataaug_preprocess', type=args.str2bool, metavar='S',
                                   help='To apply color jitter and random rotation along random resized crop and horizontal flip')
+    argreader.parser.add_argument('--ws_dan_preprocess', type=args.str2bool, metavar='S',
+                                  help='To apply the same image preprocessing as in WS-DAN.')
 
     argreader.parser.add_argument('--upscale_test', type=args.str2bool, metavar='S',
                                   help='To increase test resolution from 224 to 312')
