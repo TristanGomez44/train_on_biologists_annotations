@@ -76,7 +76,7 @@ def buildTrainLoader(args,transf=None,shuffle=True,withSeg=False,reprVec=False):
                 torchvision.transforms.Lambda(lambda x:albTransfFunc(image=np.asarray(x))["image"]),
                 transforms.ToTensor()])
         elif args.ws_dan_preprocess:
-            tranf = transforms.Compose([
+            transf = transforms.Compose([
                 transforms.Resize(size=(int(448 / 0.875), int(448 / 0.875))),
                 transforms.RandomCrop(448),
                 transforms.RandomHorizontalFlip(0.5),
@@ -147,7 +147,7 @@ def buildTestLoader(args, mode,shuffle=False,withSeg=False,reprVec=False):
     if args.old_preprocess:
         transf = transforms.Compose([transforms.Resize(int(resizedImgSize*1.14)), transforms.CenterCrop(resizedImgSize), transforms.ToTensor()])
     elif args.ws_dan_preprocess:
-        transforms.Compose([
+        transf = transforms.Compose([
             transforms.Resize(size=(int(448 / 0.875), int(448 / 0.875))),
             transforms.CenterCrop(448),
             transforms.ToTensor()])
