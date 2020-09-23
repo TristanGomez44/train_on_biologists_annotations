@@ -110,11 +110,6 @@ class Model(nn.Module):
         if not self.firstModel is None:
             if (not self.training) and self.upscaledTest:
                 imgBatch = origImgBatch
-            else:
-                if self.reducedImgSize == origImgBatch.size(-1):
-                    imgBatch = origImgBatch
-                else:
-                    imgBatch = F.interpolate(origImgBatch,size=(self.reducedImgSize,self.reducedImgSize))
 
             visResDict = self.firstModel(imgBatch)
             resDict = self.secondModel(visResDict)
