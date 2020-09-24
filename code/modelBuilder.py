@@ -108,10 +108,8 @@ class Model(nn.Module):
     def forward(self, origImgBatch):
 
         if not self.firstModel is None:
-            if (not self.training) and self.upscaledTest:
-                imgBatch = origImgBatch
 
-            visResDict = self.firstModel(imgBatch)
+            visResDict = self.firstModel(origImgBatch)
             resDict = self.secondModel(visResDict)
             resDict = merge(visResDict,resDict)
 
