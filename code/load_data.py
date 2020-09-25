@@ -160,13 +160,13 @@ def buildTestLoader(args, mode,shuffle=False,withSeg=False,reprVec=False):
 
     if reprVec:
         datasetConst = reprVecDataset.ReprVec
-        datasetArgs = ["../data/{}".format(args.dataset_train)]
+        datasetArgs = ["../data/{}".format(datasetName)]
     elif withSeg:
         datasetConst = imageDatasetWithSeg.ImageFolderWithSeg
-        datasetArgs = ["../data/{}".format(args.dataset_train),transf]
+        datasetArgs = ["../data/{}".format(datasetName),transf]
     else:
         datasetConst = torchvision.datasets.ImageFolder
-        datasetArgs = ["../data/{}".format(args.dataset_train),transf]
+        datasetArgs = ["../data/{}".format(datasetName),transf]
 
     test_dataset = datasetConst(*datasetArgs)
 
