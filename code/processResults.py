@@ -193,7 +193,8 @@ def plotPointsImageDatasetGrid(exp_id,imgNb,epochs,model_ids,reduction_fact_list
                 incorrectInd = torch.arange(len(testDataset))[~correct]
                 inds = incorrectInd[torch.randperm(len(incorrectInd))][:imgNb]
         else:
-            inds = torch.randint(len(np.load(pointPaths[0])),size=(imgNb,))
+            maxInd = min(len(np.load(pointPaths[0])),640)
+            inds = torch.randint(maxInd),size=(imgNb,))
             print(sorted(inds))
         imgBatch = torch.cat([testDataset[ind][0].unsqueeze(0) for ind in inds],dim=0)
 
@@ -228,7 +229,8 @@ def plotPointsImageDatasetGrid(exp_id,imgNb,epochs,model_ids,reduction_fact_list
         else:
             vecEmb_list.append(None)
 
-    fnt = ImageFont.truetype("Pillow/Tests/fonts/FreeMono.ttf", 40)
+    fnt = ImageFont.load_default()
+
     for i in range(imgNb):
 
         img = imgBatch[i:i+1]
@@ -381,8 +383,7 @@ def plotPointsImageDatasetGrid(exp_id,imgNb,epochs,model_ids,reduction_fact_list
             if luminosity:
                 ptsImageCopy = ptsImageCopy*imgBatch[i:i+1]
             else:
-                #ptsImageCopy = 0.8*ptsImageCopy+0.2*imgBatch[i:i+1].mean(dim=1,keepdim=True)
-                ptsImageCopy = ptsImageCopy
+                ptsImageCopy = 0.8*ptsImageCopy+0.2*imgBatch[i:i+1].mean(dim=1,keepdim=True)
 
             gridImage = torch.cat((gridImage,ptsImageCopy),dim=0)
 
