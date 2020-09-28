@@ -260,7 +260,7 @@ def epochImgEval(model, log_interval, loader, epoch, args, writer, metricEarlySt
         loss = computeLoss(args, output, target, resDict, data,seg)
 
         # Other variables produced by the net
-        if batch_idx < 10 and mode == "test":
+        if mode == "test":
             intermVarDict = update.catIntermediateVariables(resDict, intermVarDict, validBatch, args.save_all)
 
         # Harware occupation
@@ -279,6 +279,7 @@ def epochImgEval(model, log_interval, loader, epoch, args, writer, metricEarlySt
 
         if validBatch > 3 and args.debug:
             break
+
 
     if mode == "test":
         intermVarDict = update.saveIntermediateVariables(intermVarDict, args.exp_id, args.model_id, epoch, mode,
