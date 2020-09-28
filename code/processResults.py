@@ -51,6 +51,9 @@ from math import log10, floor
 import io
 import skimage
 
+import scipy.stats
+
+
 def plotPointsImageDataset(imgNb,redFact,plotDepth,args):
 
     cm = plt.get_cmap('plasma')
@@ -130,7 +133,7 @@ def compRecField(architecture):
 def plotPointsImageDatasetGrid(exp_id,imgNb,epochs,model_ids,reduction_fact_list,inverse_xy,mode,nbClass,\
                                 useDropped_list,forceFeat,fullAttMap,threshold,maps_inds,plotId,luminosity,\
                                 receptive_field,cluster,cluster_attention,pond_by_norm,gradcam,nrows,correctness,\
-                                agregateMultiAtt,plotVecEmb,args):
+                                agregateMultiAtt,plotVecEmb,onlyNorm,args):
 
     if (correctness == "True" or correctness == "False") and len(model_ids)>1:
         raise ValueError("correctness can only be used with a single model.")
@@ -191,6 +194,7 @@ def plotPointsImageDatasetGrid(exp_id,imgNb,epochs,model_ids,reduction_fact_list
                 inds = incorrectInd[torch.randperm(len(incorrectInd))][:imgNb]
         else:
             inds = torch.randint(len(np.load(pointPaths[0])),size=(imgNb,))
+            print(sorted(inds))
         imgBatch = torch.cat([testDataset[ind][0].unsqueeze(0) for ind in inds],dim=0)
 
     cmPlasma = plt.get_cmap('plasma')
@@ -202,14 +206,13 @@ def plotPointsImageDatasetGrid(exp_id,imgNb,epochs,model_ids,reduction_fact_list
 
     normDict = {}
     for j in range(len(pointPaths)):
-        if pond_by_norm[j]:
+        if pond_by_norm[j] or onlyNorm[j]:
 
             if j>0 and model_ids[j] == model_ids[j-1] and pond_by_norm[j-1]:
                 normDict[j] = normDict[j-1]
             else:
                 if not os.path.exists(pointPaths[j].replace("attMaps","norm")):
-                    features = np.load(pointPaths[j].replace("attMaps","features"))
-                    normDict[j] = np.sqrt(np.power(features,2).sum(axis=1,keepdims=True))
+                    normDict[j] = compNorm(pointPaths[j].replace("attMaps","features"))
                     np.save(pointPaths[j].replace("attMaps","norm"),normDict[j])
                 else:
                     normDict[j] = np.load(pointPaths[j].replace("attMaps","norm"))
@@ -222,13 +225,11 @@ def plotPointsImageDatasetGrid(exp_id,imgNb,epochs,model_ids,reduction_fact_list
             vecEmb = np.load("../results/{}/vecEmb_{}_test.npy".format(exp_id,model_ids[j]))
             vecEmb = (vecEmb-vecEmb.min())/(vecEmb.max()-vecEmb.min())
             vecEmb_list.append(vecEmb)
-            print(vecEmb.min(),vecEmb.mean(),vecEmb.max())
         else:
             vecEmb_list.append(None)
 
     fnt = ImageFont.truetype("Pillow/Tests/fonts/FreeMono.ttf", 40)
     for i in range(imgNb):
-        print("Img",i)
 
         img = imgBatch[i:i+1]
 
@@ -252,8 +253,9 @@ def plotPointsImageDatasetGrid(exp_id,imgNb,epochs,model_ids,reduction_fact_list
                 if gradcam[j]:
                     attMap = (attMap-attMap.min())/(attMap.max()-attMap.min())
 
-                if attMap.shape[0] != 1:
-                    if attMap.shape[0] == 3 or attMap.shape[0] == 4:
+                if attMap.shape[0] != 1 and not onlyNorm[j]:
+                    if maps_inds[j] == -1:
+                    #if attMap.shape[0] == 3 or attMap.shape[0] == 4:
                         #allAttMap = []
                         #for l in range(3):
                         #    attMap_l = attMap[l:l+1]
@@ -274,9 +276,14 @@ def plotPointsImageDatasetGrid(exp_id,imgNb,epochs,model_ids,reduction_fact_list
                         attMap = attMap[maps_inds[j]:maps_inds[j]+1]
                         attMap = attMap.astype(float)
                         attMap /= 255
-                        attMap *= 3
-                        attMap = torch.softmax(torch.tensor(attMap).float().view(-1),dim=-1).view(attMap.shape[0],attMap.shape[1],attMap.shape[2]).numpy()
+                        #attMap *= 3
+                        #attMap = torch.softmax(torch.tensor(attMap).float().view(-1),dim=-1).view(attMap.shape[0],attMap.shape[1],attMap.shape[2]).numpy()
                         attMap = (attMap-attMap.min())/(attMap.max()-attMap.min())
+                        attMap = (attMap > 0.5).astype(float)
+                else:
+                    norm = normDict[j][inds[i]]
+                    norm = norm/norm.max()
+                    attMap = norm
 
                 if pond_by_norm[j]:
                     norm = normDict[j][inds[i]]
@@ -374,7 +381,8 @@ def plotPointsImageDatasetGrid(exp_id,imgNb,epochs,model_ids,reduction_fact_list
             if luminosity:
                 ptsImageCopy = ptsImageCopy*imgBatch[i:i+1]
             else:
-                ptsImageCopy = 0.8*ptsImageCopy+0.2*imgBatch[i:i+1].mean(dim=1,keepdim=True)
+                #ptsImageCopy = 0.8*ptsImageCopy+0.2*imgBatch[i:i+1].mean(dim=1,keepdim=True)
+                ptsImageCopy = ptsImageCopy
 
             gridImage = torch.cat((gridImage,ptsImageCopy),dim=0)
 
@@ -1084,6 +1092,99 @@ def agrVec(exp_id,model_id,args,classMin=0,classMax=19,redDim=2):
     fullCSV = np.concatenate((np.arange(classNb)[:,np.newaxis],corrList_norm[:,np.newaxis]),axis=1)
     np.savetxt("../results/{}/distToCloud_vs_norm_corr_{}.csv".format(exp_id,model_id),fullCSV)
 
+def compNorm(featPath):
+
+    features = np.load(featPath,mmap_mode="r+")
+    nbFeat = features.shape[0]
+    splitLen = [100*(i+1) for i in range(nbFeat//100)]
+    features_split = np.split(features,splitLen)
+
+    allNorm = None
+    for feat in features_split:
+        norm = np.sqrt(np.power(feat.astype(float),2).sum(axis=1,keepdims=True))
+        if allNorm is None:
+            allNorm = norm
+        else:
+            allNorm = np.concatenate((allNorm,norm),axis=0)
+        print(feat.shape)
+    return allNorm
+
+def mean_confidence_interval(data, confidence=0.95):
+    a = 1.0 * np.array(data)
+    n = len(a)
+    m, se = np.mean(a), scipy.stats.sem(a)
+    h = se * scipy.stats.t.ppf((1 + confidence) / 2., n-1)
+    return m, m-h, m+h
+
+def importancePlot(exp_id,model_id,imgNb=15,debug=False,plotStds=False,plotConfInter=False):
+
+    # attMaps = N 3 H W
+    attMaps = torch.tensor(np.load(glob.glob("../results/{}/attMaps_{}_epoch*_test.npy".format(exp_id,model_id))[0]))
+
+    #Masking maps where nothing salient was detected
+    mask = torch.zeros(1,1,attMaps.shape[2],attMaps.shape[3])
+    mask[0,0,0,0] = 1
+    attMaps_max = attMaps.max(dim=-2,keepdim=True)[0].max(dim=-1,keepdim=True)[0]
+    attMaps = attMaps * ~((attMaps == attMaps_max) == mask)
+
+    featPath = glob.glob("../results/{}/features_{}_epoch*_test.npy".format(exp_id,model_id))[0]
+    epoch = int(os.path.basename(featPath).split("epoch")[1].split("_")[0])
+
+    # norm = N 1 H W
+    if not os.path.exists("../results/{}/norm_{}_epoch{}_test.npy".format(exp_id,model_id,epoch)):
+        norm = compNorm(featPath)
+        np.save("../results/{}/norm_{}_epoch{}_test.npy".format(exp_id,model_id,epoch),norm)
+    else:
+        norm = np.load("../results/{}/norm_{}_epoch{}_test.npy".format(exp_id,model_id,epoch))
+
+    norm = torch.tensor(norm)
+    norm_max = norm.max(dim=-1,keepdim=True)[0].max(dim=-2,keepdim=True)[0]
+    norm = norm/(norm_max+0.00001)
+
+    if debug:
+        torch.manual_seed(1)
+        attMaps = attMaps[:640]
+        norm = norm[:640]
+        inds = torch.randint(len(norm),size=(imgNb,))
+
+    attMaps = attMaps.float()/255
+    norm = norm.float()
+
+    # avgNorm = N 1 3
+    attMaps = attMaps/(attMaps.sum(dim=(2,3),keepdim=True)+0.0001)
+    avgNorm = (attMaps*norm).sum(dim=(2,3))
+
+    if debug:
+        for i,ind in enumerate(inds):
+            avgNorm_sample = avgNorm[ind]
+            plt.figure()
+            plt.bar(np.arange(avgNorm.shape[1]),avgNorm_sample.numpy())
+            plt.savefig("../vis/{}/importance_{}_ind{}_{}.png".format(exp_id,model_id,i+1,ind))
+
+    if plotStds:
+        avgNorm_mean,avgNorm_std = avgNorm.mean(dim=0),avgNorm.std(dim=0)
+        plt.figure()
+        plt.bar(np.arange(avgNorm.shape[1]),avgNorm_mean.numpy())
+        plt.errorbar(np.arange(avgNorm.shape[1]),avgNorm_mean.numpy(),avgNorm_std,fmt="*",color="black")
+        plt.savefig("../vis/{}/importance_{}.png".format(exp_id,model_id))
+    elif plotConfInter:
+        meanList,lowList,highList = [],[],[]
+        for i in range(avgNorm.shape[1]):
+            mean,low,high = mean_confidence_interval(avgNorm[:,i])
+            meanList.append(mean)
+            lowList.append(low)
+            highList.append(high)
+        errors = np.concatenate((np.array(lowList)[np.newaxis],np.array(highList)[np.newaxis]),axis=0)
+        plt.figure()
+        plt.bar(np.arange(len(meanList)),meanList)
+        plt.errorbar(np.arange(len(meanList)),meanList,errors,fmt="*",color="black")
+        plt.savefig("../vis/{}/importance_{}.png".format(exp_id,model_id))
+    else:
+        avgNorm_mean = avgNorm.mean(dim=0)
+        plt.figure()
+        plt.bar(np.arange(avgNorm.shape[1]),avgNorm_mean.numpy())
+        plt.savefig("../vis/{}/importance_{}.png".format(exp_id,model_id))
+
 def main(argv=None):
 
     #Getting arguments from config file and command line
@@ -1127,6 +1228,8 @@ def main(argv=None):
     argreader.parser.add_argument('--cluster',type=str2bool,nargs="*",metavar="BOOL",help='To cluster points with UMAP',default=[])
     argreader.parser.add_argument('--cluster_attention',type=str2bool,nargs="*",metavar="BOOL",help='To cluster attended points with UMAP',default=[])
     argreader.parser.add_argument('--pond_by_norm',type=str2bool,nargs="*",metavar="BOOL",help='To also show the norm of pixels along with the attention weights.',default=[])
+    argreader.parser.add_argument('--only_norm',type=str2bool,nargs="*",metavar="BOOL",help='To only plot the norm of pixels',default=[])
+
 
     argreader.parser.add_argument('--gradcam',type=str2bool,nargs="*",metavar="BOOL",help='To plot gradcam instead of attention maps',default=[])
     argreader.parser.add_argument('--correctness',type=str,metavar="CORRECT",help='Set this to True to only show image where the model has given a correct answer.',default=None)
@@ -1172,6 +1275,10 @@ def main(argv=None):
     argreader.parser.add_argument('--class_min',type=int,metavar="NAME",help='Minimum class index to plot.',default=None)
     argreader.parser.add_argument('--class_max',type=int,metavar="NAME",help='Maximum class index to plot.',default=None)
 
+    ###################################### Importance plot #################################################
+
+    argreader.parser.add_argument('--importance_plot',action="store_true",help='To plot the average relative norm of pixels chosen by each map.')
+
     argreader = load_data.addArgs(argreader)
 
     #Reading the comand line arg
@@ -1200,11 +1307,13 @@ def main(argv=None):
             args.agregate_multi_att = [False for _ in range(len(args.model_ids))]
         if len(args.plot_vec_emb) ==  0:
             args.plot_vec_emb = [False for _ in range(len(args.model_ids))]
+        if len(args.only_norm) ==  0:
+            args.only_norm = [False for _ in range(len(args.model_ids))]
 
         plotPointsImageDatasetGrid(args.exp_id,args.image_nb,args.epoch_list,args.model_ids,args.reduction_fact_list,args.inverse_xy,args.mode,\
                                     args.class_nb,args.use_dropped_list,args.force_feat,args.full_att_map,args.use_threshold,args.maps_inds,args.plot_id,\
                                     args.luminosity,args.receptive_field,args.cluster,args.cluster_attention,args.pond_by_norm,args.gradcam,args.nrows,\
-                                    args.correctness,args.agregate_multi_att,args.plot_vec_emb,args)
+                                    args.correctness,args.agregate_multi_att,args.plot_vec_emb,args.only_norm,args)
     if args.plot_prob_maps:
         plotProbMaps(args.image_nb,args,args.norm)
     if args.list_best_pred:
@@ -1258,5 +1367,7 @@ def main(argv=None):
         compileTest(args.exp_id,id_to_label_dict,args.table_id,args.model_ids)
     if args.agr_vec:
         agrVec(args.exp_id,args.model_id,args,args.class_min,args.class_max)
+    if args.importance_plot:
+        importancePlot(args.exp_id,args.model_id,debug=args.debug)
 if __name__ == "__main__":
     main()
