@@ -194,8 +194,8 @@ def plotPointsImageDatasetGrid(exp_id,imgNb,epochs,model_ids,reduction_fact_list
                 inds = incorrectInd[torch.randperm(len(incorrectInd))][:imgNb]
         else:
             maxInd = min(len(np.load(pointPaths[0])),640)
-            inds = torch.randint(maxInd),size=(imgNb,))
-            print(sorted(inds))
+            inds = torch.randint(maxInd,size=(imgNb,))
+
         imgBatch = torch.cat([testDataset[ind][0].unsqueeze(0) for ind in inds],dim=0)
 
     cmPlasma = plt.get_cmap('plasma')
