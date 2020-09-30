@@ -581,7 +581,7 @@ def mapToHeatMap(batch,i,name):
 
     torchvision.utils.save_image(map,"../vis/repreVecSchema_{}.png".format(name))
 
-def representativeVectors(x,nbVec,applySoftMax=False,softmCoeff=1,softmSched=False,softmSched_interpCoeff=0,no_refine=False,randVec=False,unnorm=False,update_sco_by_norm_sim=False):
+def representativeVectors(x,nbVec,applySoftMax=False,softmCoeff=1,softmSched=False,softmSched_interpCoeff=0,no_refine=False,randVec=False,unnorm=False,update_sco_by_norm_sim=False,vectIndToUse="all"):
 
     xOrigShape = x.size()
 
@@ -633,7 +633,11 @@ def representativeVectors(x,nbVec,applySoftMax=False,softmCoeff=1,softmSched=Fal
 
         simList.append(simReshaped)
 
-    return repreVecList,simList
+    if vectIndToUse == "all":
+        return repreVecList,simList
+    else:
+        vectIndToUse = [int(ind) for ind in vectIndToUse.split(",")]
+        return [repreVecList[ind] for ind in vectIndToUse],[simList[ind] for ind in vectIndToUse]
 
 class CNN2D_bilinearAttPool(FirstModel):
 
@@ -641,7 +645,7 @@ class CNN2D_bilinearAttPool(FirstModel):
                  attChan=16,inFeat=512,nb_parts=3,aux_model=False,score_pred_act_func="softmax",center_loss=False,\
                  center_loss_beta=5e-2,num_classes=200,cuda=True,cluster=False,cluster_ensemble=False,applySoftmaxOnSim=False,\
                  softmCoeff=1,softmSched=False,normFeat=False,no_refine=False,rand_vec=False,unnorm=False,update_sco_by_norm_sim=False,\
-                 vect_gate=False,\
+                 vect_gate=False,vect_ind_to_use="all",\
                  **kwargs):
 
         super(CNN2D_bilinearAttPool, self).__init__(featModelName, pretrainedFeatMod, featMap, bigMaps, **kwargs)
@@ -691,6 +695,8 @@ class CNN2D_bilinearAttPool(FirstModel):
             stdv = 1. / math.sqrt(self.vect_gate_proto.size(1))
             self.vect_gate_proto.data.uniform_(0, 2*stdv)
 
+        self.vect_ind_to_use = vect_ind_to_use
+
     def forward(self, x):
         # N x C x H x L
         self.batchSize = x.size(0)
@@ -716,7 +722,9 @@ class CNN2D_bilinearAttPool(FirstModel):
         else:
 
             vecList,simList = representativeVectors(features,self.nb_parts,self.applySoftmaxOnSim,self.softmCoeff,self.softmSched,\
-                                                    self.softmSched_interpCoeff,self.no_refine,self.rand_vec,self.unnorm,self.update_sco_by_norm_sim)
+                                                    self.softmSched_interpCoeff,self.no_refine,self.rand_vec,self.unnorm,\
+                                                    self.update_sco_by_norm_sim,self.vect_ind_to_use)
+
             if not self.cluster_ensemble:
                 if self.vect_gate:
                     features_agr = torch.cat(vecList,dim=0)
@@ -958,7 +966,8 @@ def netBuilder(args):
                           "unnorm":args.bil_clust_unnorm,\
                           "update_sco_by_norm_sim":args.bil_clust_update_sco_by_norm_sim,\
                           "normFeat":args.bil_norm_feat,\
-                          "vect_gate":args.bil_clus_vect_gate}
+                          "vect_gate":args.bil_clus_vect_gate,\
+                          "vect_ind_to_use":args.bil_clus_vect_ind_to_use}
                 nbFeatAux = nbFeat
                 if not args.bil_cluster_ensemble:
                     nbFeat *= args.resnet_bil_nb_parts
@@ -1171,6 +1180,9 @@ def addArgs(argreader):
                                   help="To mulitply similarity by norm to make weights superior to 1.")
     argreader.parser.add_argument('--bil_clus_vect_gate', type=args.str2bool, metavar='BOOL',
                                   help="To add a gate that reorder the vectors.")
+
+    argreader.parser.add_argument('--bil_clus_vect_ind_to_use',type=str, metavar='BOOL',
+                                  help="Specify this list to only use some of the vectors collected. Eg : --bil_clus_vect_ind_to_use 1,2")
 
     argreader.parser.add_argument('--bil_clust_update_sco_by_norm_sim', type=args.str2bool, metavar='BOOL',
                                   help="To update score using normalised similarity.")
