@@ -728,7 +728,12 @@ class CNN2D_bilinearAttPool(FirstModel):
             if not self.cluster_ensemble:
                 if self.vect_gate:
                     features_agr = torch.cat(vecList,dim=0)
-                    features_agr = features_agr.unsqueeze(1).reshape(features_agr.size(0)//self.nb_parts,self.nb_parts,features_agr.size(1))
+
+                    if self.vect_ind_to_use == "all":
+                        features_agr = features_agr.unsqueeze(1).reshape(features_agr.size(0)//self.nb_parts,self.nb_parts,features_agr.size(1))
+                    else:
+                        effectivePartNb = len(self.vect_ind_to_use.split(","))
+                        features_agr = features_agr.unsqueeze(1).reshape(features_agr.size(0)//effectivePartNb,effectivePartNb,features_agr.size(1))
 
                     # (N 1 3 512) x (1 3 1 512) -> (N 3 3 1)
                     sim = (features_agr.unsqueeze(1) * self.vect_gate_proto.unsqueeze(0).unsqueeze(2)).sum(dim=-1,keepdim=True)
@@ -970,7 +975,10 @@ def netBuilder(args):
                           "vect_ind_to_use":args.bil_clus_vect_ind_to_use}
                 nbFeatAux = nbFeat
                 if not args.bil_cluster_ensemble:
-                    nbFeat *= args.resnet_bil_nb_parts
+                    if args.bil_clus_vect_ind_to_use == "all":
+                        nbFeat *= args.resnet_bil_nb_parts
+                    else:
+                        nbFeat *= len(args.bil_clus_vect_ind_to_use.split(","))
             elif args.resnet_simple_att:
                 CNNconst = CNN2D_simpleAttention
                 kwargs = {"inFeat":nbFeat,
