@@ -229,7 +229,7 @@ def plotPointsImageDatasetGrid(exp_id,imgNb,epochs,model_ids,reduction_fact_list
         else:
             vecEmb_list.append(None)
 
-    fnt = ImageFont.load_default()
+    fnt = ImageFont.truetype("arial.ttf", 40)
 
     for i in range(imgNb):
 
@@ -257,29 +257,19 @@ def plotPointsImageDatasetGrid(exp_id,imgNb,epochs,model_ids,reduction_fact_list
 
                 if attMap.shape[0] != 1 and not onlyNorm[j]:
                     if maps_inds[j] == -1:
-                    #if attMap.shape[0] == 3 or attMap.shape[0] == 4:
-                        #allAttMap = []
-                        #for l in range(3):
-                        #    attMap_l = attMap[l:l+1]
-                        #    attMap_l = attMap_l.astype(float)
-                        #    attMap_l = (attMap_l-attMap_l.min())/(attMap_l.max()-attMap_l.min())
-                        #    allAttMap.append(attMap_l)
-                        #attMap = np.concatenate(allAttMap,axis=0)
+
                         attMap = (attMap-attMap.min())/(attMap.max()-attMap.min())
 
                         if agregateMultiAtt[j]:
                             attMap = attMap.mean(axis=0,keepdims=True)
                             attMap = (attMap-attMap.min())/(attMap.max()-attMap.min())
                         elif plotVecEmb[j]:
-                            #print(attMap[0:1].shape,vecEmb_list[j][inds[i]][0][:,np.newaxis,np.newaxis].shape)
                             attMap = attMap[0:1]*vecEmb_list[j][inds[i]][0][:,np.newaxis,np.newaxis]
                             attMap = (attMap-attMap.min())/(attMap.max()-attMap.min())
                     else:
                         attMap = attMap[maps_inds[j]:maps_inds[j]+1]
                         attMap = attMap.astype(float)
                         attMap /= 255
-                        #attMap *= 3
-                        #attMap = torch.softmax(torch.tensor(attMap).float().view(-1),dim=-1).view(attMap.shape[0],attMap.shape[1],attMap.shape[2]).numpy()
                         attMap = (attMap-attMap.min())/(attMap.max()-attMap.min())
                         attMap = (attMap > 0.5).astype(float)
                 else:
