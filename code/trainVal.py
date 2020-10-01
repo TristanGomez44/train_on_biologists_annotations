@@ -83,10 +83,6 @@ def epochSeqTr(model, optim, log_interval, loader, epoch, args, writer, **kwargs
 
         resDict = model(data)
 
-        if args.bil_center_loss:
-            resDict["feature_center_batch"] = model.firstModel.computeFeatCenter(target)
-            model.firstModel.updateFeatCenter(resDict["feature_center_batch"],resDict["feature_matrix"],target)
-
         output = resDict["pred"]
 
         loss = computeLoss(args, output, target, resDict, data,seg)
@@ -184,7 +180,6 @@ def average_gradients(model):
             dist.all_reduce(param.grad.data, op=dist.ReduceOp.SUM)
             param.grad.data /= size
 
-
 def epochImgEval(model, log_interval, loader, epoch, args, writer, metricEarlyStop, mode="val"):
     ''' Train a model during one epoch
 
@@ -201,6 +196,8 @@ def epochImgEval(model, log_interval, loader, epoch, args, writer, metricEarlySt
 
     if args.debug or args.benchmark:
         start_time = time.time()
+
+    dataset = getattr(args,"dataset_{}".format(mode))
 
     model.eval()
 
@@ -251,16 +248,13 @@ def epochImgEval(model, log_interval, loader, epoch, args, writer, metricEarlySt
         else:
             resDict = model(data)
 
-        if args.bil_center_loss:
-            resDict["feature_center_batch"] = model.firstModel.computeFeatCenter(target)
-
         output = resDict["pred"]
 
         # Loss
         loss = computeLoss(args, output, target, resDict, data,seg)
 
         # Other variables produced by the net
-        if mode == "test":
+        if mode == "test" and (dataset.find("emb") == -1 or (dataset.find("emb") != -1 and validBatch < 10)):
             intermVarDict = update.catIntermediateVariables(resDict, intermVarDict, validBatch, args.save_all)
 
         # Harware occupation
