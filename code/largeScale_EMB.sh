@@ -5,6 +5,9 @@ case $1 in
   "clusCat")
     python trainVal.py -c model_emb.config --exp_id EMB --model_id bilClusCat --epochs 300  --aux_model False --aux_mod_nll_weight 0 --first_mod $2   --resnet_bilinear True --bil_cluster True --bil_cluster_ensemble False --val_batch_size 16 --shuffle_test_set True
     ;;
+  "clusCatSoftm")
+    python trainVal.py -c model_emb.config --exp_id EMB --model_id bilClusCat_softm --epochs 300  --aux_model False --aux_mod_nll_weight 0 --first_mod $2   --resnet_bilinear True --bil_cluster True --bil_cluster_ensemble False --val_batch_size 16 --shuffle_test_set True --apply_softmax_on_sim True --softm_coeff 1
+    ;;
   "clusNoGate")
     python trainVal.py -c model_emb.config --exp_id EMB --model_id bilClusNoG --epochs 300  --aux_model False --aux_mod_nll_weight 0 --first_mod $2   --resnet_bilinear True --bil_cluster True --bil_cluster_ensemble True
     ;;

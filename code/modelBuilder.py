@@ -629,7 +629,7 @@ def representativeVectors(x,nbVec,applySoftMax=False,softmCoeff=1,softmSched=Fal
             else:
                 raw_reprVec_score = (1-sim)*raw_reprVec_score
 
-        simReshaped = sim.reshape(sim.size(0),1,xOrigShape[2],xOrigShape[3])
+        simReshaped = simNorm.reshape(sim.size(0),1,xOrigShape[2],xOrigShape[3])
 
         simList.append(simReshaped)
 
