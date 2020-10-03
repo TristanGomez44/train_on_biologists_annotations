@@ -619,8 +619,8 @@ def run(args):
     if args.cuda:
         torch.cuda.manual_seed(args.seed)
 
-    trainLoader, trainDataset = load_data.buildTrainLoader(args,withSeg=args.with_seg,reprVec=args.repr_vec)
-    valLoader,_ = load_data.buildTestLoader(args, "val",withSeg=args.with_seg,reprVec=args.repr_vec)
+    trainLoader, trainDataset = load_data.buildTrainLoader(args,useBirdDataset=args.use_bird_dataset,withSeg=args.with_seg,reprVec=args.repr_vec)
+    valLoader,_ = load_data.buildTestLoader(args, "val",useBirdDataset=args.use_bird_dataset,withSeg=args.with_seg,reprVec=args.repr_vec)
 
     # Building the net
     net = modelBuilder.netBuilder(args)
@@ -702,7 +702,7 @@ def run(args):
             kwargsTest = kwargsVal
             kwargsTest["mode"] = "test"
 
-            testLoader,_ = load_data.buildTestLoader(args, "test",withSeg=args.with_seg,reprVec=args.repr_vec,shuffle=args.shuffle_test_set)
+            testLoader,_ = load_data.buildTestLoader(args, "test",useBirdDataset=args.use_bird_dataset,withSeg=args.with_seg,reprVec=args.repr_vec,shuffle=args.shuffle_test_set)
 
             kwargsTest['loader'] = testLoader
 

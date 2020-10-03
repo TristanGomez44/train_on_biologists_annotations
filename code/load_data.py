@@ -18,6 +18,7 @@ import albumentations
 import scipy.io
 import imageDatasetWithSeg
 import reprVecDataset
+import birdDataset
 
 class Partition(object):
 
@@ -54,53 +55,57 @@ class DataPartitioner(object):
 
 
 
-def buildTrainLoader(args,transf=None,shuffle=True,withSeg=False,reprVec=False):
+def buildTrainLoader(args,useBirdDataset=False,transf=None,shuffle=True,withSeg=False,reprVec=False):
 
-    normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
-    resizedImgSize = 500 if args.big_images else 224
-    if transf is None:
+    if not useBirdDataset:
+        normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+        resizedImgSize = 500 if args.big_images else 224
+        if transf is None:
 
-        if args.old_preprocess:
-            transf = transforms.Compose(
-                [transforms.RandomResizedCrop(resizedImgSize), transforms.RandomHorizontalFlip(), transforms.ToTensor()])
-        elif args.moredataaug_preprocess:
+            if args.old_preprocess:
+                transf = transforms.Compose(
+                    [transforms.RandomResizedCrop(resizedImgSize), transforms.RandomHorizontalFlip(), transforms.ToTensor()])
+            elif args.moredataaug_preprocess:
 
-            albTransfFunc = albumentations.Compose([
-                albumentations.augmentations.transforms.GaussNoise(var_limit=(10.0, 100.0)),
-                albumentations.augmentations.transforms.GaussianBlur(blur_limit=10)])
+                albTransfFunc = albumentations.Compose([
+                    albumentations.augmentations.transforms.GaussNoise(var_limit=(10.0, 100.0)),
+                    albumentations.augmentations.transforms.GaussianBlur(blur_limit=10)])
 
-            transf = transforms.Compose(
-                [transforms.RandomResizedCrop(resizedImgSize, scale=(0.2, 1.0)),
-                transforms.RandomHorizontalFlip(),
-                torchvision.transforms.ColorJitter(brightness=0.1, contrast=0.1, saturation=0.1, hue=0.1),
-                torchvision.transforms.Lambda(lambda x:albTransfFunc(image=np.asarray(x))["image"]),
-                transforms.ToTensor()])
-        elif args.ws_dan_preprocess:
-            transf = transforms.Compose([
-                transforms.Resize(size=(int(448 / 0.875), int(448 / 0.875))),
-                transforms.RandomCrop(448),
-                transforms.RandomHorizontalFlip(0.5),
-                transforms.ColorJitter(brightness=0.126, saturation=0.5),
-                transforms.ToTensor()])
+                transf = transforms.Compose(
+                    [transforms.RandomResizedCrop(resizedImgSize, scale=(0.2, 1.0)),
+                    transforms.RandomHorizontalFlip(),
+                    torchvision.transforms.ColorJitter(brightness=0.1, contrast=0.1, saturation=0.1, hue=0.1),
+                    torchvision.transforms.Lambda(lambda x:albTransfFunc(image=np.asarray(x))["image"]),
+                    transforms.ToTensor()])
+            elif args.ws_dan_preprocess:
+                transf = transforms.Compose([
+                    transforms.Resize(size=(int(448 / 0.875), int(448 / 0.875))),
+                    transforms.RandomCrop(448),
+                    transforms.RandomHorizontalFlip(0.5),
+                    transforms.ColorJitter(brightness=0.126, saturation=0.5),
+                    transforms.ToTensor()])
+            else:
+                transf = transforms.Compose([transforms.Resize(resizedImgSize), transforms.RandomCrop(resizedImgSize, padding=0, pad_if_needed=True),
+                                             transforms.RandomHorizontalFlip(), transforms.ToTensor()])
+
+            if args.normalize_data:
+                transf = transforms.Compose([transf,normalize])
+
+        if transf == "identity":
+            transf = transforms.Compose([transforms.Resize((resizedImgSize,resizedImgSize)), transforms.ToTensor()])
+
+        if reprVec:
+            datasetConst = reprVecDataset.ReprVec
+            datasetArgs = ["../data/{}".format(args.dataset_train)]
+        elif withSeg:
+            datasetConst = imageDatasetWithSeg.ImageFolderWithSeg
+            datasetArgs = ["../data/{}".format(args.dataset_train),transf]
         else:
-            transf = transforms.Compose([transforms.Resize(resizedImgSize), transforms.RandomCrop(resizedImgSize, padding=0, pad_if_needed=True),
-                                         transforms.RandomHorizontalFlip(), transforms.ToTensor()])
-
-        if args.normalize_data:
-            transf = transforms.Compose([transf,normalize])
-
-    if transf == "identity":
-        transf = transforms.Compose([transforms.Resize((resizedImgSize,resizedImgSize)), transforms.ToTensor()])
-
-    if reprVec:
-        datasetConst = reprVecDataset.ReprVec
-        datasetArgs = ["../data/{}".format(args.dataset_train)]
-    elif withSeg:
-        datasetConst = imageDatasetWithSeg.ImageFolderWithSeg
-        datasetArgs = ["../data/{}".format(args.dataset_train),transf]
+            datasetConst = torchvision.datasets.ImageFolder
+            datasetArgs = ["../data/{}".format(args.dataset_train),transf]
     else:
-        datasetConst = torchvision.datasets.ImageFolder
-        datasetArgs = ["../data/{}".format(args.dataset_train),transf]
+        datasetConst = birdDataset.BirdDataset
+        datasetArgs = [args.dataset_train, "train",(224,224)]
 
     train_dataset = datasetConst(*datasetArgs)
 
@@ -136,37 +141,41 @@ def buildTrainLoader(args,transf=None,shuffle=True,withSeg=False,reprVec=False):
     return trainLoader, train_dataset
 
 
-def buildTestLoader(args, mode,shuffle=False,withSeg=False,reprVec=False):
+def buildTestLoader(args, mode,useBirdDataset=False,shuffle=False,withSeg=False,reprVec=False):
     datasetName = getattr(args, "dataset_{}".format(mode))
 
-    if args.upscale_test:
-        resizedImgSize = 312
-    else:
-        resizedImgSize = 500 if args.big_images else 224
+    if not useBirdDataset:
+        if args.upscale_test:
+            resizedImgSize = 312
+        else:
+            resizedImgSize = 500 if args.big_images else 224
 
-    if args.old_preprocess:
-        transf = transforms.Compose([transforms.Resize(int(resizedImgSize*1.14)), transforms.CenterCrop(resizedImgSize), transforms.ToTensor()])
-    elif args.ws_dan_preprocess:
-        transf = transforms.Compose([
-            transforms.Resize(size=(int(448 / 0.875), int(448 / 0.875))),
-            transforms.CenterCrop(448),
-            transforms.ToTensor()])
-    else:
-        transf = transforms.Compose([transforms.Resize(resizedImgSize), transforms.CenterCrop(resizedImgSize), transforms.ToTensor()])
+        if args.old_preprocess:
+            transf = transforms.Compose([transforms.Resize(int(resizedImgSize*1.14)), transforms.CenterCrop(resizedImgSize), transforms.ToTensor()])
+        elif args.ws_dan_preprocess:
+            transf = transforms.Compose([
+                transforms.Resize(size=(int(448 / 0.875), int(448 / 0.875))),
+                transforms.CenterCrop(448),
+                transforms.ToTensor()])
+        else:
+            transf = transforms.Compose([transforms.Resize(resizedImgSize), transforms.CenterCrop(resizedImgSize), transforms.ToTensor()])
 
-    if args.normalize_data:
-        normalizeFunc = transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
-        transf = transforms.Compose([transf, normalizeFunc])
+        if args.normalize_data:
+            normalizeFunc = transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+            transf = transforms.Compose([transf, normalizeFunc])
 
-    if reprVec:
-        datasetConst = reprVecDataset.ReprVec
-        datasetArgs = ["../data/{}".format(datasetName)]
-    elif withSeg:
-        datasetConst = imageDatasetWithSeg.ImageFolderWithSeg
-        datasetArgs = ["../data/{}".format(datasetName),transf]
+        if reprVec:
+            datasetConst = reprVecDataset.ReprVec
+            datasetArgs = ["../data/{}".format(datasetName)]
+        elif withSeg:
+            datasetConst = imageDatasetWithSeg.ImageFolderWithSeg
+            datasetArgs = ["../data/{}".format(datasetName),transf]
+        else:
+            datasetConst = torchvision.datasets.ImageFolder
+            datasetArgs = ["../data/{}".format(datasetName),transf]
     else:
-        datasetConst = torchvision.datasets.ImageFolder
-        datasetArgs = ["../data/{}".format(datasetName),transf]
+        datasetConst = birdDataset.BirdDataset
+        datasetArgs = [datasetName, mode,(224,224)]
 
     test_dataset = datasetConst(*datasetArgs)
 
@@ -245,5 +254,11 @@ def addArgs(argreader):
 
     argreader.parser.add_argument('--shuffle_test_set', type=args.str2bool, metavar='S',
                                   help='To shuffle the test set.')
+
+    argreader.parser.add_argument('--use_bird_dataset', type=args.str2bool, metavar='S',
+                                  help='To use the WS-DAN bird dataset code.')
+
+
+
 
     return argreader
