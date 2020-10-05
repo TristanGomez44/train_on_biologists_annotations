@@ -645,7 +645,7 @@ class CNN2D_bilinearAttPool(FirstModel):
                  attChan=16,inFeat=512,nb_parts=3,aux_model=False,score_pred_act_func="softmax",center_loss=False,\
                  center_loss_beta=5e-2,num_classes=200,cuda=True,cluster=False,cluster_ensemble=False,applySoftmaxOnSim=False,\
                  softmCoeff=1,softmSched=False,normFeat=False,no_refine=False,rand_vec=False,unnorm=False,update_sco_by_norm_sim=False,\
-                 vect_gate=False,vect_ind_to_use="all",\
+                 vect_gate=False,vect_ind_to_use="all",multi_feat_by_100=False,\
                  **kwargs):
 
         super(CNN2D_bilinearAttPool, self).__init__(featModelName, pretrainedFeatMod, featMap, bigMaps, **kwargs)
@@ -696,6 +696,7 @@ class CNN2D_bilinearAttPool(FirstModel):
             self.vect_gate_proto.data.uniform_(0, 2*stdv)
 
         self.vect_ind_to_use = vect_ind_to_use
+        self.multi_feat_by_100 = multi_feat_by_100
 
     def forward(self, x):
         # N x C x H x L
@@ -754,7 +755,11 @@ class CNN2D_bilinearAttPool(FirstModel):
 
             spatialWeights = torch.cat(simList,dim=1)
 
-        retDict["x"] = features_agr
+        if self.multi_feat_by_100:
+            retDict["x"] = 100*features_agr
+        else:
+            retDict["x"] = features_agr
+
         retDict["attMaps"] = spatialWeights
         retDict["features"] = features
 
@@ -972,7 +977,8 @@ def netBuilder(args):
                           "update_sco_by_norm_sim":args.bil_clust_update_sco_by_norm_sim,\
                           "normFeat":args.bil_norm_feat,\
                           "vect_gate":args.bil_clus_vect_gate,\
-                          "vect_ind_to_use":args.bil_clus_vect_ind_to_use}
+                          "vect_ind_to_use":args.bil_clus_vect_ind_to_use,\
+                          "multi_feat_by_100":args.multi_feat_by_100}
                 nbFeatAux = nbFeat
                 if not args.bil_cluster_ensemble:
                     if args.bil_clus_vect_ind_to_use == "all":
@@ -1021,6 +1027,8 @@ def netBuilder(args):
                                       multiLev_cat=args.multi_level_feat_cat,\
                                       deeplabv3_outchan=args.deeplabv3_outchan,\
                                       replaceStrideByDilation=args.resnet_replace_str_by_dil,\
+                                      strideLay2=args.stride_lay2,strideLay3=args.stride_lay3,\
+                                      strideLay4=args.stride_lay4,\
                                       **kwargs)
             else:
                 firstModel = CNNconst(args.first_mod, args.pretrained_visual,
@@ -1140,6 +1148,12 @@ def addArgs(argreader):
                                   help='Apply stride on every non 3x3 convolution')
     argreader.parser.add_argument('--resnet_replace_by_1x1', type=args.str2bool, metavar='NB',
                                   help='Replace the second 3x3 conv of BasicBlock by a 1x1 conv')
+    argreader.parser.add_argument('--stride_lay2', type=int, metavar='NB',
+                                  help='Stride for layer 2.')
+    argreader.parser.add_argument('--stride_lay3', type=int, metavar='NB',
+                                  help='Stride for layer 3.')
+    argreader.parser.add_argument('--stride_lay4', type=int, metavar='NB',
+                                  help='Stride for layer 4.')
 
     argreader.parser.add_argument('--resnet_att_chan', type=int, metavar='INT',
                                   help='For the \'resnetX_att\' feat models. The number of channels in the attention module.')
@@ -1218,5 +1232,8 @@ def addArgs(argreader):
 
     argreader.parser.add_argument('--lin_lay_bias', type=args.str2bool, metavar='BOOL',
                                   help="To add a bias to the final layer.")
+
+    argreader.parser.add_argument('--multi_feat_by_100', type=args.str2bool, metavar='BOOL',
+                                  help="To multiply feature by 100 when using bilinear model.")
 
     return argreader

@@ -191,6 +191,7 @@ class MultiLevelFeat(nn.Module):
 class ResNet(nn.Module):
 
     def __init__(self, block, layers, num_classes=1000, zero_init_residual=False, norm_layer=None,maxPoolKer=(3,3),maxPoolPad=(1,1),stride=(2,2),\
+                    strideLay2=2,strideLay3=2,strideLay4=2,\
                     featMap=False,chan=64,inChan=3,dilation=1,layerSizeReduce=True,preLayerSizeReduce=True,layersNb=4,attention=False,attChan=16,attBlockNb=1,\
                     attActFunc="sigmoid",applyStrideOnAll=False,replaceBy1x1=False,reluOnLast=False,multiLevelFeat=False,multiLev_outChan=64,multiLev_cat=False,\
                     replaceStrideByDilation=False):
@@ -220,13 +221,13 @@ class ResNet(nn.Module):
         #All layers are built but they will not necessarily be used
         self.layer1 = self._make_layer(block, chan[0], layers[0], stride=1,norm_layer=norm_layer,reluOnLast=reluOnLast if self.nbLayers==1 else True,\
                                         dilation=1,applyStrideOnAll=applyStrideOnAll,replaceBy1x1=replaceBy1x1,replaceStrideByDilation=replaceStrideByDilation)
-        self.layer2 = self._make_layer(block, chan[1], layers[1], stride=1 if not layerSizeReduce else stride, norm_layer=norm_layer,\
+        self.layer2 = self._make_layer(block, chan[1], layers[1], stride=1 if not layerSizeReduce else strideLay2, norm_layer=norm_layer,\
                                         reluOnLast=reluOnLast if self.nbLayers==2 else True,dilation=dilation[0],applyStrideOnAll=applyStrideOnAll,replaceBy1x1=replaceBy1x1,\
                                         replaceStrideByDilation=replaceStrideByDilation)
-        self.layer3 = self._make_layer(block, chan[2], layers[2], stride=1 if not layerSizeReduce else stride, norm_layer=norm_layer,\
+        self.layer3 = self._make_layer(block, chan[2], layers[2], stride=1 if not layerSizeReduce else strideLay3, norm_layer=norm_layer,\
                                         reluOnLast=reluOnLast if self.nbLayers==3 else True,dilation=dilation[1],applyStrideOnAll=applyStrideOnAll,replaceBy1x1=replaceBy1x1,\
                                         replaceStrideByDilation=replaceStrideByDilation)
-        self.layer4 = self._make_layer(block, chan[3], layers[3], stride=1 if not layerSizeReduce else stride, norm_layer=norm_layer,\
+        self.layer4 = self._make_layer(block, chan[3], layers[3], stride=1 if not layerSizeReduce else strideLay4, norm_layer=norm_layer,\
                                         reluOnLast=reluOnLast if self.nbLayers==4 else True,dilation=dilation[2],applyStrideOnAll=applyStrideOnAll,replaceBy1x1=replaceBy1x1,\
                                         replaceStrideByDilation=replaceStrideByDilation)
 

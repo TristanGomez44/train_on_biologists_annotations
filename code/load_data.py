@@ -105,7 +105,8 @@ def buildTrainLoader(args,useBirdDataset=False,transf=None,shuffle=True,withSeg=
             datasetArgs = ["../data/{}".format(args.dataset_train),transf]
     else:
         datasetConst = birdDataset.BirdDataset
-        datasetArgs = [args.dataset_train, "train",(224,224)]
+        imgSize = 448 if args.big_images else 224
+        datasetArgs = [args.dataset_train, "train",(imgSize,imgSize)]
 
     train_dataset = datasetConst(*datasetArgs)
 
@@ -175,7 +176,8 @@ def buildTestLoader(args, mode,useBirdDataset=False,shuffle=False,withSeg=False,
             datasetArgs = ["../data/{}".format(datasetName),transf]
     else:
         datasetConst = birdDataset.BirdDataset
-        datasetArgs = [datasetName, mode,(224,224)]
+        imgSize = 448 if args.big_images else 224
+        datasetArgs = [datasetName, mode,(imgSize,imgSize)]
 
     test_dataset = datasetConst(*datasetArgs)
 
