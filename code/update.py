@@ -119,10 +119,10 @@ def saveIntermediateVariables(intermVarDict,exp_id,model_id,epoch,mode="val",sav
 
     return intermVarDict
 
-def catMap(visualDict,fullMap,key="attMaps",save_all="all"):
+def catMap(visualDict,fullMap,key="attMaps",save_all=True):
     if key in visualDict.keys():
 
-        if not save_all=="all":
+        if not save_all:
             #Only taking one image over the batch to not overload memory
             visualDict[key] = visualDict[key][0:1]
 

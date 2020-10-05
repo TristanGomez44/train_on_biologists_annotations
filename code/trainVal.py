@@ -63,6 +63,7 @@ def epochSeqTr(model, optim, log_interval, loader, epoch, args, writer, **kwargs
     allOut, allGT = None, None
 
     for batch_idx, batch in enumerate(loader):
+        optim.zero_grad()
 
         if (batch_idx % log_interval == 0):
             processedImgNb = batch_idx * len(batch[0])
@@ -95,7 +96,6 @@ def epochSeqTr(model, optim, log_interval, loader, epoch, args, writer, **kwargs
         optim.step()
         update.updateHardWareOccupation(args.debug, args.benchmark, args.cuda, epoch, "train", args.exp_id,
                                         args.model_id, batch_idx)
-        optim.zero_grad()
 
         # Metrics
         with torch.no_grad():
@@ -255,7 +255,7 @@ def epochImgEval(model, log_interval, loader, epoch, args, writer, metricEarlySt
 
         # Other variables produced by the net
         if mode == "test" and (dataset.find("emb") == -1 or (dataset.find("emb") != -1 and validBatch < 640)):
-            intermVarDict = update.catIntermediateVariables(resDict, intermVarDict, validBatch, args.save_all or dataset.find("emb") != -1)
+            intermVarDict = update.catIntermediateVariables(resDict, intermVarDict, validBatch, args.save_all and dataset.find("emb") == -1)
 
         # Harware occupation
         update.updateHardWareOccupation(args.debug, args.benchmark, args.cuda, epoch, mode, args.exp_id, args.model_id,
