@@ -8,6 +8,33 @@ case $1 in
   "bilRed")
     python trainVal.py -c model_cub4.config --exp_id CUB5 --model_id bilRed        --epochs 300  --aux_model False  --aux_mod_nll_weight 0 --first_mod $2    --resnet_bilinear True  --resnet_simple_att_score_pred_act_func relu --resnet_layer_size_reduce True
     ;;
+  "bilRed-BD-alltrain")
+    python trainVal.py -c model_cub4.config --exp_id CUB5 --model_id bilRed-BD-alltrain        --epochs 300  --aux_model False  --aux_mod_nll_weight 0 --first_mod $2    --resnet_bilinear True  --resnet_simple_att_score_pred_act_func relu --resnet_layer_size_reduce True --use_bird_dataset True  --dataset_val CUB_200_2011_test --train_prop 100 --batch_size 12
+    ;;
+  "bilRed-BD-alltrain-nodrp-nobias")
+    python trainVal.py -c model_cub4.config --exp_id CUB5 --model_id bilRed-BD-alltrain-nodrp-nobias       --epochs 300  --aux_model False  --aux_mod_nll_weight 0 --first_mod $2    --resnet_bilinear True  --resnet_simple_att_score_pred_act_func relu --resnet_layer_size_reduce True --use_bird_dataset True  --dataset_val CUB_200_2011_test --train_prop 100 --batch_size 12 --dropout 0 --lin_lay_bias False
+    ;;
+  "bilRed-BD-alltrain-nodrp-nobias-sched")
+    python trainVal.py -c model_cub4.config --exp_id CUB5 --model_id bilRed-BD-alltrain-nodrp-nobias-sched       --epochs 300  --aux_model False  --aux_mod_nll_weight 0 --first_mod $2    --resnet_bilinear True  --resnet_simple_att_score_pred_act_func relu --resnet_layer_size_reduce True --use_bird_dataset True  --dataset_val CUB_200_2011_test --train_prop 100 --batch_size 12 --dropout 0 --lin_lay_bias False --use_scheduler True
+    ;;
+  "bilRed-BD-alltrain-nodrp-nobias-sched-highRes")
+    python trainVal.py -c model_cub4.config --exp_id CUB5 --model_id bilRed-BD-alltrain-nodrp-nobias-sched-highRes       --epochs 300  --aux_model False  --aux_mod_nll_weight 0 --first_mod $2    --resnet_bilinear True  --resnet_simple_att_score_pred_act_func relu --resnet_layer_size_reduce True --use_bird_dataset True --dataset_val CUB_200_2011_test --train_prop 100  --batch_size 12 --dropout 0 --lin_lay_bias False --use_scheduler True --big_images True
+    ;;
+  "bilRed-BD-nodrp-nobias-sched-highRes")
+    python trainVal.py -c model_cub4.config --exp_id CUB5 --model_id bilRed-BD-nodrp-nobias-sched-highRes       --epochs 300  --aux_model False  --aux_mod_nll_weight 0 --first_mod $2    --resnet_bilinear True  --resnet_simple_att_score_pred_act_func relu --resnet_layer_size_reduce True --use_bird_dataset True  --batch_size 12 --dropout 0 --lin_lay_bias False --use_scheduler True --big_images True
+    ;;
+  "bil-BD-nodrp-nobias-sched-highRes")
+    python trainVal.py -c model_cub4.config --exp_id CUB5 --model_id bil-BD-nodrp-nobias-sched-highRes       --epochs 300  --aux_model False  --aux_mod_nll_weight 0 --first_mod $2    --resnet_bilinear True  --resnet_simple_att_score_pred_act_func relu --resnet_layer_size_reduce True --use_bird_dataset True  --batch_size 12 --dropout 0 --lin_lay_bias False --use_scheduler True --big_images True --stride_lay2 2 --stride_lay3 1 --stride_lay4 1
+    ;;
+  "bilClus-BD-nodrp-nobias-sched-highRes")
+    python trainVal.py -c model_cub4.config --exp_id CUB5 --model_id bilClus-BD-nodrp-nobias-sched-highRes       --epochs 300  --aux_model False  --aux_mod_nll_weight 0 --first_mod $2    --resnet_bilinear True  --resnet_simple_att_score_pred_act_func relu --resnet_layer_size_reduce True --use_bird_dataset True  --batch_size 12 --dropout 0 --lin_lay_bias False --use_scheduler True --big_images True --stride_lay2 2 --stride_lay3 1 --stride_lay4 1 --bil_cluster True
+    ;;
+  "bilRed-BD-alltrain-nodrp-nobias-sched-zeroGrad")
+    python trainVal.py -c model_cub4.config --exp_id CUB5 --model_id bilRed-BD-alltrain-nodrp-nobias-sched-zeroGrad       --epochs 300  --aux_model False  --aux_mod_nll_weight 0 --first_mod $2    --resnet_bilinear True  --resnet_simple_att_score_pred_act_func relu --resnet_layer_size_reduce True --use_bird_dataset True  --dataset_val CUB_200_2011_test --train_prop 100 --batch_size 12 --dropout 0 --lin_lay_bias False --use_scheduler True
+    ;;
+  "bilRed-BD-alltrain-nodrp-nobias-multBy100")
+    python trainVal.py -c model_cub4.config --exp_id CUB5 --model_id bilRed-BD-alltrain-nodrp-nobias-multBy100        --epochs 300  --aux_model False  --aux_mod_nll_weight 0 --first_mod $2    --resnet_bilinear True  --resnet_simple_att_score_pred_act_func relu --resnet_layer_size_reduce True --use_bird_dataset True  --dataset_val CUB_200_2011_test --train_prop 100 --batch_size 12 --dropout 0 --lin_lay_bias False --multi_feat_by_100 True
+    ;;
   "bilSmallAtt")
     python trainVal.py -c model_cub4.config --exp_id CUB5 --model_id bilSmallAtt --epochs 300  --aux_model False  --aux_mod_nll_weight 0 --first_mod $2    --resnet_bilinear True  --resnet_simple_att_score_pred_act_func relu --resnet_att_blocks_nb 0
     ;;
