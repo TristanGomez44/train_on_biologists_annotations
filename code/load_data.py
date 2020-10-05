@@ -252,9 +252,6 @@ def addArgs(argreader):
     argreader.parser.add_argument('--repr_vec', type=args.str2bool, metavar='S',
                                   help='To use representative vectors instead of raw image.')
 
-    argreader.parser.add_argument('--shuffle_test_set', type=args.str2bool, metavar='S',
-                                  help='To shuffle the test set.')
-
     argreader.parser.add_argument('--use_bird_dataset', type=args.str2bool, metavar='S',
                                   help='To use the WS-DAN bird dataset code.')
 

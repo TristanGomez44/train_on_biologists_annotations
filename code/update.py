@@ -106,17 +106,8 @@ def updateTimeCSV(epoch,mode,exp_id,model_id,totalTime,batch_idx):
 
 def catIntermediateVariables(visualDict,intermVarDict,nbVideos, save_all):
 
-    intermVarDict["fullAttMap"] = catMap(visualDict,intermVarDict["fullAttMap"],key="attMaps")
+    intermVarDict["fullAttMap"] = catMap(visualDict,intermVarDict["fullAttMap"],key="attMaps",save_all=save_all)
     intermVarDict["fullFeatMapSeq"] = catMap(visualDict,intermVarDict["fullFeatMapSeq"],key="features")
-    intermVarDict["fullPointsSeq"] = catPointsSeq(visualDict,intermVarDict["fullPointsSeq"],key="points")
-    intermVarDict["fullPointsSeqDropped"] = catPointsSeq(visualDict,intermVarDict["fullPointsSeqDropped"],key="points_dropped")
-    intermVarDict["fullPointsWeightSeq"] = catPointsSeq(visualDict,intermVarDict["fullPointsWeightSeq"],key="pointWeights")
-
-    intermVarDict["fullPointsSeq_pureText"] = catPointsSeq(visualDict,intermVarDict["fullPointsSeq_pureText"],key="points_puretext")
-    intermVarDict["fullPointsWeightSeq_pureText"] = catPointsSeq(visualDict,intermVarDict["fullPointsWeightSeq_pureText"],key="pointWeights_puretext")
-
-    intermVarDict["fullProbMap"] = catMap(visualDict,intermVarDict["fullProbMap"],key="prob_map")
-    intermVarDict["fullReconstSeq"] = catMap(visualDict,intermVarDict["fullReconstSeq"],key="reconst")
 
     return intermVarDict
 
@@ -125,56 +116,25 @@ def saveIntermediateVariables(intermVarDict,exp_id,model_id,epoch,mode="val",sav
     if mode == "test" or save_all == True:
         intermVarDict["fullAttMap"] = saveMap(intermVarDict["fullAttMap"],exp_id,model_id,epoch,mode,key="attMaps")
         intermVarDict["fullFeatMapSeq"] = saveMap(intermVarDict["fullFeatMapSeq"],exp_id,model_id,epoch,mode,key="features")
-        intermVarDict["fullPointsSeq"] =  savePointsSeq(intermVarDict["fullPointsSeq"],exp_id,model_id,epoch,mode,key="points")
-        intermVarDict["fullPointsSeqDropped"] =  savePointsSeq(intermVarDict["fullPointsSeqDropped"],exp_id,model_id,epoch,mode,key="points_dropped")
-        intermVarDict["fullPointsWeightSeq"] =  savePointsSeq(intermVarDict["fullPointsWeightSeq"],exp_id,model_id,epoch,mode,key="pointWeights")
-
-        intermVarDict["fullPointsSeq_pureText"] =  savePointsSeq(intermVarDict["fullPointsSeq_pureText"],exp_id,model_id,epoch,mode,key="points_puretext")
-        intermVarDict["fullPointsWeightSeq_pureText"] =  savePointsSeq(intermVarDict["fullPointsWeightSeq_pureText"],exp_id,model_id,epoch,mode,key="pointWeights_puretext")
-
-        intermVarDict["fullPNReconstSeq"] = saveMap(intermVarDict["fullPNReconstSeq"],exp_id,model_id,epoch,mode,key="pn_reconst")
-        intermVarDict["fullProbMap"] = saveMap(intermVarDict["fullProbMap"],exp_id,model_id,epoch,mode,key="prob_map")
-        intermVarDict["fullReconstSeq"] = saveMap(intermVarDict["fullReconstSeq"],exp_id,model_id,epoch,mode,key="reconst")
 
     return intermVarDict
 
-def catPointsSeq(visualDict,fullPointsSeq,key="points"):
-    if key in visualDict.keys():
-        if fullPointsSeq is None:
-            fullPointsSeq = visualDict[key].cpu()
-        else:
-            fullPointsSeq = torch.cat((fullPointsSeq,visualDict[key].cpu()),dim=0)
-    return fullPointsSeq
-
-def savePointsSeq(fullPointsSeq,exp_id,model_id,epoch,mode,key="points"):
-    if not fullPointsSeq is None:
-        np.save("../results/{}/{}_{}_epoch{}_{}.npy".format(exp_id,key,model_id,epoch,mode),fullPointsSeq.numpy())
-        fullPointsSeq = None
-    return fullPointsSeq
-
-def catMap(visualDict,fullMap,key="attMaps"):
+def catMap(visualDict,fullMap,key="attMaps",save_all="all"):
     if key in visualDict.keys():
 
-        if not type(visualDict[key]) is dict:
+        if not save_all=="all":
+            #Only taking one image over the batch to not overload memory
+            visualDict[key] = visualDict[key][0:1]
 
-            #In case attention weights are not comprised between 0 and 1
-            tens_min = visualDict[key].min(dim=-1,keepdim=True)[0].min(dim=-2,keepdim=True)[0].min(dim=-3,keepdim=True)[0]
-            tens_max = visualDict[key].max(dim=-1,keepdim=True)[0].max(dim=-2,keepdim=True)[0].max(dim=-3,keepdim=True)[0]
-            map = (visualDict[key]-tens_min)/(tens_max-tens_min)
+        #In case attention weights are not comprised between 0 and 1
+        tens_min = visualDict[key].min(dim=-1,keepdim=True)[0].min(dim=-2,keepdim=True)[0].min(dim=-3,keepdim=True)[0]
+        tens_max = visualDict[key].max(dim=-1,keepdim=True)[0].max(dim=-2,keepdim=True)[0].max(dim=-3,keepdim=True)[0]
+        map = (visualDict[key]-tens_min)/(tens_max-tens_min)
 
-            if fullMap is None:
-                fullMap = (map.cpu()*255).byte()
-            else:
-                fullMap = torch.cat((fullMap,(map.cpu()*255).byte()),dim=0)
-
+        if fullMap is None:
+            fullMap = (map.cpu()*255).byte()
         else:
-            visualDict[key] = {layer:(visualDict[key][layer].cpu()*255).byte() for layer in visualDict[key].keys()}
-
-            if fullMap is None:
-                fullMap = visualDict[key]
-            else:
-                for layer in fullMap.keys():
-                    fullMap[layer] = torch.cat((fullMap[layer],visualDict[key][layer]),dim=0)
+            fullMap = torch.cat((fullMap,(map.cpu()*255).byte()),dim=0)
 
     return fullMap
 def saveMap(fullMap,exp_id,model_id,epoch,mode,key="attMaps"):
