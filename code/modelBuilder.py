@@ -791,7 +791,7 @@ class SecondModel(nn.Module):
 class LinearSecondModel(SecondModel):
 
     def __init__(self, nbFeat, nbFeatAux,nbClass, dropout,aux_model=False,zoom=False,zoom_max_sub_clouds=2,bil_cluster_ensemble=False,hidLay=False,\
-                        bil_cluster_ensemble_gate=False,gate_drop=False,gate_randdrop=False):
+                        bil_cluster_ensemble_gate=False,gate_drop=False,gate_randdrop=False,bias=True):
         super(LinearSecondModel, self).__init__(nbFeat, nbClass)
         self.dropout = nn.Dropout(p=dropout)
 
@@ -800,7 +800,7 @@ class LinearSecondModel(SecondModel):
             self.linLay = nn.Linear(self.nbFeat//2, self.nbClass)
         else:
             self.hidLay = None
-            self.linLay = nn.Linear(self.nbFeat, self.nbClass)
+            self.linLay = nn.Linear(self.nbFeat, self.nbClass,bias=bias)
 
         self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
 
@@ -1046,7 +1046,7 @@ def netBuilder(args):
     if args.second_mod == "linear":
         secondModel = LinearSecondModel(nbFeat,nbFeatAux, args.class_nb, args.dropout,args.aux_model,bil_cluster_ensemble=args.bil_cluster_ensemble,\
                                         bil_cluster_ensemble_gate=args.bil_cluster_ensemble_gate,hidLay=args.hid_lay,gate_drop=args.bil_cluster_ensemble_gate_drop,\
-                                        gate_randdrop=args.bil_cluster_ensemble_gate_randdrop,**zoomArgs)
+                                        gate_randdrop=args.bil_cluster_ensemble_gate_randdrop,bias=args.lin_lay_bias,**zoomArgs)
     else:
         raise ValueError("Unknown second model type : ", args.second_mod)
 
@@ -1216,7 +1216,7 @@ def addArgs(argreader):
     argreader.parser.add_argument('--bil_cluster_randvec', type=args.str2bool, metavar='BOOL',
                                   help="To select random vectors as initial estimation instead of vectors with high norms.")
 
-
-
+    argreader.parser.add_argument('--lin_lay_bias', type=args.str2bool, metavar='BOOL',
+                                  help="To add a bias to the final layer.")
 
     return argreader

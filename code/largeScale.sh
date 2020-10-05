@@ -2,6 +2,9 @@ case $1 in
   "bil")
     python trainVal.py -c model_cub4.config --exp_id CUB5 --model_id bil        --epochs 300  --aux_model False  --aux_mod_nll_weight 0 --first_mod $2    --resnet_bilinear True  --resnet_simple_att_score_pred_act_func relu
     ;;
+  "bil-BD-alltrain")
+    python trainVal.py -c model_cub4.config --exp_id CUB5 --model_id bil-BD-alltrain        --epochs 300  --aux_model False  --aux_mod_nll_weight 0 --first_mod $2    --resnet_bilinear True  --resnet_simple_att_score_pred_act_func relu --use_bird_dataset True --dataset_val CUB_200_2011_test --train_prop 100 --batch_size 12
+    ;;
   "bilRed")
     python trainVal.py -c model_cub4.config --exp_id CUB5 --model_id bilRed        --epochs 300  --aux_model False  --aux_mod_nll_weight 0 --first_mod $2    --resnet_bilinear True  --resnet_simple_att_score_pred_act_func relu --resnet_layer_size_reduce True
     ;;
@@ -104,6 +107,30 @@ case $1 in
     ;;
   "none")
     python trainVal.py -c model_cub4.config --exp_id CUB5 --model_id none       --epochs 300  --aux_model False --aux_mod_nll_weight 0 --first_mod $2   --resnet_layer_size_reduce True
+    ;;
+  "none-BD")
+    python trainVal.py -c model_cub4.config --exp_id CUB5 --model_id none-BD       --epochs 300  --aux_model False --aux_mod_nll_weight 0 --first_mod $2   --resnet_layer_size_reduce True --use_bird_dataset True
+    ;;
+  "none-BD-alltrain")
+    python trainVal.py -c model_cub4.config --exp_id CUB5 --model_id none-BD-alltrain       --epochs 300  --aux_model False --aux_mod_nll_weight 0 --first_mod $2   --resnet_layer_size_reduce True --use_bird_dataset True --train_prop 100 --dataset_val CUB_200_2011_test --val_batch_size 128
+    ;;
+  "none-BD-allTrain-nobias")
+    python trainVal.py -c model_cub4.config --exp_id CUB5 --model_id none-BD-alltrain-nobias       --epochs 300  --aux_model False --aux_mod_nll_weight 0 --first_mod $2   --resnet_layer_size_reduce True --use_bird_dataset True --train_prop 100 --dataset_val CUB_200_2011_test --val_batch_size 128 --lin_lay_bias False
+    ;;
+  "none-BD-allTrain-nobias-nodrp")
+    python trainVal.py -c model_cub4.config --exp_id CUB5 --model_id none-BD-alltrain-nobias-nodrp       --epochs 300  --aux_model False --aux_mod_nll_weight 0 --first_mod $2   --resnet_layer_size_reduce True --use_bird_dataset True --train_prop 100 --dataset_val CUB_200_2011_test --val_batch_size 128 --lin_lay_bias False --dropout 0
+    ;;
+  "none-BD-alltrain-nodrp")
+    python trainVal.py -c model_cub4.config --exp_id CUB5 --model_id none-BD-alltrain-nodrp       --epochs 300  --aux_model False --aux_mod_nll_weight 0 --first_mod $2   --resnet_layer_size_reduce True --use_bird_dataset True --train_prop 100 --dataset_val CUB_200_2011_test --val_batch_size 128 --dropout 0
+    ;;
+  "none-BD-nodrp")
+    python trainVal.py -c model_cub4.config --exp_id CUB5 --model_id none-BD-nodrp --epochs 300  --aux_model False --aux_mod_nll_weight 0 --first_mod $2   --resnet_layer_size_reduce True --use_bird_dataset True  --dropout 0
+    ;;
+  "none-BD-nodrp-sched")
+    python trainVal.py -c model_cub4.config --exp_id CUB5 --model_id none-BD-nodrp-sched --epochs 300  --aux_model False --aux_mod_nll_weight 0 --first_mod $2   --resnet_layer_size_reduce True --use_bird_dataset True  --dropout 0 --use_scheduler True
+    ;;
+  "none-BD-nodrp-sched-wd")
+    python trainVal.py -c model_cub4.config --exp_id CUB5 --model_id none-BD-nodrp-sched-wd --epochs 300  --aux_model False --aux_mod_nll_weight 0 --first_mod $2   --resnet_layer_size_reduce True --use_bird_dataset True  --dropout 0 --use_scheduler True --weight_decay 0.00001
     ;;
   "noneNoRed")
     python trainVal.py -c model_cub4.config --exp_id CUB5 --model_id none_noRed --epochs 1000 --aux_model False --aux_mod_nll_weight 0 --first_mod $2
