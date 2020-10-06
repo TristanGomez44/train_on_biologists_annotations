@@ -250,7 +250,7 @@ def epochImgEval(model, log_interval, loader, epoch, args, writer, metricEarlySt
         loss = computeLoss(args, output, target, resDict, data,seg)
 
         # Other variables produced by the net
-        if mode == "test" and (dataset.find("emb") == -1 or (dataset.find("emb") != -1 and validBatch.data.size(0) < 640)):
+        if mode == "test" and (dataset.find("emb") == -1 or (dataset.find("emb") != -1 and validBatch*data.size(0) < 640)):
             intermVarDict = update.catIntermediateVariables(resDict, intermVarDict, validBatch)
 
         # Harware occupation
@@ -614,11 +614,8 @@ def run(args):
     if args.cuda:
         torch.cuda.manual_seed(args.seed)
 
-    if args.use_bird_dataset:
-        args.with_seg = False
-
-    trainLoader, trainDataset = load_data.buildTrainLoader(args,useBirdDataset=args.use_bird_dataset,withSeg=args.with_seg,reprVec=args.repr_vec)
-    valLoader,_ = load_data.buildTestLoader(args, "val",useBirdDataset=args.use_bird_dataset,withSeg=args.with_seg,reprVec=args.repr_vec)
+    trainLoader, trainDataset = load_data.buildTrainLoader(args,withSeg=args.with_seg,reprVec=args.repr_vec)
+    valLoader,_ = load_data.buildTestLoader(args, "val",withSeg=args.with_seg,reprVec=args.repr_vec)
 
     # Building the net
     net = modelBuilder.netBuilder(args)
@@ -700,7 +697,7 @@ def run(args):
             kwargsTest = kwargsVal
             kwargsTest["mode"] = "test"
 
-            testLoader,_ = load_data.buildTestLoader(args, "test",useBirdDataset=args.use_bird_dataset,withSeg=args.with_seg,reprVec=args.repr_vec,shuffle=args.shufle_test_set)
+            testLoader,_ = load_data.buildTestLoader(args, "test",withSeg=args.with_seg,reprVec=args.repr_vec,shuffle=args.shufle_test_set)
 
             kwargsTest['loader'] = testLoader
 
