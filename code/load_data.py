@@ -20,6 +20,23 @@ import imageDatasetWithSeg
 import reprVecDataset
 import birdDataset
 
+class RandomSampler(Sampler):
+
+    def __init__(self, data_source,seed):
+        self.data_source = data_source
+        np.random.seed(seed)
+        torch.manual_seed(seed)
+        if args.cuda:
+            torch.cuda.manual_seed(seed)
+        self.iterObj = iter(torch.randperm(n).tolist())
+
+    def __iter__(self):
+        n = len(self.data_source)
+        return self.iterObj
+
+    def __len__(self):
+        return self.num_samples
+
 class Partition(object):
 
     def __init__(self, data, index):
@@ -201,8 +218,13 @@ def buildTestLoader(args, mode,useBirdDataset=False,shuffle=False,withSeg=False,
         if args.cuda:
             torch.cuda.manual_seed(args.seed)
 
+    if shuffle:
+        sampler = RandomSampler(test_dataset,args.seed)
+    else:
+        sampler=None
+
     testLoader = torch.utils.data.DataLoader(dataset=test_dataset, batch_size=args.val_batch_size,
-                                             num_workers=args.num_workers,shuffle=shuffle)
+                                             num_workers=args.num_workers,sampler=sampler)
 
     return testLoader,test_dataset
 
@@ -229,6 +251,10 @@ def addArgs(argreader):
                                   help='The dataset for validation. Can be "big" or "small"')
     argreader.parser.add_argument('--dataset_test', type=str, metavar='DATASET',
                                   help='The dataset for testing. Can be "big" or "small"')
+
+    argreader.parser.add_argument('--shufle_test_set', type=args.str2bool, metavar='BOOL',
+                                  help='To shuffle the test set.')
+
 
     argreader.parser.add_argument('--class_nb', type=int, metavar='S',
                                   help='The number of class of to model')

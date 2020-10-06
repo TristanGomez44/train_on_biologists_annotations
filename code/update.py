@@ -104,27 +104,23 @@ def updateTimeCSV(epoch,mode,exp_id,model_id,totalTime,batch_idx):
         with open(csvPath,"a") as text_file:
             print(str(epoch)+","+str(totalTime),file=text_file)
 
-def catIntermediateVariables(visualDict,intermVarDict,nbVideos, save_all):
+def catIntermediateVariables(visualDict,intermVarDict,nbVideos):
 
-    intermVarDict["fullAttMap"] = catMap(visualDict,intermVarDict["fullAttMap"],key="attMaps",save_all=save_all)
-    intermVarDict["fullFeatMapSeq"] = catMap(visualDict,intermVarDict["fullFeatMapSeq"],key="features",save_all=save_all)
+    intermVarDict["fullAttMap"] = catMap(visualDict,intermVarDict["fullAttMap"],key="attMaps")
+    intermVarDict["fullFeatMapSeq"] = catMap(visualDict,intermVarDict["fullFeatMapSeq"],key="features")
 
     return intermVarDict
 
-def saveIntermediateVariables(intermVarDict,exp_id,model_id,epoch,mode="val",save_all=True):
+def saveIntermediateVariables(intermVarDict,exp_id,model_id,epoch,mode="val"):
 
-    if mode == "test" or save_all == True:
+    if mode == "test":
         intermVarDict["fullAttMap"] = saveMap(intermVarDict["fullAttMap"],exp_id,model_id,epoch,mode,key="attMaps")
         intermVarDict["fullFeatMapSeq"] = saveMap(intermVarDict["fullFeatMapSeq"],exp_id,model_id,epoch,mode,key="features")
 
     return intermVarDict
 
-def catMap(visualDict,fullMap,key="attMaps",save_all=True):
+def catMap(visualDict,fullMap,key="attMaps"):
     if key in visualDict.keys():
-
-        if not save_all:
-            #Only taking one image over the batch to not overload memory
-            visualDict[key] = visualDict[key][0:1]
 
         #In case attention weights are not comprised between 0 and 1
         tens_min = visualDict[key].min(dim=-1,keepdim=True)[0].min(dim=-2,keepdim=True)[0].min(dim=-3,keepdim=True)[0]

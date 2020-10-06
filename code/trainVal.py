@@ -113,10 +113,6 @@ def epochSeqTr(model, optim, log_interval, loader, epoch, args, writer, **kwargs
     if validBatch > 0:
 
         torch.save(model.state_dict(), "../models/{}/model{}_epoch{}".format(args.exp_id, args.model_id, epoch))
-
-        if (not args.save_all) and os.path.exists(
-                "../models/{}/model{}_epoch{}".format(args.exp_id, args.model_id, epoch - 1)):
-            os.remove("../models/{}/model{}_epoch{}".format(args.exp_id, args.model_id, epoch - 1))
         writeSummaries(metrDict, totalImgNb, writer, epoch, "train", args.model_id, args.exp_id)
 
     if args.debug or args.benchmark:
@@ -254,8 +250,8 @@ def epochImgEval(model, log_interval, loader, epoch, args, writer, metricEarlySt
         loss = computeLoss(args, output, target, resDict, data,seg)
 
         # Other variables produced by the net
-        if mode == "test" and (dataset.find("emb") == -1 or (dataset.find("emb") != -1 and validBatch < 640)):
-            intermVarDict = update.catIntermediateVariables(resDict, intermVarDict, validBatch, args.save_all and dataset.find("emb") == -1)
+        if mode == "test" and (dataset.find("emb") == -1 or (dataset.find("emb") != -1 and validBatch.data.size(0) < 640)):
+            intermVarDict = update.catIntermediateVariables(resDict, intermVarDict, validBatch)
 
         # Harware occupation
         update.updateHardWareOccupation(args.debug, args.benchmark, args.cuda, epoch, mode, args.exp_id, args.model_id,
@@ -276,8 +272,7 @@ def epochImgEval(model, log_interval, loader, epoch, args, writer, metricEarlySt
 
 
     if mode == "test":
-        intermVarDict = update.saveIntermediateVariables(intermVarDict, args.exp_id, args.model_id, epoch, mode,
-                                                        args.save_all)
+        intermVarDict = update.saveIntermediateVariables(intermVarDict, args.exp_id, args.model_id, epoch, mode)
 
     writeSummaries(metrDict, totalImgNb, writer, epoch, mode, args.model_id, args.exp_id)
 
@@ -705,7 +700,7 @@ def run(args):
             kwargsTest = kwargsVal
             kwargsTest["mode"] = "test"
 
-            testLoader,_ = load_data.buildTestLoader(args, "test",useBirdDataset=args.use_bird_dataset,withSeg=args.with_seg,reprVec=args.repr_vec)
+            testLoader,_ = load_data.buildTestLoader(args, "test",useBirdDataset=args.use_bird_dataset,withSeg=args.with_seg,reprVec=args.repr_vec,shuffle=args.shufle_test_set)
 
             kwargsTest['loader'] = testLoader
 
@@ -785,8 +780,6 @@ def main(argv=None):
                                   help="To use when --no_train is set to True. This is the exp_id of the model to get the weights from.")
     argreader.parser.add_argument('--model_id_no_train', type=str,
                                   help="To use when --no_train is set to True. This is the model_id of the model to get the weights from.")
-    argreader.parser.add_argument('--save_all', type=str2bool,
-                                  help="Whether to save network weights at each epoch.")
 
     argreader.parser.add_argument('--no_val', type=str2bool, help='To not compute the validation')
     argreader.parser.add_argument('--only_test', type=str2bool, help='To only compute the test')
