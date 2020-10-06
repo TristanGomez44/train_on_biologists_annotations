@@ -2,8 +2,8 @@ case $1 in
   "r18")
     python trainVal.py -c model_cub8.config --exp_id CUB8_HYP --model_id r18 --epochs 300   --first_mod resnet18   --resnet_bilinear True --bil_cluster True --bil_cluster_ensemble False
     ;;
-  "r50")
-    python trainVal.py -c model_cub8.config --exp_id CUB8_HYP --model_id r50 --epochs 300   --first_mod resnet50   --resnet_bilinear True --bil_cluster True --bil_cluster_ensemble False
+  "r34")
+    python trainVal.py -c model_cub8.config --exp_id CUB8_HYP --model_id r34 --epochs 300   --first_mod resnet34   --resnet_bilinear True --bil_cluster True --bil_cluster_ensemble False
     ;;
   "r101")
     python trainVal.py -c model_cub8.config --exp_id CUB8_HYP --model_id r101 --epochs 300   --first_mod resnet101 --resnet_bilinear True --bil_cluster True --bil_cluster_ensemble False

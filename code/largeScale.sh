@@ -29,6 +29,12 @@ case $1 in
   "bilClus-BD-nodrp-nobias-sched-highRes")
     python trainVal.py -c model_cub4.config --exp_id CUB5 --model_id bilClus-BD-nodrp-nobias-sched-highRes       --epochs 300  --aux_model False  --aux_mod_nll_weight 0 --first_mod $2    --resnet_bilinear True  --resnet_simple_att_score_pred_act_func relu --resnet_layer_size_reduce True --use_bird_dataset True  --batch_size 12 --dropout 0 --lin_lay_bias False --use_scheduler True --big_images True --stride_lay2 2 --stride_lay3 1 --stride_lay4 1 --bil_cluster True
     ;;
+  "clus-BD-nod-nob-sc-hr-8prts")
+    python trainVal.py -c model_cub4.config --exp_id CUB5 --model_id clus-BD-nd-nb-sc-hr-8prts       --epochs 300  --aux_model False  --aux_mod_nll_weight 0 --first_mod $2    --resnet_bilinear True  --resnet_simple_att_score_pred_act_func relu --resnet_layer_size_reduce True  --batch_size 12 --dropout 0 --lin_lay_bias False --use_scheduler True --big_images True --stride_lay2 2 --stride_lay3 1 --stride_lay4 1 --bil_cluster True --resnet_bil_nb_parts 8
+    ;;
+  "clus-BD-nod-nob-sc-hr-16prts")
+    python trainVal.py -c model_cub4.config --exp_id CUB5 --model_id clus-BD-nd-nb-sc-hr-16prts       --epochs 300  --aux_model False  --aux_mod_nll_weight 0 --first_mod $2    --resnet_bilinear True  --resnet_simple_att_score_pred_act_func relu --resnet_layer_size_reduce True --batch_size 12 --dropout 0 --lin_lay_bias False --use_scheduler True --big_images True --stride_lay2 2 --stride_lay3 1 --stride_lay4 1 --bil_cluster True --resnet_bil_nb_parts 16
+    ;;
   "bilRed-BD-alltrain-nodrp-nobias-sched-zeroGrad")
     python trainVal.py -c model_cub4.config --exp_id CUB5 --model_id bilRed-BD-alltrain-nodrp-nobias-sched-zeroGrad       --epochs 300  --aux_model False  --aux_mod_nll_weight 0 --first_mod $2    --resnet_bilinear True  --resnet_simple_att_score_pred_act_func relu --resnet_layer_size_reduce True --use_bird_dataset True  --dataset_val CUB_200_2011_test --train_prop 100 --batch_size 12 --dropout 0 --lin_lay_bias False --use_scheduler True
     ;;
