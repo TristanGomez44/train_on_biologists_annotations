@@ -36,19 +36,10 @@ def binaryToMetrics(output,target,segmentation,resDict,normAtt=False,attentionAc
     acc = compAccuracy(output,target)
     metDict = {"Accuracy":acc}
 
-    cleanNames = ["Accuracy_aux","Accuracy_puretext","Accuracy_struct","Accuracy_zoom","Accuracy_crop","Accuracy_drop","Accuracy_rawcrop"]
-    keys = ["auxPred","puretext_pred","struct_pred","pred_zoom","pred_crop","pred_drop","pred_rawcrop"]
-    for i in range(len(keys)):
-        if keys[i] in resDict:
-            metDict[cleanNames[i]] = compAccuracy(resDict[keys[i]],target)
-
-    if "predBilClusEns0" in resDict:
-        i = 0
-        key = "predBilClusEns{}".format(i)
-        while key in resDict:
-            metDict["Accuracy_BilClustEns{}".format(i)] = compAccuracy(resDict[key],target)
-            i += 1
-            key = "predBilClusEns{}".format(i)
+    for key in resDict.keys():
+        if key.find("pred_") != -1:
+            suff = key.split("_")[-1]
+            metDict["Accuracy_{}".format(suff)] = compAccuracy(resDict[key],target)
 
     if "attMaps" in resDict.keys():
         metDict["Sparsity"],metDict["Sparsity Normalised"] = compAttMapSparsity(resDict["attMaps"].clone(),segmentation.clone() if not segmentation is None else None)

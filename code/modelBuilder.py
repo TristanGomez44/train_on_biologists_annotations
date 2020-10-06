@@ -742,39 +742,25 @@ class SecondModel(nn.Module):
 
 class LinearSecondModel(SecondModel):
 
-    def __init__(self, nbFeat, nbFeatAux,nbClass, dropout,aux_model=False,zoom=False,zoom_max_sub_clouds=2,bil_cluster_ensemble=False,hidLay=False,\
-                        bil_cluster_ensemble_gate=False,gate_drop=False,gate_randdrop=False,bias=True):
+    def __init__(self, nbFeat, nbFeatAux,nbClass, dropout,aux_model=False,zoom=False,zoom_max_sub_clouds=2,bil_cluster_ensemble=False,\
+                        bil_cluster_ensemble_gate=False,gate_drop=False,gate_randdrop=False,bias=True,\
+                        aux_on_masked=False):
+
         super(LinearSecondModel, self).__init__(nbFeat, nbClass)
         self.dropout = nn.Dropout(p=dropout)
 
-        if hidLay:
-            self.hidLay = nn.Sequential(nn.Linear(self.nbFeat,self.nbFeat//2),nn.ReLU())
-            self.linLay = nn.Linear(self.nbFeat//2, self.nbClass)
-        else:
-            self.hidLay = None
-            self.linLay = nn.Linear(self.nbFeat, self.nbClass,bias=bias)
+        self.linLay = nn.Linear(self.nbFeat, self.nbClass,bias=bias)
 
         self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
-
-        self.aux_model = aux_model
-        if self.aux_model:
-            self.aux_model = nn.Linear(nbFeatAux, self.nbClass)
-
-        self.zoom = zoom
-        if self.zoom:
-            self.zoom_model = nn.Linear(zoom_max_sub_clouds*nbFeat,self.nbClass)
-
         self.bil_cluster_ensemble = bil_cluster_ensemble
-        self.bil_cluster_ensemble_gate = bil_cluster_ensemble_gate
-        if self.bil_cluster_ensemble_gate:
-            self.gate = nn.Linear(self.nbFeat//2,1) if hidLay else nn.Linear(self.nbFeat,1)
 
-            if gate_randdrop and gate_drop:
-                raise ValueError("Can't have gate_drop and gate_randdrop at the same time")
-            self.gate_randdrop = gate_randdrop
-            self.gate_drop = gate_drop
-        else:
-            self.gate = None
+        self.aux_on_masked = aux_on_masked
+        if self.aux_on_masked:
+            self.lin01 = nn.Linear(int(nbFeat*2/3),nbClass)
+            self.lin12 = nn.Linear(int(nbFeat*2/3),nbClass)
+            self.lin0 = nn.Linear(nbFeat//3,nbClass)
+            self.lin1 = nn.Linear(nbFeat//3,nbClass)
+            self.lin2 = nn.Linear(nbFeat//3,nbClass)
 
     def forward(self, visResDict):
 
@@ -784,44 +770,29 @@ class LinearSecondModel(SecondModel):
             if len(x.size()) == 4:
                 x = self.avgpool(x).squeeze(-1).squeeze(-1)
 
-            if not self.hidLay is None:
-                x = self.hidLay(x)
-
             x = self.dropout(x)
-            if x.size(-1) == self.nbFeat or (x.size(-1) != self.nbFeat and (not self.zoom)):
-                x = self.linLay(x)
-            else:
-                x = self.zoom_model(x)
-            retDict = {"pred": x}
+            pred = self.linLay(x)
+
+            retDict = {"pred": pred}
+
+            if self.aux_on_masked:
+                retDict["pred_01"] = self.lin01(x[:,:int(self.nbFeat*2/3)].detach())
+                retDict["pred_12"] = self.lin12(x[:,int(self.nbFeat*1/3):].detach())
+                retDict["pred_0"] = self.lin0(x[:,:int(self.nbFeat*1/3)].detach())
+                retDict["pred_1"] = self.lin1(x[:,int(self.nbFeat*1/3):int(self.nbFeat*2/3)].detach())
+                retDict["pred_2"] = self.lin2(x[:,int(self.nbFeat*2/3):].detach())
+
         else:
             predList = []
             gateScoreList = []
 
             for featVec in visResDict["x"]:
-                if self.hidLay:
-                    featVec = self.hidLay(featVec)
                 predList.append(self.linLay(featVec).unsqueeze(0))
-                if self.bil_cluster_ensemble_gate:
-                    gateScoreList.append(self.gate(featVec).unsqueeze(0))
-            if self.bil_cluster_ensemble_gate:
-                x = torch.cat(predList,dim=0)
-                gateScores = torch.softmax(torch.cat(gateScoreList,dim=0),dim=0)
 
-                if self.gate_drop and self.training:
-                    gateScores = gateScores*(gateScores < gateScores.max(dim=0)[0].unsqueeze(0))
-                elif self.gate_randdrop and self.training:
-                    gateScores = gateScores*(gateScores != gateScores[torch.randint(len(predList),size=(featVec.size(0),)),torch.arange(featVec.size(0))].unsqueeze(0))
-                if (self.gate_drop or self.gate_randdrop) and self.training:
-                    gateScores = gateScores/(gateScores.sum(dim=0,keepdim=True)+0.00001)
-                x = (x*gateScores).sum(dim=0)
-            else:
-                x = torch.cat(predList,dim=0).mean(dim=0)
+            x = torch.cat(predList,dim=0).mean(dim=0)
 
             retDict = {"pred": x}
             retDict.update({"predBilClusEns{}".format(i):predList[i][0] for i in range(len(predList))})
-
-        if self.aux_model:
-            retDict["auxPred"] = self.aux_model(visResDict["auxFeat"].mean(dim=-1).mean(dim=-1))
 
         return retDict
 
@@ -1000,8 +971,7 @@ def netBuilder(args):
 
     if args.second_mod == "linear":
         secondModel = LinearSecondModel(nbFeat,nbFeatAux, args.class_nb, args.dropout,args.aux_model,bil_cluster_ensemble=args.bil_cluster_ensemble,\
-                                        bil_cluster_ensemble_gate=args.bil_cluster_ensemble_gate,hidLay=args.hid_lay,gate_drop=args.bil_cluster_ensemble_gate_drop,\
-                                        gate_randdrop=args.bil_cluster_ensemble_gate_randdrop,bias=args.lin_lay_bias,**zoomArgs)
+                                        bias=args.lin_lay_bias,aux_on_masked=args.aux_on_masked,**zoomArgs)
     else:
         raise ValueError("Unknown second model type : ", args.second_mod)
 
@@ -1182,5 +1152,8 @@ def addArgs(argreader):
 
     argreader.parser.add_argument('--multi_feat_by_100', type=args.str2bool, metavar='BOOL',
                                   help="To multiply feature by 100 when using bilinear model.")
+
+    argreader.parser.add_argument('--aux_on_masked', type=args.str2bool, metavar='BOOL',
+                                  help="To train dense layers on masked version of the feature matrix.")
 
     return argreader

@@ -122,25 +122,15 @@ def epochSeqTr(model, optim, log_interval, loader, epoch, args, writer, **kwargs
 def computeLoss(args, output, target, resDict, data,seg):
 
     loss = args.nll_weight * F.cross_entropy(output, target)
-    if args.aux_mod_nll_weight > 0:
-        loss += aux_model_loss_term(args.aux_mod_nll_weight, resDict, data, target)
-    if args.zoom_nll_weight > 0:
-        loss += zoom_loss_term(args.zoom_nll_weight, resDict, data, target)
-    if args.bil_backgr_weight > 0:
-        back_term = bil_backgr_term(args.bil_backgr_weight,args.bil_backgr_thres,resDict)
-        loss += back_term
 
-    if args.crop_nll_weight > 0:
-        crop_term = args.crop_nll_weight*F.cross_entropy(resDict["pred_crop"], target)
-        loss += crop_term
-    if args.drop_nll_weight > 0:
-        drop_term = args.drop_nll_weight*F.cross_entropy(resDict["pred_drop"], target)
-        loss += drop_term
-    if args.center_loss_weight > 0:
-        loss += args.center_loss_weight*F.mse_loss(resDict["feature_matrix"], resDict["feature_center_batch"],reduction="sum") / resDict["feature_matrix"].size(0)
+    nbTerms = 1
+    for key in resDict.keys():
+        if key.find("pred_") != -1:
+            loss += args.nll_weight * F.cross_entropy(resDict[key], target)
+            nbTerms += 1
 
-    if args.supervised_segm_weight > 0:
-        loss += args.supervised_segm_weight*supervisedSegTerm(resDict,args.resnet_simple_att_pred_score,args.resnet_simple_att_score_pred_act_func,seg)
+    loss = loss/nbTerms
+
     return loss
 
 def aux_model_loss_term(aux_model_weight, resDict, data, target):
