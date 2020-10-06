@@ -69,7 +69,7 @@ class FineGrainedDataset(Dataset):
                         id += 1
 
         # transform
-        self.transform = get_transform(self.resize, self.phase)
+        self.transform = get_transform(self.resize, self.phase,colorDataset=self.root.find("emb") == -1)
 
     def __getitem__(self, item):
         # get image id
@@ -87,7 +87,7 @@ class FineGrainedDataset(Dataset):
 
             return image, self.image_label[image_id],imageSeg
         else:
-            return image, self.image_label[image_id]  
+            return image, self.image_label[image_id]
 
     def __len__(self):
         return len(self.image_id)
@@ -106,20 +106,26 @@ def has_file_allowed_extension(filename, extensions):
     return filename.lower().endswith(extensions)
 
 
-def get_transform(resize, phase='train'):
+def get_transform(resize, phase='train',colorDataset=True):
     if phase == 'train':
-        return transforms.Compose([
+        transf = transforms.Compose([
             transforms.Resize(size=(int(resize[0] / 0.875), int(resize[1] / 0.875))),
             transforms.RandomCrop(resize),
             transforms.RandomHorizontalFlip(0.5),
-            transforms.ColorJitter(brightness=0.126, saturation=0.5),
-            transforms.ToTensor(),
-            transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
         ])
+
+        if colorDataset:
+            transf = transforms.Compose([transf,transforms.ColorJitter(brightness=0.126, saturation=0.5)])
+
     else:
-        return transforms.Compose([
+        transf = transforms.Compose([
             transforms.Resize(size=(int(resize[0] / 0.875), int(resize[1] / 0.875))),
             transforms.CenterCrop(resize),
-            transforms.ToTensor(),
-            transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
         ])
+
+    transf = transforms.Compose([transf,transforms.ToTensor()])
+
+    if colorDataset:
+        transf = transforms.Compose([transf,transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])])
+
+    return transf
