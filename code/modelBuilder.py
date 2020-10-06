@@ -113,59 +113,6 @@ class Model(nn.Module):
             resDict = self.secondModel(visResDict)
             resDict = merge(visResDict,resDict)
 
-            if self.zoom:
-
-                if len(visResDict["x"].size()) == 4:
-                    xSize = visResDict["x"].size()
-                else:
-                    xSize = visResDict["x_size"]
-
-                subCloudInd,countList = self.splitCloud(resDict['points'],xSize)
-
-                croppedImg,_,_,_,_,bboxNbs = self.computeZoom(origImgBatch,xSize,resDict['points'],subCloudInd,countList)
-
-                cumBboxNbs = torch.cumsum(torch.tensor([0]+bboxNbs).to(origImgBatch),dim=0).long()
-                visResDict_zoom = self.firstModel(croppedImg,zoom=True)
-
-                predBatch = visResDict_zoom["x"]
-
-                predList = [[predBatch[cumBboxNbs[i]+j].unsqueeze(0) for j in range(bboxNbs[i])] for i in range(len(origImgBatch))]
-
-                #Padding for image in which there is less than the required number of sub cloud
-                predList = [torch.cat((torch.cat(predList[i],dim=-1),torch.zeros((1,self.nbFeat*(self.subcloudNb-bboxNbs[i]))).to(origImgBatch.device)),dim=-1) for i in range(len(origImgBatch))]
-                predBatch = torch.cat(predList,dim=0)
-                visResDict_zoom["x"] = predBatch
-
-                resDict_zoom = self.secondModel(visResDict_zoom)
-                resDict_zoom = merge(visResDict_zoom,resDict_zoom)
-                resDict = merge(resDict_zoom,resDict,"zoom")
-
-                resDict.pop('x_size_zoom', None)
-
-                if self.zoom_merge_preds:
-                    resDict["pred"] = 0.5*resDict["pred"]+0.5*resDict["pred_zoom"]
-                    resDict.pop('pred_zoom', None)
-
-            elif self.drop_and_crop:
-
-                if self.firstModel.topk:
-                    features = resDict["features"]
-                    features = self.bn(features)
-                    attMaps = torch.mean(F.relu(features, inplace=True), dim=1, keepdim=True)
-                else:
-                    attMaps = resDict["attMaps"]
-
-                with torch.no_grad():
-                    crop_images = batch_augment(origImgBatch, resDict["attMaps"], mode='crop', theta=(0.4, 0.6), padding_ratio=0.1)
-                resDict["pred_crop"] = self.secondModel(self.firstModel(crop_images))["pred"]
-
-                resDict["pred_rawcrop"] = (resDict["pred_crop"]+resDict["pred"])/2
-
-                with torch.no_grad():
-                    drop_images = batch_augment(origImgBatch, resDict["attMaps"], mode='drop', theta=(0.2, 0.5))
-                resDict["pred_drop"] = self.secondModel(self.firstModel(drop_images))["pred"]
-
-            resDict.pop('x_size', None)
         else:
             resDict = self.secondModel(origImgBatch)
 
@@ -410,8 +357,8 @@ class CNN2D(FirstModel):
         spatialWeights = torch.pow(features, 2).sum(dim=1, keepdim=True)
         retDict = {}
         retDict["attMaps"] = spatialWeights
-        retDict["x"] = features
-        retDict["features"] = retDict["x"]
+        retDict["features"] = features
+        retDict["x"] = features.mean(dim=-1).mean(dim=-1)
 
         if self.aux_model:
             retDict["auxFeat"] = features
