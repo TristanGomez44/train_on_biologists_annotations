@@ -107,7 +107,7 @@ def updateTimeCSV(epoch,mode,exp_id,model_id,totalTime,batch_idx):
 def catIntermediateVariables(visualDict,intermVarDict,nbVideos, save_all):
 
     intermVarDict["fullAttMap"] = catMap(visualDict,intermVarDict["fullAttMap"],key="attMaps",save_all=save_all)
-    intermVarDict["fullFeatMapSeq"] = catMap(visualDict,intermVarDict["fullFeatMapSeq"],key="features")
+    intermVarDict["fullFeatMapSeq"] = catMap(visualDict,intermVarDict["fullFeatMapSeq"],key="features",save_all=save_all)
 
     return intermVarDict
 
