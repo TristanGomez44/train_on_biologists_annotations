@@ -44,6 +44,9 @@ case $1 in
   "clusCat-aux")
     python trainVal.py -c model_cub8.config --model_id bilClusCat_aux     --resnet_bilinear True --bil_cluster True  --aux_on_masked True
     ;;
+  "clusCat-aux-lr0.006")
+    python trainVal.py -c model_cub8.config --model_id bilClusCat_aux-lr0.006     --resnet_bilinear True --bil_cluster True  --aux_on_masked True --lr 0.006
+    ;;
   "*")
     echo "no such model"
     ;;
