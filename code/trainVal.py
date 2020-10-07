@@ -36,6 +36,14 @@ import gradcam
 
 import configparser
 
+import optuna
+import sqlite3
+
+from shutil import copyfile
+
+
+OPTIM_LIST = ["Adam", "AMSGrad", "SGD"]
+
 def epochSeqTr(model, optim, log_interval, loader, epoch, args, writer, **kwargs):
     ''' Train a model during one epoch
 
@@ -112,12 +120,13 @@ def epochSeqTr(model, optim, log_interval, loader, epoch, args, writer, **kwargs
     # If the training set is empty (which we might want to just evaluate the model), then allOut and allGT will still be None
     if validBatch > 0:
 
-        torch.save(model.state_dict(), "../models/{}/model{}_epoch{}".format(args.exp_id, args.model_id, epoch))
-        writeSummaries(metrDict, totalImgNb, writer, epoch, "train", args.model_id, args.exp_id)
+        if not args.optuna:
+            torch.save(model.state_dict(), "../models/{}/model{}_epoch{}".format(args.exp_id, args.model_id, epoch))
+            writeSummaries(metrDict, totalImgNb, writer, epoch, "train", args.model_id, args.exp_id)
 
-    if args.debug or args.benchmark:
-        totalTime = time.time() - start_time
-        update.updateTimeCSV(epoch, "train", args.exp_id, args.model_id, totalTime, batch_idx)
+        if args.debug or args.benchmark:
+            totalTime = time.time() - start_time
+            update.updateTimeCSV(epoch, "train", args.exp_id, args.model_id, totalTime, batch_idx)
 
 def computeLoss(args, output, target, resDict, data,seg):
 
@@ -596,7 +605,7 @@ def init_process(args, rank, size, fn, backend='gloo'):
     fn(args)
 
 
-def run(args):
+def run(args,trial=None):
     writer = SummaryWriter("../results/{}".format(args.exp_id))
 
     np.random.seed(args.seed)
@@ -606,6 +615,11 @@ def run(args):
 
     trainLoader, trainDataset = load_data.buildTrainLoader(args,withSeg=args.with_seg,reprVec=args.repr_vec)
     valLoader,_ = load_data.buildTestLoader(args, "val",withSeg=args.with_seg,reprVec=args.repr_vec)
+
+    if not trial is None:
+        args.lr = trial.suggest_float("lr", 1e-4, 1e-2, log=True)
+        args.optim = trial.suggest_categorical("optim", OPTIM_LIST)
+        args.batch_size = trial.suggest_int("batch_size", 10, 90, log=True)
 
     # Building the net
     net = modelBuilder.netBuilder(args)
@@ -647,7 +661,7 @@ def run(args):
 
                 trainFunc(**kwargsTr)
                 if not scheduler is None:
-                    writer.add_scalars("LR", {args.model_id: scheduler.get_lr()}, epoch)
+                    writer.add_scalars("LR", {args.model_id: scheduler.get_last_lr()}, epoch)
                     scheduler.step()
             else:
                 if not args.no_val:
@@ -665,83 +679,91 @@ def run(args):
                 bestEpoch, bestMetricVal, worseEpochNb = update.updateBestModel(metricVal, bestMetricVal, args.exp_id,
                                                                                 args.model_id, bestEpoch, epoch, net,
                                                                                 isBetter, worseEpochNb)
+                if trial is not None:
+                    trial.report(metricVal, epoch)
 
             epoch += 1
 
-    if args.run_test or args.only_test:
+    if trial is None:
+        if args.run_test or args.only_test:
 
-        if os.path.exists("../results/{}/test_done.txt".format(args.exp_id)):
-            test_done = np.genfromtxt("../results/{}/test_done.txt".format(args.exp_id),delimiter=",",dtype=str)
+            if os.path.exists("../results/{}/test_done.txt".format(args.exp_id)):
+                test_done = np.genfromtxt("../results/{}/test_done.txt".format(args.exp_id),delimiter=",",dtype=str)
 
-            if len(test_done.shape) == 1:
-                test_done = test_done[np.newaxis]
-        else:
-            test_done = None
-
-        alreadyDone = (test_done==np.array([args.model_id,str(bestEpoch)])).any()
-
-        if (test_done is None) or (alreadyDone and args.do_test_again) or (not alreadyDone):
-
-            testFunc = valFunc
-
-            kwargsTest = kwargsVal
-            kwargsTest["mode"] = "test"
-
-            testLoader,_ = load_data.buildTestLoader(args, "test",withSeg=args.with_seg,reprVec=args.repr_vec,shuffle=args.shufle_test_set)
-
-            kwargsTest['loader'] = testLoader
-
-            net = preprocessAndLoadParams("../models/{}/model{}_best_epoch{}".format(args.exp_id, args.model_id, bestEpoch),args.cuda,net,args.strict_init)
-
-            kwargsTest["model"] = net
-            kwargsTest["epoch"] = bestEpoch
-
-            if args.bil_clus_soft_sched:
-                update.updateBilClusSoftmSched(net,args.epochs,args.epochs)
-
-            with torch.no_grad():
-                testFunc(**kwargsTest)
-
-            with open("../results/{}/test_done.txt".format(args.exp_id),"a") as text_file:
-                print("{},{}".format(args.model_id,bestEpoch),file=text_file)
-
-
-    if args.grad_cam:
-        args.val_batch_size = 1
-        testLoader,_ = load_data.buildTestLoader(args, "test",withSeg=args.with_seg)
-        net = preprocessAndLoadParams("../models/{}/model{}_best_epoch{}".format(args.exp_id, args.model_id, bestEpoch),args.cuda,net,args.strict_init)
-        resnet = net.firstModel.featMod
-        resnet.fc = net.secondModel.linLay
-
-        grad_cam = gradcam.GradCam(model=resnet, feature_module=resnet.layer4, target_layer_names=["1"], use_cuda=args.cuda)
-
-        allMask = None
-        latency_list = []
-        batchSize_list = []
-        for batch_idx, batch in enumerate(testLoader):
-            data,target = batch[:2]
-            if (batch_idx % args.log_interval == 0):
-                print("\t", batch_idx * len(data), "/", len(testLoader.dataset))
-
-            if args.cuda:
-                data = data.cuda()
-
-            lat_start_time = time.time()
-            mask = grad_cam(data).detach().cpu()
-            latency_list.append(time.time()-lat_start_time)
-            batchSize_list.append(data.size(0))
-
-            if allMask is None:
-                allMask = mask
+                if len(test_done.shape) == 1:
+                    test_done = test_done[np.newaxis]
             else:
-                allMask = torch.cat((allMask,mask),dim=0)
+                test_done = None
 
-        np.save("../results/{}/gradcam_{}_epoch{}_test.npy".format(args.exp_id,args.model_id,bestEpoch),allMask.detach().cpu().numpy())
+            alreadyDone = (test_done==np.array([args.model_id,str(bestEpoch)])).any()
 
-        latency_list = np.array(latency_list)[:,np.newaxis]
-        batchSize_list = np.array(batchSize_list)[:,np.newaxis]
-        latency_list = np.concatenate((latency_list,batchSize_list),axis=1)
-        np.savetxt("../results/{}/latencygradcam_{}_epoch{}.csv".format(args.exp_id,args.model_id,bestEpoch),latency_list,header="latency,batch_size",delimiter=",")
+            if (test_done is None) or (alreadyDone and args.do_test_again) or (not alreadyDone):
+
+                testFunc = valFunc
+
+                kwargsTest = kwargsVal
+                kwargsTest["mode"] = "test"
+
+                testLoader,_ = load_data.buildTestLoader(args, "test",withSeg=args.with_seg,reprVec=args.repr_vec,shuffle=args.shufle_test_set)
+
+                kwargsTest['loader'] = testLoader
+
+                net = preprocessAndLoadParams("../models/{}/model{}_best_epoch{}".format(args.exp_id, args.model_id, bestEpoch),args.cuda,net,args.strict_init)
+
+                kwargsTest["model"] = net
+                kwargsTest["epoch"] = bestEpoch
+
+                if args.bil_clus_soft_sched:
+                    update.updateBilClusSoftmSched(net,args.epochs,args.epochs)
+
+                with torch.no_grad():
+                    testFunc(**kwargsTest)
+
+                with open("../results/{}/test_done.txt".format(args.exp_id),"a") as text_file:
+                    print("{},{}".format(args.model_id,bestEpoch),file=text_file)
+
+        if args.grad_cam:
+            args.val_batch_size = 1
+            testLoader,_ = load_data.buildTestLoader(args, "test",withSeg=args.with_seg)
+            net = preprocessAndLoadParams("../models/{}/model{}_best_epoch{}".format(args.exp_id, args.model_id, bestEpoch),args.cuda,net,args.strict_init)
+            resnet = net.firstModel.featMod
+            resnet.fc = net.secondModel.linLay
+
+            grad_cam = gradcam.GradCam(model=resnet, feature_module=resnet.layer4, target_layer_names=["1"], use_cuda=args.cuda)
+
+            allMask = None
+            latency_list = []
+            batchSize_list = []
+            for batch_idx, batch in enumerate(testLoader):
+                data,target = batch[:2]
+                if (batch_idx % args.log_interval == 0):
+                    print("\t", batch_idx * len(data), "/", len(testLoader.dataset))
+
+                if args.cuda:
+                    data = data.cuda()
+
+                lat_start_time = time.time()
+                mask = grad_cam(data).detach().cpu()
+                latency_list.append(time.time()-lat_start_time)
+                batchSize_list.append(data.size(0))
+
+                if allMask is None:
+                    allMask = mask
+                else:
+                    allMask = torch.cat((allMask,mask),dim=0)
+
+            np.save("../results/{}/gradcam_{}_epoch{}_test.npy".format(args.exp_id,args.model_id,bestEpoch),allMask.detach().cpu().numpy())
+
+            latency_list = np.array(latency_list)[:,np.newaxis]
+            batchSize_list = np.array(batchSize_list)[:,np.newaxis]
+            latency_list = np.concatenate((latency_list,batchSize_list),axis=1)
+            np.savetxt("../results/{}/latencygradcam_{}_epoch{}.csv".format(args.exp_id,args.model_id,bestEpoch),latency_list,header="latency,batch_size",delimiter=",")
+
+    else:
+        oldPath = "../models/{}/model{}_best_epoch{}".format(args.exp_id,args.model_id, bestEpoch)
+        os.rename(oldPath, oldPath.replace("best_epoch","trial{}_best_epoch".format(trial.number)))
+
+        return metricVal
 
 def updateSeedAndNote(args):
     if args.start_mode == "auto" and len(
@@ -774,7 +796,8 @@ def main(argv=None):
     argreader.parser.add_argument('--do_test_again', type=str2bool, help='Does the test evaluation even if it has already been done')
     argreader.parser.add_argument('--compute_latency', type=str2bool, help='To write in a file the latency at each forward pass.')
     argreader.parser.add_argument('--grad_cam', type=str2bool, help='To compute grad cam instead of training or testing.')
-
+    argreader.parser.add_argument('--optuna', type=str2bool, help='To run a hyper-parameter study')
+    argreader.parser.add_argument('--optuna_trial_nb', type=int, help='The number of hyper-parameter trial to run.')
 
     argreader = addInitArgs(argreader)
     argreader = addOptimArgs(argreader)
@@ -819,8 +842,52 @@ def main(argv=None):
         for p in processes:
             p.join()
     else:
-        run(args)
 
+        if args.optuna:
+            def objective(trial):
+                return run(args,trial=trial)
+
+            study = optuna.create_study(direction="maximize" if args.maximise_val_metric else "minimize",\
+                                        storage="sqlite:///../results/{}/{}_hypSearch.db".format(args.exp_id,args.model_id), \
+                                        study_name=args.model_id,load_if_exists=True)
+
+            con = sqlite3.connect("../results/{}/{}_hypSearch.db".format(args.exp_id,args.model_id))
+            curr = con.cursor()
+
+            for elem in curr.execute('SELECT trial_id,value FROM trials WHERE study_id == 1').fetchall():
+                print(elem)
+
+            trialsAlreadyDone = len(curr.execute('SELECT trial_id,value FROM trials WHERE study_id == 1').fetchall())
+            if trialsAlreadyDone < args.optuna_trial_nb:
+                study.optimize(objective,n_trials=args.optuna_trial_nb-trialsAlreadyDone)
+
+            curr.execute('SELECT trial_id,value FROM trials WHERE study_id == 1')
+            query_res = curr.fetchall()
+
+            query_res = list(filter(lambda x:not x[1] is None,query_res))
+
+            trialIds = [id_value[0] for id_value in query_res]
+            values = [id_value[1] for id_value in query_res]
+
+            bestTrialId = trialIds[np.array(values).argmax()]
+
+            curr.execute('SELECT param_name,param_value from trial_params WHERE trial_id == {}'.format(bestTrialId))
+            query_res = curr.fetchall()
+
+            bestParamDict = {key:value for key,value in query_res}
+
+            args.lr,args.batch_size = bestParamDict["lr"],int(bestParamDict["batch_size"])
+            args.optim = OPTIM_LIST[int(bestParamDict["optim"])]
+            args.only_test = True
+
+            bestPath = glob.glob("../models/{}/model{}_trial{}_best_epoch*".format(args.exp_id,args.model_id,bestTrialId-1))[0]
+
+            copyfile(bestPath, bestPath.replace("_trial{}".format(bestTrialId-1),""))
+
+            run(args)
+
+        else:
+            run(args)
 
 if __name__ == "__main__":
     main()

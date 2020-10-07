@@ -74,6 +74,9 @@ case $1 in
   "lr0.000125")
     python trainVal.py -c model_cub8.config --exp_id CUB8_HYP --model_id lr0.000125 --first_mod resnet50   --resnet_bilinear True --bil_cluster True --bil_cluster_ensemble False --lr 0.000125
     ;;
+  "optuna")
+    python trainVal.py -c model_cub8.config --exp_id CUB8_HYP --model_id optuna --first_mod resnet50   --resnet_bilinear True --bil_cluster True --bil_cluster_ensemble False --optuna True
+    ;;
   "*")
     echo "no such model"
     ;;
