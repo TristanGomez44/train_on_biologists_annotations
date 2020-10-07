@@ -26,6 +26,12 @@ case $1 in
   "b48-lr0.008")
     python trainVal.py -c model_cub8.config --exp_id CUB8_HYP --model_id b48-lr0.008 --first_mod resnet50   --resnet_bilinear True --bil_cluster True --bil_cluster_ensemble False --batch_size 48 --lr 0.008
     ;;
+  "b48-lr0.008-adam")
+    python trainVal.py -c model_cub8.config --exp_id CUB8_HYP --model_id b48-lr0.008-adam --first_mod resnet50   --resnet_bilinear True --bil_cluster True --bil_cluster_ensemble False --batch_size 48 --lr 0.008 --use_scheduler False --optim Adam
+    ;;
+  "b48-lr0.008-r101")
+    python trainVal.py -c model_cub8.config --exp_id CUB8_HYP --model_id b48-lr0.008-r101 --first_mod resnet101   --resnet_bilinear True --bil_cluster True --bil_cluster_ensemble False --batch_size 48 --lr 0.008
+    ;;
   "b72-lr0.012")
     python trainVal.py -c model_cub8.config --exp_id CUB8_HYP --model_id b72-lr0.012 --first_mod resnet50   --resnet_bilinear True --bil_cluster True --bil_cluster_ensemble False --batch_size 72 --lr 0.012
     ;;
