@@ -25,12 +25,11 @@ class RandomSampler(Sampler):
         self.data_source = data_source
         np.random.seed(seed)
         torch.manual_seed(seed)
-        if args.cuda:
-            torch.cuda.manual_seed(seed)
-        self.iterObj = iter(torch.randperm(n).tolist())
+        self.randPerm = torch.randperm(len(self.data_source))
+        self.iterObj = iter(self.randPerm.tolist())
 
     def __iter__(self):
-        n = len(self.data_source)
+
         return self.iterObj
 
     def __len__(self):
@@ -164,7 +163,7 @@ def addArgs(argreader):
     argreader.parser.add_argument('--dataset_test', type=str, metavar='DATASET',
                                   help='The dataset for testing. Can be "big" or "small"')
 
-    argreader.parser.add_argument('--shufle_test_set', type=args.str2bool, metavar='BOOL',
+    argreader.parser.add_argument('--shuffle_test_set', type=args.str2bool, metavar='BOOL',
                                   help='To shuffle the test set.')
 
 
