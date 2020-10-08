@@ -159,7 +159,6 @@ def plotPointsImageDatasetGrid(exp_id,imgNb,epochs,model_ids,reduction_fact_list
 
     pointPaths,pointWeightPaths = [],[]
     for j in range(len(model_ids)):
-
         if useDropped_list[j]:
             pointPaths.append("../results/{}/points_dropped_{}_epoch{}_{}.npy".format(exp_id,model_ids[j],epochs[j],mode))
             pointWeightPaths.append("../results/{}/points_dropped_{}_epoch{}_{}.npy".format(exp_id,model_ids[j],epochs[j],mode))
@@ -195,6 +194,10 @@ def plotPointsImageDatasetGrid(exp_id,imgNb,epochs,model_ids,reduction_fact_list
         else:
             maxInd = min(len(np.load(pointPaths[0])),640)
             inds = torch.randint(maxInd,size=(imgNb,))
+
+        if args.shuffle_test_set:
+            perm = load_data.RandomSampler(testDataset,args.seed).randPerm
+            testDataset = [testDataset[ind] for ind in perm]
 
         imgBatch = torch.cat([testDataset[ind][0].unsqueeze(0) for ind in inds],dim=0)
 
