@@ -665,7 +665,6 @@ class CNN2D_bilinearAttPool(FirstModel):
             spatialWeights = self.attention_activation(self.attention(features))
             features_weig = (spatialWeights[:,:self.nb_parts].unsqueeze(2)*features.unsqueeze(1)).reshape(features.size(0),features.size(1)*(spatialWeights.size(1)-1),features.size(2),features.size(3))
             features_agr = self.avgpool(features_weig)
-            retDict["x_size"] = features_weig.size()
             features_agr = features_agr.view(features.size(0), -1)
         else:
 
