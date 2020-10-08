@@ -197,9 +197,10 @@ def plotPointsImageDatasetGrid(exp_id,imgNb,epochs,model_ids,reduction_fact_list
 
         if args.shuffle_test_set:
             perm = load_data.RandomSampler(testDataset,args.seed).randPerm
-            testDataset = [testDataset[ind] for ind in perm]
 
-        imgBatch = torch.cat([testDataset[ind][0].unsqueeze(0) for ind in inds],dim=0)
+            imgBatch = torch.cat([testDataset[perm[ind]][0].unsqueeze(0) for ind in inds],dim=0)
+        else:
+            imgBatch = torch.cat([testDataset[ind][0].unsqueeze(0) for ind in inds],dim=0)
 
     cmPlasma = plt.get_cmap('plasma')
 
