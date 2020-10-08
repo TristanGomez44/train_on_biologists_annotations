@@ -619,7 +619,7 @@ def run(args,trial=None):
     if not trial is None:
         args.lr = trial.suggest_float("lr", 1e-4, 1e-2, log=True)
         args.optim = trial.suggest_categorical("optim", OPTIM_LIST)
-        args.batch_size = trial.suggest_int("batch_size", 10, 90, log=True)
+        args.batch_size = trial.suggest_int("batch_size", 10, 80, log=True)
 
     # Building the net
     net = modelBuilder.netBuilder(args)
