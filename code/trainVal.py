@@ -704,7 +704,7 @@ def run(args,trial=None):
                 kwargsTest = kwargsVal
                 kwargsTest["mode"] = "test"
 
-                testLoader,_ = load_data.buildTestLoader(args, "test",withSeg=args.with_seg,reprVec=args.repr_vec,shuffle=args.shufle_test_set)
+                testLoader,_ = load_data.buildTestLoader(args, "test",withSeg=args.with_seg,reprVec=args.repr_vec,shuffle=args.shuffle_test_set)
 
                 kwargsTest['loader'] = testLoader
 
