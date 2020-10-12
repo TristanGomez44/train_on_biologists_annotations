@@ -23,7 +23,7 @@ class FineGrainedDataset(Dataset):
         __len__(self):                  returns the length of dataset
     """
 
-    def __init__(self, root, phase,resize=500,withSeg=False):
+    def __init__(self, root, phase,resize=500,withSeg=False,sqResizing=True):
 
         self.image_path = {}
         self.withSeg = withSeg
@@ -69,7 +69,7 @@ class FineGrainedDataset(Dataset):
                         id += 1
 
         # transform
-        self.transform = get_transform(self.resize, self.phase,colorDataset=self.root.find("emb") == -1)
+        self.transform = get_transform(self.resize, self.phase,colorDataset=self.root.find("emb") == -1,sqResizing=sqResizing)
 
     def __getitem__(self, item):
         # get image id
@@ -106,10 +106,16 @@ def has_file_allowed_extension(filename, extensions):
     return filename.lower().endswith(extensions)
 
 
-def get_transform(resize, phase='train',colorDataset=True):
+def get_transform(resize, phase='train',colorDataset=True,sqResizing=True):
+
+    if sqResizing:
+        kwargs={"size":(int(resize[0] / 0.875), int(resize[1] / 0.875))}
+    else:
+        kwargs={"size":int(resize[0] / 0.875)}
+
     if phase == 'train':
         transf = transforms.Compose([
-            transforms.Resize(size=(int(resize[0] / 0.875), int(resize[1] / 0.875))),
+            transforms.Resize(**kwargs),
             transforms.RandomCrop(resize),
             transforms.RandomHorizontalFlip(0.5),
         ])
@@ -119,7 +125,7 @@ def get_transform(resize, phase='train',colorDataset=True):
 
     else:
         transf = transforms.Compose([
-            transforms.Resize(size=(int(resize[0] / 0.875), int(resize[1] / 0.875))),
+            transforms.Resize(**kwargs),
             transforms.CenterCrop(resize),
         ])
 

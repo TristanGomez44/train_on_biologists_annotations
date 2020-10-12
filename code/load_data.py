@@ -70,7 +70,8 @@ class DataPartitioner(object):
 def buildTrainLoader(args,transf=None,shuffle=True,withSeg=False,reprVec=False):
 
     imgSize = 448 if args.big_images else 224
-    train_dataset = fineGrainedDataset.FineGrainedDataset(args.dataset_train, "train",(imgSize,imgSize),withSeg=withSeg)
+    train_dataset = fineGrainedDataset.FineGrainedDataset(args.dataset_train, "train",(imgSize,imgSize),\
+                                            withSeg=withSeg,sqResizing=args.sq_resizing)
 
     totalLength = len(train_dataset)
 
@@ -107,7 +108,8 @@ def buildTrainLoader(args,transf=None,shuffle=True,withSeg=False,reprVec=False):
 def buildTestLoader(args, mode,shuffle=False,withSeg=False,reprVec=False):
     datasetName = getattr(args, "dataset_{}".format(mode))
     imgSize = 448 if args.big_images else 224
-    test_dataset = fineGrainedDataset.FineGrainedDataset(datasetName, mode,(imgSize,imgSize),withSeg=withSeg)
+    test_dataset = fineGrainedDataset.FineGrainedDataset(datasetName, mode,(imgSize,imgSize),\
+                                                        withSeg=withSeg,sqResizing=args.sq_resizing)
 
     if mode == "val" and args.dataset_train == args.dataset_val:
         np.random.seed(1)
@@ -190,5 +192,9 @@ def addArgs(argreader):
 
     argreader.parser.add_argument('--repr_vec', type=args.str2bool, metavar='S',
                                   help='To use representative vectors instead of raw image.')
+
+    argreader.parser.add_argument('--sq_resizing', type=args.str2bool, metavar='S',
+                                  help='To resize each input image to a square.')
+
 
     return argreader
