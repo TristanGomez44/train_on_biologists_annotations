@@ -648,6 +648,9 @@ def run(args,trial=None):
         bestMetricVal = np.inf
         isBetter = lambda x, y: x < y
 
+    if args.optuna:
+        valMetricList = []
+
     if not args.only_test and not args.grad_cam:
         while epoch < args.epochs + 1 and worseEpochNb < args.max_worse_epoch_nb:
 
@@ -676,11 +679,19 @@ def run(args,trial=None):
                 with torch.no_grad():
                     metricVal = valFunc(**kwargsVal)
 
+                    if args.optuna:
+                        if len(valMetricList) >= 10:
+                            valMetricList.pop(0)
+                        valMetricList.append(metricVal)
+                        avgMetricVal = np.array(valMetricList).mean()
+                    else:
+                        avgMetricVal = metricVal
+
                 bestEpoch, bestMetricVal, worseEpochNb = update.updateBestModel(metricVal, bestMetricVal, args.exp_id,
                                                                                 args.model_id, bestEpoch, epoch, net,
                                                                                 isBetter, worseEpochNb)
                 if trial is not None:
-                    trial.report(metricVal, epoch)
+                    trial.report(avgMetricVal, epoch)
 
             epoch += 1
 
@@ -763,7 +774,7 @@ def run(args,trial=None):
         oldPath = "../models/{}/model{}_best_epoch{}".format(args.exp_id,args.model_id, bestEpoch)
         os.rename(oldPath, oldPath.replace("best_epoch","trial{}_best_epoch".format(trial.number)))
 
-        return metricVal
+        return avgMetricVal
 
 def updateSeedAndNote(args):
     if args.start_mode == "auto" and len(
