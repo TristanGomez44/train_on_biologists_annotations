@@ -24,7 +24,13 @@ case $1 in
     python trainVal.py -c model_cub8.config --model_id bil             --resnet_bilinear True --optuna True
     ;;
   "clusCatRed")
-    python trainVal.py -c model_cub8.config --model_id bilClusCatRed     --resnet_bilinear True --bil_cluster True  --bil_cluster_norefine True   --stride_lay3 2 --stride_lay4 2 --optuna True
+    python trainVal.py -c model_cub8.config --model_id bilClusCatRed     --resnet_bilinear True --bil_cluster True --stride_lay3 2 --stride_lay4 2 --optuna True --bil_cluster_norefine True
+    ;;
+  "clusCatRed-ref")
+    python trainVal.py -c model_cub8.config --model_id bilClusCatRed-ref     --resnet_bilinear True --bil_cluster True --stride_lay3 2 --stride_lay4 2 --optuna True
+    ;;
+  "clusCat-nosqRes")
+    python trainVal.py -c model_cub8.config --model_id bilClusCat-nosqRes     --resnet_bilinear True --bil_cluster True --sq_resizing False
     ;;
   "clusCat-01")
     python trainVal.py -c model_cub8.config --model_id bilClusCat_vec01     --resnet_bilinear True --bil_cluster True  --bil_clus_vect_ind_to_use 0,1
