@@ -6,7 +6,7 @@ case $1 in
     python trainVal.py -c model_cub8.config --model_id noneRed          --with_seg True --stride_lay3 2 --stride_lay4 2 --optuna True
     ;;
   "none")
-    python trainVal.py -c model_cub8.config --model_id none --epochs 300  --with_seg True --optuna True
+    python trainVal.py -c model_cub8.config --model_id none --with_seg True --optuna True
     ;;
   "clusCatRandVecNoRef")
     python trainVal.py -c model_cub8.config --model_id bilClusCatRandVecNoRef     --resnet_bilinear True --bil_cluster True  --bil_cluster_randvec True  --bil_cluster_norefine True
