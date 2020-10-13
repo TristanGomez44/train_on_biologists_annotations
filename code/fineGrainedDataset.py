@@ -23,7 +23,8 @@ class FineGrainedDataset(Dataset):
         __len__(self):                  returns the length of dataset
     """
 
-    def __init__(self, root, phase,resize=500,withSeg=False,sqResizing=True):
+    def __init__(self, root, phase,resize,withSeg,sqResizing,\
+                        cropRatio,brightness,saturation):
 
         self.image_path = {}
         self.withSeg = withSeg
@@ -69,7 +70,8 @@ class FineGrainedDataset(Dataset):
                         id += 1
 
         # transform
-        self.transform = get_transform(self.resize, self.phase,colorDataset=self.root.find("emb") == -1,sqResizing=sqResizing)
+        self.transform = get_transform(self.resize, self.phase,colorDataset=self.root.find("emb") == -1,\
+                                        sqResizing=sqResizing,cropRatio=cropRatio,brightness=brightness,saturation=saturation)
 
     def __getitem__(self, item):
         # get image id
@@ -106,12 +108,13 @@ def has_file_allowed_extension(filename, extensions):
     return filename.lower().endswith(extensions)
 
 
-def get_transform(resize, phase='train',colorDataset=True,sqResizing=True):
+def get_transform(resize, phase='train',colorDataset=True,sqResizing=True,\
+                    cropRatio=0.875,brightness=0.126,saturation=0.5):
 
     if sqResizing:
-        kwargs={"size":(int(resize[0] / 0.875), int(resize[1] / 0.875))}
+        kwargs={"size":(int(resize[0] / cropRatio), int(resize[1] / cropRatio))}
     else:
-        kwargs={"size":int(resize[0] / 0.875)}
+        kwargs={"size":int(resize[0] / cropRatio)}
 
     if phase == 'train':
         transf = transforms.Compose([
@@ -121,7 +124,7 @@ def get_transform(resize, phase='train',colorDataset=True,sqResizing=True):
         ])
 
         if colorDataset:
-            transf = transforms.Compose([transf,transforms.ColorJitter(brightness=0.126, saturation=0.5)])
+            transf = transforms.Compose([transf,transforms.ColorJitter(brightness=brightness, saturation=saturation)])
 
     else:
         transf = transforms.Compose([

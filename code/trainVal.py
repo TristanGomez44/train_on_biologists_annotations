@@ -621,6 +621,11 @@ def run(args,trial=None):
         args.optim = trial.suggest_categorical("optim", OPTIM_LIST)
         args.batch_size = trial.suggest_int("batch_size", 10, 72, log=True)
 
+        if args.opt_data_aug:
+            args.brightness = trial.suggest_float("brightness", 0, 0.5, step=0.05)
+            args.saturation = trial.suggest_float("saturation", 0, 0.9, step=0.1)
+            args.crop_ratio = trial.suggest_float("crop_ratio", 0.8, 1, step=0.05)
+
     # Building the net
     net = modelBuilder.netBuilder(args)
 
@@ -809,6 +814,7 @@ def main(argv=None):
     argreader.parser.add_argument('--grad_cam', type=str2bool, help='To compute grad cam instead of training or testing.')
     argreader.parser.add_argument('--optuna', type=str2bool, help='To run a hyper-parameter study')
     argreader.parser.add_argument('--optuna_trial_nb', type=int, help='The number of hyper-parameter trial to run.')
+    argreader.parser.add_argument('--opt_data_aug', type=str2bool, help='To optimise data augmentation hyper-parameter.')
 
     argreader = addInitArgs(argreader)
     argreader = addOptimArgs(argreader)
