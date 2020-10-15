@@ -78,7 +78,7 @@ case $1 in
     python trainVal.py -c model_cub8.config --exp_id CUB8_HYP --model_id optuna --first_mod resnet50   --resnet_bilinear True --bil_cluster True --bil_cluster_ensemble False --optuna True
     ;;
   "optuna-avg")
-    python trainVal.py -c model_cub8.config --exp_id CUB8_HYP --model_id optuna-avg --first_mod resnet50   --resnet_bilinear True --bil_cluster True --bil_cluster_ensemble False --optuna True
+    python trainVal.py -c model_cub8.config --exp_id CUB8_HYP --model_id optuna-avg --first_mod resnet50 --with_seg True  --resnet_bilinear True --bil_cluster True --bil_cluster_ensemble False --optuna True
     ;;
   "optuna-avg-datAug")
     python trainVal.py -c model_cub8.config --exp_id CUB8_HYP --model_id optuna-avg-dataAug --first_mod resnet50   --resnet_bilinear True --bil_cluster True --bil_cluster_ensemble False --optuna True --opt_data_aug True
@@ -87,7 +87,7 @@ case $1 in
     python trainVal.py -c model_cub8.config --exp_id CUB8_HYP --model_id opt-bil --first_mod resnet50   --resnet_bilinear True --bil_cluster False --optuna True
     ;;
   "opt-bil-avg")
-    python trainVal.py -c model_cub8.config --exp_id CUB8_HYP --model_id opt-bil-avg --first_mod resnet50   --resnet_bilinear True --bil_cluster False --optuna True
+    python trainVal.py -c model_cub8.config --exp_id CUB8_HYP --model_id opt-bil-avg --first_mod resnet50  --with_seg True --resnet_bilinear True --bil_cluster False --optuna True
     ;;
   "*")
     echo "no such model"
