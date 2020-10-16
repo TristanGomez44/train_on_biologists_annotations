@@ -23,7 +23,7 @@ def updateMetrDict(metrDict,metrDictSample):
 
     return metrDict
 
-def binaryToMetrics(output,target,segmentation,resDict,normAtt=False,attentionAct="sigmoid"):
+def binaryToMetrics(output,target,segmentation,resDict,bilinear, clus):
     ''' Computes metrics over a batch of targets and predictions
 
     Args:
@@ -45,7 +45,7 @@ def binaryToMetrics(output,target,segmentation,resDict,normAtt=False,attentionAc
         metDict["Sparsity"],metDict["Sparsity Normalised"] = compAttMapSparsity(resDict["attMaps"].clone(),segmentation.clone() if not segmentation is None else None)
 
         if not segmentation is None:
-            metDict["IoS"] = compIoS(resDict["attMaps"],segmentation,normAtt,attentionAct)
+            metDict["IoS"] = compIoS(resDict["attMaps"],segmentation,resDict,bilinear,clus)
 
     return metDict
 
@@ -71,24 +71,23 @@ def compAttMapSparsity(attMaps,segmentation):
 
     return sparsity.sum().item(),sparsity_norm.sum().item()
 
-def compIoS(attentionMap,segmentation,normAtt,attentionAct):
+def compIoS(attentionMap,segmentation,resDict,bilinear,clus):
 
     segmentation = (segmentation>0.5)
 
-    if normAtt:
+    if (not bilinear) and (not clus):
         thresholds = [2500]
+    elif bilinear and clus:
+        thresholds = [0.5]
     else:
-        if attentionAct == "softmax":
-            thresholds = [0.5]
-        elif attentionAct == "relu":
-            thresholds = [0]
-        elif attentionAct == "sigmoid":
-            thresholds = [0.5]
-        else:
-            raise ValueError("Unkown activation function :",attentionAct)
+        thresholds = [0]
 
-    if attentionMap.size(1) > 1:
+    if bilinear > 1:
         attentionMap = attentionMap.mean(dim=1,keepdim=True)
+        norm = torch.sqrt(torch.pow(resDict["features"],2).sum(dim=1,keepdim=True))
+        norm_max = norm.max(dim=-1,keepdim=True)[0].max(dim=-2,keepdim=True)[0]
+        norm = norm/norm_max
+        attentionMap = attentionMap*norm
 
     attentionMap = F.interpolate(attentionMap,size=(segmentation.size(-1)))
 

@@ -55,8 +55,6 @@ def epochSeqTr(model, optim, log_interval, loader, epoch, args, writer, **kwargs
     - epoch (int): the current epoch
     - args (Namespace): the namespace containing all the arguments required for training and building the network
     - writer (tensorboardX.SummaryWriter): the writer to use to log metrics evolution to tensorboardX
-    - width (int): the width of the triangular window (i.e. the number of steps over which the window is spreading)
-
     '''
 
     start_time = time.time() if args.debug or args.benchmark else None
@@ -107,7 +105,7 @@ def epochSeqTr(model, optim, log_interval, loader, epoch, args, writer, **kwargs
 
         # Metrics
         with torch.no_grad():
-            metDictSample = metrics.binaryToMetrics(output, target, seg,resDict,not args.resnet_simple_att_pred_score,args.resnet_simple_att_score_pred_act_func)
+            metDictSample = metrics.binaryToMetrics(output, target, seg,resDict,args.resnet_bilinear,args.bil_cluster)
         metDictSample["Loss"] = loss.detach().data.item()
         metrDict = metrics.updateMetrDict(metrDict, metDictSample)
 
