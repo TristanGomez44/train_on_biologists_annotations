@@ -54,16 +54,16 @@ case $1 in
     python trainVal.py -c model_cub8.config --model_id bilClusCat_aux-lr0.006     --resnet_bilinear True --bil_cluster True  --aux_on_masked True --lr 0.006
     ;;
   "noneRed-avg")
-    python trainVal.py -c model_cub8.config --model_id noneRed-avg          --with_seg True --stride_lay3 2 --stride_lay4 2 --optuna True
+    python trainVal.py -c model_cub8.config --model_id noneRed-avg           --stride_lay3 2 --stride_lay4 2 --optuna True
     ;;
   "none-avg")
-    python trainVal.py -c model_cub8.config --model_id none-avg --with_seg True --optuna True
+    python trainVal.py -c model_cub8.config --model_id none-avg  --optuna True
     ;;
   "clusCatRed-ref-avg")
-    python trainVal.py -c model_cub8.config --model_id bilClusCatRed-ref-avg  --with_seg True   --resnet_bilinear True --bil_cluster True --stride_lay3 2 --stride_lay4 2 --optuna True
+    python trainVal.py -c model_cub8.config --model_id bilClusCatRed-ref-avg     --resnet_bilinear True --bil_cluster True --stride_lay3 2 --stride_lay4 2 --optuna True
     ;;
   "bilRed-avg")
-    python trainVal.py -c model_cub8.config --model_id bilRed-avg    --with_seg True         --resnet_bilinear True   --stride_lay3 2 --stride_lay4 2 --optuna True
+    python trainVal.py -c model_cub8.config --model_id bilRed-avg             --resnet_bilinear True   --stride_lay3 2 --stride_lay4 2 --optuna True
     ;;
 
   "*")
