@@ -23,13 +23,13 @@ class RandomSampler(Sampler):
 
     def __init__(self, data_source,seed):
         self.data_source = data_source
-        np.random.seed(seed)
-        torch.manual_seed(seed)
+        np.random.seed(1)
+        torch.manual_seed(1)
+
         self.randPerm = torch.randperm(len(self.data_source))
         self.iterObj = iter(self.randPerm.tolist())
 
     def __iter__(self):
-
         return self.iterObj
 
     def __len__(self):
@@ -139,7 +139,7 @@ def buildTestLoader(args, mode,shuffle=False,withSeg=False,reprVec=False):
         sampler=None
 
     if args.val_batch_size == -1:
-        args.val_batch_size = int(args.max_batch_size*5.33)
+        args.val_batch_size = int(args.max_batch_size*4)
 
     testLoader = torch.utils.data.DataLoader(dataset=test_dataset, batch_size=args.val_batch_size,
                                              num_workers=args.num_workers,sampler=sampler)
