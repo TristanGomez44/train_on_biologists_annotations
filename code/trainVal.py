@@ -617,7 +617,7 @@ def run(args,trial=None):
     if not trial is None:
         args.lr = trial.suggest_float("lr", 1e-4, 1e-2, log=True)
         args.optim = trial.suggest_categorical("optim", OPTIM_LIST)
-        args.batch_size = trial.suggest_int("batch_size", 10, 72, log=True)
+        args.batch_size = trial.suggest_int("batch_size", 10, args.max_batch_size, log=True)
 
         if args.opt_data_aug:
             args.brightness = trial.suggest_float("brightness", 0, 0.5, step=0.05)
@@ -651,9 +651,6 @@ def run(args,trial=None):
         bestMetricVal = np.inf
         isBetter = lambda x, y: x < y
 
-    if args.optuna:
-        valMetricList = []
-
     if not args.only_test and not args.grad_cam:
         while epoch < args.epochs + 1 and worseEpochNb < args.max_worse_epoch_nb:
 
@@ -682,19 +679,11 @@ def run(args,trial=None):
                 with torch.no_grad():
                     metricVal = valFunc(**kwargsVal)
 
-                    if args.optuna:
-                        if len(valMetricList) >= 10:
-                            valMetricList.pop(0)
-                        valMetricList.append(metricVal)
-                        avgMetricVal = np.array(valMetricList).mean()
-                    else:
-                        avgMetricVal = metricVal
-
                 bestEpoch, bestMetricVal, worseEpochNb = update.updateBestModel(metricVal, bestMetricVal, args.exp_id,
                                                                                 args.model_id, bestEpoch, epoch, net,
                                                                                 isBetter, worseEpochNb)
                 if trial is not None:
-                    trial.report(avgMetricVal, epoch)
+                    trial.report(metricVal, epoch)
 
             epoch += 1
 
@@ -777,7 +766,7 @@ def run(args,trial=None):
         oldPath = "../models/{}/model{}_best_epoch{}".format(args.exp_id,args.model_id, bestEpoch)
         os.rename(oldPath, oldPath.replace("best_epoch","trial{}_best_epoch".format(trial.number)))
 
-        return avgMetricVal
+        return metricVal
 
 def updateSeedAndNote(args):
     if args.start_mode == "auto" and len(
@@ -813,6 +802,7 @@ def main(argv=None):
     argreader.parser.add_argument('--optuna', type=str2bool, help='To run a hyper-parameter study')
     argreader.parser.add_argument('--optuna_trial_nb', type=int, help='The number of hyper-parameter trial to run.')
     argreader.parser.add_argument('--opt_data_aug', type=str2bool, help='To optimise data augmentation hyper-parameter.')
+    argreader.parser.add_argument('--max_batch_size', type=int, help='To maximum batch size to test.')
 
     argreader = addInitArgs(argreader)
     argreader = addOptimArgs(argreader)
