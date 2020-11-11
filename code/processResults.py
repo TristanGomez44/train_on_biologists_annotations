@@ -139,7 +139,7 @@ def plotPointsImageDatasetGrid(exp_id,imgNb,epochs,model_ids,reduction_fact_list
         raise ValueError("correctness can only be used with a single model.")
 
     torch.manual_seed(1)
-    imgSize = 224
+    imgSize = 448
 
     ptsImage = torch.zeros((3,imgSize,imgSize))
     gridImage = None
@@ -174,8 +174,17 @@ def plotPointsImageDatasetGrid(exp_id,imgNb,epochs,model_ids,reduction_fact_list
 
     if mode == "val":
         imgLoader,testDataset = load_data.buildTestLoader(args,mode,shuffle=False)
-        inds = torch.arange(imgNb)
-        imgBatch,_ = next(iter(imgLoader))
+        #inds = torch.arange(imgNb)
+        #imgBatch,_ = next(iter(imgLoader))
+
+        inds = []
+        earlyImgs = []
+        for i in range(len(testDataset)):
+            if testDataset[i][1]==0 or testDataset[i][1]==13:
+                inds.append(i)
+                earlyImgs.append(testDataset[i][0])
+
+        imgBatch = torch.cat([img.unsqueeze(0) for img in earlyImgs],dim=0)
         #imgBatch = torch.cat([testDataset[ind][0].unsqueeze(0) for ind in inds],dim=0)
     else:
         imgLoader,testDataset = load_data.buildTestLoader(args,mode,shuffle=False)
@@ -193,11 +202,13 @@ def plotPointsImageDatasetGrid(exp_id,imgNb,epochs,model_ids,reduction_fact_list
                 inds = incorrectInd[torch.randperm(len(incorrectInd))][:imgNb]
         else:
             maxInd = min(len(np.load(pointPaths[0])),640)
-            inds = torch.randint(maxInd,size=(imgNb,))
+            #inds = torch.randint(maxInd,size=(imgNb,))
+            inds = torch.arange(imgNb)
 
         if args.shuffle_test_set:
             perm = load_data.RandomSampler(testDataset,args.seed).randPerm
 
+            #inds = [perm[ind] for ind in inds]
             imgBatch = torch.cat([testDataset[perm[ind]][0].unsqueeze(0) for ind in inds],dim=0)
         else:
             imgBatch = torch.cat([testDataset[ind][0].unsqueeze(0) for ind in inds],dim=0)
