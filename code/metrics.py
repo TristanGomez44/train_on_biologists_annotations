@@ -44,9 +44,6 @@ def binaryToMetrics(output,target,segmentation,resDict):
     if "attMaps" in resDict.keys():
         metDict["Sparsity"],metDict["Sparsity Normalised"] = compAttMapSparsity(resDict["attMaps"].clone(),segmentation.clone() if not segmentation is None else None)
 
-        #if not segmentation is None:
-        #    metDict["IoS"] = compIoS(resDict["attMaps"],segmentation,resDict,bilinear,clus)
-
     return metDict
 
 def compAccuracy(output,target):
