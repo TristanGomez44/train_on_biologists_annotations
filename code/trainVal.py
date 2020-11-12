@@ -105,7 +105,7 @@ def epochSeqTr(model, optim, log_interval, loader, epoch, args, writer, **kwargs
 
         # Metrics
         with torch.no_grad():
-            metDictSample = metrics.binaryToMetrics(output, target, seg,resDict,args.resnet_bilinear,args.bil_cluster)
+            metDictSample = metrics.binaryToMetrics(output, target, seg,resDict)
         metDictSample["Loss"] = loss.detach().data.item()
         metrDict = metrics.updateMetrDict(metrDict, metDictSample)
 
@@ -255,7 +255,7 @@ def epochImgEval(model, log_interval, loader, epoch, args, writer, metricEarlySt
                                         batch_idx)
 
         # Metrics
-        metDictSample = metrics.binaryToMetrics(output, target, seg,resDict,not args.resnet_simple_att_pred_score,args.resnet_simple_att_score_pred_act_func)
+        metDictSample = metrics.binaryToMetrics(output, target, seg,resDict)
         metDictSample["Loss"] = loss.detach().data.item()
         metrDict = metrics.updateMetrDict(metrDict, metDictSample)
 
@@ -266,7 +266,6 @@ def epochImgEval(model, log_interval, loader, epoch, args, writer, metricEarlySt
 
         if validBatch > 3 and args.debug:
             break
-
 
     if mode == "test":
         intermVarDict = update.saveIntermediateVariables(intermVarDict, args.exp_id, args.model_id, epoch, mode)

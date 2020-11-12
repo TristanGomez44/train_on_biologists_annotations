@@ -23,7 +23,7 @@ def updateMetrDict(metrDict,metrDictSample):
 
     return metrDict
 
-def binaryToMetrics(output,target,segmentation,resDict,bilinear, clus):
+def binaryToMetrics(output,target,segmentation,resDict):
     ''' Computes metrics over a batch of targets and predictions
 
     Args:
@@ -44,8 +44,8 @@ def binaryToMetrics(output,target,segmentation,resDict,bilinear, clus):
     if "attMaps" in resDict.keys():
         metDict["Sparsity"],metDict["Sparsity Normalised"] = compAttMapSparsity(resDict["attMaps"].clone(),segmentation.clone() if not segmentation is None else None)
 
-        if not segmentation is None:
-            metDict["IoS"] = compIoS(resDict["attMaps"],segmentation,resDict,bilinear,clus)
+        #if not segmentation is None:
+        #    metDict["IoS"] = compIoS(resDict["attMaps"],segmentation,resDict,bilinear,clus)
 
     return metDict
 

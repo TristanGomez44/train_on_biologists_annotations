@@ -351,13 +351,19 @@ class CNN2D(FirstModel):
         self.batchSize = x.size(0)
 
         # N x C x H x L
-        res = self.featMod(x)
-        features = res["x"]
+        featModRetDict = self.featMod(x)
+        features = featModRetDict["x"]
 
         spatialWeights = torch.pow(features, 2).sum(dim=1, keepdim=True)
         retDict = {}
-        retDict["attMaps"] = spatialWeights
-        retDict["features"] = features
+
+        if not "attMaps" in featModRetDict.keys():
+            retDict["attMaps"] = spatialWeights
+            retDict["features"] = features
+        else:
+            retDict["attMaps"] = featModRetDict["attMaps"]
+            retDict["features"] = featModRetDict["features"]
+
         retDict["x"] = features.mean(dim=-1).mean(dim=-1)
 
         if self.aux_model:
@@ -387,135 +393,6 @@ class SoftMax(nn.Module):
             x_min,x_max = x.min(dim=-1,keepdim=True)[0].min(dim=-2,keepdim=True)[0],x.max(dim=-1,keepdim=True)[0].max(dim=-2,keepdim=True)[0]
             x = (x-x_min)/(x_max-x_min)
         return x
-
-class CNN2D_simpleAttention(FirstModel):
-
-    def __init__(self, featModelName, pretrainedFeatMod=True, featMap=True, bigMaps=False, chan=64, attBlockNb=2,
-                 attChan=16, \
-                 topk=False, topk_pxls_nb=256, topk_enc_chan=64,inFeat=512,sagpool=False,sagpool_drop=False,sagpool_drop_ratio=0.5,\
-                 norm_points=False,predictScore=False,score_pred_act_func="sigmoid",aux_model=False,zoom_tied_models=False,zoom_model_no_topk=False,**kwargs):
-
-        super(CNN2D_simpleAttention, self).__init__(featModelName, pretrainedFeatMod, featMap, bigMaps, **kwargs)
-        self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
-
-        self.predictScore = predictScore
-        if predictScore:
-            self.attention = buildImageAttention(inFeat,attBlockNb)
-            if score_pred_act_func == "sigmoid":
-                self.attention_activation = torch.sigmoid
-            elif score_pred_act_func == "softmax":
-                self.attention_activation = SoftMax()
-            elif score_pred_act_func == "relu":
-                self.attention_activation = torch.relu
-            else:
-                raise ValueError("Unknown activation function")
-
-        self.topk = topk
-        if topk:
-            self.topk_pxls_nb = topk_pxls_nb
-
-            if not type(self.topk_pxls_nb) is list:
-                self.topk_pxls_nb = [self.topk_pxls_nb]
-
-        self.topk_enc_chan = topk_enc_chan
-        if self.topk_enc_chan != -1:
-            self.conv1x1 = nn.Conv2d(inaux_modelFeat,self.topk_enc_chan,1)
-        else:
-            self.conv1x1 = None
-
-        self.sagpool = sagpool
-        if sagpool:
-            self.sagpoolModule = sagpoolLayer(topk_enc_chan if self.conv1x1 else inFeat)
-            self.sagpool_drop = sagpool_drop
-            self.sagpool_drop_ratio = sagpool_drop_ratio
-            self.norm_points = norm_points
-
-        self.predictScore = predictScore
-
-        self.aux_model = aux_model
-
-        self.zoom_tied_models = zoom_tied_models
-        if self.zoom_tied_models:
-            self.featMod_zoom = self.featMod
-        else:
-            self.featMod_zoom = buildFeatModel(featModelName, pretrainedFeatMod, featMap, bigMaps, **kwargs)
-
-        self.zoom_model_no_topk = zoom_model_no_topk
-
-    def forward(self, x,zoom=False):
-        # N x C x H x L
-        self.batchSize = x.size(0)
-        # N x C x H x L
-        if zoom:
-            output = self.featMod_zoom(x)
-        else:
-            output = self.featMod(x)
-
-        if type(output) is dict:
-            features = output["x"]
-        else:
-            features = output
-
-        if self.topk_enc_chan != -1:
-            features = self.conv1x1(features)
-
-        retDict = {}
-
-        if self.predictScore:
-            spatialWeights = self.attention_activation(self.attention(features))
-            features_weig = spatialWeights * features
-        else:
-            spatialWeights = torch.pow(features, 2).sum(dim=1, keepdim=True)
-            features_weig = features
-
-        if self.topk and (not (zoom and self.zoom_model_no_topk)):
-            featVecList = []
-
-            flatSpatialWeights = spatialWeights.view(spatialWeights.size(0), -1)
-            allFlatVals, allFlatInds = torch.topk(flatSpatialWeights, max(self.topk_pxls_nb), dim=-1, largest=True)
-
-            for i in range(len(self.topk_pxls_nb)):
-                flatVals, flatInds = allFlatVals[:,:self.topk_pxls_nb[i]], allFlatInds[:,:self.topk_pxls_nb[i]]
-                abs, ord = (flatInds % spatialWeights.shape[-1], flatInds // spatialWeights.shape[-1])
-                depth = torch.zeros(abs.size(0), abs.size(1), 1).to(x.device)
-                featureList = mapToList(features_weig, abs, ord)
-
-                points = torch.cat((abs.unsqueeze(2).float(), ord.unsqueeze(2).float(), depth, featureList), dim=-1).float()
-                addOrCat(retDict,'points',points,dim=1)
-
-                if self.sagpool:
-                    abs, ord = abs.unsqueeze(-1).float(), ord.unsqueeze(-1).float()
-                    points = torch.cat((abs, ord, depth), dim=-1).float()
-                    ptsDict = {"batch" : torch.arange(points.size(0)).unsqueeze(1).expand(points.size(0), points.size(1)).reshape(-1).to(points.device),
-                               "pos" : points.reshape(points.size(0) * points.size(1), points.size(2)),
-                               "pointfeatures" : featureList.reshape(featureList.size(0) * featureList.size(1), featureList.size(2))}
-                    if self.norm_points:
-                        ptsDict["pos"][:,:2] = (2*ptsDict["pos"][:,:2]/(x.size(-1)-1))-1
-                    ptsDict = applySagPool(self.sagpoolModule,ptsDict,x.size(0),self.sagpool_drop,self.sagpool_drop_ratio)
-                    finalPtsNb = int(featureList.size(1)*self.sagpool_drop_ratio) if self.sagpool_drop else featureList.size(1)
-                    featureList = ptsDict["pointfeatures"].reshape(featureList.size(0),finalPtsNb, featureList.size(2))
-
-                addOrCat(retDict,"pointfeatures",featureList,dim=1)
-
-                features_agr = featureList.mean(dim=1)
-                featVecList.append(features_agr)
-            features_agr = torch.cat(featVecList,dim=-1)
-
-            spatialWeights[spatialWeights<allFlatVals[:,-1].unsqueeze(-1).unsqueeze(-1).unsqueeze(-1)] = 0
-        else:
-            features_agr = self.avgpool(features_weig)
-            features_agr = features_agr.view(features.size(0), -1)
-
-        retDict["x"] = features_agr
-        retDict["x_size"] = features_weig.size()
-        retDict["attMaps"] = spatialWeights
-        retDict["features"] = features
-
-        if self.aux_model:
-            retDict["auxFeat"] = features
-
-        return retDict
-
 
 def mapToHeatMap(batch,i,name):
 
@@ -874,10 +751,7 @@ def netBuilder(args):
     if not args.repr_vec:
         if args.first_mod.find("resnet") != -1 or args.first_mod.find("bagnet") != -1 or args.first_mod.find("hrnet") != -1:
 
-            if not args.multi_level_feat:
-                nbFeat = getResnetFeat(args.first_mod, args.resnet_chan,args.deeplabv3_outchan)
-            else:
-                nbFeat = args.multi_level_feat_outchan
+            nbFeat = getResnetFeat(args.first_mod, args.resnet_chan,args.deeplabv3_outchan)
 
             if args.resnet_bilinear:
                 CNNconst = CNN2D_bilinearAttPool
@@ -902,48 +776,19 @@ def netBuilder(args):
                         nbFeat *= args.resnet_bil_nb_parts
                     else:
                         nbFeat *= len(args.bil_clus_vect_ind_to_use.split(","))
-            elif args.resnet_simple_att:
-                CNNconst = CNN2D_simpleAttention
-                kwargs = {"inFeat":nbFeat,
-                          "topk": args.resnet_simple_att_topk,
-                          "topk_pxls_nb": args.resnet_simple_att_topk_pxls_nb,
-                          "topk_enc_chan":args.resnet_simple_att_topk_enc_chan,
-                          "sagpool":args.resnet_simple_att_topk_sagpool,
-                          "sagpool_drop":args.resnet_simple_att_topk_sagpool_drop,
-                          "sagpool_drop_ratio":args.resnet_simple_att_topk_sagpool_ratio,
-                          "norm_points":args.norm_points,\
-                          "predictScore":args.resnet_simple_att_pred_score,
-                          "score_pred_act_func":args.resnet_simple_att_score_pred_act_func,
-                          "aux_model":args.aux_model,\
-                          "zoom_tied_models":args.zoom_tied_models,\
-                          "zoom_model_no_topk":args.zoom_model_no_topk}
-                if args.resnet_simple_att_topk_enc_chan != -1:
-                    nbFeat = args.resnet_simple_att_topk_enc_chan
-
-                nbFeatAux = nbFeat
-                if type(args.resnet_simple_att_topk_pxls_nb) is list and len(args.resnet_simple_att_topk_pxls_nb) > 1:
-                    nbFeat *= len(args.resnet_simple_att_topk_pxls_nb)
             else:
                 CNNconst = CNN2D
-                kwargs = {"aux_model":args.aux_model}
+                kwargs = {"aux_model":args.aux_model,"bil_cluster_early":args.bil_cluster_early,"nb_parts":args.resnet_bil_nb_parts}
                 nbFeatAux = nbFeat
 
             if args.first_mod.find("bagnet") == -1 and args.first_mod.find("hrnet") == -1:
                 firstModel = CNNconst(args.first_mod, args.pretrained_visual, featMap=True,chan=args.resnet_chan, stride=args.resnet_stride,
                                       dilation=args.resnet_dilation, \
-                                      attChan=args.resnet_att_chan, attBlockNb=args.resnet_att_blocks_nb,
-                                      attActFunc=args.resnet_att_act_func, \
                                       num_classes=args.class_nb, \
                                       layerSizeReduce=args.resnet_layer_size_reduce,
                                       preLayerSizeReduce=args.resnet_prelay_size_reduce, \
-                                      applyStrideOnAll=args.resnet_apply_stride_on_all, \
-                                      replaceBy1x1=args.resnet_replace_by_1x1,\
                                       reluOnLast=args.relu_on_last_layer,
-                                      multiLevelFeat=args.multi_level_feat,\
-                                      multiLev_outChan=args.multi_level_feat_outchan,\
-                                      multiLev_cat=args.multi_level_feat_cat,\
                                       deeplabv3_outchan=args.deeplabv3_outchan,\
-                                      replaceStrideByDilation=args.resnet_replace_str_by_dil,\
                                       strideLay2=args.stride_lay2,strideLay3=args.stride_lay3,\
                                       strideLay4=args.stride_lay4,\
                                       **kwargs)
@@ -1032,51 +877,19 @@ def addArgs(argreader):
                                   help='The stride for the visual model when resnet is used')
     argreader.parser.add_argument('--resnet_dilation', type=int, metavar='INT',
                                   help='The dilation for the visual model when resnet is used')
-    argreader.parser.add_argument('--resnet_replace_str_by_dil', type=args.str2bool, metavar='INT',
-                                  help='To replace stride by dilation.')
 
 
     argreader.parser.add_argument('--resnet_layer_size_reduce', type=args.str2bool, metavar='INT',
                                   help='To apply a stride of 2 in the layer 2,3 and 4 when the resnet model is used.')
     argreader.parser.add_argument('--resnet_prelay_size_reduce', type=args.str2bool, metavar='INT',
                                   help='To apply a stride of 2 in the convolution and the maxpooling before the layer 1.')
-    argreader.parser.add_argument('--resnet_simple_att', type=args.str2bool, metavar='INT',
-                                  help='To apply a simple attention on top of the resnet model.')
-    argreader.parser.add_argument('--resnet_simple_att_topk', type=args.str2bool, metavar='BOOL',
-                                  help='To use top-k feature as attention model with resnet. Ignored when --resnet_simple_att is False.')
-    argreader.parser.add_argument('--resnet_simple_att_topk_pxls_nb', type=int, metavar='INT',
-                                  nargs="*",help='The value of k when using top-k selection for resnet simple attention. Can be a list of values. Ignored when --resnet_simple_att_topk is False.')
-    argreader.parser.add_argument('--resnet_simple_att_topk_enc_chan', type=int, metavar='NB',
-                                  help='For the resnet_simple_att_topk model. This is the number of output channel of the encoder. Ignored when --resnet_simple_att_topk is False.')
 
-    argreader.parser.add_argument('--resnet_simple_att_topk_sagpool', type=args.str2bool, metavar='BOOL',
-                                  help='To use sagpool.')
-    argreader.parser.add_argument('--resnet_simple_att_topk_sagpool_drop', type=args.str2bool, metavar='BOOL',
-                                  help='To use sagpool with point dropping.')
-    argreader.parser.add_argument('--resnet_simple_att_topk_sagpool_ratio', type=float, metavar='BOOL',
-                                  help='The ratio of point dropped.')
-    argreader.parser.add_argument('--resnet_simple_att_pred_score', type=args.str2bool, metavar='BOOL',
-                                  help='To predict the score of each pixel, instead of using their norm to select them.')
-    argreader.parser.add_argument('--resnet_simple_att_score_pred_act_func', type=str, metavar='STR',
-                                  help='The activation function of the attention module.')
-
-    argreader.parser.add_argument('--resnet_apply_stride_on_all', type=args.str2bool, metavar='NB',
-                                  help='Apply stride on every non 3x3 convolution')
-    argreader.parser.add_argument('--resnet_replace_by_1x1', type=args.str2bool, metavar='NB',
-                                  help='Replace the second 3x3 conv of BasicBlock by a 1x1 conv')
     argreader.parser.add_argument('--stride_lay2', type=int, metavar='NB',
                                   help='Stride for layer 2.')
     argreader.parser.add_argument('--stride_lay3', type=int, metavar='NB',
                                   help='Stride for layer 3.')
     argreader.parser.add_argument('--stride_lay4', type=int, metavar='NB',
                                   help='Stride for layer 4.')
-
-    argreader.parser.add_argument('--resnet_att_chan', type=int, metavar='INT',
-                                  help='For the \'resnetX_att\' feat models. The number of channels in the attention module.')
-    argreader.parser.add_argument('--resnet_att_blocks_nb', type=int, metavar='INT',
-                                  help='For the \'resnetX_att\' feat models. The number of blocks in the attention module.')
-    argreader.parser.add_argument('--resnet_att_act_func', type=str, metavar='INT',
-                                  help='For the \'resnetX_att\' feat models. The activation function for the attention weights. Can be "sigmoid", "relu" or "tanh+relu".')
 
     argreader.parser.add_argument('--reduced_img_size', type=int, metavar='BOOL',
                                   help="The size at which the image is reduced at the begining of the process")
@@ -1086,13 +899,6 @@ def addArgs(argreader):
 
     argreader.parser.add_argument('--relu_on_last_layer', type=args.str2bool, metavar='BOOL',
                                   help="To apply relu on the last layer of the feature extractor.")
-
-    argreader.parser.add_argument('--multi_level_feat', type=args.str2bool, metavar='BOOL',
-                                  help="To extract multi-level features by combining features maps at every layers.")
-    argreader.parser.add_argument('--multi_level_feat_outchan', type=int, metavar='BOOL',
-                                  help="The number of channels of the multi level feature maps.")
-    argreader.parser.add_argument('--multi_level_feat_cat', type=args.str2bool, metavar='BOOL',
-                                  help="To concatenate the features instead of computing the mean")
 
     argreader.parser.add_argument('--deeplabv3_outchan', type=int, metavar='BOOL',
                                   help="The number of output channel of deeplabv3")
@@ -1145,6 +951,14 @@ def addArgs(argreader):
                                   help="To not refine feature vectors by using similar vectors.")
     argreader.parser.add_argument('--bil_cluster_randvec', type=args.str2bool, metavar='BOOL',
                                   help="To select random vectors as initial estimation instead of vectors with high norms.")
+
+    argreader.parser.add_argument('--bil_cluster_early', type=args.str2bool, metavar='BOOL',
+                                  help="To perform early grouping.")
+    argreader.parser.add_argument('--bil_clu_earl_exp', type=args.str2bool, metavar='BOOL',
+                                  help="To apply soft-max when using early grouping.")
+
+
+
 
     argreader.parser.add_argument('--lin_lay_bias', type=args.str2bool, metavar='BOOL',
                                   help="To add a bias to the final layer.")

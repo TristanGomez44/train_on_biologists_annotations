@@ -11,6 +11,9 @@ import torch
 
 from skimage.transform import resize
 import torch.nn.functional as F
+
+import modelBuilder
+
 '''
 
 Just a modification of the torchvision resnet model to get the before-to-last activation
@@ -49,24 +52,17 @@ def conv3x3Transp(in_planes, out_planes, stride=1,dilation=1,groups=1):
 class BasicBlock(nn.Module):
     expansion = 1
 
-    def __init__(self, inplanes, planes, stride=1, downsample=None, norm_layer=None,endRelu=True,dilation=1,groups=1,applyStrideOnAll=False,\
-                replaceBy1x1=False,replaceStrideByDilation=False):
+    def __init__(self, inplanes, planes, stride=1, downsample=None, norm_layer=None,endRelu=True,dilation=1,groups=1):
         super(BasicBlock, self).__init__()
         if norm_layer is None:
             norm_layer = nn.BatchNorm2d
         # Both self.conv1 and self.downsample layers downsample the input when stride != 1
-        if replaceStrideByDilation:
-            self.conv1 = conv3x3(inplanes, planes, stride=1,dilation=1,groups=groups)
-        else:
-            self.conv1 = conv3x3(inplanes, planes, stride,dilation,groups=groups)
+        self.conv1 = conv3x3(inplanes, planes, stride,dilation,groups=groups)
 
         self.bn1 = norm_layer(planes)
         self.relu = nn.ReLU(inplace=True)
 
-        if replaceStrideByDilation:
-            self.conv2 = conv3x3(planes, planes,groups=groups,dilation=stride)
-        else:
-            self.conv2 = conv3x3(planes, planes,groups=groups)
+        self.conv2 = conv3x3(planes, planes,groups=groups)
 
         self.bn2 = norm_layer(planes)
         self.downsample = downsample
@@ -95,12 +91,8 @@ class BasicBlock(nn.Module):
 class Bottleneck(nn.Module):
     expansion = 4
 
-    def __init__(self, inplanes, planes, stride=1, downsample=None, norm_layer=None,endRelu=False,dilation=1,applyStrideOnAll=True,replaceBy1x1=False,\
-                    replaceStrideByDilation=False):
+    def __init__(self, inplanes, planes, stride=1, downsample=None, norm_layer=None,endRelu=False,dilation=1):
         super(Bottleneck, self).__init__()
-
-        if replaceStrideByDilation:
-            raise ValueError("replaceStrideByDilation can't be used with Bottleneck")
 
         if norm_layer is None:
             norm_layer = nn.BatchNorm2d
@@ -192,9 +184,8 @@ class ResNet(nn.Module):
 
     def __init__(self, block, layers, num_classes=1000, zero_init_residual=False, norm_layer=None,maxPoolKer=(3,3),maxPoolPad=(1,1),stride=(2,2),\
                     strideLay2=2,strideLay3=2,strideLay4=2,\
-                    featMap=False,chan=64,inChan=3,dilation=1,layerSizeReduce=True,preLayerSizeReduce=True,layersNb=4,attention=False,attChan=16,attBlockNb=1,\
-                    attActFunc="sigmoid",applyStrideOnAll=False,replaceBy1x1=False,reluOnLast=False,multiLevelFeat=False,multiLev_outChan=64,multiLev_cat=False,\
-                    replaceStrideByDilation=False):
+                    featMap=False,chan=64,inChan=3,dilation=1,layerSizeReduce=True,preLayerSizeReduce=True,layersNb=4,reluOnLast=False,\
+                    bil_cluster_early=False,nb_parts=3,bil_clu_earl_exp=False):
 
         super(ResNet, self).__init__()
         if norm_layer is None:
@@ -217,19 +208,15 @@ class ResNet(nn.Module):
 
         self.nbLayers = len(layers)
 
-        self.replaceBy1x1 = replaceBy1x1
         #All layers are built but they will not necessarily be used
         self.layer1 = self._make_layer(block, chan[0], layers[0], stride=1,norm_layer=norm_layer,reluOnLast=reluOnLast if self.nbLayers==1 else True,\
-                                        dilation=1,applyStrideOnAll=applyStrideOnAll,replaceBy1x1=replaceBy1x1,replaceStrideByDilation=replaceStrideByDilation)
+                                        dilation=1)
         self.layer2 = self._make_layer(block, chan[1], layers[1], stride=1 if not layerSizeReduce else strideLay2, norm_layer=norm_layer,\
-                                        reluOnLast=reluOnLast if self.nbLayers==2 else True,dilation=dilation[0],applyStrideOnAll=applyStrideOnAll,replaceBy1x1=replaceBy1x1,\
-                                        replaceStrideByDilation=replaceStrideByDilation)
+                                        reluOnLast=reluOnLast if self.nbLayers==2 else True,dilation=dilation[0])
         self.layer3 = self._make_layer(block, chan[2], layers[2], stride=1 if not layerSizeReduce else strideLay3, norm_layer=norm_layer,\
-                                        reluOnLast=reluOnLast if self.nbLayers==3 else True,dilation=dilation[1],applyStrideOnAll=applyStrideOnAll,replaceBy1x1=replaceBy1x1,\
-                                        replaceStrideByDilation=replaceStrideByDilation)
+                                        reluOnLast=reluOnLast if self.nbLayers==3 else True,dilation=dilation[1])
         self.layer4 = self._make_layer(block, chan[3], layers[3], stride=1 if not layerSizeReduce else strideLay4, norm_layer=norm_layer,\
-                                        reluOnLast=reluOnLast if self.nbLayers==4 else True,dilation=dilation[2],applyStrideOnAll=applyStrideOnAll,replaceBy1x1=replaceBy1x1,\
-                                        replaceStrideByDilation=replaceStrideByDilation)
+                                        reluOnLast=reluOnLast if self.nbLayers==4 else True,dilation=dilation[2])
 
         if layersNb<1 or layersNb>4:
             raise ValueError("Wrong number of layer : ",layersNb)
@@ -259,57 +246,33 @@ class ResNet(nn.Module):
 
         self.featMap = featMap
 
-        self.multiLevelFeat = multiLevelFeat
-        if self.multiLevelFeat:
-            self.multiLevMod = MultiLevelFeat(chan[0],multiLev_outChan,multiLev_cat)
+        self.bil_cluster_early = bil_cluster_early
+        if self.bil_cluster_early:
+            self.clus_earl_conv1x1 = conv1x1(chan[3],chan[3]//nb_parts)
+            self.nb_parts = nb_parts
+            self.bil_clu_earl_exp = bil_clu_earl_exp
 
-
-        self.attention = attention
-        if attention:
-            self.inplanes = attChan
-            self.att1 = self._make_layer(block, attChan, attBlockNb, stride=1, norm_layer=norm_layer,feat=True)
-            self.att2 = self._make_layer(block, attChan, attBlockNb, stride=1, norm_layer=norm_layer,feat=True)
-            self.att3 = self._make_layer(block, attChan, attBlockNb, stride=1, norm_layer=norm_layer,feat=True)
-            self.att4 = self._make_layer(block, attChan, attBlockNb, stride=1, norm_layer=norm_layer,feat=True)
-            self.att_conv1x1_1 = conv1x1(chan[0], attChan, stride=1)
-            self.att_conv1x1_2 = conv1x1(chan[1], attChan, stride=1)
-            self.att_conv1x1_3 = conv1x1(chan[2], attChan, stride=1)
-            self.att_conv1x1_4 = conv1x1(chan[3], attChan, stride=1)
-            self.att_final_conv1x1 = conv1x1(attChan, 1, stride=1)
-
-            if attActFunc == "sigmoid":
-                actFuncConstructor = nn.Sigmoid
-            elif attActFunc == "relu":
-                actFuncConstructor = nn.ReLU
-            elif attActFunc == "tanh+relu":
-                actFuncConstructor = TanHPlusRelu
-
-            self.att_1 = nn.Sequential(self.att_conv1x1_1,self.att1,self.att_final_conv1x1,actFuncConstructor())
-            self.att_2 = nn.Sequential(self.att_conv1x1_2,self.att2,self.att_final_conv1x1,actFuncConstructor())
-            self.att_3 = nn.Sequential(self.att_conv1x1_3,self.att3,self.att_final_conv1x1,actFuncConstructor())
-            self.att_4 = nn.Sequential(self.att_conv1x1_4,self.att4,self.att_final_conv1x1,actFuncConstructor())
-
-    def _make_layer(self, block, planes, blocks, stride=1, norm_layer=None,reluOnLast=False,dilation=1,applyStrideOnAll=False,replaceBy1x1=False,replaceStrideByDilation=False):
+    def _make_layer(self, block, planes, blocks, stride=1, norm_layer=None,reluOnLast=False,dilation=1):
 
         if norm_layer is None:
             norm_layer = nn.BatchNorm2d
         downsample = None
         if stride != 1 or self.inplanes != planes * block.expansion:
             downsample = nn.Sequential(
-                conv1x1(self.inplanes, planes * block.expansion, [stride[0]*2,stride[1]*2] if (block is BasicBlock) and applyStrideOnAll else stride),
+                conv1x1(self.inplanes, planes * block.expansion, stride),
                 norm_layer(planes * block.expansion),
             )
 
         layers = []
-        layers.append(block(self.inplanes, planes, stride, downsample, norm_layer,applyStrideOnAll=applyStrideOnAll,replaceBy1x1=replaceBy1x1,replaceStrideByDilation=replaceStrideByDilation))
+        layers.append(block(self.inplanes, planes, stride, downsample, norm_layer))
         self.inplanes = planes * block.expansion
 
         for i in range(1, blocks):
 
             if i == blocks-1:
-                layers.append(block(self.inplanes, planes, norm_layer=norm_layer,endRelu=reluOnLast,dilation=dilation,applyStrideOnAll=applyStrideOnAll,replaceBy1x1=replaceBy1x1,replaceStrideByDilation=replaceStrideByDilation))
+                layers.append(block(self.inplanes, planes, norm_layer=norm_layer,endRelu=reluOnLast,dilation=dilation))
             else:
-                layers.append(block(self.inplanes, planes, norm_layer=norm_layer,endRelu=True,dilation=dilation,applyStrideOnAll=applyStrideOnAll,replaceBy1x1=replaceBy1x1,replaceStrideByDilation=replaceStrideByDilation))
+                layers.append(block(self.inplanes, planes, norm_layer=norm_layer,endRelu=True,dilation=dilation))
 
         return nn.Sequential(*layers)
 
@@ -321,24 +284,22 @@ class ResNet(nn.Module):
         x = self.relu(x)
         x = self.maxpool(x)
 
-        if self.attention:
-            attWeightsDict = {}
-
         layerFeat = {}
-        multiLevelFeat = {}
         lastLayer = self.layersNb if returnLayer=="last" else int(returnLayer)
 
         for i in range(1,lastLayer+1):
             x = getattr(self,"layer{}".format(i))(x)
-            if self.attention:
-                attWeights = getattr(self,"att_{}".format(i))(x)
-                attWeightsDict[i] = attWeights
-                x = x*attWeights
-
             layerFeat[i] = x
 
-        if self.multiLevelFeat:
-            x = self.multiLevMod(layerFeat)
+            if i == 2 and self.bil_cluster_early:
+                _,simMaps = modelBuilder.representativeVectors(x,self.nb_parts,applySoftMax=self.bil_clu_earl_exp)
+                retDict["attMaps"] = torch.cat(simMaps,dim=1)
+                retDict["features"] = x
+                x_part_list = []
+                for j in range(len(simMaps)):
+                    x_part_list.append(self.clus_earl_conv1x1(simMaps[j]*x))
+                x_part_list = torch.cat(x_part_list,dim=1)
+                x = torch.cat((x_part_list,torch.zeros(x.size(0),x.size(1)%self.nb_parts,x.size(2),x.size(3)).to(x.device)),dim=1)
 
         if not self.featMap:
             x = self.avgpool(x)
@@ -346,11 +307,6 @@ class ResNet(nn.Module):
 
         retDict["layerFeat"] = layerFeat
         retDict["x"] = x
-        if self.attention:
-            retDict["attMaps"] = attWeightsDict
-
-        if self.multiLevelFeat:
-            retDict["multiLevelFeat"] = multiLevelFeat
 
         return retDict
 
