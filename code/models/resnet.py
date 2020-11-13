@@ -13,7 +13,7 @@ from skimage.transform import resize
 import torch.nn.functional as F
 
 import modelBuilder
-
+import torchvision
 '''
 
 Just a modification of the torchvision resnet model to get the before-to-last activation
@@ -296,8 +296,12 @@ class ResNet(nn.Module):
                 retDict["attMaps"] = torch.cat(simMaps,dim=1)
                 retDict["features"] = x
                 x_part_list = []
+
                 for j in range(len(simMaps)):
-                    x_part_list.append(self.clus_earl_conv1x1(simMaps[j]*x))
+                    simMaps[j] = simMaps[j]/simMaps[j].max(dim=-1,keepdim=True)[0].max(dim=-2,keepdim=True)[0]
+                    x_part = self.clus_earl_conv1x1(simMaps[j]*x)
+                    x_part_list.append(x_part)
+
                 x_part_list = torch.cat(x_part_list,dim=1)
                 x = torch.cat((x_part_list,torch.zeros(x.size(0),x.size(1)%self.nb_parts,x.size(2),x.size(3)).to(x.device)),dim=1)
 
