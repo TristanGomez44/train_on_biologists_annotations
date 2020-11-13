@@ -139,7 +139,7 @@ def buildTestLoader(args, mode,shuffle=False,withSeg=False,reprVec=False):
         sampler=None
 
     if args.val_batch_size == -1:
-        args.val_batch_size = int(args.max_batch_size*4)
+        args.val_batch_size = int(args.max_batch_size*3.5)
 
     testLoader = torch.utils.data.DataLoader(dataset=test_dataset, batch_size=args.val_batch_size,
                                              num_workers=args.num_workers,sampler=sampler)
