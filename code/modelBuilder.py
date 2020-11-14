@@ -371,10 +371,9 @@ class CNN2D(FirstModel):
 
         return retDict
 
-def buildImageAttention(inFeat,blockNb,outChan=1):
+def buildImageAttention(inFeat,outChan=1):
     attention = []
-    for i in range(blockNb):
-        attention.append(resnet.BasicBlock(inFeat, inFeat))
+    attention.append(resnet.BasicBlock(inFeat, inFeat))
     attention.append(resnet.conv1x1(inFeat, outChan))
     return nn.Sequential(*attention)
 
@@ -465,18 +464,18 @@ def representativeVectors(x,nbVec,applySoftMax=False,softmCoeff=1,softmSched=Fal
 
 class CNN2D_bilinearAttPool(FirstModel):
 
-    def __init__(self, featModelName, pretrainedFeatMod=True, featMap=True, bigMaps=False, chan=64, attBlockNb=2,
-                 attChan=16,inFeat=512,nb_parts=3,aux_model=False,score_pred_act_func="softmax",center_loss=False,\
+    def __init__(self, featModelName, pretrainedFeatMod=True, featMap=True, bigMaps=False, chan=64,
+                 inFeat=512,nb_parts=3,aux_model=False,score_pred_act_func="softmax",center_loss=False,\
                  center_loss_beta=5e-2,num_classes=200,cuda=True,cluster=False,cluster_ensemble=False,applySoftmaxOnSim=False,\
                  softmCoeff=1,softmSched=False,normFeat=False,no_refine=False,rand_vec=False,unnorm=False,update_sco_by_norm_sim=False,\
-                 vect_gate=False,vect_ind_to_use="all",multi_feat_by_100=False,\
+                 vect_gate=False,vect_ind_to_use="all",multi_feat_by_100=False,cluster_lay_ind=4,clu_glob_vec=False,\
                  **kwargs):
 
         super(CNN2D_bilinearAttPool, self).__init__(featModelName, pretrainedFeatMod, featMap, bigMaps, **kwargs)
         self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
 
         if not cluster:
-            self.attention = buildImageAttention(inFeat,attBlockNb,nb_parts+1)
+            self.attention = buildImageAttention(inFeat,nb_parts+1)
         else:
             self.attention = None
 
@@ -522,16 +521,19 @@ class CNN2D_bilinearAttPool(FirstModel):
         self.vect_ind_to_use = vect_ind_to_use
         self.multi_feat_by_100 = multi_feat_by_100
 
+        self.cluster_lay_ind = cluster_lay_ind
+        self.clu_glob_vec = clu_glob_vec
+
     def forward(self, x):
         # N x C x H x L
         self.batchSize = x.size(0)
         # N x C x H x L
         output = self.featMod(x)
 
-        if type(output) is dict:
+        if not self.cluster:
             features = output["x"]
         else:
-            features = output
+            features = output["layerFeat"][self.cluster_lay_ind]
 
         if self.normFeat:
             features = features/torch.sqrt(torch.pow(features,2).sum(dim=1,keepdim=True))
@@ -585,6 +587,9 @@ class CNN2D_bilinearAttPool(FirstModel):
 
         retDict["attMaps"] = spatialWeights
         retDict["features"] = features
+
+        if self.clu_glob_vec:
+            retDict["x"] = torch.cat((retDict["x"],output["layerFeat"][4].mean(dim=-1).mean(dim=-1)),dim=-1)
 
         if self.center_loss:
             retDict["feature_matrix"] = retDict["x"]
@@ -769,13 +774,28 @@ def netBuilder(args):
                           "normFeat":args.bil_norm_feat,\
                           "vect_gate":args.bil_clus_vect_gate,\
                           "vect_ind_to_use":args.bil_clus_vect_ind_to_use,\
-                          "multi_feat_by_100":args.multi_feat_by_100}
+                          "multi_feat_by_100":args.multi_feat_by_100,\
+                          "cluster_lay_ind":args.bil_cluster_lay_ind,\
+                          "clu_glob_vec":args.bil_clu_glob_vec}
                 nbFeatAux = nbFeat
                 if not args.bil_cluster_ensemble:
+
+                    if args.bil_cluster_lay_ind != 4:
+                        if nbFeat == 2048:
+                            nbFeat = nbFeat//2**(4-args.bil_cluster_lay_ind)
+                        elif nbFeat == 512:
+                            nbFeat = nbFeat//2**(4-args.bil_cluster_lay_ind)
+                        else:
+                            raise ValueError("Unknown feature nb.")
+
                     if args.bil_clus_vect_ind_to_use == "all":
                         nbFeat *= args.resnet_bil_nb_parts
                     else:
                         nbFeat *= len(args.bil_clus_vect_ind_to_use.split(","))
+
+                    if args.bil_clu_glob_vec:
+                        nbFeat += getResnetFeat(args.first_mod, args.resnet_chan,args.deeplabv3_outchan)
+
             else:
                 CNNconst = CNN2D
                 kwargs = {"aux_model":args.aux_model,"bil_cluster_early":args.bil_cluster_early,"nb_parts":args.resnet_bil_nb_parts}
@@ -952,13 +972,16 @@ def addArgs(argreader):
     argreader.parser.add_argument('--bil_cluster_randvec', type=args.str2bool, metavar='BOOL',
                                   help="To select random vectors as initial estimation instead of vectors with high norms.")
 
+    argreader.parser.add_argument('--bil_cluster_lay_ind', type=int, metavar='BOOL',
+                                  help="The layer at which to group pixels.")
+
     argreader.parser.add_argument('--bil_cluster_early', type=args.str2bool, metavar='BOOL',
                                   help="To perform early grouping.")
     argreader.parser.add_argument('--bil_clu_earl_exp', type=args.str2bool, metavar='BOOL',
                                   help="To apply soft-max when using early grouping.")
 
-
-
+    argreader.parser.add_argument('--bil_clu_glob_vec', type=args.str2bool, metavar='BOOL',
+                                  help="To compute a global vector by global average pooling on the last layer.")
 
     argreader.parser.add_argument('--lin_lay_bias', type=args.str2bool, metavar='BOOL',
                                   help="To add a bias to the final layer.")
