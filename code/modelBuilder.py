@@ -469,6 +469,7 @@ class CNN2D_bilinearAttPool(FirstModel):
                  center_loss_beta=5e-2,num_classes=200,cuda=True,cluster=False,cluster_ensemble=False,applySoftmaxOnSim=False,\
                  softmCoeff=1,softmSched=False,normFeat=False,no_refine=False,rand_vec=False,unnorm=False,update_sco_by_norm_sim=False,\
                  vect_gate=False,vect_ind_to_use="all",multi_feat_by_100=False,cluster_lay_ind=4,clu_glob_vec=False,\
+                 clu_glob_rep_vec=False,\
                  **kwargs):
 
         super(CNN2D_bilinearAttPool, self).__init__(featModelName, pretrainedFeatMod, featMap, bigMaps, **kwargs)
@@ -523,6 +524,7 @@ class CNN2D_bilinearAttPool(FirstModel):
 
         self.cluster_lay_ind = cluster_lay_ind
         self.clu_glob_vec = clu_glob_vec
+        self.clu_glob_rep_vec = clu_glob_rep_vec
 
     def forward(self, x):
         # N x C x H x L
@@ -590,6 +592,17 @@ class CNN2D_bilinearAttPool(FirstModel):
 
         if self.clu_glob_vec:
             retDict["x"] = torch.cat((retDict["x"],output["layerFeat"][4].mean(dim=-1).mean(dim=-1)),dim=-1)
+        elif self.clu_glob_rep_vec:
+            lastLayFeat = output["layerFeat"][4]
+
+            globVecList,globSimList = representativeVectors(lastLayFeat,self.nb_parts,self.applySoftmaxOnSim,self.softmCoeff,self.softmSched,\
+                                                    self.softmSched_interpCoeff,True,self.rand_vec,self.unnorm,\
+                                                    self.update_sco_by_norm_sim,self.vect_ind_to_use)
+            globRepVec = torch.cat(globVecList,dim=-1)
+            retDict["x"] = torch.cat((retDict["x"],globRepVec),dim=-1)
+
+            retDict["attMaps_glob"] = torch.cat(globSimList,dim=1)
+            retDict["features_glob"] = lastLayFeat
 
         if self.center_loss:
             retDict["feature_matrix"] = retDict["x"]
@@ -776,7 +789,8 @@ def netBuilder(args):
                           "vect_ind_to_use":args.bil_clus_vect_ind_to_use,\
                           "multi_feat_by_100":args.multi_feat_by_100,\
                           "cluster_lay_ind":args.bil_cluster_lay_ind,\
-                          "clu_glob_vec":args.bil_clu_glob_vec}
+                          "clu_glob_vec":args.bil_clu_glob_vec,\
+                          "clu_glob_rep_vec":args.bil_clu_glob_rep_vec}
                 nbFeatAux = nbFeat
                 if not args.bil_cluster_ensemble:
 
@@ -795,7 +809,8 @@ def netBuilder(args):
 
                     if args.bil_clu_glob_vec:
                         nbFeat += getResnetFeat(args.first_mod, args.resnet_chan,args.deeplabv3_outchan)
-
+                    elif args.bil_clu_glob_rep_vec:
+                        nbFeat += args.resnet_bil_nb_parts*getResnetFeat(args.first_mod, args.resnet_chan,args.deeplabv3_outchan)
             else:
                 CNNconst = CNN2D
                 kwargs = {"aux_model":args.aux_model,"bil_cluster_early":args.bil_cluster_early,"nb_parts":args.resnet_bil_nb_parts}
@@ -982,6 +997,8 @@ def addArgs(argreader):
 
     argreader.parser.add_argument('--bil_clu_glob_vec', type=args.str2bool, metavar='BOOL',
                                   help="To compute a global vector by global average pooling on the last layer.")
+    argreader.parser.add_argument('--bil_clu_glob_rep_vec', type=args.str2bool, metavar='BOOL',
+                                  help="To compute representative vectors on the last layer.")
 
     argreader.parser.add_argument('--lin_lay_bias', type=args.str2bool, metavar='BOOL',
                                   help="To add a bias to the final layer.")

@@ -109,12 +109,19 @@ def catIntermediateVariables(visualDict,intermVarDict,nbVideos):
     intermVarDict["fullAttMap"] = catMap(visualDict,intermVarDict["fullAttMap"],key="attMaps")
     intermVarDict["fullFeatMapSeq"] = catMap(visualDict,intermVarDict["fullFeatMapSeq"],key="features")
 
+    intermVarDict["fullAttMap_glob"] = catMap(visualDict,intermVarDict["fullAttMap_glob"],key="attMaps_glob")
+    intermVarDict["fullFeatMapSeq_glob"] = catMap(visualDict,intermVarDict["fullFeatMapSeq_glob"],key="features_glob")
+
     return intermVarDict
 
 def saveIntermediateVariables(intermVarDict,exp_id,model_id,epoch,mode="val"):
 
     intermVarDict["fullAttMap"] = saveMap(intermVarDict["fullAttMap"],exp_id,model_id,epoch,mode,key="attMaps")
     intermVarDict["fullFeatMapSeq"] = saveMap(intermVarDict["fullFeatMapSeq"],exp_id,model_id,epoch,mode,key="features")
+
+    intermVarDict["fullAttMap_glob"] = saveMap(intermVarDict["fullAttMap_glob"],exp_id,model_id,epoch,mode,key="attMaps_glob")
+    intermVarDict["fullFeatMapSeq_glob"] = saveMap(intermVarDict["fullFeatMapSeq_glob"],exp_id,model_id,epoch,mode,key="features_glob")
+
 
     return intermVarDict
 

@@ -204,7 +204,7 @@ def epochImgEval(model, log_interval, loader, epoch, args, writer, metricEarlySt
     allGT = None
     intermVarDict = {"fullAttMap": None, "fullFeatMapSeq": None, "fullAffTransSeq": None, "fullPointsSeq": None,"fullPointsWeightSeq":None,
                      "fullPointsSeq_pureText": None,"fullPointsWeightSeq_pureText":None,"fullPointsSeqDropped":None,"fullPNReconstSeq": None,"fullProbMap":None,\
-                     "fullReconstSeq":None}
+                     "fullReconstSeq":None,"fullAttMap_glob": None,"fullFeatMapSeq_glob": None}
 
     compute_latency = args.compute_latency and mode == "test"
 
