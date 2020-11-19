@@ -28,8 +28,6 @@ plt.switch_backend('agg')
 import cv2
 from scipy import ndimage
 
-_EPSILON = 10e-7
-
 from  torch.nn.modules.upsampling import Upsample
 import time
 
@@ -67,14 +65,6 @@ def buildFeatModel(featModelName, pretrainedFeatMod, featMap=True, bigMaps=False
         raise ValueError("Unknown model type : ", featModelName)
 
     return featModel
-
-def mapToList(map, abs, ord):
-    # This extract the desired pixels in a map
-    indices = tuple([torch.arange(map.size(0), dtype=torch.long).unsqueeze(1).unsqueeze(1),
-                     torch.arange(map.size(1), dtype=torch.long).unsqueeze(1).unsqueeze(0),
-                     ord.long().unsqueeze(1), abs.long().unsqueeze(1)])
-    list = map[indices].permute(0, 2, 1)
-    return list
 
 # This class is just the class nn.DataParallel that allow running computation on multiple gpus
 # but it adds the possibility to access the attribute of the model
@@ -118,153 +108,6 @@ class Model(nn.Module):
 
         return resDict
 
-    def computeZoom(self,origImg,xSize,pts,subCloudInd,countList):
-        imgSize = torch.tensor(origImg.size())[-2:].to(origImg.device)
-        xSize = torch.tensor(xSize)[-2:].to(origImg.device)
-
-        bboxNbs = list(map(lambda x:min(len(x)-1,self.subcloudNb),countList))
-
-        bboxCount = 0
-        bboxs = torch.zeros((sum(bboxNbs),4)).to(origImg.device)
-        pts = pts.view(origImg.size(0),-1,pts.size(-1))
-        for i in range(len(pts)):
-            sortedInds = torch.argsort(countList[i],descending=True)
-            for j in range(1,1+min(len(countList[i])-1,self.subcloudNb)):
-                ptsCoord = (subCloudInd[i,0] == sortedInds[j]).nonzero()
-                ptsCoord *= (imgSize/xSize).unsqueeze(0)
-                yMin,yMax = ptsCoord[:,0].min(dim=0)[0],ptsCoord[:,0].max(dim=0)[0]
-                xMin,xMax = ptsCoord[:,1].min(dim=0)[0],ptsCoord[:,1].max(dim=0)[0]
-                bboxs[bboxCount] = torch.cat((xMin.unsqueeze(0),xMax.unsqueeze(0),yMin.unsqueeze(0),yMax.unsqueeze(0)),dim=0)
-                bboxCount += 1
-
-        theta = bboxToTheta(bboxs,imgSize)
-
-        origImg = torch.repeat_interleave(origImg, torch.tensor(bboxNbs).to(origImg.device), dim=0)
-        pts = torch.repeat_interleave(pts, torch.tensor(bboxNbs).to(origImg.device), dim=0)
-        #origImg = debugCrop(pts,origImg,xSize)
-
-        flowField = F.affine_grid(theta, origImg.size(),align_corners=False).to(origImg.device)
-        croppedImg = F.grid_sample(origImg, flowField,align_corners=False)
-
-        #torchvision.utils.save_image(croppedImg, "../vis/cropped.png")
-
-        return croppedImg,xMin,xMax,yMin,yMax,bboxNbs
-
-    def splitCloud(self,points,xSize,maxSubCloud=3):
-
-        ended = False
-        randTens = torch.rand((points.size(0),1,xSize[-2],xSize[-1])).to(points.device)
-
-        tensor = torch.zeros_like(randTens).to(points.device)
-
-        inds = tuple([torch.arange(tensor.size(0), dtype=torch.long).unsqueeze(1).unsqueeze(1),
-                         torch.arange(tensor.size(1), dtype=torch.long).unsqueeze(1).unsqueeze(0),
-                         points[:,:,1].long().unsqueeze(1), points[:,:,0].long().unsqueeze(1)])
-
-        tensor[inds] = randTens[inds]
-        stepCount = 0
-        tensList = [tensor]
-
-        #Spliting the clouds
-        while not ended and stepCount<40:
-
-            newTensor = F.max_pool2d(tensor,kernel_size=3,stride=1,padding=1)
-
-            newTensorPadded = torch.zeros_like(newTensor).to(points.device)
-            newTensorPadded[inds] = newTensor[inds]
-            newTensor = newTensorPadded
-
-            ended=torch.all(torch.eq(newTensor, tensor))
-            if not ended:
-                tensor = newTensor.clone()
-
-            tensList.append(newTensor)
-            stepCount += 1
-
-        #debugSplitCloud(tensList)
-
-        #For each cloud, collecting the biggest subclouds
-        ids = tensList[-1][inds].squeeze(1)
-
-        subCloudInd = []
-        countList = []
-        for i in range(len(tensList[-1])):
-            _,revInds,counts = torch.unique(tensList[-1][i],return_inverse=True,return_counts=True)
-            subCloudInd.append(revInds.unsqueeze(0))
-            countList.append(counts)
-
-        subCloudInd = torch.cat(subCloudInd,dim=0)
-
-        return subCloudInd,countList
-
-def bboxToTheta(bboxs,imgSize):
-
-    xMin,xMax,yMin,yMax = bboxs[:,0],bboxs[:,1],bboxs[:,2],bboxs[:,3]
-
-    theta = torch.eye(3)[:2].unsqueeze(0).expand(len(xMin),-1,-1)
-
-    #Zoom
-    theta = theta.permute(1,2,0).clone()
-
-    zoomX = (xMax-xMin)/imgSize[-2]
-    zoomY = (yMax-yMin)/imgSize[-1]
-    theta[0,0] = torch.max(zoomX,zoomY)
-    theta[1,1] = torch.max(zoomX,zoomY)
-    theta = theta.permute(2,0,1)
-
-    #Translation
-    theta = theta.permute(2,0,1).clone()
-    theta[2,:,0] = 2*((xMax+xMin)/2)/imgSize[0]-1
-    theta[2,:,1] = 2*((yMax+yMin)/2)/imgSize[1]-1
-    theta = theta.permute(1,2,0)
-    return theta
-
-def debugCrop(pts,origImg,xSize):
-    ptsValues = torch.abs(pts[:,:,4:]).sum(axis=-1)
-    ptsValues = ptsValues/ptsValues.max()
-    ptsValues = torch.pow(ptsValues,2)
-    ptsWeights = (ptsValues-ptsValues.min(dim=0)[0])/(ptsValues.max(dim=0)[0]-ptsValues.min(dim=0)[0])
-    cmPlasma = plt.get_cmap('plasma')
-    ptsWeights = torch.tensor(cmPlasma(ptsWeights.cpu().detach().numpy())).to(ptsValues.device)[:,:,:3].float()
-    ptsCoord = pts[:,:,:2]
-    ptsImage = torch.zeros((origImg.size(0),origImg.size(1),xSize[0],xSize[1])).to(ptsValues.device)
-    ptsImage[torch.arange(origImg.size(0)).unsqueeze(1),:,ptsCoord[:,:,1].long(),ptsCoord[:,:,0].long()] = ptsWeights
-    ptsImage = F.interpolate(ptsImage, size=(origImg.size(-2),origImg.size(-1)))
-    origImg = 0.5*origImg+0.5*ptsImage
-    torchvision.utils.save_image(origImg, "../vis/orig.png")
-    return origImg
-
-def debugSplitCloud(tensList):
-    cmPlasma = plt.get_cmap('rainbow')
-
-    colorTensBatch = []
-    for i,tensor in enumerate(tensList[-1]):
-        values = torch.unique(tensor)
-        tensor = tensor[0]
-        colorTens = torch.ones((tensor.size(0),tensor.size(1),3)).to(tensList[-1].device)
-        for j,value in enumerate(values):
-            if value != 0:
-                color = cmPlasma(j/len(values))[:3]
-                colorTens[tensor == value] = torch.tensor(color).to(tensList[-1].device)
-        colorTens = colorTens.permute(2,0,1).unsqueeze(0)
-        colorTensBatch.append(colorTens)
-
-    colorTensBatch = torch.cat(colorTensBatch,dim=0)
-    torchvision.utils.save_image(F.interpolate(colorTensBatch,size=(224,224)), "../vis/cloudSplit_color.png")
-
-    for i,tensor in enumerate(tensList):
-        torchvision.utils.save_image(F.interpolate(tensor,size=(224,224)), "../vis/cloudSplit{}.png".format(i))
-
-def debugSubClouds(subCloudsList,origImgBatch,resDict):
-    tensor = torch.zeros((origImgBatch.size(0),56,56,3)).to(origImgBatch.device)
-    for i,subClouds in enumerate(subCloudsList):
-        for j,subCloud in enumerate(subClouds):
-            tensor[i][subCloud[:,0],subCloud[:,1]] = 2
-
-    tensor = tensor.permute(0,3,1,2)
-    tensor = 0.5*F.interpolate(tensor,size=(224,224))+0.5*origImgBatch
-    torchvision.utils.save_image(tensor, "../vis/cloudSplit_kepsSubs.png")
-
 def merge(dictA,dictB,suffix=""):
     for key in dictA.keys():
         if key in dictB:
@@ -273,57 +116,7 @@ def merge(dictA,dictB,suffix=""):
             dictB[key] = dictA[key]
     return dictB
 
-def plotBox(mask,xMin,xMax,yMin,yMax,chan):
-    mask[chan][max(xMin,0):min(xMax,mask.size(1)-1),max(yMin,0)] = 1
-    mask[chan][max(xMin,0):min(xMax,mask.size(1)-1),min(yMax,mask.size(2)-1)] = 1
-    mask[chan][max(xMin,0),max(yMin,0):min(yMax,mask.size(2)-1)] = 1
-    mask[chan][min(xMax,mask.size(1)-1),max(yMin,0):min(yMax,mask.size(2)-1)] = 1
-    return mask
 ################################# Visual Model ##########################
-
-def batch_augment(images, attention_map, mode='crop', theta=0.5, padding_ratio=0.1):
-    #This comes from https://github.com/GuYuc/WS-DAN.PyTorch/blob/87779124f619ceeb445ddfb0246c8a22ff324db4/utils.py
-
-    batches, _, imgH, imgW = images.size()
-
-    if mode == 'crop':
-        crop_images = []
-        for batch_index in range(batches):
-            atten_map = attention_map[batch_index:batch_index + 1]
-            if isinstance(theta, tuple):
-                theta_c = random.uniform(*theta) * atten_map.max()
-            else:
-                theta_c = theta * atten_map.max()
-
-            crop_mask = F.interpolate(atten_map, size=(imgH, imgW)) >= theta_c
-            nonzero_indices = torch.nonzero(crop_mask[0, 0, ...])
-            height_min = max(int(nonzero_indices[:, 0].min().item() - padding_ratio * imgH), 0)
-            height_max = min(int(nonzero_indices[:, 0].max().item() + padding_ratio * imgH), imgH)
-            width_min = max(int(nonzero_indices[:, 1].min().item() - padding_ratio * imgW), 0)
-            width_max = min(int(nonzero_indices[:, 1].max().item() + padding_ratio * imgW), imgW)
-
-            crop_images.append(
-                F.interpolate(images[batch_index:batch_index + 1, :, height_min:height_max, width_min:width_max],
-                                    size=(imgH, imgW)))
-        crop_images = torch.cat(crop_images, dim=0)
-        return crop_images
-
-    elif mode == 'drop':
-        drop_masks = []
-        for batch_index in range(batches):
-            atten_map = attention_map[batch_index:batch_index + 1]
-            if isinstance(theta, tuple):
-                theta_d = random.uniform(*theta) * atten_map.max()
-            else:
-                theta_d = theta * atten_map.max()
-
-            drop_masks.append(F.interpolate(atten_map, size=(imgH, imgW)) < theta_d)
-        drop_masks = torch.cat(drop_masks, dim=0)
-        drop_images = images * drop_masks.float()
-        return drop_images
-
-    else:
-        raise ValueError('Expected mode in [\'crop\', \'drop\'], but received unsupported augmentation method %s' % mode)
 
 class FirstModel(nn.Module):
 
@@ -393,17 +186,6 @@ class SoftMax(nn.Module):
             x = (x-x_min)/(x_max-x_min)
         return x
 
-def mapToHeatMap(batch,i,name):
-
-    import matplotlib.pyplot as plt
-    plt.switch_backend('agg')
-    cmPlasma = plt.get_cmap('plasma')
-
-    map = batch[i].permute(1,2,0).cpu().detach().numpy()
-    map = torch.tensor(cmPlasma(map[:,:,0])[:,:,:3]).permute(2,0,1)
-
-    torchvision.utils.save_image(map,"../vis/repreVecSchema_{}.png".format(name))
-
 def representativeVectors(x,nbVec,applySoftMax=False,softmCoeff=1,softmSched=False,softmSched_interpCoeff=0,no_refine=False,randVec=False,unnorm=False,update_sco_by_norm_sim=False,vectIndToUse="all"):
 
     xOrigShape = x.size()
@@ -469,7 +251,7 @@ class CNN2D_bilinearAttPool(FirstModel):
                  center_loss_beta=5e-2,num_classes=200,cuda=True,cluster=False,cluster_ensemble=False,applySoftmaxOnSim=False,\
                  softmCoeff=1,softmSched=False,normFeat=False,no_refine=False,rand_vec=False,unnorm=False,update_sco_by_norm_sim=False,\
                  vect_gate=False,vect_ind_to_use="all",multi_feat_by_100=False,cluster_lay_ind=4,clu_glob_vec=False,\
-                 clu_glob_rep_vec=False,\
+                 clu_glob_rep_vec=False,clu_glob_corr_vec=False,\
                  **kwargs):
 
         super(CNN2D_bilinearAttPool, self).__init__(featModelName, pretrainedFeatMod, featMap, bigMaps, **kwargs)
@@ -525,6 +307,7 @@ class CNN2D_bilinearAttPool(FirstModel):
         self.cluster_lay_ind = cluster_lay_ind
         self.clu_glob_vec = clu_glob_vec
         self.clu_glob_rep_vec = clu_glob_rep_vec
+        self.clu_glob_corr_vec = clu_glob_corr_vec
 
     def forward(self, x):
         # N x C x H x L
@@ -603,6 +386,28 @@ class CNN2D_bilinearAttPool(FirstModel):
 
             retDict["attMaps_glob"] = torch.cat(globSimList,dim=1)
             retDict["features_glob"] = lastLayFeat
+        elif self.clu_glob_corr_vec:
+            lastLayFeat = output["layerFeat"][4]
+
+            spatialWeights_max = spatialWeights.max(dim=-1,keepdim=True)[0].max(dim=-2,keepdim=True)[0]
+            inds = torch.nonzero(spatialWeights==spatialWeights_max,as_tuple=False)
+
+            #Removing vectors when they are too many (in case several of them have weight==1)
+            if len(inds) > spatialWeights.size(0)*spatialWeights.size(1):
+                indToKeep = []
+                for i in range(1,len(inds)):
+                    if (inds[i,:2] != inds[i-1,:2]).any():
+                        indToKeep.append(i)
+                inds = inds[indToKeep]
+
+            x = (inds[:,3].float()*(lastLayFeat.size(3)*1.0/spatialWeights.size(3))).long()
+            y = (inds[:,2].float()*(lastLayFeat.size(2)*1.0/spatialWeights.size(2))).long()
+
+            globCorVec = lastLayFeat[inds[:,0],:,y,x]
+            globCorVec = globCorVec.reshape(lastLayFeat.size(0),-1)
+
+            retDict["x"] = torch.cat((retDict["x"],globCorVec),dim=-1)
+            retDict["features_glob"] = lastLayFeat
 
         if self.center_loss:
             retDict["feature_matrix"] = retDict["x"]
@@ -616,12 +421,6 @@ class CNN2D_bilinearAttPool(FirstModel):
         return F.normalize(self.feature_center[target], dim=-1)
     def updateFeatCenter(self,feature_center_batch,features_agr,target):
         self.feature_center[target] += self.center_loss_beta * (features_agr.detach() - feature_center_batch)
-
-def addOrCat(dict,key,tensor,dim):
-    if not key in dict:
-        dict[key] = tensor
-    else:
-        dict[key] = torch.cat((dict[key],tensor),dim=dim)
 
 ################################ Temporal Model ########################""
 
@@ -690,52 +489,6 @@ class LinearSecondModel(SecondModel):
 
         return retDict
 
-
-def sagpoolLayer(inChan):
-    return pointnet2.SAModule(1, 0.2, pointnet2.MLP_linEnd([inChan+3,64,1]))
-
-def applySagPool(module,retDict,batchSize,drop,dropRatio):
-
-    nodeWeight,pos,batch = module(retDict['pointfeatures'],retDict["pos"],retDict["batch"])
-    nodeWeight = torch.tanh(nodeWeight)
-    ptsNb = nodeWeight.size(0)//batchSize
-
-    retDict["pointWeights"] = nodeWeight.reshape(batchSize,ptsNb)
-
-    if drop:
-
-        ptsNb_afterpool = int(ptsNb*dropRatio)
-
-        nodeWeight = nodeWeight.reshape(batchSize,ptsNb)
-        retDict["pointfeatures"] = retDict["pointfeatures"].unsqueeze(0).reshape(batchSize,ptsNb,-1)
-        retDict["pos"] = retDict["pos"].unsqueeze(0).reshape(batchSize,ptsNb,-1)
-        retDict["batch"] = retDict["batch"].unsqueeze(0).reshape(batchSize,ptsNb)
-
-        #Finding most important pixels
-        nodeWeight, inds = torch.topk(nodeWeight, int(nodeWeight.size(1)*dropRatio), dim=-1, largest=True)
-
-        #Selecting those pixels
-        retDict["pointfeatures"] = retDict["pointfeatures"][torch.arange(batchSize).unsqueeze(1),inds]
-        retDict["pos"] = retDict["pos"][torch.arange(batchSize).unsqueeze(1),inds]
-        retDict["batch"] = retDict["batch"][torch.arange(batchSize).unsqueeze(1),inds]
-
-        retDict["points_dropped"] = torch.cat((retDict["pos"],retDict["pointfeatures"],nodeWeight.unsqueeze(-1)),dim=-1)
-
-        #Reshaping
-        nodeWeight = nodeWeight.reshape(batchSize*ptsNb_afterpool).unsqueeze(1)
-        retDict["pointfeatures"] = retDict["pointfeatures"].reshape(batchSize*ptsNb_afterpool,-1)
-        retDict["pos"] = retDict["pos"].reshape(batchSize*ptsNb_afterpool,-1)
-        retDict["batch"] = retDict["batch"].reshape(batchSize*ptsNb_afterpool)
-
-    retDict["pointfeatures"] = nodeWeight*retDict["pointfeatures"]
-    return retDict
-
-def getLayerNb(backbone_name):
-    if backbone_name.find("9") != -1:
-        return 2
-    else:
-        return 4
-
 def getResnetFeat(backbone_name, backbone_inplanes,deeplabv3_outchan):
     if backbone_name == "resnet50" or backbone_name == "resnet101" or backbone_name == "resnet151":
         nbFeat = backbone_inplanes * 4 * 2 ** (4 - 1)
@@ -790,7 +543,8 @@ def netBuilder(args):
                           "multi_feat_by_100":args.multi_feat_by_100,\
                           "cluster_lay_ind":args.bil_cluster_lay_ind,\
                           "clu_glob_vec":args.bil_clu_glob_vec,\
-                          "clu_glob_rep_vec":args.bil_clu_glob_rep_vec}
+                          "clu_glob_rep_vec":args.bil_clu_glob_rep_vec,\
+                          "clu_glob_corr_vec":args.bil_clu_glob_corr_vec}
                 nbFeatAux = nbFeat
                 if not args.bil_cluster_ensemble:
 
@@ -809,7 +563,7 @@ def netBuilder(args):
 
                     if args.bil_clu_glob_vec:
                         nbFeat += getResnetFeat(args.first_mod, args.resnet_chan,args.deeplabv3_outchan)
-                    elif args.bil_clu_glob_rep_vec:
+                    elif args.bil_clu_glob_rep_vec or args.bil_clu_glob_corr_vec:
                         nbFeat += args.resnet_bil_nb_parts*getResnetFeat(args.first_mod, args.resnet_chan,args.deeplabv3_outchan)
             else:
                 CNNconst = CNN2D
@@ -866,7 +620,6 @@ def netBuilder(args):
         net = DataParallelModel(net)
 
     return net
-
 
 def addArgs(argreader):
     argreader.parser.add_argument('--first_mod', type=str, metavar='MOD',
@@ -999,6 +752,11 @@ def addArgs(argreader):
                                   help="To compute a global vector by global average pooling on the last layer.")
     argreader.parser.add_argument('--bil_clu_glob_rep_vec', type=args.str2bool, metavar='BOOL',
                                   help="To compute representative vectors on the last layer.")
+    argreader.parser.add_argument('--bil_clu_glob_corr_vec', type=args.str2bool, metavar='BOOL',
+                                  help="To extract the vector on the last layer at the position where \
+                                            representative vectors have been extracted.")
+
+
 
     argreader.parser.add_argument('--lin_lay_bias', type=args.str2bool, metavar='BOOL',
                                   help="To add a bias to the final layer.")
