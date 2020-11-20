@@ -188,6 +188,8 @@ class SoftMax(nn.Module):
 
 def representativeVectors(x,nbVec,applySoftMax=False,softmCoeff=1,softmSched=False,softmSched_interpCoeff=0,no_refine=False,randVec=False,unnorm=False,update_sco_by_norm_sim=False,vectIndToUse="all"):
 
+    print(applySoftMax,no_refine)
+
     xOrigShape = x.size()
 
     normNotFlat = torch.sqrt(torch.pow(x,2).sum(dim=1,keepdim=True))
@@ -251,7 +253,7 @@ class CNN2D_bilinearAttPool(FirstModel):
                  center_loss_beta=5e-2,num_classes=200,cuda=True,cluster=False,cluster_ensemble=False,applySoftmaxOnSim=False,\
                  softmCoeff=1,softmSched=False,normFeat=False,no_refine=False,rand_vec=False,unnorm=False,update_sco_by_norm_sim=False,\
                  vect_gate=False,vect_ind_to_use="all",multi_feat_by_100=False,cluster_lay_ind=4,clu_glob_vec=False,\
-                 clu_glob_rep_vec=False,clu_glob_corr_vec=False,\
+                 clu_glob_rep_vec=False,clu_glob_corr_vec=False,clus_glob_norefine=False,applySoftmaxOnSim_glob=False,\
                  **kwargs):
 
         super(CNN2D_bilinearAttPool, self).__init__(featModelName, pretrainedFeatMod, featMap, bigMaps, **kwargs)
@@ -308,6 +310,8 @@ class CNN2D_bilinearAttPool(FirstModel):
         self.clu_glob_vec = clu_glob_vec
         self.clu_glob_rep_vec = clu_glob_rep_vec
         self.clu_glob_corr_vec = clu_glob_corr_vec
+        self.clus_glob_norefine = clus_glob_norefine
+        self.applySoftmaxOnSim_glob = applySoftmaxOnSim_glob
 
     def forward(self, x):
         # N x C x H x L
@@ -378,8 +382,8 @@ class CNN2D_bilinearAttPool(FirstModel):
         elif self.clu_glob_rep_vec:
             lastLayFeat = output["layerFeat"][4]
 
-            globVecList,globSimList = representativeVectors(lastLayFeat,self.nb_parts,self.applySoftmaxOnSim,self.softmCoeff,self.softmSched,\
-                                                    self.softmSched_interpCoeff,True,self.rand_vec,self.unnorm,\
+            globVecList,globSimList = representativeVectors(lastLayFeat,self.nb_parts,self.applySoftmaxOnSim_glob,self.softmCoeff,self.softmSched,\
+                                                    self.softmSched_interpCoeff,self.clus_glob_norefine,self.rand_vec,self.unnorm,\
                                                     self.update_sco_by_norm_sim,self.vect_ind_to_use)
             globRepVec = torch.cat(globVecList,dim=-1)
             retDict["x"] = torch.cat((retDict["x"],globRepVec),dim=-1)
@@ -394,7 +398,8 @@ class CNN2D_bilinearAttPool(FirstModel):
 
             #Removing vectors when they are too many (in case several of them have weight==1)
             if len(inds) > spatialWeights.size(0)*spatialWeights.size(1):
-                indToKeep = []
+
+                indToKeep = [0]
                 for i in range(1,len(inds)):
                     if (inds[i,:2] != inds[i-1,:2]).any():
                         indToKeep.append(i)
@@ -404,6 +409,7 @@ class CNN2D_bilinearAttPool(FirstModel):
             y = (inds[:,2].float()*(lastLayFeat.size(2)*1.0/spatialWeights.size(2))).long()
 
             globCorVec = lastLayFeat[inds[:,0],:,y,x]
+
             globCorVec = globCorVec.reshape(lastLayFeat.size(0),-1)
 
             retDict["x"] = torch.cat((retDict["x"],globCorVec),dim=-1)
@@ -544,7 +550,9 @@ def netBuilder(args):
                           "cluster_lay_ind":args.bil_cluster_lay_ind,\
                           "clu_glob_vec":args.bil_clu_glob_vec,\
                           "clu_glob_rep_vec":args.bil_clu_glob_rep_vec,\
-                          "clu_glob_corr_vec":args.bil_clu_glob_corr_vec}
+                          "clu_glob_corr_vec":args.bil_clu_glob_corr_vec,\
+                          "clus_glob_norefine":args.bil_cluster_glob_norefine,\
+                          "applySoftmaxOnSim_glob":args.apply_softmax_on_sim_glob}
                 nbFeatAux = nbFeat
                 if not args.bil_cluster_ensemble:
 
@@ -739,6 +747,8 @@ def addArgs(argreader):
                                   help="To not refine feature vectors by using similar vectors.")
     argreader.parser.add_argument('--bil_cluster_randvec', type=args.str2bool, metavar='BOOL',
                                   help="To select random vectors as initial estimation instead of vectors with high norms.")
+    argreader.parser.add_argument('--bil_cluster_glob_norefine', type=args.str2bool, metavar='BOOL',
+                                  help="To prevent refining when extracting representative vectors at the last layer.")
 
     argreader.parser.add_argument('--bil_cluster_lay_ind', type=int, metavar='BOOL',
                                   help="The layer at which to group pixels.")
@@ -755,6 +765,10 @@ def addArgs(argreader):
     argreader.parser.add_argument('--bil_clu_glob_corr_vec', type=args.str2bool, metavar='BOOL',
                                   help="To extract the vector on the last layer at the position where \
                                             representative vectors have been extracted.")
+    argreader.parser.add_argument('--apply_softmax_on_sim_glob', type=args.str2bool, metavar='BOOL',
+                              help="When extracting representative vectors at the last layer, whether to apply softmax.")
+
+
 
 
 
