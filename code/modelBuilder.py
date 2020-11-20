@@ -188,8 +188,6 @@ class SoftMax(nn.Module):
 
 def representativeVectors(x,nbVec,applySoftMax=False,softmCoeff=1,softmSched=False,softmSched_interpCoeff=0,no_refine=False,randVec=False,unnorm=False,update_sco_by_norm_sim=False,vectIndToUse="all"):
 
-    print(applySoftMax,no_refine)
-
     xOrigShape = x.size()
 
     normNotFlat = torch.sqrt(torch.pow(x,2).sum(dim=1,keepdim=True))
