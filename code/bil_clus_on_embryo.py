@@ -46,7 +46,12 @@ def main(argv=None):
 
     random.seed(0)
     random.shuffle(allPaths)
-    testPaths = allPaths[len(allPaths)//2:]
+
+    mode = "train"
+    if mode == "train":
+        testPaths = allPaths[:len(allPaths)//2]
+    else:
+        testPaths = allPaths[len(allPaths)//2:]
 
     bs = 15
     for m,path in enumerate(testPaths):
@@ -54,8 +59,9 @@ def main(argv=None):
         grid = None
         nbImg = len(torchvision.io.read_video_timestamps(path,pts_unit="sec")[0])
 
-        splitSizes = [bs for _ in range(nbImg//bs)]+[nbImg%bs]
-        frameInds_list = torch.split(torch.arange(nbImg),splitSizes)
+        startFr = 100
+        splitSizes = [bs for _ in range((nbImg-startFr)//bs)]+[(nbImg-startFr)%bs]
+        frameInds_list = torch.split(torch.arange(startFr,nbImg),splitSizes)
 
         #for k,inds in enumerate(frameInds_list):
         for k,inds in enumerate(frameInds_list[:1]):
@@ -99,7 +105,7 @@ def main(argv=None):
                     grid = torch.cat((grid,img_attMaps),dim=0)
 
         vidName = os.path.splitext(os.path.basename(path))[0]
-        torchvision.utils.save_image(grid,"../vis/EMB8/{}_{}.png".format(args.model_id,vidName))
+        torchvision.utils.save_image(grid,"../vis/EMB8/{}_{}_{}.png".format(mode,args.model_id,vidName))
 
 
 def loadFrames(videoPath,indStart,indEnd,preprocFunc):
