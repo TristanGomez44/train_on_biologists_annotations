@@ -1191,6 +1191,18 @@ def importancePlot(exp_id,model_id,imgNb=15,debug=False,plotStds=False,plotConfI
         plt.bar(np.arange(avgNorm.shape[1]),avgNorm_mean.numpy())
         plt.savefig("../vis/{}/importance_{}.png".format(exp_id,model_id))
 
+def repVSGlob(rep_vs_glob):
+
+    weights = np.load(rep_vs_glob)
+
+    vec_weig = np.abs(weights[:,:-2048]).mean(axis=1)
+    glob_weig = np.abs(weights[:,-2048:]).mean(axis=1)
+
+    plt.figure()
+    plt.bar(np.arange(len(vec_weig)),vec_weig,width=0.45,color="blue")
+    plt.bar(np.arange(len(glob_weig))+0.5,glob_weig,width=0.45,color="yellow")
+    plt.savefig("../vis/rep_vs_glob.png")
+
 def main(argv=None):
 
     #Getting arguments from config file and command line
@@ -1285,6 +1297,10 @@ def main(argv=None):
 
     argreader.parser.add_argument('--importance_plot',action="store_true",help='To plot the average relative norm of pixels chosen by each map.')
 
+    ###################################### Representative vectors vs global vector ##############################
+
+    argreader.parser.add_argument('--rep_vs_glob',type=str,metavar="PATH",help='To plot the importance of the representative vector features vs the ones from the global vector.')
+
     argreader = load_data.addArgs(argreader)
 
     #Reading the comand line arg
@@ -1375,5 +1391,7 @@ def main(argv=None):
         agrVec(args.exp_id,args.model_id,args,args.class_min,args.class_max)
     if args.importance_plot:
         importancePlot(args.exp_id,args.model_id,debug=args.debug)
+    if args.rep_vs_glob:
+        repVSGlob(args.rep_vs_glob)
 if __name__ == "__main__":
     main()
