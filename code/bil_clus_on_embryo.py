@@ -17,6 +17,8 @@ import torch
 
 import torch.nn.functional as F
 
+from PIL import Image
+
 def main(argv=None):
     argreader = ArgReader(argv)
     argreader = modelBuilder.addArgs(argreader)
@@ -28,12 +30,11 @@ def main(argv=None):
 
     net = modelBuilder.netBuilder(args)
     params = torch.load(args.init_path, map_location="cpu" if not args.cuda else None)
-    net.load_state_dict(params, strict=False)
+    net.load_state_dict(params, strict=True)
     net.eval()
 
     resize = 448
     preprocFunc = transforms.Compose([
-                    transforms.ToPILImage(),
                     transforms.Resize(size=int(resize / 0.875)),
                     transforms.CenterCrop(resize),
                     transforms.ToTensor()])
@@ -47,7 +48,7 @@ def main(argv=None):
     random.seed(0)
     random.shuffle(allPaths)
 
-    mode = "train"
+    mode = "test"
     if mode == "train":
         testPaths = allPaths[:len(allPaths)//2]
     else:
@@ -59,7 +60,7 @@ def main(argv=None):
         grid = None
         nbImg = len(torchvision.io.read_video_timestamps(path,pts_unit="sec")[0])
 
-        startFr = 100
+        startFr = nbImg-30
         splitSizes = [bs for _ in range((nbImg-startFr)//bs)]+[(nbImg-startFr)%bs]
         frameInds_list = torch.split(torch.arange(startFr,nbImg),splitSizes)
 
@@ -81,6 +82,8 @@ def main(argv=None):
             pred_01 = retDict["pred_01"].argmax(dim=-1)
             pred_0 = retDict["pred_0"].argmax(dim=-1)
 
+            norm = torch.sqrt(torch.pow(retDict["features"],2).sum(dim=1,keepdim=True))
+
             nbRequiredVec = torch.zeros_like(pred_012)
             for i in range(len(inds)):
                 if pred_0[i] == pred_012[i]:
@@ -89,9 +92,18 @@ def main(argv=None):
                     nbRequiredVec[i] = 2
                 else:
                     nbRequiredVec[i] = 3
+                nbRequiredVec[i] = 3
 
                 attMaps = retDict["attMaps"][i:i+1,:nbRequiredVec[i]]
+                #attMaps =(attMaps-attMaps.min())/(attMaps.max()-attMaps.min())
+                att_min = attMaps.min(dim=-1,keepdim=True)[0].min(dim=-2,keepdim=True)[0].min(dim=-3,keepdim=True)[0]
+                att_max = attMaps.max(dim=-1,keepdim=True)[0].max(dim=-2,keepdim=True)[0].max(dim=-3,keepdim=True)[0]
+                attMaps = (attMaps-att_min)/(att_max-att_min)
+                attMaps =  (255*attMaps).byte().float()
                 attMaps =(attMaps-attMaps.min())/(attMaps.max()-attMaps.min())
+
+                attMaps = attMaps*norm[i:i+1]/norm[i:i+1].max()
+
                 padd = torch.zeros(attMaps.size(0),3-nbRequiredVec[i],attMaps.size(2),attMaps.size(3)).to(attMaps.device)
                 attMaps = torch.cat((attMaps,padd),dim=1)
                 attMaps = F.interpolate(attMaps, scale_factor=batch.size(2)*1.0/attMaps.size(2))
@@ -112,7 +124,7 @@ def loadFrames(videoPath,indStart,indEnd,preprocFunc):
 
     timeStamps = torchvision.io.read_video_timestamps(videoPath,pts_unit="sec")[0]
     startTime,endTime = timeStamps[indStart],timeStamps[indEnd]
-    frameSeq = torchvision.io.read_video(videoPath,pts_unit="sec",start_pts=startTime,end_pts=endTime)[0].float()/255
+    frameSeq = torchvision.io.read_video(videoPath,pts_unit="sec",start_pts=startTime,end_pts=endTime)[0]
     torchvision.utils.save_image(frameSeq.permute(0,3,1,2).float(),"../vis/batchTest_nopreproc.png")
 
 	#Removing top border
@@ -122,10 +134,11 @@ def loadFrames(videoPath,indStart,indEnd,preprocFunc):
     #Removing time
     frameSeq[:,-30:] = 0
 
-    frameSeq = frameSeq.permute(0,3,1,2)
+    #frameSeq = frameSeq.permute(0,3,1,2)
 
     procFrameList = []
     for frame in frameSeq:
+        frame = Image.fromarray(frame.numpy()).convert('RGB')  # (C, H, W)
         procFrame = preprocFunc(frame)
         procFrameList.append(procFrame.unsqueeze(0))
     procFrameBatch = torch.cat(procFrameList,dim=0)
