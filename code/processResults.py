@@ -295,6 +295,11 @@ def plotPointsImageDatasetGrid(exp_id,imgNb,epochs,model_ids,reduction_fact_list
                 if pond_by_norm[j]:
                     norm = normDict[j][inds[i]]
                     norm = norm/norm.max()
+
+                    if norm.shape[1:] != attMap.shape[1:]:
+                        norm = resize(np.transpose(norm,(1,2,0)), (attMap.shape[1],attMap.shape[2]),anti_aliasing=True,mode="constant",order=0)
+                        norm = np.transpose(norm,(2,0,1))
+
                     attMap = norm*attMap
 
                 if not luminosity:
