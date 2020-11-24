@@ -27,7 +27,10 @@ case $1 in
     python trainVal.py -c model_cub9.config --model_id deconv  --resnet_bilinear True --bil_cluster True  --bil_cluster_lay_ind 4 --bil_clu_deconv True --stride_lay3 2 --stride_lay4 2
     ;;
   "clusDil")
-    python trainVal.py -c model_cub9.config --model_id clusDil   --resnet_bilinear True --bil_cluster True --resnet_dilation 2 
+    python trainVal.py -c model_cub9.config --model_id clusDil   --resnet_bilinear True --bil_cluster True --resnet_dilation 2 --val_batch_size 120
+    ;;
+  "clusEnsRed")
+    python trainVal.py -c model_cub9.config --model_id clusEnsRed   --resnet_bilinear True --bil_cluster True --bil_cluster_ensemble True  --stride_lay3 2 --stride_lay4 2
     ;;
   "*")
     echo "no such model"
