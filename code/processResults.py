@@ -289,12 +289,13 @@ def plotPointsImageDatasetGrid(exp_id,imgNb,epochs,model_ids,reduction_fact_list
                         attMap = (attMap > 0.5).astype(float)
                 else:
                     norm = normDict[j][inds[i]]
-                    norm = norm/norm.max()
+                    norm = (norm-norm.min())/(norm.max()-norm.min())
                     attMap = norm
 
                 if pond_by_norm[j]:
                     norm = normDict[j][inds[i]]
-                    norm = norm/norm.max()
+                    #norm = norm/norm.max()
+                    norm = (norm-norm.min())/(norm.max()-norm.min())
 
                     if norm.shape[1:] != attMap.shape[1:]:
                         norm = resize(np.transpose(norm,(1,2,0)), (attMap.shape[1],attMap.shape[2]),anti_aliasing=True,mode="constant",order=0)
@@ -392,8 +393,8 @@ def plotPointsImageDatasetGrid(exp_id,imgNb,epochs,model_ids,reduction_fact_list
 
             if luminosity:
                 ptsImageCopy = ptsImageCopy*imgBatch[i:i+1]
-            else:
-                ptsImageCopy = 0.8*ptsImageCopy+0.2*imgBatch[i:i+1].mean(dim=1,keepdim=True)
+            #else:
+                #ptsImageCopy = 0.8*ptsImageCopy+0.2*imgBatch[i:i+1].mean(dim=1,keepdim=True)
 
             gridImage = torch.cat((gridImage,ptsImageCopy),dim=0)
 
