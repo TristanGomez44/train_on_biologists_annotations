@@ -394,6 +394,7 @@ class CNN2D_bilinearAttPool(FirstModel):
 
         if not self.clu_deconv or self.training:
             retDict["attMaps"] = spatialWeights
+            retDict["features"] = features
         else:
             allAttMaps = []
             for i in range(spatialWeights.size(1)):
@@ -404,8 +405,7 @@ class CNN2D_bilinearAttPool(FirstModel):
                 allAttMaps.append(attMap)
             allAttMaps = torch.cat(allAttMaps,dim=1)
             retDict["attMaps"] = allAttMaps
-
-        retDict["features"] = features
+            retDict["features"] = output["layerFeat"][2]
 
         if self.clu_glob_vec:
             retDict["x"] = torch.cat((retDict["x"],output["layerFeat"][4].mean(dim=-1).mean(dim=-1)),dim=-1)

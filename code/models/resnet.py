@@ -139,8 +139,6 @@ class Bottleneck(nn.Module):
         if self.endRelu:
             out = self.relu(out)
 
-        #print("\tBlock : ",inChan,out.size(1))
-
         return out
 
 class RevBottleneck(nn.Module):
@@ -158,13 +156,10 @@ class RevBottleneck(nn.Module):
         self.stride = stride
 
     def forward(self, x):
-
         out = self.conv3(x)
         out = self.conv2(out)
         out = self.conv1(out)
-
         return out
-
 
 class TanHPlusRelu(nn.Module):
 
@@ -321,7 +316,6 @@ class ResNet(nn.Module):
         lastLayer = self.layersNb if returnLayer=="last" else int(returnLayer)
 
         for i in range(1,lastLayer+1):
-            #print("Layer {}".format(i))
             x = getattr(self,"layer{}".format(i))(x)
             layerFeat[i] = x
 
