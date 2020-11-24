@@ -194,6 +194,9 @@ def epochImgEval(model, log_interval, loader, epoch, args, writer, metricEarlySt
 
     model.eval()
 
+    if args.bil_clu_deconv:
+        model.firstModel.updateDeconv()
+
     print("Epoch", epoch, " : {}".format(mode))
 
     metrDict = None

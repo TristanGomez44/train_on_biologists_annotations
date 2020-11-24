@@ -18,10 +18,16 @@ case $1 in
     python trainVal.py -c model_cub9.config --model_id clusAt1_GlobRepVec  --resnet_bilinear True --bil_cluster True  --bil_cluster_lay_ind 2 --bil_clu_glob_rep_vec True --stride_lay3 2 --stride_lay4 2
     ;;
   "clusAt1_GlobRefRepVec")
-    python trainVal.py -c model_cub9.config --model_id clusAt1_GlobRefRepVec  --resnet_bilinear True --bil_cluster True  --bil_cluster_lay_ind 2 --bil_clu_glob_rep_vec True --bil_cluster_glob_norefine False --apply_softmax_on_sim_glob True --stride_lay3 2 --stride_lay4 2 
+    python trainVal.py -c model_cub9.config --model_id clusAt1_GlobRefRepVec  --resnet_bilinear True --bil_cluster True  --bil_cluster_lay_ind 2 --bil_clu_glob_rep_vec True --bil_cluster_glob_norefine False --apply_softmax_on_sim_glob True --stride_lay3 2 --stride_lay4 2
     ;;
   "clusAt1_GlobCorVec")
     python trainVal.py -c model_cub9.config --model_id clusAt1_GlobCorVec  --resnet_bilinear True --bil_cluster True  --bil_cluster_lay_ind 2 --bil_clu_glob_corr_vec True --stride_lay3 2 --stride_lay4 2
+    ;;
+  "deconv")
+    python trainVal.py -c model_cub9.config --model_id deconv  --resnet_bilinear True --bil_cluster True  --bil_cluster_lay_ind 4 --bil_clu_deconv True --stride_lay3 2 --stride_lay4 2
+    ;;
+  "clusDil")
+    python trainVal.py -c model_cub9.config --model_id clusDil   --resnet_bilinear True --bil_cluster True --resnet_dilation 2 
     ;;
   "*")
     echo "no such model"

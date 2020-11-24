@@ -252,6 +252,7 @@ class CNN2D_bilinearAttPool(FirstModel):
                  softmCoeff=1,softmSched=False,normFeat=False,no_refine=False,rand_vec=False,unnorm=False,update_sco_by_norm_sim=False,\
                  vect_gate=False,vect_ind_to_use="all",multi_feat_by_100=False,cluster_lay_ind=4,clu_glob_vec=False,\
                  clu_glob_rep_vec=False,clu_glob_corr_vec=False,clus_glob_norefine=False,applySoftmaxOnSim_glob=False,\
+                 clu_deconv=False,\
                  **kwargs):
 
         super(CNN2D_bilinearAttPool, self).__init__(featModelName, pretrainedFeatMod, featMap, bigMaps, **kwargs)
@@ -311,6 +312,22 @@ class CNN2D_bilinearAttPool(FirstModel):
         self.clus_glob_norefine = clus_glob_norefine
         self.applySoftmaxOnSim_glob = applySoftmaxOnSim_glob
 
+        self.clu_deconv = clu_deconv
+        if self.clu_deconv and featModelName != "resnet50":
+            raise ValueError("Deconv only implemented for resnet50.")
+        if self.clu_deconv:
+            self.deconv = resnet.revresnet50()
+
+            if cuda:
+                self.deconv.cuda()
+
+            if isinstance(self.featMod,DataParallelModel):
+                self.deconv = DataParallelModel(self.deconv)
+
+    def updateDeconv(self):
+        params = self.featMod.state_dict()
+        self.deconv.load_state_dict(params,strict=False)
+
     def forward(self, x):
         # N x C x H x L
         self.batchSize = x.size(0)
@@ -326,6 +343,9 @@ class CNN2D_bilinearAttPool(FirstModel):
             features = features/torch.sqrt(torch.pow(features,2).sum(dim=1,keepdim=True))
 
         retDict = {}
+
+        #features[:,:,:,:3] = 0
+        #features[:,:,:,-3:] = 0
 
         if not self.cluster:
             spatialWeights = self.attention_activation(self.attention(features))
@@ -372,7 +392,19 @@ class CNN2D_bilinearAttPool(FirstModel):
         else:
             retDict["x"] = features_agr
 
-        retDict["attMaps"] = spatialWeights
+        if not self.clu_deconv or self.training:
+            retDict["attMaps"] = spatialWeights
+        else:
+            allAttMaps = []
+            for i in range(spatialWeights.size(1)):
+                maps = spatialWeights[:,i:i+1]
+                feature_weig = features*maps
+                feature_weig = self.deconv(feature_weig)["x"]
+                attMap = torch.sqrt(torch.pow(feature_weig,2).sum(dim=1,keepdim=True))
+                allAttMaps.append(attMap)
+            allAttMaps = torch.cat(allAttMaps,dim=1)
+            retDict["attMaps"] = allAttMaps
+
         retDict["features"] = features
 
         if self.clu_glob_vec:
@@ -550,7 +582,8 @@ def netBuilder(args):
                           "clu_glob_rep_vec":args.bil_clu_glob_rep_vec,\
                           "clu_glob_corr_vec":args.bil_clu_glob_corr_vec,\
                           "clus_glob_norefine":args.bil_cluster_glob_norefine,\
-                          "applySoftmaxOnSim_glob":args.apply_softmax_on_sim_glob}
+                          "applySoftmaxOnSim_glob":args.apply_softmax_on_sim_glob,\
+                          "clu_deconv":args.bil_clu_deconv}
                 nbFeatAux = nbFeat
                 if not args.bil_cluster_ensemble:
 
@@ -765,10 +798,8 @@ def addArgs(argreader):
                                             representative vectors have been extracted.")
     argreader.parser.add_argument('--apply_softmax_on_sim_glob', type=args.str2bool, metavar='BOOL',
                               help="When extracting representative vectors at the last layer, whether to apply softmax.")
-
-
-
-
+    argreader.parser.add_argument('--bil_clu_deconv', type=args.str2bool, metavar='BOOL',
+                              help="To apply deconvolution to recover high resolution attention maps.")
 
     argreader.parser.add_argument('--lin_lay_bias', type=args.str2bool, metavar='BOOL',
                                   help="To add a bias to the final layer.")

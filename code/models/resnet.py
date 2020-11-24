@@ -46,7 +46,12 @@ def conv1x1(in_planes, out_planes, stride=1,groups=1):
 
 def conv3x3Transp(in_planes, out_planes, stride=1,dilation=1,groups=1):
     """3x3 convolution with padding"""
-    return nn.ConvTranspose2d(in_planes, out_planes, kernel_size=3, stride=stride,padding=1)
+    return nn.ConvTranspose2d(out_planes,in_planes, kernel_size=3, stride=stride,\
+                                padding=dilation,bias=False,dilation=dilation,groups=groups)
+
+def conv1x1Transp(in_planes, out_planes, stride=1,groups=1):
+    """1x1 convolution"""
+    return nn.ConvTranspose2d(out_planes,in_planes, kernel_size=1, stride=stride, bias=False,groups=groups)
 
 
 class BasicBlock(nn.Module):
@@ -72,6 +77,7 @@ class BasicBlock(nn.Module):
 
     def forward(self, x):
         identity = x
+
         out = self.conv1(x)
         out = self.bn1(out)
         out = self.relu(out)
@@ -112,6 +118,8 @@ class Bottleneck(nn.Module):
     def forward(self, x):
         identity = x
 
+        inChan = x.size(1)
+
         out = self.conv1(x)
         out = self.bn1(out)
         out = self.relu(out)
@@ -131,7 +139,32 @@ class Bottleneck(nn.Module):
         if self.endRelu:
             out = self.relu(out)
 
+        #print("\tBlock : ",inChan,out.size(1))
+
         return out
+
+class RevBottleneck(nn.Module):
+    expansion = 4
+
+    def __init__(self, inplanes, planes, stride=1, downsample=None, norm_layer=None,endRelu=False,dilation=1):
+        super(RevBottleneck, self).__init__()
+
+        if norm_layer is None:
+            norm_layer = nn.BatchNorm2d
+        # Both self.conv2 and self.downsample layers downsample the input when stride != 1
+        self.conv1 = conv1x1Transp(inplanes, planes)
+        self.conv2 = conv3x3Transp(planes, planes, stride,dilation)
+        self.conv3 = conv1x1Transp(planes, planes * self.expansion)
+        self.stride = stride
+
+    def forward(self, x):
+
+        out = self.conv3(x)
+        out = self.conv2(out)
+        out = self.conv1(out)
+
+        return out
+
 
 class TanHPlusRelu(nn.Module):
 
@@ -288,6 +321,7 @@ class ResNet(nn.Module):
         lastLayer = self.layersNb if returnLayer=="last" else int(returnLayer)
 
         for i in range(1,lastLayer+1):
+            #print("Layer {}".format(i))
             x = getattr(self,"layer{}".format(i))(x)
             layerFeat[i] = x
 
@@ -310,6 +344,23 @@ class ResNet(nn.Module):
             x = x.view(x.size(0), -1)
 
         retDict["layerFeat"] = layerFeat
+        retDict["x"] = x
+
+        return retDict
+
+class RevResNet(ResNet):
+
+    def __init__(self, **kwargs):
+        super(RevResNet, self).__init__(**kwargs)
+
+    def forward(self,x,returnLayer="last"):
+
+        retDict = {}
+
+        for layer in [self.layer4, self.layer3]:
+            for i in range(len(layer)-1,-1,-1):
+                x = layer[i](x)
+
         retDict["x"] = x
 
         return retDict
@@ -427,6 +478,16 @@ def resnet50(pretrained=False, strict=True,**kwargs):
         model.load_state_dict(params,strict=False)
     return model
 
+def revresnet50(pretrained=False,**kwargs):
+    """Constructs a ResNet-50 model.
+    Args:
+        pretrained (bool): If True, returns a model pre-trained on ImageNet
+    """
+    kwargs["block"] = RevBottleneck
+    kwargs["layers"] = [3, 4, 6, 3]
+    model = RevResNet(**kwargs)
+
+    return model
 
 def resnet101(pretrained=False, **kwargs):
     """Constructs a ResNet-101 model.
