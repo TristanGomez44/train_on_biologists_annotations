@@ -18,7 +18,8 @@ import torch
 import torch.nn.functional as F
 
 from PIL import Image
-
+from PIL import ImageDraw
+from PIL import ImageFont
 def main(argv=None):
     argreader = ArgReader(argv)
     argreader = modelBuilder.addArgs(argreader)
@@ -54,13 +55,17 @@ def main(argv=None):
     else:
         testPaths = allPaths[len(allPaths)//2:]
 
-    bs = 15
+    bs = 500
+
+    classes = [d.name for d in os.scandir("../data/embryo_img_train/") if d.is_dir()]
+    classes.sort()
+
     for m,path in enumerate(testPaths):
         print(m,"/",len(testPaths))
         grid = None
         nbImg = len(torchvision.io.read_video_timestamps(path,pts_unit="sec")[0])
 
-        startFr = nbImg-30
+        startFr = 0
         splitSizes = [bs for _ in range((nbImg-startFr)//bs)]+[(nbImg-startFr)%bs]
         frameInds_list = torch.split(torch.arange(startFr,nbImg),splitSizes)
 
@@ -85,14 +90,14 @@ def main(argv=None):
             norm = torch.sqrt(torch.pow(retDict["features"],2).sum(dim=1,keepdim=True))
 
             nbRequiredVec = torch.zeros_like(pred_012)
-            for i in range(len(inds)):
+            for i in range(len(batch)):
                 if pred_0[i] == pred_012[i]:
                     nbRequiredVec[i] = 1
                 elif pred_01[i] == pred_012[i]:
                     nbRequiredVec[i] = 2
                 else:
                     nbRequiredVec[i] = 3
-                nbRequiredVec[i] = 3
+                #nbRequiredVec[i] = 3
 
                 attMaps = retDict["attMaps"][i:i+1,:nbRequiredVec[i]]
                 #attMaps =(attMaps-attMaps.min())/(attMaps.max()-attMaps.min())
@@ -109,6 +114,7 @@ def main(argv=None):
                 attMaps = F.interpolate(attMaps, scale_factor=batch.size(2)*1.0/attMaps.size(2))
                 attMaps = 0.8*attMaps+0.2*batch[i:i+1]
 
+                attMaps = addPred(attMaps.cpu(),classes[pred_012[i]]).to(attMaps.device)
                 img_attMaps = torch.cat((batch[i:i+1],attMaps),dim=0).cpu()
 
                 if grid is None:
@@ -119,13 +125,30 @@ def main(argv=None):
         vidName = os.path.splitext(os.path.basename(path))[0]
         torchvision.utils.save_image(grid,"../vis/EMB8/{}_{}_{}.png".format(mode,args.model_id,vidName))
 
+def addPred(img,text):
+    fnt = ImageFont.truetype("arial.ttf", 40)
+    imgPIL = Image.fromarray((255*img[0].permute(1,2,0).numpy()).astype("uint8"))
+    imgDraw = ImageDraw.Draw(imgPIL)
+    imgDraw.rectangle([(0,0), (100, 40)],fill="white")
+    imgDraw.text((0,0), text, font=fnt,fill=(0,0,0))
+    img = torch.tensor(np.array(imgPIL)).permute(2,0,1).unsqueeze(0).float()/255
 
-def loadFrames(videoPath,indStart,indEnd,preprocFunc):
+    return img
+
+def loadFrames(videoPath,indStart,indEnd,preprocFunc,dilRate=10):
 
     timeStamps = torchvision.io.read_video_timestamps(videoPath,pts_unit="sec")[0]
-    startTime,endTime = timeStamps[indStart],timeStamps[indEnd]
-    frameSeq = torchvision.io.read_video(videoPath,pts_unit="sec",start_pts=startTime,end_pts=endTime)[0]
-    torchvision.utils.save_image(frameSeq.permute(0,3,1,2).float(),"../vis/batchTest_nopreproc.png")
+
+    if dilRate == 1:
+        startTime,endTime = timeStamps[indStart],timeStamps[indEnd]
+        frameSeq = torchvision.io.read_video(videoPath,pts_unit="sec",start_pts=startTime,end_pts=endTime)[0]
+    else:
+        frameSeq = []
+        for i in range((indEnd-indStart+1)//dilRate):
+            startTime,endTime = timeStamps[i*dilRate],timeStamps[i*dilRate]
+            frame = torchvision.io.read_video(videoPath,pts_unit="sec",start_pts=startTime,end_pts=endTime)[0]
+            frameSeq.append(frame)
+        frameSeq = torch.cat(frameSeq,dim=0)
 
 	#Removing top border
     if frameSeq.size(1) > frameSeq.size(2):
