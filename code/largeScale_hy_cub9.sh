@@ -1,6 +1,6 @@
 case $1 in
   "clus")
-    python trainVal.py -c model_cub9.config --model_id clus   --resnet_bilinear True --bil_cluster True
+    python trainVal.py -c model_cub9.config --model_id clus   --resnet_bilinear True --bil_cluster True --max_batch_size 65 --val_batch_size 100
     ;;
   "bil")
     python trainVal.py -c model_cub9.config --model_id bil    --resnet_bilinear True
