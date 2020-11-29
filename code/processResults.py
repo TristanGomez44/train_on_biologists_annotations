@@ -201,9 +201,24 @@ def plotPointsImageDatasetGrid(exp_id,imgNb,epochs,model_ids,reduction_fact_list
                 incorrectInd = torch.arange(len(testDataset))[~correct]
                 inds = incorrectInd[torch.randperm(len(incorrectInd))][:imgNb]
         else:
-            maxInd = min(len(np.load(pointPaths[0])),640)
-            #inds = torch.randint(maxInd,size=(imgNb,))
-            inds = torch.arange(imgNb)
+            maxInd = None
+
+            for i in range(len(pointPaths)):
+
+                if maxInd is None:
+                    maxInd = len(np.load(pointPaths[i]))
+                else:
+                    indAtt = len(np.load(pointPaths[i],mmap_mode="r"))
+                    indFeat = len(np.load(pointPaths[i].replace("attMaps","features"),mmap_mode="r"))
+
+                    if maxInd > indAtt:
+                        maxInd = indAtt
+                    if maxInd > indFeat:
+                        maxInd = indFeat
+
+            #maxInd = min(len(np.load(pointPaths[0])),640)
+            inds = torch.randint(maxInd,size=(imgNb,))
+            #inds = torch.arange(imgNb)
 
         if args.shuffle_test_set:
             perm = load_data.RandomSampler(testDataset,args.seed).randPerm
@@ -250,6 +265,8 @@ def plotPointsImageDatasetGrid(exp_id,imgNb,epochs,model_ids,reduction_fact_list
 
         img = imgBatch[i:i+1]
 
+        img = (img-img.min())/(img.max()-img.min())
+
         imgPIL = Image.fromarray((255*img[0].permute(1,2,0).numpy()).astype("uint8"))
         imgDraw = ImageDraw.Draw(imgPIL)
         imgDraw.rectangle([(0,0), (50, 40)],fill="white")
@@ -294,7 +311,6 @@ def plotPointsImageDatasetGrid(exp_id,imgNb,epochs,model_ids,reduction_fact_list
 
                 if pond_by_norm[j]:
                     norm = normDict[j][inds[i]]
-                    #norm = norm/norm.max()
                     norm = (norm-norm.min())/(norm.max()-norm.min())
 
                     if norm.shape[1:] != attMap.shape[1:]:
@@ -393,8 +409,10 @@ def plotPointsImageDatasetGrid(exp_id,imgNb,epochs,model_ids,reduction_fact_list
 
             if luminosity:
                 ptsImageCopy = ptsImageCopy*imgBatch[i:i+1]
-            #else:
-                #ptsImageCopy = 0.8*ptsImageCopy+0.2*imgBatch[i:i+1].mean(dim=1,keepdim=True)
+            else:
+                img = imgBatch[i:i+1].mean(dim=1,keepdim=True)
+                img = (img-img.min())/(img.max()-img.min())
+                ptsImageCopy = 0.8*ptsImageCopy+0.2*img
 
             gridImage = torch.cat((gridImage,ptsImageCopy),dim=0)
 
