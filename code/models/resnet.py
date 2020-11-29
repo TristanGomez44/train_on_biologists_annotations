@@ -97,7 +97,8 @@ class BasicBlock(nn.Module):
 class Bottleneck(nn.Module):
     expansion = 4
 
-    def __init__(self, inplanes, planes, stride=1, downsample=None, norm_layer=None,endRelu=False,dilation=1):
+    def __init__(self, inplanes, planes, stride=1, downsample=None, norm_layer=None,endRelu=False,dilation=1,\
+                            multiple_stride=False):
         super(Bottleneck, self).__init__()
 
         if norm_layer is None:
@@ -114,17 +115,10 @@ class Bottleneck(nn.Module):
         self.stride = stride
 
         self.endRelu = endRelu
+        self.multiple_stride = multiple_stride
 
-    def forward(self, x):
-        identity = x
-
-        inChan = x.size(1)
-
-        out = self.conv1(x)
-        out = self.bn1(out)
-        out = self.relu(out)
-
-        out = self.conv2(out)
+    def applyLastConvs(self,x,identity):
+        out = self.conv2(x)
         out = self.bn2(out)
         out = self.relu(out)
 
@@ -132,14 +126,44 @@ class Bottleneck(nn.Module):
         out = self.bn3(out)
 
         if self.downsample is not None:
-            identity = self.downsample(x)
-
-        out += identity
+            identityDown = self.downsample(identity)
+            out += identityDown
+        else:
+            out += identity
 
         if self.endRelu:
             out = self.relu(out)
 
         return out
+
+    def forward(self, inp):
+
+        mult_str = self.stride > 1 and self.multiple_stride
+
+        retDic = {}
+        for key in inp.keys():
+
+            x = inp[key]
+
+            identity = x
+
+            inChan = x.size(1)
+
+            out = self.conv1(x)
+            out = self.bn1(out)
+            out = self.relu(out)
+
+            if mult_str:
+
+                for i in range(self.stride):
+                    for j in range(self.stride):
+                        newKey = "{}_{}{}".format(key,i,j) if len(inp) > 1 else "{}{}".format(i,j)
+                        retDic[newKey] = self.applyLastConvs(out[:,:,i:,j:],identity)
+            else:
+                out = self.applyLastConvs(out,identity)
+                retDic[key] = out
+
+        return retDic
 
 class RevBottleneck(nn.Module):
     expansion = 4
@@ -161,59 +185,12 @@ class RevBottleneck(nn.Module):
         out = self.conv1(out)
         return out
 
-class TanHPlusRelu(nn.Module):
-
-    def __init__(self):
-        super(TanHPlusRelu,self).__init__()
-        self.tanh = nn.Tanh()
-        self.relu = nn.ReLU()
-    def forward(self,x):
-        return self.relu(self.tanh(x))
-
-class MultiLevelFeat(nn.Module):
-
-    def __init__(self,chan,outChan,cat):
-        super(MultiLevelFeat, self).__init__()
-
-        self.cat = cat
-        if cat:
-            self.multLev_conv1x1_1 = conv1x1(chan,outChan//4)
-            self.multLev_conv1x1_2 = conv1x1(chan*2,outChan//4)
-            self.multLev_conv1x1_3 = conv1x1(chan*4,outChan//4)
-            self.multLev_conv1x1_4 = conv1x1(chan*8,outChan//4)
-        else:
-            self.multLev_conv1x1_1 = conv1x1(chan,outChan)
-            self.multLev_conv1x1_2 = conv1x1(chan*2,outChan)
-            self.multLev_conv1x1_3 = conv1x1(chan*4,outChan)
-            self.multLev_conv1x1_4 = conv1x1(chan*8,outChan)
-
-    def norm(self,maps):
-        return maps/torch.abs(maps).max(dim=-1,keepdim=True)[0].max(dim=-1,keepdim=True)[0].max(dim=-1,keepdim=True)[0]
-
-    def forward(self,featMaps):
-
-        maps1 = self.multLev_conv1x1_1(featMaps[1])
-        maps2 = interpo(self.multLev_conv1x1_2(featMaps[2]),(maps1.size(-2),maps1.size(-1)))
-        maps3 = interpo(self.multLev_conv1x1_3(featMaps[3]),(maps1.size(-2),maps1.size(-1)))
-        maps4 = interpo(self.multLev_conv1x1_4(featMaps[4]),(maps1.size(-2),maps1.size(-1)))
-
-        if self.cat:
-            maps1 = self.norm(maps1)
-            maps2 = self.norm(maps2)
-            maps3 = self.norm(maps3)
-            maps4 = self.norm(maps4)
-            maps = torch.cat((maps1,maps2,maps3,maps4),dim=1)
-        else:
-            maps = (maps1+maps2+maps3+maps4)/4
-
-        return maps
-
 class ResNet(nn.Module):
 
     def __init__(self, block, layers, num_classes=1000, zero_init_residual=False, norm_layer=None,maxPoolKer=(3,3),maxPoolPad=(1,1),stride=(2,2),\
                     strideLay2=2,strideLay3=2,strideLay4=2,\
                     featMap=False,chan=64,inChan=3,dilation=1,layerSizeReduce=True,preLayerSizeReduce=True,layersNb=4,reluOnLast=False,\
-                    bil_cluster_early=False,nb_parts=3,bil_clu_earl_exp=False):
+                    bil_cluster_early=False,nb_parts=3,bil_clu_earl_exp=False,multiple_stride=False,bin_multiple_stride=True):
 
         super(ResNet, self).__init__()
         if norm_layer is None:
@@ -236,15 +213,17 @@ class ResNet(nn.Module):
 
         self.nbLayers = len(layers)
 
+        self.binMultStr = bin_multiple_stride
+
         #All layers are built but they will not necessarily be used
         self.layer1 = self._make_layer(block, chan[0], layers[0], stride=1,norm_layer=norm_layer,reluOnLast=reluOnLast if self.nbLayers==1 else True,\
                                         dilation=1)
         self.layer2 = self._make_layer(block, chan[1], layers[1], stride=1 if not layerSizeReduce else strideLay2, norm_layer=norm_layer,\
                                         reluOnLast=reluOnLast if self.nbLayers==2 else True,dilation=dilation[0])
         self.layer3 = self._make_layer(block, chan[2], layers[2], stride=1 if not layerSizeReduce else strideLay3, norm_layer=norm_layer,\
-                                        reluOnLast=reluOnLast if self.nbLayers==3 else True,dilation=dilation[1])
+                                        reluOnLast=reluOnLast if self.nbLayers==3 else True,dilation=dilation[1],multStr=multiple_stride if not self.binMultStr else False)
         self.layer4 = self._make_layer(block, chan[3], layers[3], stride=1 if not layerSizeReduce else strideLay4, norm_layer=norm_layer,\
-                                        reluOnLast=reluOnLast if self.nbLayers==4 else True,dilation=dilation[2])
+                                        reluOnLast=reluOnLast if self.nbLayers==4 else True,dilation=dilation[2],multStr=multiple_stride)
 
         if layersNb<1 or layersNb>4:
             raise ValueError("Wrong number of layer : ",layersNb)
@@ -280,7 +259,57 @@ class ResNet(nn.Module):
             self.nb_parts = nb_parts
             self.bil_clu_earl_exp = bil_clu_earl_exp
 
-    def _make_layer(self, block, planes, blocks, stride=1, norm_layer=None,reluOnLast=False,dilation=1):
+        self.multiple_stride = multiple_stride
+        if self.multiple_stride:
+            self.rowInds = None
+            self.colInds = None
+            self.rows = None
+            self.cols = None
+            if strideLay2 != 2 or strideLay3 != 2 or strideLay4 != 2:
+                raise ValueError("Multiple stride not implemented for stride != 2")
+
+    def createMultStrInds(self,x,bin=False):
+
+        if not bin:
+            self.rowInds = torch.arange(x.size(2)).to(x.device)
+            self.colInds = torch.arange(x.size(3)).to(x.device)
+
+            self.rows = {rem:(self.rowInds % 4 == rem) for rem in range(4)}
+            self.cols = {rem:(self.colInds % 4 == rem) for rem in range(4)}
+        else:
+            self.rowInds = torch.arange(x.size(2)).to(x.device)
+            self.colInds = torch.arange(x.size(3)).to(x.device)
+
+            self.rows = {rem:(self.rowInds % 2 == rem) for rem in range(2)}
+            self.cols = {rem:(self.colInds % 2 == rem) for rem in range(2)}
+
+    def fillMap(self,map,values,cond1,cond2,batchSize,chanNb):
+        mask = self.binary(cond1,cond2,batchSize,chanNb)
+        map[mask] = values.reshape(-1)
+        return map
+
+    def binary(self,cond1,cond2,batchSize,chanNb):
+        binaryArr = (cond1).unsqueeze(1)*(cond2).unsqueeze(0)
+        binaryArr = binaryArr.unsqueeze(0).unsqueeze(0).expand(batchSize,chanNb,-1,-1)
+        return binaryArr
+
+    def gatherMultStr(self,x,bin=False):
+        if not bin:
+            feat = torch.zeros(x["00_00"].size(0),x["00_00"].size(1),len(self.rowInds),len(self.colInds)).to(x["00_00"].device)
+            for key in x:
+                row = int(key.split("_")[1][0])*2+int(key.split("_")[0][0])
+                col = int(key.split("_")[1][1])*2+int(key.split("_")[0][1])
+                feat = self.fillMap(feat,x[key],self.rows[row],self.cols[col],x["00_00"].size(0),x["00_00"].size(1))
+        else:
+            feat = torch.zeros(x["00"].size(0),x["00"].size(1),len(self.rowInds),len(self.colInds)).to(x["00"].device)
+            for key in x:
+                row = int(key[0])
+                col = int(key[1])
+                feat = self.fillMap(feat,x[key],self.rows[row],self.cols[col],x["00"].size(0),x["00"].size(1))
+
+        return feat
+
+    def _make_layer(self, block, planes, blocks, stride=1, norm_layer=None,reluOnLast=False,dilation=1,multStr=False):
 
         if norm_layer is None:
             norm_layer = nn.BatchNorm2d
@@ -292,7 +321,7 @@ class ResNet(nn.Module):
             )
 
         layers = []
-        layers.append(block(self.inplanes, planes, stride, downsample, norm_layer))
+        layers.append(block(self.inplanes, planes, stride, downsample, norm_layer,multiple_stride=multStr))
         self.inplanes = planes * block.expansion
 
         for i in range(1, blocks):
@@ -312,33 +341,29 @@ class ResNet(nn.Module):
         x = self.relu(x)
         x = self.maxpool(x)
 
-        layerFeat = {}
-        lastLayer = self.layersNb if returnLayer=="last" else int(returnLayer)
-
-        for i in range(1,lastLayer+1):
-            x = getattr(self,"layer{}".format(i))(x)
-            layerFeat[i] = x
-
-            if i == 2 and self.bil_cluster_early:
-                _,simMaps = modelBuilder.representativeVectors(x,self.nb_parts,applySoftMax=self.bil_clu_earl_exp)
-                retDict["attMaps"] = torch.cat(simMaps,dim=1)
-                retDict["features"] = x
-                x_part_list = []
-
-                for j in range(len(simMaps)):
-                    simMaps[j] = simMaps[j]/simMaps[j].max(dim=-1,keepdim=True)[0].max(dim=-2,keepdim=True)[0]
-                    x_part = self.clus_earl_conv1x1(simMaps[j]*x)
-                    x_part_list.append(x_part)
-
-                x_part_list = torch.cat(x_part_list,dim=1)
-                x = torch.cat((x_part_list,torch.zeros(x.size(0),x.size(1)%self.nb_parts,x.size(2),x.size(3)).to(x.device)),dim=1)
+        x1 = self.layer1({"00":x})
+        x2 = self.layer2(x1)
+        x3 = self.layer3(x2)
+        x4 = self.layer4(x3)
 
         if not self.featMap:
-            x = self.avgpool(x)
+            x = self.avgpool(x4["00"])
             x = x.view(x.size(0), -1)
+            retDict["x"] = x
+        elif self.multiple_stride:
 
-        retDict["layerFeat"] = layerFeat
-        retDict["x"] = x
+            if self.rowInds is None:
+                self.createMultStrInds(x2["00"] if not self.binMultStr else x3["00"],bin=self.binMultStr)
+
+            retDict["x"] = self.gatherMultStr(x4,bin=self.binMultStr)
+
+        else:
+            retDict["x"] = x4["00"]
+
+        retDict["layerFeat"] = {1:x1[list(x1.keys())[0]],\
+                                2:x2[list(x2.keys())[0]],\
+                                3:x3[list(x3.keys())[0]],\
+                                4:x4[list(x4.keys())[0]]}
 
         return retDict
 

@@ -26,11 +26,20 @@ case $1 in
   "deconv")
     python trainVal.py -c model_cub9.config --model_id deconv  --resnet_bilinear True --bil_cluster True  --bil_cluster_lay_ind 4 --bil_clu_deconv True --stride_lay3 2 --stride_lay4 2
     ;;
+  "multiple_stride")
+    python trainVal.py -c model_cub9.config --model_id multStr  --resnet_bilinear True --bil_cluster True  --bil_cluster_lay_ind 4 --multiple_stride True --stride_lay3 2 --stride_lay4 2
+    ;;
   "clusDil")
-    python trainVal.py -c model_cub9.config --model_id clusDil   --resnet_bilinear True --bil_cluster True --resnet_dilation 2 --val_batch_size 120
+    python trainVal.py -c model_cub9.config --model_id clusDil   --resnet_bilinear True --bil_cluster True --resnet_dilation 2 --val_batch_size 120 --max_batch_size 50
     ;;
   "clusEnsRed")
     python trainVal.py -c model_cub9.config --model_id clusEnsRed   --resnet_bilinear True --bil_cluster True --bil_cluster_ensemble True  --stride_lay3 2 --stride_lay4 2
+    ;;
+  "clusRedMultStrInit")
+    python trainVal.py -c model_cub9.config --model_id clusRedMultStrInit   --resnet_bilinear True --bil_cluster True --multiple_stride True  --stride_lay3 2 --stride_lay4 2 --init_path ../models/CUB9/modelclusRed_best_epoch43 --epochs 10 --val_batch_size 100 --max_batch_size 50
+    ;;
+  "clus-initRed")
+    python trainVal.py -c model_cub9.config --model_id clus_initRed   --resnet_bilinear True --bil_cluster True --init_path ../models/CUB9/modelclusRed_best_epoch43 --max_batch_size 65 --val_batch_size 100
     ;;
   "*")
     echo "no such model"

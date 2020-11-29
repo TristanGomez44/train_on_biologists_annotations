@@ -334,7 +334,7 @@ class CNN2D_bilinearAttPool(FirstModel):
         # N x C x H x L
         output = self.featMod(x)
 
-        if not self.cluster:
+        if (not self.cluster) or (self.cluster_lay_ind == 4):
             features = output["x"]
         else:
             features = output["layerFeat"][self.cluster_lay_ind]
@@ -619,6 +619,7 @@ def netBuilder(args):
                                       deeplabv3_outchan=args.deeplabv3_outchan,\
                                       strideLay2=args.stride_lay2,strideLay3=args.stride_lay3,\
                                       strideLay4=args.stride_lay4,\
+                                      multiple_stride=args.multiple_stride,\
                                       **kwargs)
             else:
                 firstModel = CNNconst(args.first_mod, args.pretrained_visual,
@@ -809,5 +810,8 @@ def addArgs(argreader):
 
     argreader.parser.add_argument('--aux_on_masked', type=args.str2bool, metavar='BOOL',
                                   help="To train dense layers on masked version of the feature matrix.")
+
+    argreader.parser.add_argument('--multiple_stride', type=args.str2bool, metavar='BOOL',
+                                  help="To compute multiple stride during test to obtain a detailed final feature map.")
 
     return argreader
