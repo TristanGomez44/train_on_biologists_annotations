@@ -190,7 +190,8 @@ class ResNet(nn.Module):
     def __init__(self, block, layers, num_classes=1000, zero_init_residual=False, norm_layer=None,maxPoolKer=(3,3),maxPoolPad=(1,1),stride=(2,2),\
                     strideLay2=2,strideLay3=2,strideLay4=2,\
                     featMap=False,chan=64,inChan=3,dilation=1,layerSizeReduce=True,preLayerSizeReduce=True,layersNb=4,reluOnLast=False,\
-                    bil_cluster_early=False,nb_parts=3,bil_clu_earl_exp=False,multiple_stride=False,bin_multiple_stride=True):
+                    bil_cluster_early=False,nb_parts=3,bil_clu_earl_exp=False,multiple_stride=False,bin_multiple_stride=True,\
+                    zoom_on_act=False):
 
         super(ResNet, self).__init__()
         if norm_layer is None:
@@ -268,6 +269,7 @@ class ResNet(nn.Module):
             if strideLay2 != 2 or strideLay3 != 2 or strideLay4 != 2:
                 raise ValueError("Multiple stride not implemented for stride != 2")
 
+        self.zoom_on_act = zoom_on_act
     def createMultStrInds(self,x,bin=False):
 
         if not bin:
@@ -333,18 +335,41 @@ class ResNet(nn.Module):
 
         return nn.Sequential(*layers)
 
-    def forward(self,x,returnLayer="last"):
+    def crop(self,x):
+        mapAct = x.sum(dim=1)
+        inds = torch.max(mapAct.view(mapAct.size(0),-1),dim=-1)[1]
+        rows,cols = inds//x.size(3),inds%x.size(3)
+
+        y1 = torch.clamp(rows-x.size(2)//4,0,x.size(2)//2)
+        y2 = y1 + x.size(2)//2
+        x1 = torch.clamp(cols-x.size(3)//4,0,x.size(3)//2)
+        x2 = x1 + x.size(3)//2
+
+        crop = []
+        for i in range(len(x)):
+            crop.append(x[i:i+1,:,y1[i]:y2[i],x1[i]:x2[i]])
+        x = torch.cat(crop,dim=0)
+        return x
+
+    def forward(self,xInp,returnLayer="last"):
 
         retDict = {}
-        x = self.conv1(x)
+        x = self.conv1(xInp)
         x = self.bn1(x)
         x = self.relu(x)
         x = self.maxpool(x)
 
         x1 = self.layer1({"00":x})
         x2 = self.layer2(x1)
+
         x3 = self.layer3(x2)
+
+        if self.training and self.zoom_on_act:
+            x3["00"] = self.crop(x3["00"])
+
         x4 = self.layer4(x3)
+        if self.training and self.zoom_on_act:
+            x4["00"] = self.crop(x4["00"])
 
         if not self.featMap:
             x = self.avgpool(x4["00"])

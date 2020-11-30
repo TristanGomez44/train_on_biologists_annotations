@@ -620,6 +620,7 @@ def netBuilder(args):
                                       strideLay2=args.stride_lay2,strideLay3=args.stride_lay3,\
                                       strideLay4=args.stride_lay4,\
                                       multiple_stride=args.multiple_stride,\
+                                      zoom_on_act=args.zoom_on_act,\
                                       **kwargs)
             else:
                 firstModel = CNNconst(args.first_mod, args.pretrained_visual,
@@ -813,5 +814,8 @@ def addArgs(argreader):
 
     argreader.parser.add_argument('--multiple_stride', type=args.str2bool, metavar='BOOL',
                                   help="To compute multiple stride during test to obtain a detailed final feature map.")
+
+    argreader.parser.add_argument('--zoom_on_act', type=args.str2bool, metavar='BOOL',
+                                  help="To zoom on feature map during training.")
 
     return argreader

@@ -41,6 +41,9 @@ case $1 in
   "clus-initRed")
     python trainVal.py -c model_cub9.config --model_id clus_initRed   --resnet_bilinear True --bil_cluster True --init_path ../models/CUB9/modelclusRed_best_epoch43 --max_batch_size 65 --val_batch_size 100
     ;;
+  "clusZoomAct")
+    python trainVal.py -c model_cub9.config --model_id clus_zoomAct   --resnet_bilinear True --bil_cluster True --max_batch_size 130 --zoom_on_act True
+    ;;
   "*")
     echo "no such model"
     ;;
