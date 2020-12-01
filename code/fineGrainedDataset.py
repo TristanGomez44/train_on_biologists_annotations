@@ -7,6 +7,8 @@ import pdb
 from PIL import Image
 from torch.utils.data import Dataset
 import torchvision.transforms as transforms
+import numpy as np
+import torch
 
 IMG_EXTENSIONS = ('.jpg', '.jpeg', '.png', '.ppm', '.bmp', '.pgm', '.tif', '.tiff', '.webp')
 
@@ -24,7 +26,8 @@ class FineGrainedDataset(Dataset):
     """
 
     def __init__(self, root, phase,resize,withSeg,sqResizing,\
-                        cropRatio,brightness,saturation):
+                        cropRatio,brightness,saturation,withSaliency=False,\
+                        randomSalCrop=False):
 
         self.image_path = {}
         self.withSeg = withSeg
@@ -39,6 +42,8 @@ class FineGrainedDataset(Dataset):
         self.image_id = []
         self.num_classes = 200
 
+        self.withSaliency = withSaliency
+        self.randomSalCrop = randomSalCrop
 
         classes = [d.name for d in os.scandir(self.root) if d.is_dir()]
         classes.sort()
@@ -71,26 +76,62 @@ class FineGrainedDataset(Dataset):
 
         # transform
         self.transform = get_transform(self.resize, self.phase,colorDataset=self.root.find("emb") == -1,\
-                                        sqResizing=sqResizing,cropRatio=cropRatio,brightness=brightness,saturation=saturation)
+                                        sqResizing=sqResizing,cropRatio=cropRatio,brightness=brightness,\
+                                        saturation=saturation,salCrop=self.withSaliency)
 
     def __getitem__(self, item):
         # get image id
         image_id = self.image_id[item]
-
-        # image
         image = Image.open(self.image_path[image_id]).convert('RGB')  # (C, H, W)
-        image = self.transform(image)
 
-        if self.withSeg:
-            imageSeg = Image.open(self.image_path[image_id]).convert('RGB')
-            for t in self.transform.transforms:
-                if (not type(t) is transforms.Normalize) and (not type(t) is transforms.ColorJitter):
-                    imageSeg = t(imageSeg)
+        if not self.withSaliency:
+            # image
+            image = self.transform(image)
 
-            return image, self.image_label[image_id],imageSeg
+            if self.withSeg:
+                imageSeg = Image.open(self.image_path[image_id]).convert('RGB')
+                for t in self.transform.transforms:
+                    if (not type(t) is transforms.Normalize) and (not type(t) is transforms.ColorJitter):
+                        imageSeg = t(imageSeg)
+
+                return image, self.image_label[image_id],imageSeg
+            else:
+                return image, self.image_label[image_id]
         else:
-            return image, self.image_label[image_id]
 
+            imageSalPath = self.image_path[image_id].replace(self.root,self.root+"_sal").replace(".jpg",".png")
+            imageSal = Image.open(imageSalPath).convert('RGB')
+
+            for t in self.transform.transforms:
+
+                if type(t) is transforms.Resize:
+                    image = t(image)
+                    imageSal = t(imageSal)
+                else:
+                    if (not type(t) is transforms.RandomCrop):
+                        image = t(image)
+                    else:
+                        imageSal = np.array(imageSal).mean(axis=2)
+                        imageSal = imageSal/imageSal.sum(axis=(0,1),keepdims=True)
+
+                        if self.randomSalCrop:
+                            center = torch.multinomial(torch.tensor(imageSal.reshape(-1)), 1, replacement=True)
+                            x,y = center%imageSal.shape[1],center//imageSal.shape[1]
+                        else:
+                            x = int((np.arange(imageSal.shape[1])[np.newaxis]*imageSal).sum())
+                            y = int((np.arange(imageSal.shape[0])[:,np.newaxis]*imageSal).sum())
+
+                        x1,x2 = (x-imageSal.shape[1]//8),(x+imageSal.shape[1]//8)
+                        y1,y2 = (y-imageSal.shape[0]//8),(y+imageSal.shape[0]//8)
+
+                        x1,x2 = np.clip(x1,0,3*imageSal.shape[1]//4),np.clip(x2,imageSal.shape[1]//4,imageSal.shape[1])
+                        y1,y2 = np.clip(y1,0,3*imageSal.shape[1]//4),np.clip(y2,imageSal.shape[1]//4,imageSal.shape[1])
+
+                        image = Image.fromarray(np.array(image)[y1:y2,x1:x2]).convert("RGB")
+
+                        image = t(image)
+
+            return image, self.image_label[image_id]
     def __len__(self):
         return len(self.image_id)
 
@@ -109,7 +150,7 @@ def has_file_allowed_extension(filename, extensions):
 
 
 def get_transform(resize, phase='train',colorDataset=True,sqResizing=True,\
-                    cropRatio=0.875,brightness=0.126,saturation=0.5):
+                    cropRatio=0.875,brightness=0.126,saturation=0.5,salCrop=False):
 
     if sqResizing:
         kwargs={"size":(int(resize[0] / cropRatio), int(resize[1] / cropRatio))}
@@ -117,24 +158,21 @@ def get_transform(resize, phase='train',colorDataset=True,sqResizing=True,\
         kwargs={"size":int(resize[0] / cropRatio)}
 
     if phase == 'train':
-        transf = transforms.Compose([
-            transforms.Resize(**kwargs),
-            transforms.RandomCrop(resize),
-            transforms.RandomHorizontalFlip(0.5),
-        ])
+        transf = [transforms.Resize(**kwargs),
+                    transforms.RandomCrop((resize[0]//4,resize[1]//4) if salCrop else resize),
+                    transforms.RandomHorizontalFlip(0.5)]
 
         if colorDataset:
-            transf = transforms.Compose([transf,transforms.ColorJitter(brightness=brightness, saturation=saturation)])
+            transf.extend([transforms.ColorJitter(brightness=brightness, saturation=saturation)])
 
     else:
-        transf = transforms.Compose([
-            transforms.Resize(**kwargs),
-            transforms.CenterCrop(resize),
-        ])
+        transf = [transforms.Resize(**kwargs),transforms.CenterCrop(resize)]
 
-    transf = transforms.Compose([transf,transforms.ToTensor()])
+    transf.extend([transforms.ToTensor()])
 
     if colorDataset:
-        transf = transforms.Compose([transf,transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])])
+        transf.extend([transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])])
+
+    transf = transforms.Compose(transf)
 
     return transf

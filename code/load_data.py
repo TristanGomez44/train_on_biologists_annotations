@@ -69,10 +69,18 @@ class DataPartitioner(object):
 
 def buildTrainLoader(args,transf=None,shuffle=True,withSeg=False,reprVec=False):
 
-    imgSize = 448 if args.big_images else 224
+    if args.very_big_images:
+        imgSize = 1792
+    elif args.big_images:
+        imgSize = 448
+    else:
+        imgSize = 224
+
     train_dataset = fineGrainedDataset.FineGrainedDataset(args.dataset_train, "train",(imgSize,imgSize),\
                                             withSeg=withSeg,sqResizing=args.sq_resizing,\
-                                            cropRatio=args.crop_ratio,brightness=args.brightness,saturation=args.saturation)
+                                            cropRatio=args.crop_ratio,brightness=args.brightness,\
+                                            saturation=args.saturation,withSaliency=args.saliency_crop,\
+                                            randomSalCrop=args.random_sal_crop)
 
     totalLength = len(train_dataset)
 
@@ -188,7 +196,11 @@ def addArgs(argreader):
                                   help='To increase test resolution from 224 to 312')
 
     argreader.parser.add_argument('--big_images', type=args.str2bool, metavar='S',
-                                  help='To resize the images to 500 pixels instead of 224')
+                                  help='To resize the images to 448 pixels instead of 224')
+    argreader.parser.add_argument('--very_big_images', type=args.str2bool, metavar='S',
+                                    help='To resize the images to 1792 pixels instead of 224')
+
+
     argreader.parser.add_argument('--normalize_data', type=args.str2bool, metavar='S',
                                   help='To normalize the data using imagenet means and std before puting it between 0 and 1.')
 
@@ -208,9 +220,10 @@ def addArgs(argreader):
     argreader.parser.add_argument('--saturation', type=float, metavar='S',
                                   help='The saturation intensity for data augmentation.')
 
+    argreader.parser.add_argument('--saliency_crop', type=args.str2bool, metavar='S',
+                                  help='To crop image using saliency.')
 
-
-
-
+    argreader.parser.add_argument('--random_sal_crop', type=args.str2bool, metavar='S',
+                                  help='To do random saliency cropping.')
 
     return argreader

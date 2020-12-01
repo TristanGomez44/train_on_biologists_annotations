@@ -42,7 +42,16 @@ case $1 in
     python trainVal.py -c model_cub9.config --model_id clus_initRed   --resnet_bilinear True --bil_cluster True --init_path ../models/CUB9/modelclusRed_best_epoch43 --max_batch_size 65 --val_batch_size 100
     ;;
   "clusZoomAct")
-    python trainVal.py -c model_cub9.config --model_id clus_zoomAct   --resnet_bilinear True --bil_cluster True --max_batch_size 130 --zoom_on_act True
+    python trainVal.py -c model_cub9.config --model_id clus_zoomAct   --resnet_bilinear True --bil_cluster True --max_batch_size 130 --zoom_on_act True --val_batch_size 100
+    ;;
+  "clusRedZoomSal")
+    python trainVal.py -c model_cub9.config --model_id clusRed_zoomSal   --resnet_bilinear True --bil_cluster True --stride_lay3 2 --stride_lay4 2 --saliency_crop True --max_batch_size 130 --num_workers 12
+    ;;
+  "clusRedZoomSal-init")
+    python trainVal.py -c model_cub9.config --model_id clusRed_zoomSal_init   --resnet_bilinear True --bil_cluster True --stride_lay3 2 --stride_lay4 2 --saliency_crop True --max_batch_size 130 --num_workers 12 --init_path ../models/CUB9/modelclusRed_best_epoch43
+    ;;
+  "clusRedRandZoomSal")
+    python trainVal.py -c model_cub9.config --model_id clusRed_randZoomSal   --resnet_bilinear True --bil_cluster True --stride_lay3 2 --stride_lay4 2 --saliency_crop True --random_sal_crop True --max_batch_size 130 --num_workers 12
     ;;
   "*")
     echo "no such model"
