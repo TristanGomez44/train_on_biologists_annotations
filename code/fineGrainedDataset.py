@@ -27,7 +27,7 @@ class FineGrainedDataset(Dataset):
 
     def __init__(self, root, phase,resize,withSeg,sqResizing,\
                         cropRatio,brightness,saturation,withSaliency=False,\
-                        randomSalCrop=False):
+                        randomSalCrop=False,apply_random_crop=True):
 
         self.image_path = {}
         self.withSeg = withSeg
@@ -44,6 +44,7 @@ class FineGrainedDataset(Dataset):
 
         self.withSaliency = withSaliency
         self.randomSalCrop = randomSalCrop
+        self.apply_random_crop = apply_random_crop
 
         classes = [d.name for d in os.scandir(self.root) if d.is_dir()]
         classes.sort()
@@ -111,13 +112,18 @@ class FineGrainedDataset(Dataset):
                     if (not type(t) is transforms.RandomCrop):
                         image = t(image)
                     else:
-                        imageSal = np.array(imageSal).mean(axis=2)
-                        imageSal = imageSal/imageSal.sum(axis=(0,1),keepdims=True)
 
                         if self.randomSalCrop:
+                            imageSal = np.array(imageSal).mean(axis=2)
+                            imageSal = imageSal/imageSal.sum(axis=(0,1),keepdims=True)
+
                             center = torch.multinomial(torch.tensor(imageSal.reshape(-1)), 1, replacement=True)
                             x,y = center%imageSal.shape[1],center//imageSal.shape[1]
                         else:
+
+                            imageSal = np.array(imageSal)[:,:,0]
+                            imageSal = imageSal/imageSal.sum(axis=(0,1),keepdims=True)
+
                             x = int((np.arange(imageSal.shape[1])[np.newaxis]*imageSal).sum())
                             y = int((np.arange(imageSal.shape[0])[:,np.newaxis]*imageSal).sum())
 
@@ -129,7 +135,8 @@ class FineGrainedDataset(Dataset):
 
                         image = Image.fromarray(np.array(image)[y1:y2,x1:x2]).convert("RGB")
 
-                        image = t(image)
+                        if self.apply_random_crop:
+                            image = t(image)
 
             return image, self.image_label[image_id]
     def __len__(self):

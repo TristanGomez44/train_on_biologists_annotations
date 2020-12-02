@@ -80,7 +80,7 @@ def buildTrainLoader(args,transf=None,shuffle=True,withSeg=False,reprVec=False):
                                             withSeg=withSeg,sqResizing=args.sq_resizing,\
                                             cropRatio=args.crop_ratio,brightness=args.brightness,\
                                             saturation=args.saturation,withSaliency=args.saliency_crop,\
-                                            randomSalCrop=args.random_sal_crop)
+                                            randomSalCrop=args.random_sal_crop,apply_random_crop=args.apply_random_crop)
 
     totalLength = len(train_dataset)
 
@@ -163,6 +163,8 @@ def addArgs(argreader):
                                   help='The batchsize to use for training')
     argreader.parser.add_argument('--val_batch_size', type=int, metavar='BS',
                                   help='The batchsize to use for validation')
+    argreader.parser.add_argument('--max_sub_batch_size', type=int, metavar='BS',
+                                  help='The maximum sub batch size when using very big images.')
 
     argreader.parser.add_argument('--train_prop', type=float, metavar='END',
                                   help='The proportion of the train dataset to use for training when working in non video mode. The rest will be used for validation.')
@@ -225,5 +227,8 @@ def addArgs(argreader):
 
     argreader.parser.add_argument('--random_sal_crop', type=args.str2bool, metavar='S',
                                   help='To do random saliency cropping.')
+
+    argreader.parser.add_argument('--apply_random_crop', type=args.str2bool, metavar='S',
+                                  help='To apply random crop after saliency crop.')
 
     return argreader
