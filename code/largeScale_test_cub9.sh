@@ -50,8 +50,14 @@ case $1 in
   "clusRedZoomSal-init")
     python trainVal.py -c model_cub9.config --model_id clusRed_zoomSal_init   --resnet_bilinear True --bil_cluster True --stride_lay3 2 --stride_lay4 2 --saliency_crop True --max_batch_size 130 --num_workers 12 --init_path ../models/CUB9/modelclusRed_best_epoch43
     ;;
+  "clusRedZoomSalHead-init")
+    python trainVal.py -c model_cub9.config --model_id clusRed_zoomSalHead_init   --resnet_bilinear True --bil_cluster True --stride_lay3 2 --stride_lay4 2 --saliency_crop True --max_batch_size 130 --num_workers 12 --init_path ../models/CUB9/modelclusRed_best_epoch43
+    ;;
   "clusRedRandZoomSal")
     python trainVal.py -c model_cub9.config --model_id clusRed_randZoomSal   --resnet_bilinear True --bil_cluster True --stride_lay3 2 --stride_lay4 2 --saliency_crop True --random_sal_crop True --max_batch_size 130 --num_workers 12
+    ;;
+  "clusRed_veryBig")
+    python trainVal.py -c model_cub9.config --model_id clusRed_veryBig --very_big_images True  --resnet_bilinear True --bil_cluster True --stride_lay3 2 --stride_lay4 2 --max_batch_size 130
     ;;
   "*")
     echo "no such model"

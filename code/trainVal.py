@@ -41,6 +41,7 @@ import sqlite3
 
 from shutil import copyfile
 
+import torchvision
 
 OPTIM_LIST = ["Adam", "AMSGrad", "SGD"]
 
@@ -88,13 +89,14 @@ def epochSeqTr(model, optim, log_interval, loader, epoch, args, writer, **kwargs
             if args.with_seg:
                 seg = seg.cuda()
 
-        resDict = model(data)
-
-        output = resDict["pred"]
-
-        loss = computeLoss(args, output, target, resDict, data,seg)
-
-        loss.backward()
+        if args.very_big_images:
+            output,resDict,loss = subBatchTrain(args,data,target,model)
+        else:
+            resDict = model(data)
+            output = resDict["pred"]
+            loss = computeLoss(args, output, target, resDict, data)
+            loss.backward()
+            loss = loss.detach().data.item()
 
         if args.distributed:
             average_gradients(model)
@@ -106,7 +108,7 @@ def epochSeqTr(model, optim, log_interval, loader, epoch, args, writer, **kwargs
         # Metrics
         with torch.no_grad():
             metDictSample = metrics.binaryToMetrics(output, target, seg,resDict)
-        metDictSample["Loss"] = loss.detach().data.item()
+        metDictSample["Loss"] = loss
         metrDict = metrics.updateMetrDict(metrDict, metDictSample)
 
         validBatch += 1
@@ -126,7 +128,7 @@ def epochSeqTr(model, optim, log_interval, loader, epoch, args, writer, **kwargs
             totalTime = time.time() - start_time
             update.updateTimeCSV(epoch, "train", args.exp_id, args.model_id, totalTime, batch_idx)
 
-def computeLoss(args, output, target, resDict, data,seg):
+def computeLoss(args, output, target, resDict, data):
 
     loss = args.nll_weight * F.cross_entropy(output, target)
 
@@ -139,6 +141,39 @@ def computeLoss(args, output, target, resDict, data,seg):
     loss = loss/nbTerms
 
     return loss
+
+def subBatchTrain(args,data,target,model):
+    meanLoss=0
+    batch_size = data.size(0)
+
+    splitSize = [args.max_sub_batch_size for _ in range(batch_size//args.max_sub_batch_size)]
+
+    if batch_size%args.max_sub_batch_size > 0:
+        splitSize.append(batch_size%args.max_sub_batch_size)
+
+    data_split = torch.split(data, splitSize, dim=0)
+    target_split = torch.split(target,splitSize,dim=0)
+    if args.with_seg:
+        seg_split = torch.split(seg,splitSize,dim=0)
+
+    resDict_total = None
+    for l,data in enumerate(data_split):
+        resDict = model(data)
+        if resDict_total is None:
+            resDict_total = resDict
+        else:
+            for key in resDict:
+                if key == "pred" or key == "attMaps":
+                    resDict_total[key] = torch.cat((resDict_total[key],resDict[key]),dim=0)
+
+        loss = computeLoss(args, resDict["pred"], target_split[l], resDict, data)
+        loss.backward()
+
+        meanLoss += loss.detach().data.item()*len(data)*1.0/batch_size
+
+    resDict = resDict_total
+    output = resDict["pred"]
+    return output,resDict,meanLoss
 
 def aux_model_loss_term(aux_model_weight, resDict, data, target):
     return aux_model_weight * F.cross_entropy(resDict["auxPred"], target)
@@ -247,7 +282,7 @@ def epochImgEval(model, log_interval, loader, epoch, args, writer, metricEarlySt
         output = resDict["pred"]
 
         # Loss
-        loss = computeLoss(args, output, target, resDict, data,seg)
+        loss = computeLoss(args, output, target, resDict, data)
 
         # Other variables produced by the net
         if mode == "test" and (dataset.find("emb") == -1 or (dataset.find("emb") != -1 and validBatch*data.size(0) < 640)):
@@ -351,12 +386,12 @@ def getOptim_and_Scheduler(optimStr, lr,momentum,weightDecay,useScheduler,maxEpo
         if optimStr == "SGD":
             kwargs = {'lr':lr,'momentum': momentum,"weight_decay":weightDecay}
         elif optimStr == "Adam":
-            kwargs = {'lr':lr}
+            kwargs = {'lr':lr,"weight_decay":weightDecay}
         else:
             raise ValueError("Unknown optimisation algorithm : {}".format(args.optim))
     else:
         optimConst = torch.optim.Adam
-        kwargs = {'lr':lr,'amsgrad': True}
+        kwargs = {'lr':lr,'amsgrad': True,"weight_decay":weightDecay}
 
     optim = optimConst(net.parameters(), **kwargs)
 
@@ -613,18 +648,24 @@ def run(args,trial=None):
     if args.cuda:
         torch.cuda.manual_seed(args.seed)
 
-    trainLoader, trainDataset = load_data.buildTrainLoader(args,withSeg=args.with_seg,reprVec=args.repr_vec)
-    valLoader,_ = load_data.buildTestLoader(args, "val",withSeg=args.with_seg,reprVec=args.repr_vec)
-
     if not trial is None:
         args.lr = trial.suggest_float("lr", 1e-4, 1e-2, log=True)
         args.optim = trial.suggest_categorical("optim", OPTIM_LIST)
         args.batch_size = trial.suggest_int("batch_size", 10, args.max_batch_size, log=True)
+        args.dropout = trial.suggest_float("dropout", 0, 0.6,step=0.2)
+        args.weight_decay = trial.suggest_float("weight_decay", 1e-6, 1e-3, log=True)
+
+        if args.optim == "SGD":
+            args.momentum = trial.suggest_float("momentum", 0., 0.99,step=0.1)
+            args.use_scheduler = trial.suggest_categorical("use_scheduler",[True,False])
 
         if args.opt_data_aug:
             args.brightness = trial.suggest_float("brightness", 0, 0.5, step=0.05)
             args.saturation = trial.suggest_float("saturation", 0, 0.9, step=0.1)
             args.crop_ratio = trial.suggest_float("crop_ratio", 0.8, 1, step=0.05)
+
+    trainLoader, trainDataset = load_data.buildTrainLoader(args,withSeg=args.with_seg,reprVec=args.repr_vec)
+    valLoader,_ = load_data.buildTestLoader(args, "val",withSeg=args.with_seg,reprVec=args.repr_vec)
 
     # Building the net
     net = modelBuilder.netBuilder(args)
