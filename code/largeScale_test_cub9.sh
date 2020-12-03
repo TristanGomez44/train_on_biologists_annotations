@@ -32,6 +32,9 @@ case $1 in
   "clusDil")
     python trainVal.py -c model_cub9.config --model_id clusDil   --resnet_bilinear True --bil_cluster True --resnet_dilation 2 --val_batch_size 120 --max_batch_size 50
     ;;
+  "clusDilOnStart")
+    python trainVal.py -c model_cub9.config --model_id clusDilOnStart   --resnet_bilinear True --bil_cluster True --resnet_dilation 2 --val_batch_size 120 --max_batch_size 50 --dil_on_start True
+    ;;
   "clusEnsRed")
     python trainVal.py -c model_cub9.config --model_id clusEnsRed   --resnet_bilinear True --bil_cluster True --bil_cluster_ensemble True  --stride_lay3 2 --stride_lay4 2
     ;;

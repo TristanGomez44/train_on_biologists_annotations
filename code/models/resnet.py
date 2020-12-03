@@ -191,7 +191,7 @@ class ResNet(nn.Module):
                     strideLay2=2,strideLay3=2,strideLay4=2,\
                     featMap=False,chan=64,inChan=3,dilation=1,layerSizeReduce=True,preLayerSizeReduce=True,layersNb=4,reluOnLast=False,\
                     bil_cluster_early=False,nb_parts=3,bil_clu_earl_exp=False,multiple_stride=False,bin_multiple_stride=True,\
-                    zoom_on_act=False):
+                    zoom_on_act=False,dilOnStart=False):
 
         super(ResNet, self).__init__()
         if norm_layer is None:
@@ -215,6 +215,7 @@ class ResNet(nn.Module):
         self.nbLayers = len(layers)
 
         self.binMultStr = bin_multiple_stride
+        self.dilOnStart = dilOnStart
 
         #All layers are built but they will not necessarily be used
         self.layer1 = self._make_layer(block, chan[0], layers[0], stride=1,norm_layer=norm_layer,reluOnLast=reluOnLast if self.nbLayers==1 else True,\
@@ -323,13 +324,18 @@ class ResNet(nn.Module):
             )
 
         layers = []
-        layers.append(block(self.inplanes, planes, stride, downsample, norm_layer,multiple_stride=multStr))
+
+        if self.dilOnStart:
+            layers.append(block(self.inplanes, planes, stride, downsample, norm_layer,multiple_stride=multStr,dilation=dilation))
+        else:
+            layers.append(block(self.inplanes, planes, stride, downsample, norm_layer,multiple_stride=multStr))
+
         self.inplanes = planes * block.expansion
 
         for i in range(1, blocks):
 
-            if i == blocks-1:
-                layers.append(block(self.inplanes, planes, norm_layer=norm_layer,endRelu=reluOnLast,dilation=dilation))
+            if self.dilOnStart:
+                layers.append(block(self.inplanes, planes, norm_layer=norm_layer,endRelu=True))
             else:
                 layers.append(block(self.inplanes, planes, norm_layer=norm_layer,endRelu=True,dilation=dilation))
 

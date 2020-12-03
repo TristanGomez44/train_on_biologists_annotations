@@ -621,6 +621,7 @@ def netBuilder(args):
                                       strideLay4=args.stride_lay4,\
                                       multiple_stride=args.multiple_stride,\
                                       zoom_on_act=args.zoom_on_act,\
+                                      dilOnStart=args.dil_on_start,\
                                       **kwargs)
             else:
                 firstModel = CNNconst(args.first_mod, args.pretrained_visual,
@@ -817,5 +818,8 @@ def addArgs(argreader):
 
     argreader.parser.add_argument('--zoom_on_act', type=args.str2bool, metavar='BOOL',
                                   help="To zoom on feature map during training.")
+
+    argreader.parser.add_argument('--dil_on_start', type=args.str2bool, metavar='BOOL',
+                                  help="To apply dilation at the begining of blocks")
 
     return argreader
