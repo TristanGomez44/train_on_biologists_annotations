@@ -62,6 +62,9 @@ case $1 in
   "clusRed_veryBig")
     python trainVal.py -c model_cub9.config --model_id clusRed_veryBig --very_big_images True  --resnet_bilinear True --bil_cluster True --stride_lay3 2 --stride_lay4 2 --max_batch_size 130
     ;;
+  "clus_masterClusRed")
+    python trainVal.py -c model_cub9.config --model_id clus_masterClusRed   --resnet_bilinear True --bil_cluster True --max_batch_size 60 --val_batch_size 100 --master_net True --m_net_path ../models/CUB9/modelclusRed_best_epoch43 --m_conf_path ../models/CUB9/clusRed.ini
+    ;;
   "*")
     echo "no such model"
     ;;

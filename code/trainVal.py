@@ -43,7 +43,13 @@ from shutil import copyfile
 
 import torchvision
 
+import gc
+
 OPTIM_LIST = ["Adam", "AMSGrad", "SGD"]
+
+class Bunch(object):
+  def __init__(self, adict):
+    self.__dict__.update(adict)
 
 def epochSeqTr(model, optim, log_interval, loader, epoch, args, writer, **kwargs):
     ''' Train a model during one epoch
@@ -94,6 +100,11 @@ def epochSeqTr(model, optim, log_interval, loader, epoch, args, writer, **kwargs
         else:
             resDict = model(data)
             output = resDict["pred"]
+
+            if args.master_net:
+                with torch.no_grad():
+                    resDict["master_net_pred"] = kwargs["master_net"](data)["pred"]
+
             loss = computeLoss(args, output, target, resDict, data)
             loss.backward()
             loss = loss.detach().data.item()
@@ -130,7 +141,12 @@ def epochSeqTr(model, optim, log_interval, loader, epoch, args, writer, **kwargs
 
 def computeLoss(args, output, target, resDict, data):
 
-    loss = args.nll_weight * F.cross_entropy(output, target)
+    if not args.master_net:
+        loss = args.nll_weight * F.cross_entropy(output, target)
+    else:
+        kl = F.kl_div(F.log_softmax(output/args.kl_temp, dim=1),F.softmax(resDict["master_net_pred"]/args.kl_temp, dim=1),reduction="batchmean")
+        ce = F.cross_entropy(output, target)
+        loss = args.nll_weight*(kl*args.kl_interp*args.kl_temp*args.kl_temp+ce*(1-args.kl_interp))
 
     nbTerms = 1
     for key in resDict.keys():
@@ -208,7 +224,7 @@ def average_gradients(model):
             dist.all_reduce(param.grad.data, op=dist.ReduceOp.SUM)
             param.grad.data /= size
 
-def epochImgEval(model, log_interval, loader, epoch, args, writer, metricEarlyStop, mode="val"):
+def epochImgEval(model, log_interval, loader, epoch, args, writer, metricEarlyStop, mode="val",**kwargs):
     ''' Train a model during one epoch
 
     Args:
@@ -281,6 +297,9 @@ def epochImgEval(model, log_interval, loader, epoch, args, writer, metricEarlySt
 
         output = resDict["pred"]
 
+        if args.master_net:
+            resDict["master_net_pred"] = kwargs["master_net"](data)["pred"]
+
         # Loss
         loss = computeLoss(args, output, target, resDict, data)
 
@@ -322,7 +341,6 @@ def epochImgEval(model, log_interval, loader, epoch, args, writer, metricEarlySt
 
     return metrDict[metricEarlyStop]
 
-
 def writePreds(predBatch, targBatch, epoch, exp_id, model_id, class_nb, batch_idx,mode):
     csvPath = "../results/{}/{}_epoch{}_{}.csv".format(exp_id, model_id, epoch,mode)
 
@@ -334,7 +352,6 @@ def writePreds(predBatch, targBatch, epoch, exp_id, model_id, class_nb, batch_id
         for i in range(len(predBatch)):
             print(str(targBatch[i].cpu().detach().numpy()) + "," + ",".join(
                 predBatch[i].cpu().detach().numpy().astype(str)), file=text_file)
-
 
 def writeSummaries(metrDict, totalImgNb, writer, epoch, mode, model_id, exp_id):
     ''' Write the metric computed during an evaluation in a tf writer and in a csv file
@@ -639,6 +656,32 @@ def init_process(args, rank, size, fn, backend='gloo'):
     dist.init_process_group(backend, rank=rank, world_size=size)
     fn(args)
 
+def initMasterNet(args):
+    config = configparser.ConfigParser()
+    config.read(args.m_conf_path)
+    args_master = Bunch(config["default"])
+
+    argDic = args.__dict__
+    mastDic = args_master.__dict__
+
+    for arg in mastDic:
+        if not argDic[arg] is None:
+            if not type(argDic[arg]) is bool:
+                mastDic[arg] = type(argDic[arg])(mastDic[arg])
+            else:
+                mastDic[arg] = str2bool(mastDic[arg])
+        else:
+            mastDic[arg] = None
+
+    for arg in argDic:
+        if not arg in mastDic:
+            mastDic[arg] = argDic[arg]
+
+    master_net = modelBuilder.netBuilder(args_master)
+    params = torch.load(args.m_net_path, map_location="cpu" if not args.cuda else None)
+    master_net.load_state_dict(params, strict=True)
+    master_net.eval()
+    return master_net
 
 def run(args,trial=None):
     writer = SummaryWriter("../results/{}".format(args.exp_id))
@@ -656,13 +699,17 @@ def run(args,trial=None):
         args.weight_decay = trial.suggest_float("weight_decay", 1e-6, 1e-3, log=True)
 
         if args.optim == "SGD":
-            args.momentum = trial.suggest_float("momentum", 0., 0.99,step=0.1)
+            args.momentum = trial.suggest_float("momentum", 0., 0.9,step=0.1)
             args.use_scheduler = trial.suggest_categorical("use_scheduler",[True,False])
 
         if args.opt_data_aug:
             args.brightness = trial.suggest_float("brightness", 0, 0.5, step=0.05)
             args.saturation = trial.suggest_float("saturation", 0, 0.9, step=0.1)
             args.crop_ratio = trial.suggest_float("crop_ratio", 0.8, 1, step=0.05)
+
+        if args.master_net:
+            args.kl_temp = trial.suggest_float("kl_temp", 1, 21, step=5)
+            args.kl_interp = trial.suggest_float("kl_interp", 0.1, 1, step=0.1)
 
     trainLoader, trainDataset = load_data.buildTrainLoader(args,withSeg=args.with_seg,reprVec=args.repr_vec)
     valLoader,_ = load_data.buildTestLoader(args, "val",withSeg=args.with_seg,reprVec=args.repr_vec)
@@ -693,6 +740,10 @@ def run(args,trial=None):
     else:
         bestMetricVal = np.inf
         isBetter = lambda x, y: x < y
+
+    if args.master_net:
+        kwargsTr["master_net"] = initMasterNet(args)
+        kwargsVal["master_net"] = kwargsTr["master_net"]
 
     if not args.only_test and not args.grad_cam:
         while epoch < args.epochs + 1 and worseEpochNb < args.max_worse_epoch_nb:
@@ -907,7 +958,19 @@ def main(argv=None):
 
             trialsAlreadyDone = len(curr.execute('SELECT trial_id,value FROM trials WHERE study_id == 1').fetchall())
             if trialsAlreadyDone < args.optuna_trial_nb:
-                study.optimize(objective,n_trials=args.optuna_trial_nb-trialsAlreadyDone)
+
+                studyDone = False
+                while not studyDone:
+                    try:
+                        study.optimize(objective,n_trials=args.optuna_trial_nb-trialsAlreadyDone)
+                        studyDone = True
+                    except RuntimeError as e:
+                        if str(e).find("CUDA out of memory.") != -1:
+                            gc.collect()
+                            torch.cuda.empty_cache()
+                            args.max_batch_size -= 5
+                        else:
+                            raise RuntimError(e)
 
             curr.execute('SELECT trial_id,value FROM trials WHERE study_id == 1')
             query_res = curr.fetchall()

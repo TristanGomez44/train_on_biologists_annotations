@@ -822,4 +822,10 @@ def addArgs(argreader):
     argreader.parser.add_argument('--dil_on_start', type=args.str2bool, metavar='BOOL',
                                   help="To apply dilation at the begining of blocks")
 
+    argreader.parser.add_argument('--master_net', type=args.str2bool, help='To distill a master network into the trained network.')
+    argreader.parser.add_argument('--m_net_path', type=str, help='The path to the master network')
+    argreader.parser.add_argument('--m_conf_path', type=str, help='The path to the master network config file.')
+    argreader.parser.add_argument('--kl_interp', type=float, help='If set to 0, will use regular target, if set to 1, will only use master net target')
+    argreader.parser.add_argument('--kl_temp', type=float, help='KL temperature.')
+
     return argreader
