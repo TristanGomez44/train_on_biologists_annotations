@@ -139,10 +139,10 @@ def epochSeqTr(model, optim, log_interval, loader, epoch, args, writer, **kwargs
             totalTime = time.time() - start_time
             update.updateTimeCSV(epoch, "train", args.exp_id, args.model_id, totalTime, batch_idx)
 
-def computeLoss(args, output, target, resDict, data):
+def computeLoss(args, output, target, resDict, data,reduction="mean"):
 
     if not args.master_net:
-        loss = args.nll_weight * F.cross_entropy(output, target)
+        loss = args.nll_weight * F.cross_entropy(output, target,reduction=reduction)
     else:
         kl = F.kl_div(F.log_softmax(output/args.kl_temp, dim=1),F.softmax(resDict["master_net_pred"]/args.kl_temp, dim=1),reduction="batchmean")
         ce = F.cross_entropy(output, target)
@@ -301,7 +301,7 @@ def epochImgEval(model, log_interval, loader, epoch, args, writer, metricEarlySt
             resDict["master_net_pred"] = kwargs["master_net"](data)["pred"]
 
         # Loss
-        loss = computeLoss(args, output, target, resDict, data)
+        loss = computeLoss(args, output, target, resDict, data,reduction="sum")
 
         # Other variables produced by the net
         if mode == "test" and (dataset.find("emb") == -1 or (dataset.find("emb") != -1 and validBatch*data.size(0) < 640)):
@@ -312,7 +312,7 @@ def epochImgEval(model, log_interval, loader, epoch, args, writer, metricEarlySt
                                         batch_idx)
 
         # Metrics
-        metDictSample = metrics.binaryToMetrics(output, target, seg,resDict)
+        metDictSample = metrics.binaryToMetrics(output, target, seg,resDict,comp_spars=(mode=="test"))
         metDictSample["Loss"] = loss.detach().data.item()
         metrDict = metrics.updateMetrDict(metrDict, metDictSample)
 
@@ -321,7 +321,7 @@ def epochImgEval(model, log_interval, loader, epoch, args, writer, metricEarlySt
         validBatch += 1
         totalImgNb += target.size(0)
 
-        if validBatch > 3 and args.debug:
+        if validBatch  >= 4*(50.0/args.val_batch_size) and args.debug:
             break
 
     if mode == "test":
