@@ -953,16 +953,20 @@ def main(argv=None):
             con = sqlite3.connect("../results/{}/{}_hypSearch.db".format(args.exp_id,args.model_id))
             curr = con.cursor()
 
+            failedTrials = 0
             for elem in curr.execute('SELECT trial_id,value FROM trials WHERE study_id == 1').fetchall():
-                print(elem)
+                if elem[1] is None:
+                    failedTrials += 1
 
             trialsAlreadyDone = len(curr.execute('SELECT trial_id,value FROM trials WHERE study_id == 1').fetchall())
-            if trialsAlreadyDone < args.optuna_trial_nb:
+
+            if trialsAlreadyDone-failedTrials < args.optuna_trial_nb:
 
                 studyDone = False
                 while not studyDone:
                     try:
-                        study.optimize(objective,n_trials=args.optuna_trial_nb-trialsAlreadyDone)
+                        print("N trials",args.optuna_trial_nb-trialsAlreadyDone+failedTrials)
+                        study.optimize(objective,n_trials=args.optuna_trial_nb-trialsAlreadyDone+failedTrials)
                         studyDone = True
                     except RuntimeError as e:
                         if str(e).find("CUDA out of memory.") != -1:
