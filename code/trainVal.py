@@ -970,7 +970,7 @@ def main(argv=None):
                             torch.cuda.empty_cache()
                             args.max_batch_size -= 5
                         else:
-                            raise RuntimError(e)
+                            raise RuntimeError(e)
 
             curr.execute('SELECT trial_id,value FROM trials WHERE study_id == 1')
             query_res = curr.fetchall()
