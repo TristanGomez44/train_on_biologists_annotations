@@ -416,7 +416,7 @@ def plotPointsImageDatasetGrid(exp_id,imgNb,epochs,model_ids,reduction_fact_list
 
             gridImage = torch.cat((gridImage,ptsImageCopy),dim=0)
 
-    torchvision.utils.save_image(gridImage, "../vis/{}/points_grid_{}_{}_corr={}.png".format(exp_id,mode,plotId,correctness), nrow=(len(model_ids)+1)*nrows,padding=5,pad_value=0.5)
+    torchvision.utils.save_image(gridImage, "../vis/{}/{}.png".format(exp_id,plotId), nrow=(len(model_ids)+1)*nrows,padding=5,pad_value=0.5)
 
 def plotProbMaps(imgNb,args,norm=False):
 
@@ -1256,13 +1256,13 @@ def main(argv=None):
     argreader.parser.add_argument('--plot_points_image_dataset_grid',action="store_true",help='Same as --plot_points_image_dataset but plot only on image and for several model.')
     argreader.parser.add_argument('--epoch_list',type=int,metavar="INT",nargs="*",help='The list of epochs at which to get the points.',default=[])
     argreader.parser.add_argument('--model_ids',type=str,metavar="IDS",nargs="*",help='The list of model ids.')
-    argreader.parser.add_argument('--reduction_fact_list',type=float,metavar="INT",nargs="*",help='The list of reduction factor.')
+    argreader.parser.add_argument('--reduction_fact_list',type=float,metavar="INT",nargs="*",help='The list of reduction factor.',default=[])
     argreader.parser.add_argument('--inverse_xy',type=str2bool,nargs="*",metavar="BOOL",help='To inverse x and y',default=[])
     argreader.parser.add_argument('--use_dropped_list',type=str2bool,nargs="*",metavar="BOOL",help='To plot the dropped point instead of all the points',default=[])
     argreader.parser.add_argument('--full_att_map',type=str2bool,nargs="*",metavar="BOOL",help='A list of boolean indicating if the model produces full attention maps or selects points.',default=[])
     argreader.parser.add_argument('--use_threshold',type=str2bool,nargs="*",metavar="BOOL",help='To apply the threshold to filter out points',default=[])
 
-    argreader.parser.add_argument('--mode',type=str,metavar="MODE",help='Can be "val" or "test".',default="val")
+    argreader.parser.add_argument('--mode',type=str,metavar="MODE",help='Can be "val" or "test".',default="test")
     argreader.parser.add_argument('--force_feat',type=str2bool,nargs="*",metavar="BOOL",help='To force feature plotting even when there is attention weights available.',default=[])
     argreader.parser.add_argument('--plot_id',type=str,metavar="ID",help='The plot id',default="")
     argreader.parser.add_argument('--maps_inds',type=int,nargs="*",metavar="INT",help='The index of the attention map to use when there is several. If there only one or if there is none, set this to -1',default=[])
@@ -1280,7 +1280,7 @@ def main(argv=None):
     argreader.parser.add_argument('--luminosity',type=str2bool,metavar="BOOL",help='To plot the attention maps not with a cmap but with luminosity',default=False)
     argreader.parser.add_argument('--plot_vec_emb',type=str2bool,nargs="*",metavar="BOOL",help='To plot the vector embeddings computed using UMAP on images from test set',default=[])
 
-    argreader.parser.add_argument('--nrows',type=int,metavar="INT",help='The number of rows',default=1)
+    argreader.parser.add_argument('--nrows',type=int,metavar="INT",help='The number of rows',default=4)
 
     ######################################## Find failure cases #########################################""
 
@@ -1348,13 +1348,30 @@ def main(argv=None):
         if len(args.cluster_attention) == 0:
             args.cluster_attention = [False for _ in range(len(args.model_ids))]
         if len(args.pond_by_norm) == 0:
-            args.pond_by_norm = [False for _ in range(len(args.model_ids))]
+            args.pond_by_norm = [True for _ in range(len(args.model_ids))]
         if len(args.agregate_multi_att) == 0:
             args.agregate_multi_att = [False for _ in range(len(args.model_ids))]
         if len(args.plot_vec_emb) ==  0:
             args.plot_vec_emb = [False for _ in range(len(args.model_ids))]
         if len(args.only_norm) ==  0:
             args.only_norm = [False for _ in range(len(args.model_ids))]
+        if len(args.inverse_xy) ==  0:
+            args.inverse_xy = [False for _ in range(len(args.model_ids))]
+        if len(args.use_dropped_list) ==  0:
+            args.use_dropped_list = [False for _ in range(len(args.model_ids))]
+        if len(args.use_threshold) ==  0:
+            args.use_threshold = [False for _ in range(len(args.model_ids))]
+        if len(args.force_feat) ==  0:
+            args.force_feat = [False for _ in range(len(args.model_ids))]
+        if len(args.reduction_fact_list) ==  0:
+            args.reduction_fact_list = [False for _ in range(len(args.model_ids))]
+        if len(args.maps_inds) ==  0:
+            args.maps_inds = [-1 for _ in range(len(args.model_ids))]
+        if len(args.full_att_map) ==  0:
+            args.full_att_map = [True for _ in range(len(args.model_ids))]
+
+        print(args.model_ids)
+        print(args.use_dropped_list)
 
         plotPointsImageDatasetGrid(args.exp_id,args.image_nb,args.epoch_list,args.model_ids,args.reduction_fact_list,args.inverse_xy,args.mode,\
                                     args.class_nb,args.use_dropped_list,args.force_feat,args.full_att_map,args.use_threshold,args.maps_inds,args.plot_id,\
