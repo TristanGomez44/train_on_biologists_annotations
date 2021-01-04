@@ -304,7 +304,7 @@ def epochImgEval(model, log_interval, loader, epoch, args, writer, metricEarlySt
         loss = computeLoss(args, output, target, resDict, data,reduction="sum")
 
         # Other variables produced by the net
-        if mode == "test" and (dataset.find("emb") == -1 or (dataset.find("emb") != -1 and validBatch*data.size(0) < 640)):
+        if mode == "test" and (dataset.find("emb") == -1 or (dataset.find("emb") != -1 and validBatch*data.size(0) < 15000)):
             intermVarDict = update.catIntermediateVariables(resDict, intermVarDict, validBatch)
 
         # Harware occupation
@@ -312,7 +312,7 @@ def epochImgEval(model, log_interval, loader, epoch, args, writer, metricEarlySt
                                         batch_idx)
 
         # Metrics
-        metDictSample = metrics.binaryToMetrics(output, target, seg,resDict,comp_spars=(mode=="test"))
+        metDictSample = metrics.binaryToMetrics(output, target, seg,resDict,comp_spars=(mode=="test") and args.with_seg)
         metDictSample["Loss"] = loss.detach().data.item()
         metrDict = metrics.updateMetrDict(metrDict, metDictSample)
 
