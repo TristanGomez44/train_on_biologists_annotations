@@ -42,8 +42,7 @@ def binaryToMetrics(output,target,segmentation,resDict,comp_spars=False):
             metDict["Accuracy_{}".format(suff)] = compAccuracy(resDict[key],target)
 
     if "attMaps" in resDict.keys() and comp_spars:
-        if not segmentation is None:
-            segmentation = segmentation.clone()
+        segmentation = segmentation.clone()
 
         spar,spar_n,ios = compAttMapSparsity(resDict["attMaps"].clone(),resDict["features"].clone(),segmentation)
         metDict["Sparsity"],metDict["Sparsity Normalised"] = spar,spar_n
@@ -72,13 +71,9 @@ def compAttMapSparsity(attMaps,features=None,segmentation=None):
 
     sparsity = attMaps.mean(dim=(2,3))
 
-    if not segmentation is None:
-        factor = segmentation.size(-1)/attMaps.size(-1)
-        sparsity_norm = sparsity/((segmentation>0.5).sum(dim=(2,3)).sum(dim=1,keepdim=True)/factor).float()
-        ios = compIoS(attMaps,segmentation)
-    else:
-        sparsity_norm = torch.zeros_like(sparsity)
-        ios = torch.zeros_like(sparsity_norm)
+    factor = segmentation.size(-1)/attMaps.size(-1)
+    sparsity_norm = sparsity/((segmentation>0.5).sum(dim=(2,3)).sum(dim=1,keepdim=True)/factor).float()
+    ios = compIoS(attMaps,segmentation)
 
     return sparsity.sum().item(),sparsity_norm.sum().item(),ios.sum().item()
 
