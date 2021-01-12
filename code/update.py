@@ -50,9 +50,9 @@ def updateBestModel(metricVal,bestMetricVal,exp_id,model_id,bestEpoch,epoch,net,
 def updateHardWareOccupation(debug,benchmark,cuda,epoch,mode,exp_id,model_id,batch_idx):
     if debug or benchmark:
         if cuda:
-            updateOccupiedGPURamCSV(epoch,"train",exp_id,model_id,batch_idx)
-        updateOccupiedRamCSV(epoch,"train",exp_id,model_id,batch_idx)
-        updateOccupiedCPUCSV(epoch,"train",exp_id,model_id,batch_idx)
+            updateOccupiedGPURamCSV(epoch,mode,exp_id,model_id,batch_idx)
+        updateOccupiedRamCSV(epoch,mode,exp_id,model_id,batch_idx)
+        updateOccupiedCPUCSV(epoch,mode,exp_id,model_id,batch_idx)
 def updateOccupiedGPURamCSV(epoch,mode,exp_id,model_id,batch_idx):
 
     occRamDict = get_gpu_memory_map()
