@@ -290,6 +290,9 @@ def plotPointsImageDatasetGrid(exp_id,imgNb,epochs,model_ids,reduction_fact_list
                 if attMap.shape[0] != 1 and not onlyNorm[j]:
                     if maps_inds[j] == -1:
 
+                        if attMap.shape[0] == 4:
+                            attMap = attMap[:3]
+
                         attMap = (attMap-attMap.min())/(attMap.max()-attMap.min())
 
                         if agregateMultiAtt[j]:
@@ -359,6 +362,7 @@ def plotPointsImageDatasetGrid(exp_id,imgNb,epochs,model_ids,reduction_fact_list
                 else:
                     attMap = attMap[0][:,:,np.newaxis]
                 ptsImageCopy = torch.tensor(resize(attMap, (ptsImageCopy.shape[1],ptsImageCopy.shape[2]),anti_aliasing=True,mode="constant",order=0)).permute(2,0,1).float().unsqueeze(0)
+
             else:
 
                 ptsOrig = torch.tensor(np.load(pointPaths[j]))[inds[i]]
@@ -369,7 +373,6 @@ def plotPointsImageDatasetGrid(exp_id,imgNb,epochs,model_ids,reduction_fact_list
                     pts = (ptsOrig).long()
 
                 ptsImageCopy = F.interpolate(ptsImage.unsqueeze(0), scale_factor=1/reduction_fact_list[j]).squeeze(0)
-
                 if os.path.exists(pointWeightPaths[j]) and not forceFeat[j]:
                     if useDropped_list[j]:
                         ptsWeights = np.load(pointWeightPaths[j])[i][:,-1]
@@ -380,7 +383,6 @@ def plotPointsImageDatasetGrid(exp_id,imgNb,epochs,model_ids,reduction_fact_list
                         ptsWeights = torch.sqrt(torch.pow(ptsOrig[:,3:-1],2).sum(dim=-1)).numpy()
                     else:
                         ptsWeights = torch.sqrt(torch.pow(ptsOrig[:,3:],2).sum(dim=-1)).numpy()
-                        print("Feat",ptsWeights.min(),ptsWeights.mean(),ptsWeights.max())
 
                 if inverse_xy[j]:
                     x,y = pts[:,0],pts[:,1]
@@ -405,10 +407,10 @@ def plotPointsImageDatasetGrid(exp_id,imgNb,epochs,model_ids,reduction_fact_list
                 rf_size = compRecField("resnet18")
                 rf_kernel = compRFKernel(rf_size)
                 ptsImageCopy = F.conv_transpose2d(ptsImageCopy,rf_kernel,padding=rf_size//2)
-                ptsImageCopy = ptsImageCopy/ptsImageCopy.max()
 
             if luminosity:
                 ptsImageCopy = ptsImageCopy*imgBatch[i:i+1]
+
             else:
                 img = imgBatch[i:i+1].mean(dim=1,keepdim=True)
                 img = (img-img.min())/(img.max()-img.min())
