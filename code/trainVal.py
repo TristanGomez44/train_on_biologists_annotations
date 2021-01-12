@@ -984,6 +984,9 @@ def main(argv=None):
             trialIds = [id_value[0] for id_value in query_res]
             values = [id_value[1] for id_value in query_res]
 
+            trialIds = trialIds[:args.optuna_trial_nb]
+            values = values[:args.optuna_trial_nb]
+
             bestTrialId = trialIds[np.array(values).argmax()]
 
             curr.execute('SELECT param_name,param_value from trial_params WHERE trial_id == {}'.format(bestTrialId))
