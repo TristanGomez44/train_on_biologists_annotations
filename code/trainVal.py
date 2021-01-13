@@ -256,9 +256,7 @@ def epochImgEval(model, log_interval, loader, epoch, args, writer, metricEarlySt
     totalImgNb = 0
     allOut = None
     allGT = None
-    intermVarDict = {"fullAttMap": None, "fullFeatMapSeq": None, "fullAffTransSeq": None, "fullPointsSeq": None,"fullPointsWeightSeq":None,
-                     "fullPointsSeq_pureText": None,"fullPointsWeightSeq_pureText":None,"fullPointsSeqDropped":None,"fullPNReconstSeq": None,"fullProbMap":None,\
-                     "fullReconstSeq":None,"fullAttMap_glob": None,"fullFeatMapSeq_glob": None}
+    intermVarDict = {"fullAttMap": None, "fullFeatMapSeq": None, "fullNormSeq":None}
 
     compute_latency = args.compute_latency and mode == "test"
 
@@ -304,7 +302,8 @@ def epochImgEval(model, log_interval, loader, epoch, args, writer, metricEarlySt
         loss = computeLoss(args, output, target, resDict, data,reduction="sum")
 
         # Other variables produced by the net
-        if mode == "test" and (dataset.find("emb") == -1 or (dataset.find("emb") != -1 and validBatch*data.size(0) < 7000)):
+        if mode == "test":
+            retDict["norm"] = torch.sqrt(torch.pow(retDict["features"],2).sum(dim=1,keepdim=True))
             intermVarDict = update.catIntermediateVariables(resDict, intermVarDict, validBatch)
 
         # Harware occupation
