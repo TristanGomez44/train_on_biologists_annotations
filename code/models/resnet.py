@@ -57,7 +57,8 @@ def conv1x1Transp(in_planes, out_planes, stride=1,groups=1):
 class BasicBlock(nn.Module):
     expansion = 1
 
-    def __init__(self, inplanes, planes, stride=1, downsample=None, norm_layer=None,endRelu=True,dilation=1,groups=1):
+    def __init__(self, inplanes, planes, stride=1, downsample=None, norm_layer=None,endRelu=True,dilation=1,groups=1,\
+                    multiple_stride=False):
         super(BasicBlock, self).__init__()
         if norm_layer is None:
             norm_layer = nn.BatchNorm2d
@@ -75,9 +76,14 @@ class BasicBlock(nn.Module):
 
         self.endRelu = endRelu
 
-    def forward(self, x):
-        identity = x
+    def forward(self, inp):
 
+        if type(inp) is dict:
+            x = inp["00"]
+        else:
+            x = inp
+
+        identity = x
         out = self.conv1(x)
         out = self.bn1(out)
         out = self.relu(out)
@@ -92,7 +98,10 @@ class BasicBlock(nn.Module):
         if self.endRelu:
             out = self.relu(out)
 
-        return out
+        if type(inp) is dict:
+            return {"00":out}
+        else:
+            return out
 
 class Bottleneck(nn.Module):
     expansion = 4
