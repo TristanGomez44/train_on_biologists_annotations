@@ -303,7 +303,7 @@ def epochImgEval(model, log_interval, loader, epoch, args, writer, metricEarlySt
 
         # Other variables produced by the net
         if mode == "test":
-            retDict["norm"] = torch.sqrt(torch.pow(retDict["features"],2).sum(dim=1,keepdim=True))
+            resDict["norm"] = torch.sqrt(torch.pow(resDict["features"],2).sum(dim=1,keepdim=True))
             intermVarDict = update.catIntermediateVariables(resDict, intermVarDict, validBatch)
 
         # Harware occupation
@@ -657,7 +657,8 @@ def init_process(args, rank, size, fn, backend='gloo'):
 
 def initMasterNet(args):
     config = configparser.ConfigParser()
-    config.read(args.m_conf_path)
+
+    config.read("../models/{}/{}.ini".format(args.exp_id,args.m_model_id))
     args_master = Bunch(config["default"])
 
     argDic = args.__dict__
@@ -677,8 +678,16 @@ def initMasterNet(args):
             mastDic[arg] = argDic[arg]
 
     master_net = modelBuilder.netBuilder(args_master)
-    params = torch.load(args.m_net_path, map_location="cpu" if not args.cuda else None)
+
+    best_paths = glob.glob("../models/{}/model{}_best_epoch*".format(args.exp_id,args.m_model_id))
+    if len(best_paths) == 0:
+        raise ValueError("Missing best path for master")
+    if len(best_paths) > 1:
+        raise ValueError("Too many best path for master")
+    bestPath = best_paths[0]
+    params = torch.load(bestPath, map_location="cpu" if not args.cuda else None)
     master_net.load_state_dict(params, strict=True)
+
     master_net.eval()
     return master_net
 
