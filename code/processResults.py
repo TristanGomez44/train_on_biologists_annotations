@@ -52,7 +52,7 @@ import io
 import skimage
 
 import scipy.stats
-
+import formatData
 
 def plotPointsImageDataset(imgNb,redFact,plotDepth,args):
 
@@ -133,7 +133,7 @@ def compRecField(architecture):
 def plotPointsImageDatasetGrid(exp_id,imgNb,epochs,model_ids,reduction_fact_list,inverse_xy,mode,nbClass,\
                                 useDropped_list,forceFeat,fullAttMap,threshold,maps_inds,plotId,luminosity,\
                                 receptive_field,cluster,cluster_attention,pond_by_norm,gradcam,nrows,correctness,\
-                                agregateMultiAtt,plotVecEmb,onlyNorm,args):
+                                agregateMultiAtt,plotVecEmb,onlyNorm,class_index,args):
 
     if (correctness == "True" or correctness == "False") and len(model_ids)>1:
         raise ValueError("correctness can only be used with a single model.")
@@ -188,7 +188,7 @@ def plotPointsImageDatasetGrid(exp_id,imgNb,epochs,model_ids,reduction_fact_list
         #imgBatch = torch.cat([testDataset[ind][0].unsqueeze(0) for ind in inds],dim=0)
     else:
         imgLoader,testDataset = load_data.buildTestLoader(args,mode,shuffle=False)
-
+        print(correctness)
         if (correctness == "True" or correctness == "False"):
             targPreds = np.genfromtxt("../results/{}/{}_epoch{}.csv".format(exp_id,model_ids[0],epochs[0]),delimiter=",")[-len(testDataset):]
             targ = targPreds[:,0]
@@ -210,15 +210,31 @@ def plotPointsImageDatasetGrid(exp_id,imgNb,epochs,model_ids,reduction_fact_list
                 else:
                     indAtt = len(np.load(pointPaths[i],mmap_mode="r"))
                     indFeat = len(np.load(pointPaths[i].replace("attMaps","features"),mmap_mode="r"))
-
                     if maxInd > indAtt:
                         maxInd = indAtt
                     if maxInd > indFeat:
                         maxInd = indFeat
 
-            #maxInd = min(len(np.load(pointPaths[0])),640)
-            inds = torch.randint(maxInd,size=(imgNb,))
-            #inds = torch.arange(imgNb)
+            #Looking for the image at which the class we want begins
+            if not class_index is None:
+                startInd = 0
+
+                for ind in range(class_index):
+                    print(ind,formatData.getRevLab()[ind])
+                    className = formatData.getRevLab()[ind]
+                    startInd += len(glob.glob("../data/{}/{}/*".format(args.dataset_test,className)))
+
+                className = formatData.getRevLab()[class_index]
+                print(class_index,className)
+                endInd = startInd + len(glob.glob("../data/{}/{}/*".format(args.dataset_test,className)))
+            else:
+                startInd = 0
+                endInd = maxInd
+
+            inds = torch.randint(startInd,endInd,size=(imgNb,))
+
+            #In case there is not enough images
+            imgNb = min(len(inds),imgNb)
 
         if args.shuffle_test_set:
             perm = load_data.RandomSampler(testDataset,args.seed).randPerm
@@ -261,7 +277,15 @@ def plotPointsImageDatasetGrid(exp_id,imgNb,epochs,model_ids,reduction_fact_list
 
     fnt = ImageFont.truetype("arial.ttf", 40)
 
+    pred = np.genfromtxt("../results/{}/{}_epoch{}_test.csv".format(exp_id,model_ids[0],epochs[0]),delimiter=",")[1:,1:].argmax(axis=1)
+    class_aSort = list(formatData.labelDict.keys())
+    class_aSort.sort()
+    class_realSort = [formatData.getRevLab()[i] for i in range(len(class_aSort))]
+
     for i in range(imgNb):
+
+        print("i",i)
+        print("inds",inds[i])
 
         img = imgBatch[i:i+1]
 
@@ -269,8 +293,15 @@ def plotPointsImageDatasetGrid(exp_id,imgNb,epochs,model_ids,reduction_fact_list
 
         imgPIL = Image.fromarray((255*img[0].permute(1,2,0).numpy()).astype("uint8"))
         imgDraw = ImageDraw.Draw(imgPIL)
-        imgDraw.rectangle([(0,0), (50, 40)],fill="white")
-        imgDraw.text((0,0), str(i+1), font=fnt,fill=(0,0,0))
+        imgDraw.rectangle([(0,0), (220, 40)],fill="white")
+
+        imgDraw.text((0,0), str(i+1)+" ", font=fnt,fill=(0,0,0))
+        if class_aSort[pred[inds[i]]] == class_realSort[testDataset[inds[i]][1]]:
+            imgDraw.text((50,0), class_aSort[pred[inds[i]]], font=fnt,fill=(0,230,0))
+        else:
+            imgDraw.text((50,0), class_aSort[pred[inds[i]]], font=fnt,fill=(255,0,0))
+            imgDraw.text((150,0), "("+class_realSort[testDataset[inds[i]][1]]+")", font=fnt,fill=(0,0,0))
+
         img = torch.tensor(np.array(imgPIL)).permute(2,0,1).unsqueeze(0).float()/255
 
         if gridImage is None:
@@ -1229,6 +1260,37 @@ def repVSGlob(rep_vs_glob):
     plt.bar(np.arange(len(glob_weig))+0.5,glob_weig,width=0.45,color="yellow")
     plt.savefig("../vis/rep_vs_glob.png")
 
+def effPlot():
+    idRoot_dic = {"clusRed":"BR-CNN","bilRed":"B-CNN"}
+    idRoot_list = list(idRoot_dic.keys())
+    resSize = ["18","34","101","152"]
+
+    latency_csv = np.genfromtxt("latency.csv",delimiter=",",dtype=str)[1:]
+    print(latency_csv)
+    latency_dic = {row[0]+"-"+row[1].replace("resnet",""):(float(row[3]),float(row[4])) for row in latency_csv}
+    print(latency_dic)
+    perfList,latList = [],[]
+
+    plt.figure()
+
+    for idRoot in idRoot_list:
+        perfList,latList = [],[]
+
+        model_ids = [idRoot+"-"+resSize[i] for i in range(len(resSize))]
+
+        paths = []
+
+        for id in model_ids:
+            perfList.append(np.genfromtxt(glob.glob("../results/CUB10/model{}_epoch*test*".format(id))[0],delimiter=",")[-1,0])
+            latList.append(latency_dic[id][0])
+
+        plt.plot(latList,perfList,"-*",label=idRoot_dic[idRoot])
+
+    plt.legend()
+    plt.xlabel("Latency (s)")
+    plt.ylabel("Accuracy")
+    plt.savefig("../vis/CUB10/eff.png")
+
 def main(argv=None):
 
     #Getting arguments from config file and command line
@@ -1283,6 +1345,7 @@ def main(argv=None):
     argreader.parser.add_argument('--plot_vec_emb',type=str2bool,nargs="*",metavar="BOOL",help='To plot the vector embeddings computed using UMAP on images from test set',default=[])
 
     argreader.parser.add_argument('--nrows',type=int,metavar="INT",help='The number of rows',default=4)
+    argreader.parser.add_argument('--class_index',type=int,metavar="INT",help='The class index to show')
 
     ######################################## Find failure cases #########################################""
 
@@ -1326,6 +1389,10 @@ def main(argv=None):
     ###################################### Representative vectors vs global vector ##############################
 
     argreader.parser.add_argument('--rep_vs_glob',type=str,metavar="PATH",help='To plot the importance of the representative vector features vs the ones from the global vector.')
+
+    ######################################### Efficiency plot ########################
+
+    argreader.parser.add_argument('--eff_plot',action="store_true",help='Efficiency plot')
 
     argreader = load_data.addArgs(argreader)
 
@@ -1378,7 +1445,7 @@ def main(argv=None):
         plotPointsImageDatasetGrid(args.exp_id,args.image_nb,args.epoch_list,args.model_ids,args.reduction_fact_list,args.inverse_xy,args.mode,\
                                     args.class_nb,args.use_dropped_list,args.force_feat,args.full_att_map,args.use_threshold,args.maps_inds,args.plot_id,\
                                     args.luminosity,args.receptive_field,args.cluster,args.cluster_attention,args.pond_by_norm,args.gradcam,args.nrows,\
-                                    args.correctness,args.agregate_multi_att,args.plot_vec_emb,args.only_norm,args)
+                                    args.correctness,args.agregate_multi_att,args.plot_vec_emb,args.only_norm,args.class_index,args)
     if args.plot_prob_maps:
         plotProbMaps(args.image_nb,args,args.norm)
     if args.list_best_pred:
@@ -1436,5 +1503,7 @@ def main(argv=None):
         importancePlot(args.exp_id,args.model_id,debug=args.debug)
     if args.rep_vs_glob:
         repVSGlob(args.rep_vs_glob)
+    if args.eff_plot:
+        effPlot()
 if __name__ == "__main__":
     main()
