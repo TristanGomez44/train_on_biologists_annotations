@@ -686,6 +686,16 @@ def initMasterNet(args):
         raise ValueError("Too many best path for master")
     bestPath = best_paths[0]
     params = torch.load(bestPath, map_location="cpu" if not args.cuda else None)
+
+    for key in params:
+        if key.find("firstModel.attention.1.weight") != -1:
+
+            if params[key].shape[0] < master_net.state_dict()[key].shape[0]:
+                padd = torch.zeros(1,params[key].size(1),params[key].size(2),params[key].size(3)).to(params[key].device)
+                params[key] = torch.cat((params[key],padd),dim=0)
+            elif params[key].shape[0] > master_net.state_dict()[key].shape[0]:
+                params[key] = params[key][:master_net.state_dict()[key].shape[0]]
+
     master_net.load_state_dict(params, strict=True)
 
     master_net.eval()
