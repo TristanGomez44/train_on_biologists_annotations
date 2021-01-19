@@ -14,6 +14,12 @@ import subprocess
 import sys
 labelDict = {"tPB2":0,"tPNa":1,"tPNf":2,"t2":3,"t3":4,"t4":5,"t5":6,"t6":7,"t7":8,"t8":9,"t9+":10,"tM":11,"tSB":12,"tB":13,"tEB":14,"tHB":15}
 
+def getRevLab():
+	rev = {}
+	for key in labelDict:
+		rev[labelDict[key]] = key
+	return rev
+
 def getNoAnnotVideos():
 	return np.genfromtxt("../data/noAnnot.csv",dtype=str,delimiter=",")
 

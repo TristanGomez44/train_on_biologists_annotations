@@ -9,6 +9,7 @@ from torch.utils.data import Dataset
 import torchvision.transforms as transforms
 import numpy as np
 import torch
+import formatData
 
 IMG_EXTENSIONS = ('.jpg', '.jpeg', '.png', '.ppm', '.bmp', '.pgm', '.tif', '.tiff', '.webp')
 
@@ -47,7 +48,12 @@ class FineGrainedDataset(Dataset):
         self.apply_random_crop = apply_random_crop
 
         classes = [d.name for d in os.scandir(self.root) if d.is_dir()]
-        classes.sort()
+
+        if root.find("emb") != -1:
+            classes.sort(key = lambda x:formatData.labelDict[x])
+        else:
+            classes.sort()
+
         class_to_idx = {cls_name: i for i, cls_name in enumerate(classes)}
 
         instances = []
