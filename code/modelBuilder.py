@@ -526,7 +526,7 @@ class LinearSecondModel(SecondModel):
         return retDict
 
 def getResnetFeat(backbone_name, backbone_inplanes,deeplabv3_outchan):
-    if backbone_name == "resnet50" or backbone_name == "resnet101" or backbone_name == "resnet151":
+    if backbone_name == "resnet50" or backbone_name == "resnet101" or backbone_name == "resnet152":
         nbFeat = backbone_inplanes * 4 * 2 ** (4 - 1)
     elif backbone_name.find("deeplab") != -1:
         nbFeat = deeplabv3_outchan
@@ -823,8 +823,7 @@ def addArgs(argreader):
                                   help="To apply dilation at the begining of blocks")
 
     argreader.parser.add_argument('--master_net', type=args.str2bool, help='To distill a master network into the trained network.')
-    argreader.parser.add_argument('--m_net_path', type=str, help='The path to the master network')
-    argreader.parser.add_argument('--m_conf_path', type=str, help='The path to the master network config file.')
+    argreader.parser.add_argument('--m_model_id', type=str, help='The model id of the master network')
     argreader.parser.add_argument('--kl_interp', type=float, help='If set to 0, will use regular target, if set to 1, will only use master net target')
     argreader.parser.add_argument('--kl_temp', type=float, help='KL temperature.')
 
