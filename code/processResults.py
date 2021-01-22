@@ -14,6 +14,7 @@ plt.switch_backend('agg')
 
 from sklearn.manifold import TSNE
 import sklearn
+import matplotlib
 import matplotlib.cm as cm
 import matplotlib.patches as patches
 import cv2
@@ -1263,18 +1264,18 @@ def repVSGlob(rep_vs_glob):
 def effPlot():
     idRoot_dic = {"clusRed":"BR-CNN","bilRed":"B-CNN"}
     idRoot_list = list(idRoot_dic.keys())
-    resSize = ["18","34","101","152"]
+    resSize = ["18","34","50","101","152"]
 
     latency_csv = np.genfromtxt("latency.csv",delimiter=",",dtype=str)[1:]
-    print(latency_csv)
     latency_dic = {row[0]+"-"+row[1].replace("resnet",""):(float(row[3]),float(row[4])) for row in latency_csv}
-    print(latency_dic)
-    perfList,latList = [],[]
 
-    plt.figure()
+    memory_csv = np.genfromtxt("memory.csv",delimiter=",",dtype=str)[1:]
+    memory_dic = {row[0]+"-"+row[1].replace("resnet",""):(int(row[2])) for row in memory_csv}
 
-    for idRoot in idRoot_list:
-        perfList,latList = [],[]
+    markerList = ["*","o"]
+
+    for j,idRoot in enumerate(idRoot_list):
+        perfList,latList,memList = [],[],[]
 
         model_ids = [idRoot+"-"+resSize[i] for i in range(len(resSize))]
 
@@ -1283,13 +1284,39 @@ def effPlot():
         for id in model_ids:
             perfList.append(np.genfromtxt(glob.glob("../results/CUB10/model{}_epoch*test*".format(id))[0],delimiter=",")[-1,0])
             latList.append(latency_dic[id][0])
+            memList.append(memory_dic[id])
 
-        plt.plot(latList,perfList,"-*",label=idRoot_dic[idRoot])
+        plt.figure(1)
+        plt.plot(latList,perfList,"-{}".format(markerList[j]),label=idRoot_dic[idRoot],markersize=14)
 
-    plt.legend()
-    plt.xlabel("Latency (s)")
-    plt.ylabel("Accuracy")
-    plt.savefig("../vis/CUB10/eff.png")
+        plt.figure(2)
+        plt.plot(memList,perfList,"-{}".format(markerList[j]),label=idRoot_dic[idRoot],markersize=14)
+
+    #params = {'axes.labelsize': 20,'axes.titlesize':20,\
+    #          'legend.fontsize': 20, 'xtick.labelsize': 20,\
+    #          'ytick.labelsize': 20}
+    #matplotlib.rcParams.update(params)
+    size = 20
+
+    fig = plt.figure(1)
+    fig.set_size_inches(5, 5.5)
+    plt.legend(fontsize=size)
+    plt.yticks(np.arange(0.78,0.87,0.01),np.arange(78,87,1),fontsize=size)
+    plt.xticks(np.arange(0.1,0.5,0.1),[round(f,2) for f in np.arange(0.1,0.5,0.1)],fontsize=size)
+    plt.xlabel("Latency (s)",fontsize=size)
+    plt.ylabel("Accuracy",fontsize=size)
+    plt.tight_layout()
+    plt.savefig("../vis/CUB10/eff_latency.png")
+
+    fig = plt.figure(2)
+    fig.set_size_inches(5, 5.5)
+    plt.legend(fontsize=size)
+    plt.yticks(np.arange(0.78,0.87,0.01),np.arange(78,87,1),fontsize=size)
+    plt.xticks(np.arange(50,300,50),np.arange(50,300,50),fontsize=size)
+    plt.xlabel("Maximum batch size",fontsize=size)
+    plt.ylabel("Accuracy",fontsize=size)
+    plt.tight_layout()
+    plt.savefig("../vis/CUB10/eff_memory.png")
 
 def main(argv=None):
 
