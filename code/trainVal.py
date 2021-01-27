@@ -729,6 +729,9 @@ def run(args,trial=None):
             args.kl_temp = trial.suggest_float("kl_temp", 1, 21, step=5)
             args.kl_interp = trial.suggest_float("kl_interp", 0.1, 1, step=0.1)
 
+        if args.opt_att_maps_nb:
+            args.resnet_bil_nb_parts = trial.suggest_int("resnet_bil_nb_parts", 3, 64, log=True)
+
     trainLoader, trainDataset = load_data.buildTrainLoader(args,withSeg=args.with_seg,reprVec=args.repr_vec)
     valLoader,_ = load_data.buildTestLoader(args, "val",withSeg=args.with_seg,reprVec=args.repr_vec)
 
@@ -914,6 +917,8 @@ def main(argv=None):
     argreader.parser.add_argument('--optuna', type=str2bool, help='To run a hyper-parameter study')
     argreader.parser.add_argument('--optuna_trial_nb', type=int, help='The number of hyper-parameter trial to run.')
     argreader.parser.add_argument('--opt_data_aug', type=str2bool, help='To optimise data augmentation hyper-parameter.')
+    argreader.parser.add_argument('--opt_att_maps_nb', type=str2bool, help='To optimise the number of attention maps.')
+
     argreader.parser.add_argument('--max_batch_size', type=int, help='To maximum batch size to test.')
 
     argreader = addInitArgs(argreader)
