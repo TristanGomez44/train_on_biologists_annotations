@@ -5,19 +5,15 @@ import glob
 import args
 from args import ArgReader
 from args import str2bool
-from args import str2StrList
 
 import numpy as np
 import torch
 from torch.nn import functional as F
 from tensorboardX import SummaryWriter
 
-import torch.backends.cudnn as cudnn
-
 torch.backends.cudnn.benchmark = True
 torch.backends.cudnn.enabled = True
 
-import matplotlib.cm as cm
 import matplotlib.pyplot as plt
 
 plt.switch_backend('agg')
@@ -27,12 +23,10 @@ import load_data
 import metrics
 import utils
 import update
-import warnings
 
 import torch.distributed as dist
 from torch.multiprocessing import Process
 import time
-import gradcam
 
 import configparser
 
@@ -41,15 +35,13 @@ import sqlite3
 
 from shutil import copyfile
 
-import torchvision
-
 import gc
 
 OPTIM_LIST = ["Adam", "AMSGrad", "SGD"]
 
 class Bunch(object):
-  def __init__(self, adict):
-    self.__dict__.update(adict)
+    def __init__(self, adict):
+        self.__dict__.update(adict)
 
 def epochSeqTr(model, optim, log_interval, loader, epoch, args, writer, **kwargs):
     ''' Train a model during one epoch
@@ -196,32 +188,6 @@ def normMap(map,minMax=False):
 
     return map
 
-def aux_model_loss_term(aux_model_weight, resDict, data, target):
-    return aux_model_weight * F.cross_entropy(resDict["auxPred"], target)
-
-def zoom_loss_term(zoom_nll_weight, resDict, data, target):
-    return zoom_nll_weight * F.cross_entropy(resDict["pred_zoom"], target)
-
-def bil_backgr_term(bil_backgr_weight,bil_backgr_thres,resDict):
-    size = resDict["attMaps"][0,0].size()
-    pixelNb = size[0]*size[1]
-    mean = resDict["attMaps"][:,-1].mean(dim=-1).mean(dim=-1)
-    return -bil_backgr_weight*((mean<bil_backgr_thres)*mean).mean()
-
-def supervisedSegTerm(resDict,pred_score,attentionAct,gt_segMap):
-
-    if not pred_score:
-        max = 10000
-    else:
-        max = 1
-
-    gt_segMap = (gt_segMap.mean(dim=1,keepdim=True)>0.5).float()
-    segMap = torch.clamp(resDict["attMaps"]/max,0.001,0.999)
-    segMap = F.interpolate(segMap,size=(gt_segMap.size(-1)))
-
-    term = torch.nn.functional.binary_cross_entropy(segMap, gt_segMap)
-    return term
-
 def average_gradients(model):
     size = float(dist.get_world_size())
     for param in model.parameters():
@@ -246,12 +212,7 @@ def epochImgEval(model, log_interval, loader, epoch, args, writer, metricEarlySt
     if args.debug or args.benchmark:
         start_time = time.time()
 
-    dataset = getattr(args,"dataset_{}".format(mode))
-
     model.eval()
-
-    if args.bil_clu_deconv:
-        model.firstModel.updateDeconv()
 
     print("Epoch", epoch, " : {}".format(mode))
 
@@ -259,8 +220,6 @@ def epochImgEval(model, log_interval, loader, epoch, args, writer, metricEarlySt
 
     validBatch = 0
     totalImgNb = 0
-    allOut = None
-    allGT = None
     intermVarDict = {"fullAttMap": None, "fullFeatMapSeq": None, "fullNormSeq":None}
 
     compute_latency = args.compute_latency and mode == "test"
@@ -787,9 +746,6 @@ def run(args,trial=None):
     if not args.only_test and not args.grad_cam:
         while epoch < args.epochs + 1 and worseEpochNb < args.max_worse_epoch_nb:
 
-            if args.bil_clus_soft_sched:
-                update.updateBilClusSoftmSched(net,epoch,args.epochs)
-
             kwargsTr["epoch"], kwargsVal["epoch"] = epoch, epoch
             kwargsTr["model"], kwargsVal["model"] = net, net
 
@@ -849,51 +805,11 @@ def run(args,trial=None):
                 kwargsTest["model"] = net
                 kwargsTest["epoch"] = bestEpoch
 
-                if args.bil_clus_soft_sched:
-                    update.updateBilClusSoftmSched(net,args.epochs,args.epochs)
-
                 with torch.no_grad():
                     testFunc(**kwargsTest)
 
                 with open("../results/{}/test_done.txt".format(args.exp_id),"a") as text_file:
                     print("{},{}".format(args.model_id,bestEpoch),file=text_file)
-
-        if args.grad_cam:
-            args.val_batch_size = 1
-            testLoader,_ = load_data.buildTestLoader(args, "test",withSeg=args.with_seg)
-            net = preprocessAndLoadParams("../models/{}/model{}_best_epoch{}".format(args.exp_id, args.model_id, bestEpoch),args.cuda,net,args.strict_init)
-            resnet = net.firstModel.featMod
-            resnet.fc = net.secondModel.linLay
-
-            grad_cam = gradcam.GradCam(model=resnet, feature_module=resnet.layer4, target_layer_names=["1"], use_cuda=args.cuda)
-
-            allMask = None
-            latency_list = []
-            batchSize_list = []
-            for batch_idx, batch in enumerate(testLoader):
-                data,target = batch[:2]
-                if (batch_idx % args.log_interval == 0):
-                    print("\t", batch_idx * len(data), "/", len(testLoader.dataset))
-
-                if args.cuda:
-                    data = data.cuda()
-
-                lat_start_time = time.time()
-                mask = grad_cam(data).detach().cpu()
-                latency_list.append(time.time()-lat_start_time)
-                batchSize_list.append(data.size(0))
-
-                if allMask is None:
-                    allMask = mask
-                else:
-                    allMask = torch.cat((allMask,mask),dim=0)
-
-            np.save("../results/{}/gradcam_{}_epoch{}_test.npy".format(args.exp_id,args.model_id,bestEpoch),allMask.detach().cpu().numpy())
-
-            latency_list = np.array(latency_list)[:,np.newaxis]
-            batchSize_list = np.array(batchSize_list)[:,np.newaxis]
-            latency_list = np.concatenate((latency_list,batchSize_list),axis=1)
-            np.savetxt("../results/{}/latencygradcam_{}_epoch{}.csv".format(args.exp_id,args.model_id,bestEpoch),latency_list,header="latency,batch_size",delimiter=",")
 
     else:
         oldPath = "../models/{}/model{}_best_epoch{}".format(args.exp_id,args.model_id, bestEpoch)

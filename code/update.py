@@ -29,9 +29,6 @@ def get_gpu_memory_map():
     gpu_memory_map = dict(zip(range(len(gpu_memory)), gpu_memory))
     return gpu_memory_map
 
-def updateBilClusSoftmSched(net,epoch,max_epoch):
-    net.softmSched_interpCoeff = epoch*1.0/max_epoch
-
 def updateBestModel(metricVal,bestMetricVal,exp_id,model_id,bestEpoch,epoch,net,isBetter,worseEpochNb):
 
     if isBetter(metricVal,bestMetricVal):
@@ -107,7 +104,6 @@ def updateTimeCSV(epoch,mode,exp_id,model_id,totalTime,batch_idx):
 def catIntermediateVariables(visualDict,intermVarDict,nbVideos):
 
     intermVarDict["fullAttMap"] = catMap(visualDict,intermVarDict["fullAttMap"],key="attMaps")
-    #intermVarDict["fullFeatMapSeq"] = catMap(visualDict,intermVarDict["fullFeatMapSeq"],key="features")
     intermVarDict["fullNormSeq"] = catMap(visualDict,intermVarDict["fullNormSeq"],key="norm")
 
     return intermVarDict
@@ -115,7 +111,6 @@ def catIntermediateVariables(visualDict,intermVarDict,nbVideos):
 def saveIntermediateVariables(intermVarDict,exp_id,model_id,epoch,mode="val"):
 
     intermVarDict["fullAttMap"] = saveMap(intermVarDict["fullAttMap"],exp_id,model_id,epoch,mode,key="attMaps")
-    #intermVarDict["fullFeatMapSeq"] = saveMap(intermVarDict["fullFeatMapSeq"],exp_id,model_id,epoch,mode,key="features")
     intermVarDict["fullNormSeq"] = saveMap(intermVarDict["fullNormSeq"],exp_id,model_id,epoch,mode,key="norm")
 
     return intermVarDict
@@ -139,17 +134,3 @@ def saveMap(fullMap,exp_id,model_id,epoch,mode,key="attMaps"):
         np.save("../results/{}/{}_{}_epoch{}_{}.npy".format(exp_id,key,model_id,epoch,mode),fullMap.numpy())
         fullMap = None
     return fullMap
-
-def updateSmoothKer(net,epoch,step,startSize,startEpoch):
-
-    if epoch % step == 0 or epoch==startEpoch:
-
-        size = startSize-2*(epoch//step)
-        if size < 1:
-            size = 1
-
-        net.secondModel.setSmoothKer(size)
-    else:
-        size = net.secondModel.smoothKer.size(-1)
-
-    return size
