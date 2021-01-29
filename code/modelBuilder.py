@@ -827,4 +827,8 @@ def addArgs(argreader):
     argreader.parser.add_argument('--kl_interp', type=float, help='If set to 0, will use regular target, if set to 1, will only use master net target')
     argreader.parser.add_argument('--kl_temp', type=float, help='KL temperature.')
 
+    argreader.parser.add_argument('--transfer_att_maps', type=args.str2bool, help='To also transfer attention maps during distillation.')
+    argreader.parser.add_argument('--att_weights', type=float, help='Attention map transfer weight.')
+    argreader.parser.add_argument('--att_pow', type=int, help='The power at which to compute the difference between the maps.')
+
     return argreader

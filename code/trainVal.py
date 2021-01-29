@@ -95,19 +95,19 @@ def epochSeqTr(model, optim, log_interval, loader, epoch, args, writer, **kwargs
             if args.with_seg:
                 seg = seg.cuda()
 
-        if args.very_big_images:
-            output,resDict,loss = subBatchTrain(args,data,target,model)
-        else:
-            resDict = model(data)
-            output = resDict["pred"]
+        resDict = model(data)
+        output = resDict["pred"]
 
-            if args.master_net:
-                with torch.no_grad():
-                    resDict["master_net_pred"] = kwargs["master_net"](data)["pred"]
+        if args.master_net:
+            with torch.no_grad():
+                mastDict = kwargs["master_net"](data)
+                resDict["master_net_pred"] = mastDict["pred"]
+                resDict["master_net_attMaps"] = mastDict["attMaps"]
+                resDict["master_net_features"] = mastDict["features"]
 
-            loss = computeLoss(args, output, target, resDict, data)
-            loss.backward()
-            loss = loss.detach().data.item()
+        loss = kwargs["lossFunc"](output, target, resDict, data).mean()
+        loss.backward()
+        loss = loss.detach().data.item()
 
         if args.distributed:
             average_gradients(model)
@@ -139,6 +139,16 @@ def epochSeqTr(model, optim, log_interval, loader, epoch, args, writer, **kwargs
             totalTime = time.time() - start_time
             update.updateTimeCSV(epoch, "train", args.exp_id, args.model_id, totalTime, batch_idx)
 
+class Loss(torch.nn.Module):
+
+    def __init__(self,args,reduction="mean"):
+        super(Loss, self).__init__()
+        self.args = args
+        self.reduction = reduction
+
+    def forward(self,output,target,resDict,data):
+        return computeLoss(self.args,output, target, resDict, data,reduction=self.reduction).unsqueeze(0)
+
 def computeLoss(args, output, target, resDict, data,reduction="mean"):
 
     if not args.master_net:
@@ -147,6 +157,9 @@ def computeLoss(args, output, target, resDict, data,reduction="mean"):
         kl = F.kl_div(F.log_softmax(output/args.kl_temp, dim=1),F.softmax(resDict["master_net_pred"]/args.kl_temp, dim=1),reduction="batchmean")
         ce = F.cross_entropy(output, target)
         loss = args.nll_weight*(kl*args.kl_interp*args.kl_temp*args.kl_temp+ce*(1-args.kl_interp))
+
+        if args.transfer_att_maps:
+            loss += args.att_weights*computeAttDiff(resDict["attMaps"],resDict["features"],resDict["master_net_attMaps"],resDict["master_net_features"],args.att_pow)
 
     nbTerms = 1
     for key in resDict.keys():
@@ -158,38 +171,30 @@ def computeLoss(args, output, target, resDict, data,reduction="mean"):
 
     return loss
 
-def subBatchTrain(args,data,target,model):
-    meanLoss=0
-    batch_size = data.size(0)
 
-    splitSize = [args.max_sub_batch_size for _ in range(batch_size//args.max_sub_batch_size)]
+def computeAttDiff(studMaps,studFeat,teachMaps,teachFeat,attPow):
 
-    if batch_size%args.max_sub_batch_size > 0:
-        splitSize.append(batch_size%args.max_sub_batch_size)
+    studNorm = torch.sqrt(torch.pow(studFeat,2).sum(dim=1,keepdim=True))
+    teachNorm = torch.sqrt(torch.pow(teachFeat,2).sum(dim=1,keepdim=True))
 
-    data_split = torch.split(data, splitSize, dim=0)
-    target_split = torch.split(target,splitSize,dim=0)
-    if args.with_seg:
-        seg_split = torch.split(seg,splitSize,dim=0)
+    studMaps = normMap(studMaps,minMax=True)*normMap(studNorm)
+    teachMaps = normMap(teachMaps,minMax=True)*normMap(teachNorm)
 
-    resDict_total = None
-    for l,data in enumerate(data_split):
-        resDict = model(data)
-        if resDict_total is None:
-            resDict_total = resDict
-        else:
-            for key in resDict:
-                if key == "pred" or key == "attMaps":
-                    resDict_total[key] = torch.cat((resDict_total[key],resDict[key]),dim=0)
+    teachMaps = F.interpolate(teachMaps,size=(studMaps.size(-2),studMaps.size(-1)),mode='bilinear',align_corners=True)
 
-        loss = computeLoss(args, resDict["pred"], target_split[l], resDict, data)
-        loss.backward()
+    term = torch.pow(torch.pow(torch.abs(teachMaps-studMaps),attPow).sum(dim=(2,3)),1.0/attPow).mean()
+    return term
 
-        meanLoss += loss.detach().data.item()*len(data)*1.0/batch_size
+def normMap(map,minMax=False):
+    if not minMax:
+        max = map.max(dim=-1,keepdim=True)[0].max(dim=-2,keepdim=True)[0].max(dim=-3,keepdim=True)[0]
+        map = map/max
+    else:
+        max = map.max(dim=-1,keepdim=True)[0].max(dim=-2,keepdim=True)[0].max(dim=-3,keepdim=True)[0]
+        min = map.min(dim=-1,keepdim=True)[0].min(dim=-2,keepdim=True)[0].min(dim=-3,keepdim=True)[0]
+        map = (map-min)/(max-min)
 
-    resDict = resDict_total
-    output = resDict["pred"]
-    return output,resDict,meanLoss
+    return map
 
 def aux_model_loss_term(aux_model_weight, resDict, data, target):
     return aux_model_weight * F.cross_entropy(resDict["auxPred"], target)
@@ -296,10 +301,13 @@ def epochImgEval(model, log_interval, loader, epoch, args, writer, metricEarlySt
         output = resDict["pred"]
 
         if args.master_net:
-            resDict["master_net_pred"] = kwargs["master_net"](data)["pred"]
+            mastDict = kwargs["master_net"](data)
+            resDict["master_net_pred"] = mastDict["pred"]
+            resDict["master_net_attMaps"] = mastDict["attMaps"]
+            resDict["master_net_features"] = mastDict["features"]
 
         # Loss
-        loss = computeLoss(args, output, target, resDict, data,reduction="sum")
+        loss = kwargs["lossFunc"](output, target, resDict, data).mean()
 
         # Other variables produced by the net
         if mode == "test":
@@ -699,6 +707,7 @@ def initMasterNet(args):
     master_net.load_state_dict(params, strict=True)
 
     master_net.eval()
+
     return master_net
 
 def run(args,trial=None):
@@ -729,11 +738,15 @@ def run(args,trial=None):
             args.kl_temp = trial.suggest_float("kl_temp", 1, 21, step=5)
             args.kl_interp = trial.suggest_float("kl_interp", 0.1, 1, step=0.1)
 
+            if args.transfer_att_maps:
+                args.att_weights = trial.suggest_float("att_weights",0.001,4,log=True)
+                args.att_pow = trial.suggest_int("att_pow",1,3,step=1)
+
         if args.opt_att_maps_nb:
             args.resnet_bil_nb_parts = trial.suggest_int("resnet_bil_nb_parts", 3, 64, log=True)
 
-    trainLoader, trainDataset = load_data.buildTrainLoader(args,withSeg=args.with_seg,reprVec=args.repr_vec)
-    valLoader,_ = load_data.buildTestLoader(args, "val",withSeg=args.with_seg,reprVec=args.repr_vec)
+    trainLoader,_ = load_data.buildTrainLoader(args,withSeg=args.with_seg,reprVec=args.repr_vec)
+    valLoader,_ = load_data.buildTestLoader(args,"val",withSeg=args.with_seg,reprVec=args.repr_vec)
 
     # Building the net
     net = modelBuilder.netBuilder(args)
@@ -765,6 +778,11 @@ def run(args,trial=None):
     if args.master_net:
         kwargsTr["master_net"] = initMasterNet(args)
         kwargsVal["master_net"] = kwargsTr["master_net"]
+
+    lossFunc = Loss(args,reduction="mean")
+    if args.multi_gpu:
+        lossFunc = torch.nn.DataParallel(lossFunc)
+    kwargsTr["lossFunc"],kwargsVal["lossFunc"] = lossFunc,lossFunc
 
     if not args.only_test and not args.grad_cam:
         while epoch < args.epochs + 1 and worseEpochNb < args.max_worse_epoch_nb:
