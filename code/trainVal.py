@@ -628,17 +628,20 @@ def initMasterNet(args):
     config.read("../models/{}/{}.ini".format(args.exp_id,args.m_model_id))
     args_master = Bunch(config["default"])
 
+    args_master.multi_gpu = args.multi_gpu
+
     argDic = args.__dict__
     mastDic = args_master.__dict__
 
     for arg in mastDic:
-        if not argDic[arg] is None:
-            if not type(argDic[arg]) is bool:
-                mastDic[arg] = type(argDic[arg])(mastDic[arg])
+        if arg in argDic:
+            if not argDic[arg] is None:
+                if not type(argDic[arg]) is bool:
+                    mastDic[arg] = type(argDic[arg])(mastDic[arg])
+                else:
+                    mastDic[arg] = str2bool(mastDic[arg]) if arg != "multi_gpu" else mastDic[arg]
             else:
-                mastDic[arg] = str2bool(mastDic[arg])
-        else:
-            mastDic[arg] = None
+                mastDic[arg] = None
 
     for arg in argDic:
         if not arg in mastDic:
@@ -647,23 +650,26 @@ def initMasterNet(args):
     master_net = modelBuilder.netBuilder(args_master)
 
     best_paths = glob.glob("../models/{}/model{}_best_epoch*".format(args.exp_id,args.m_model_id))
-    if len(best_paths) == 0:
-        raise ValueError("Missing best path for master")
+
     if len(best_paths) > 1:
         raise ValueError("Too many best path for master")
-    bestPath = best_paths[0]
-    params = torch.load(bestPath, map_location="cpu" if not args.cuda else None)
+    if len(best_paths) == 0:
+        print("Missing best path for master")
+    else:
+        bestPath = best_paths[0]
+        params = torch.load(bestPath, map_location="cpu" if not args.cuda else None)
 
-    for key in params:
-        if key.find("firstModel.attention.1.weight") != -1:
+        for key in params:
+            if key.find("firstModel.attention.1.weight") != -1:
 
-            if params[key].shape[0] < master_net.state_dict()[key].shape[0]:
-                padd = torch.zeros(1,params[key].size(1),params[key].size(2),params[key].size(3)).to(params[key].device)
-                params[key] = torch.cat((params[key],padd),dim=0)
-            elif params[key].shape[0] > master_net.state_dict()[key].shape[0]:
-                params[key] = params[key][:master_net.state_dict()[key].shape[0]]
+                if params[key].shape[0] < master_net.state_dict()[key].shape[0]:
+                    padd = torch.zeros(1,params[key].size(1),params[key].size(2),params[key].size(3)).to(params[key].device)
+                    params[key] = torch.cat((params[key],padd),dim=0)
+                elif params[key].shape[0] > master_net.state_dict()[key].shape[0]:
+                    params[key] = params[key][:master_net.state_dict()[key].shape[0]]
 
-    master_net.load_state_dict(params, strict=True)
+        params = addOrRemoveModule(params,master_net)
+        master_net.load_state_dict(params, strict=True)
 
     master_net.eval()
 
