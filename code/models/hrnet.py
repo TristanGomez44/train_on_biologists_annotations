@@ -472,9 +472,7 @@ class HighResolutionNet(nn.Module):
 
         y_list = self.stage4(x_list)
 
-        retDict = {"x":y_list[0]}
-
-        return retDict
+        return y_list[0]
 
     def init_weights(self, pretrained='',):
         for m in self.modules():
@@ -494,7 +492,7 @@ class HighResolutionNet(nn.Module):
 
 
 def get_cls_net(w=44,**kwargs):
-    if w == 4:
+    if w == 44:
         config = {
             "STAGE1" :     {"NUM_MODULES": 1,
                             "NUM_RANCHES": 1,
@@ -594,3 +592,12 @@ def get_cls_net(w=44,**kwargs):
         raise ValueError("Unkown HR model w = ",w)
 
     return model
+
+
+if __name__ == "__main__":
+    model = get_cls_net()
+
+    inp = torch.zeros(1,3,224,224)
+    out = model(inp)
+    for tens in out:
+        print(tens.size())
