@@ -21,8 +21,8 @@ def buildFeatModel(featModelName, **kwargs):
     '''
     if featModelName.find("resnet") != -1:
         featModel = getattr(resnet, featModelName)(**kwargs)
-    elif featModelName == "hrnet":
-        featModel = hrnet.get_cls_net()
+    elif featModelName == "hrnet44":
+        featModel = hrnet.get_cls_net(w=44)
     elif featModelName == "hrnet64":
         featModel = hrnet.get_cls_net(w=64)
     elif featModelName == "hrnet18":
@@ -342,7 +342,7 @@ def getResnetFeat(backbone_name, backbone_inplanes):
         nbFeat = backbone_inplanes * 2 ** (4 - 1)
     elif backbone_name.find("resnet18") != -1:
         nbFeat = backbone_inplanes * 2 ** (4 - 1)
-    elif backbone_name == "hrnet":
+    elif backbone_name == "hrnet44":
         nbFeat = 44
     elif backbone_name == "hrnet64":
         nbFeat = 64
