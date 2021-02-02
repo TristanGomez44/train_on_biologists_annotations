@@ -472,7 +472,7 @@ class HighResolutionNet(nn.Module):
 
         y_list = self.stage4(x_list)
 
-        return y_list[0]
+        return {"x":y_list[0]}
 
     def init_weights(self, pretrained='',):
         for m in self.modules():
