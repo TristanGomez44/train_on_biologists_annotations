@@ -1261,8 +1261,13 @@ def repVSGlob(rep_vs_glob):
     plt.bar(np.arange(len(glob_weig))+0.5,glob_weig,width=0.45,color="yellow")
     plt.savefig("../vis/rep_vs_glob.png")
 
-def effPlot():
-    idRoot_dic = {"clusRed":"BR-CNN","bilRed":"B-CNN"}
+def effPlot(red=True):
+
+    if red:
+        idRoot_dic = {"clusRed":"BR-CNN","bilRed":"B-CNN"}
+    else:
+        idRoot_dic = {"clusMast":"BR-CNN","bilMast":"B-CNN"}
+
     idRoot_list = list(idRoot_dic.keys())
     resSize = ["18","34","50","101","152"]
 
@@ -1298,25 +1303,32 @@ def effPlot():
     #matplotlib.rcParams.update(params)
     size = 20
 
+    if red:
+        lat_xticks = np.arange(0.1,0.5,0.1)
+        mem_xticks = np.arange(50,300,50)
+    else:
+        lat_xticks = np.arange(0.1,1,0.2)
+        mem_xticks = np.arange(50,600,100)
+
     fig = plt.figure(1)
     fig.set_size_inches(5, 5.5)
     plt.legend(fontsize=size)
     plt.yticks(np.arange(0.78,0.87,0.01),np.arange(78,87,1),fontsize=size)
-    plt.xticks(np.arange(0.1,0.5,0.1),[round(f,2) for f in np.arange(0.1,0.5,0.1)],fontsize=size)
+    plt.xticks(lat_xticks,[round(f,2) for f in lat_xticks],fontsize=size)
     plt.xlabel("Latency (s)",fontsize=size)
     plt.ylabel("Accuracy",fontsize=size)
     plt.tight_layout()
-    plt.savefig("../vis/CUB10/eff_latency.png")
+    plt.savefig("../vis/CUB10/eff_latency_red={}.png".format(red))
 
     fig = plt.figure(2)
     fig.set_size_inches(5, 5.5)
     plt.legend(fontsize=size)
     plt.yticks(np.arange(0.78,0.87,0.01),np.arange(78,87,1),fontsize=size)
-    plt.xticks(np.arange(50,300,50),np.arange(50,300,50),fontsize=size)
+    plt.xticks(mem_xticks,mem_xticks,fontsize=size)
     plt.xlabel("Maximum batch size",fontsize=size)
     plt.ylabel("Accuracy",fontsize=size)
     plt.tight_layout()
-    plt.savefig("../vis/CUB10/eff_memory.png")
+    plt.savefig("../vis/CUB10/eff_memory_red={}.png".format(red))
 
 def main(argv=None):
 
@@ -1420,6 +1432,8 @@ def main(argv=None):
     ######################################### Efficiency plot ########################
 
     argreader.parser.add_argument('--eff_plot',action="store_true",help='Efficiency plot')
+    argreader.parser.add_argument('--red',action="store_true",help='To plot the reduced feature map models.')
+
 
     argreader = load_data.addArgs(argreader)
 
@@ -1531,6 +1545,6 @@ def main(argv=None):
     if args.rep_vs_glob:
         repVSGlob(args.rep_vs_glob)
     if args.eff_plot:
-        effPlot()
+        effPlot(args.red)
 if __name__ == "__main__":
     main()
