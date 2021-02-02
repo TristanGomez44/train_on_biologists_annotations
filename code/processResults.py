@@ -1330,6 +1330,19 @@ def effPlot(red=True):
     plt.tight_layout()
     plt.savefig("../vis/CUB10/eff_memory_red={}.png".format(red))
 
+def attMapsNbPlot():
+
+    testPaths = glob.glob("../results/CUB10/model*N*test*csv")
+    perfList,NList = [],[]
+
+    plt.figure()
+    for path in testPaths:
+        perfList.append(float(np.genfromtxt(path,delimiter=",")[1,0]))
+        NList.append(os.path.basename(path).split("modelN")[1].split("_")[0])
+
+    plt.plot(NList,perfList)
+    plt.savefig("../vis/CUB10/N_acc.png")
+
 def main(argv=None):
 
     #Getting arguments from config file and command line
@@ -1434,6 +1447,9 @@ def main(argv=None):
     argreader.parser.add_argument('--eff_plot',action="store_true",help='Efficiency plot')
     argreader.parser.add_argument('--red',action="store_true",help='To plot the reduced feature map models.')
 
+    ######################################## att maps number plot ###############################
+
+    argreader.parser.add_argument('--att_maps_nb_plot',action="store_true",help='Att maps nb plot')
 
     argreader = load_data.addArgs(argreader)
 
@@ -1546,5 +1562,7 @@ def main(argv=None):
         repVSGlob(args.rep_vs_glob)
     if args.eff_plot:
         effPlot(args.red)
+    if args.att_maps_nb_plot:
+        attMapsNbPlot()
 if __name__ == "__main__":
     main()
