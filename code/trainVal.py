@@ -151,7 +151,7 @@ def computeLoss(args, output, target, resDict, data,reduction="mean"):
         loss = args.nll_weight*(kl*args.kl_interp*args.kl_temp*args.kl_temp+ce*(1-args.kl_interp))
 
         if args.transfer_att_maps:
-            loss += args.att_weights*computeAttDiff(resDict["attMaps"],resDict["features"],resDict["master_net_attMaps"],resDict["master_net_features"],args.att_pow)
+            loss += args.att_weights*computeAttDiff(args.att_term_included,resDict["attMaps"],resDict["features"],resDict["master_net_attMaps"],resDict["master_net_features"],args.att_pow)
 
     nbTerms = 1
     for key in resDict.keys():
@@ -164,7 +164,7 @@ def computeLoss(args, output, target, resDict, data,reduction="mean"):
     return loss
 
 
-def computeAttDiff(studMaps,studFeat,teachMaps,teachFeat,attPow):
+def computeAttDiff(att_term_included,studMaps,studFeat,teachMaps,teachFeat,attPow):
 
     studNorm = torch.sqrt(torch.pow(studFeat,2).sum(dim=1,keepdim=True))
     teachNorm = torch.sqrt(torch.pow(teachFeat,2).sum(dim=1,keepdim=True))
@@ -174,7 +174,12 @@ def computeAttDiff(studMaps,studFeat,teachMaps,teachFeat,attPow):
 
     teachMaps = F.interpolate(teachMaps,size=(studMaps.size(-2),studMaps.size(-1)),mode='bilinear',align_corners=True)
 
-    term = torch.pow(torch.pow(torch.abs(teachMaps-studMaps),attPow).sum(dim=(2,3)),1.0/attPow).mean()
+    if att_term_included:
+        stud_pow = torch.pow(studMaps,attPow)
+        teach_pow = torch.pow(1-teachMaps,attPow)
+        term = torch.pow((stud_pow*teach_pow).sum(dim=(2,3)),1.0/attPow).mean()
+    else:
+        term = torch.pow(torch.pow(torch.abs(teachMaps-studMaps),attPow).sum(dim=(2,3)),1.0/attPow).mean()
     return term
 
 def normMap(map,minMax=False):
