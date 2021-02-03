@@ -1006,10 +1006,13 @@ def main(argv=None):
                 curr = con.cursor()
 
                 if args.grad_exp == "best":
+                    print("Grad exp : Best run")
                     trialId = getBestTrial(curr,args.optuna_trial_nb)
                 elif args.grad_exp == "worst":
+                    print("Grad exp : worst run")
                     trialId = getWorstTrial(curr,args.optuna_trial_nb)
                 else:
+                    print("Grad exp : median run")
                     trialId = getMedianTrial(curr,args.optuna_trial_nb)
 
                 curr.execute('SELECT param_name,param_value from trial_params WHERE trial_id == {}'.format(trialId))
