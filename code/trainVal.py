@@ -65,7 +65,9 @@ def epochSeqTr(model, optim, log_interval, loader, epoch, args, writer, **kwargs
     metrDict = None
     validBatch = 0
     totalImgNb = 0
-    allOut, allGT = None, None
+
+    if args.grad_exp:
+        allGrads = None
 
     for batch_idx, batch in enumerate(loader):
         optim.zero_grad()
@@ -104,6 +106,9 @@ def epochSeqTr(model, optim, log_interval, loader, epoch, args, writer, **kwargs
         if args.distributed:
             average_gradients(model)
 
+        if args.grad_exp:
+            allGrads = updateGradExp(model,allGrads)
+
         optim.step()
         update.updateHardWareOccupation(args.debug, args.benchmark, args.cuda, epoch, "train", args.exp_id,
                                         args.model_id, batch_idx)
@@ -120,6 +125,9 @@ def epochSeqTr(model, optim, log_interval, loader, epoch, args, writer, **kwargs
         if validBatch > 3 and args.debug:
             break
 
+    if args.grad_exp:
+        updateGradExp(model,allGrads,True,epoch,args.exp_id,args.model_id,args.grad_exp)
+
     # If the training set is empty (which we might want to just evaluate the model), then allOut and allGT will still be None
     if validBatch > 0:
 
@@ -130,6 +138,21 @@ def epochSeqTr(model, optim, log_interval, loader, epoch, args, writer, **kwargs
         if args.debug or args.benchmark:
             totalTime = time.time() - start_time
             update.updateTimeCSV(epoch, "train", args.exp_id, args.model_id, totalTime, batch_idx)
+
+def updateGradExp(model,allGrads,end=False,epoch=None,exp_id=None,model_id=None,grad_exp=None):
+
+    if not end:
+        newGrads = model.secondModel.linLay.weight.grad.data.unsqueeze(0)
+
+        if allGrads is None:
+            allGrads = newGrads
+        else:
+            allGrads = torch.cat((allGrads,newGrads),dim=0)
+
+        return allGrads
+
+    else:
+        torch.save(allGrads.float(),"../results/{}/{}_allGrads_{}HypParams_epoch{}.th".format(exp_id,model_id,grad_exp,epoch))
 
 class Loss(torch.nn.Module):
 
@@ -775,7 +798,7 @@ def run(args,trial=None):
 
                     net = preprocessAndLoadParams("../models/{}/model{}_epoch{}".format(args.exp_id_no_train, args.model_id_no_train, epoch),args.cuda,net,args.strict_init)
 
-            if not args.no_val:
+            if not (args.no_val or args.grad_exp):
                 with torch.no_grad():
                     metricVal = valFunc(**kwargsVal)
 
@@ -865,6 +888,8 @@ def main(argv=None):
     argreader.parser.add_argument('--opt_att_maps_nb', type=str2bool, help='To optimise the number of attention maps.')
 
     argreader.parser.add_argument('--max_batch_size', type=int, help='To maximum batch size to test.')
+
+    argreader.parser.add_argument('--grad_exp', type=str, help='To store the gradients of the feature matrix.')
 
     argreader = addInitArgs(argreader)
     argreader = addOptimArgs(argreader)
@@ -972,8 +997,75 @@ def main(argv=None):
 
             run(args)
 
+
+        if args.grad_exp:
+
+            if len(glob.glob("../results/{}/{}_allGrads_{}HypParams_epoch*.th".format(args.exp_id,args.model_id,args.grad_exp))) < args.epochs:
+
+                con = sqlite3.connect("../results/{}/{}_hypSearch.db".format(args.exp_id,args.model_id))
+                curr = con.cursor()
+
+                if args.grad_exp == "best":
+                    trialId = getBestTrial(curr,args.optuna_trial_nb)
+                elif args.grad_exp == "worst":
+                    trialId = getWorstTrial(curr,args.optuna_trial_nb)
+                else:
+                    trialId = getMedianTrial(curr,args.optuna_trial_nb)
+
+                curr.execute('SELECT param_name,param_value from trial_params WHERE trial_id == {}'.format(trialId))
+                query_res = curr.fetchall()
+
+                paramDict = {key:value for key,value in query_res}
+                args.lr,args.batch_size = paramDict["lr"],int(paramDict["batch_size"])
+                args.optim = OPTIM_LIST[int(paramDict["optim"])]
+                args.dropout = paramDict["dropout"]
+                args.weight_decay = paramDict["weight_decay"]
+
+                if args.optim == "SGD":
+                    args.momentum = paramDict["momentum"]
+                    args.use_scheduler = (paramDict["use_scheduler"]==1.0)
+
+                if args.opt_data_aug:
+                    args.brightness = paramDict["brightness"]
+                    args.saturation = paramDict["saturation"]
+                    args.crop_ratio = paramDict["crop_ratio"]
+
+                args.run_test = False
+                run(args)
+            else:
+                print("Already done")
         else:
             run(args)
+
+def getBestTrial(curr,optuna_trial_nb):
+    trialIds,values = getTrialList(curr,optuna_trial_nb)
+    bestTrialId = trialIds[np.array(values).argmax()]
+    return bestTrialId
+
+def getWorstTrial(curr,optuna_trial_nb):
+    trialIds,values = getTrialList(curr,optuna_trial_nb)
+    trialIds,values = zip(*list(filter(lambda x:x[1]>0.1,zip(trialIds,values))))
+    worstTrialId = trialIds[np.array(values).argmin()]
+    return worstTrialId
+
+def getMedianTrial(curr,optuna_trial_nb):
+    trialIds,values = getTrialList(curr,optuna_trial_nb)
+    median = np.median(np.array(values))
+    medianTrialId = np.array(trialIds)[values==median][0]
+    return medianTrialId
+
+def getTrialList(curr,optuna_trial_nb):
+    curr.execute('SELECT trial_id,value FROM trials WHERE study_id == 1')
+    query_res = curr.fetchall()
+
+    query_res = list(filter(lambda x:not x[1] is None,query_res))
+
+    trialIds = [id_value[0] for id_value in query_res]
+    values = [id_value[1] for id_value in query_res]
+
+    trialIds = trialIds[:optuna_trial_nb]
+    values = values[:optuna_trial_nb]
+    return trialIds,values
 
 if __name__ == "__main__":
     main()
