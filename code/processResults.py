@@ -1344,6 +1344,55 @@ def attMapsNbPlot():
     plt.ylim(0,1)
     plt.savefig("../vis/CUB10/N_acc.png")
 
+def gradExp():
+
+    plt.figure()
+
+    colorDic = {"bilRed":"blue","clusRed":"orange"}
+    lineDic = {"worst":":","median":"--","best":"-"}
+
+    for model in ["bilRed","clusRed"]:
+        for run in ["worst","median","best"]:
+            ratioList = []
+            gradPaths = sorted(glob.glob("../results/CUB10/{}*allGrads*{}*".format(model,run)),key=lambda x:utils.findNumbers(os.path.basename(x)))
+
+            if len(gradPaths) > 0:
+                for gradPath in gradPaths:
+                    print(gradPath)
+                    model_id = os.path.basename(gradPath).split("_")[0]
+                    run = os.path.basename(gradPath).split("_")[2].replace("HypParams","")
+
+                    grads = torch.load(gradPath,map_location="cpu")
+                    grads = grads.view(grads.shape[0],-1)
+
+                    magPath = gradPath.replace("allGrads","allMags")
+                    if not os.path.exists(magPath):
+                        mag = torch.sqrt(torch.pow(grads,2).sum(dim=1))
+                        torch.save(mag,magPath)
+                    else:
+                        mag = torch.load(magPath)
+                    mag = mag.mean(dim=0)
+
+                    #impossible to compute covar
+                    #covar_mat = np.cov(grads.numpy(),rowvar=False)
+                    #covar_norm = np.linalg.norm(covar_mat,ord="fro")
+                    #ratioList.append(mag/covar_norm)
+
+                    varPath = gradPath.replace("allGrads","allVars")
+                    if not os.path.exists(varPath):
+                        var = grads.std()
+                        var = var*var
+                        torch.save(var,varPath)
+                    else:
+                        var = torch.load(varPath)
+                    var = var.mean(dim=0)
+
+                    ratioList.append(mag/var)
+
+                plt.plot(ratioList,lineDic[run],label=model_id+"_"+run,color=colorDic[model])
+    plt.legend()
+    plt.savefig("../vis/CUB10/gradExp.png")
+
 def main(argv=None):
 
     #Getting arguments from config file and command line
@@ -1451,6 +1500,11 @@ def main(argv=None):
     ######################################## att maps number plot ###############################
 
     argreader.parser.add_argument('--att_maps_nb_plot',action="store_true",help='Att maps nb plot')
+
+    ####################################### Grad exp ##############################################
+
+    argreader.parser.add_argument('--grad_exp',action="store_true",help='Grad exp plot')
+
 
     argreader = load_data.addArgs(argreader)
 
@@ -1565,5 +1619,7 @@ def main(argv=None):
         effPlot(args.red)
     if args.att_maps_nb_plot:
         attMapsNbPlot()
+    if args.grad_exp:
+        gradExp()
 if __name__ == "__main__":
     main()
