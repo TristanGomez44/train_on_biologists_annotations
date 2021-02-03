@@ -1336,11 +1336,12 @@ def attMapsNbPlot():
     perfList,NList = [],[]
 
     plt.figure()
-    for path in testPaths:
+    for path in sorted(testPaths,key=lambda x:utils.findNumbers(os.path.basename(x))):
         perfList.append(float(np.genfromtxt(path,delimiter=",")[1,0]))
         NList.append(os.path.basename(path).split("modelN")[1].split("_")[0])
 
     plt.plot(NList,perfList)
+    plt.ylim(0,1)
     plt.savefig("../vis/CUB10/N_acc.png")
 
 def main(argv=None):
