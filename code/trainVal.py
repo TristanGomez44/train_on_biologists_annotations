@@ -72,7 +72,7 @@ def epochSeqTr(model, optim, log_interval, loader, epoch, args, writer, **kwargs
     for batch_idx, batch in enumerate(loader):
         optim.zero_grad()
 
-        if (batch_idx % log_interval == 0):
+        if batch_idx % log_interval == 0:
             processedImgNb = batch_idx * len(batch[0])
             print("\t", processedImgNb, "/", len(loader.dataset))
 
@@ -252,6 +252,9 @@ def epochImgEval(model, log_interval, loader, epoch, args, writer, metricEarlySt
 
     compute_latency = args.compute_latency and mode == "test"
 
+    if mode=="test" and args.grad_exp_test:
+        allGrads = None
+
     if compute_latency:
         latency_list=[]
         batchSize_list = []
@@ -307,6 +310,19 @@ def epochImgEval(model, log_interval, loader, epoch, args, writer, metricEarlySt
 
         # Metrics
         metDictSample = metrics.binaryToMetrics(output, target, seg,resDict,comp_spars=(mode=="test") and args.with_seg)
+
+        if mode=="test" and args.grad_exp_test:
+            loss.backward()
+
+            newGrads = model.secondModel.linLay.grad.data.float().cpu().unsqueeze(0)
+
+            if allGrads is None:
+                allGrads = newGrads
+            else:
+                allGrads = torch.cat((allGrads,newGrads),dim=0)
+
+            model.zero_grad()
+
         metDictSample["Loss"] = loss.detach().data.item()
         metrDict = metrics.updateMetrDict(metrDict, metDictSample)
 
@@ -320,6 +336,15 @@ def epochImgEval(model, log_interval, loader, epoch, args, writer, metricEarlySt
 
     if mode == "test":
         intermVarDict = update.saveIntermediateVariables(intermVarDict, args.exp_id, args.model_id, epoch, mode)
+
+    if mode == "test" and args.grad_exp_test:
+        allGrads = allGrads.view(allGrads.size(0),-1)
+        mean = allGrads.mean(dim=0)
+        std = allGrads.std(dim=0)
+        var = std*std
+        snr = (mean/var).mean(dim=0)
+        with open("../results/{}/snr.csv".format(args.exp_id),"a") as text_file:
+            print("{},{},{},{}".format(args.model_id,args.trial_id,snr,metrDict["Accuracy"]),file=text_file)
 
     writeSummaries(metrDict, totalImgNb, writer, epoch, mode, args.model_id, args.exp_id)
 
@@ -839,7 +864,10 @@ def run(args,trial=None):
                 kwargsTest["model"] = net
                 kwargsTest["epoch"] = bestEpoch
 
-                with torch.no_grad():
+                if not args.grad_exp_test:
+                    with torch.no_grad():
+                        testFunc(**kwargsTest)
+                else:
                     testFunc(**kwargsTest)
 
                 with open("../results/{}/test_done.txt".format(args.exp_id),"a") as text_file:
@@ -890,6 +918,8 @@ def main(argv=None):
     argreader.parser.add_argument('--max_batch_size', type=int, help='To maximum batch size to test.')
 
     argreader.parser.add_argument('--grad_exp', type=str, help='To store the gradients of the feature matrix.')
+    argreader.parser.add_argument('--grad_exp_test', type=str2bool, help='To store the gradients of the feature matrix during test.')
+    argreader.parser.add_argument('--trial_id', type=int, help='The trial ID. Useful for grad exp during test')
 
     argreader = addInitArgs(argreader)
     argreader = addOptimArgs(argreader)
@@ -908,11 +938,11 @@ def main(argv=None):
         sys.stdout = open("python.out", 'w')
 
     # The folders where the experience file will be written
-    if not (os.path.exists("../vis/{}".format(args.exp_id))):
+    if not os.path.exists("../vis/{}".format(args.exp_id)):
         os.makedirs("../vis/{}".format(args.exp_id))
-    if not (os.path.exists("../results/{}".format(args.exp_id))):
+    if not os.path.exists("../results/{}".format(args.exp_id)):
         os.makedirs("../results/{}".format(args.exp_id))
-    if not (os.path.exists("../models/{}".format(args.exp_id))):
+    if not os.path.exists("../models/{}".format(args.exp_id)):
         os.makedirs("../models/{}".format(args.exp_id))
 
     args = updateSeedAndNote(args)
@@ -1019,14 +1049,17 @@ def main(argv=None):
                 query_res = curr.fetchall()
 
                 paramDict = {key:value for key,value in query_res}
+
                 args.lr,args.batch_size = paramDict["lr"],int(paramDict["batch_size"])
                 args.optim = OPTIM_LIST[int(paramDict["optim"])]
-                args.dropout = paramDict["dropout"]
-                args.weight_decay = paramDict["weight_decay"]
 
-                if args.optim == "SGD":
-                    args.momentum = paramDict["momentum"]
-                    args.use_scheduler = (paramDict["use_scheduler"]==1.0)
+                if "dropout" in paramDict:
+                    args.dropout = paramDict["dropout"]
+                    args.weight_decay = paramDict["weight_decay"]
+
+                    if args.optim == "SGD":
+                        args.momentum = paramDict["momentum"]
+                        args.use_scheduler = (paramDict["use_scheduler"]==1.0)
 
                 if args.opt_data_aug:
                     args.brightness = paramDict["brightness"]
@@ -1037,6 +1070,42 @@ def main(argv=None):
                 run(args)
             else:
                 print("Already done")
+
+        if args.grad_exp_test:
+
+            con = sqlite3.connect("../results/{}/{}_hypSearch.db".format(args.exp_id,args.model_id))
+            curr = con.cursor()
+            trialIds,values = getTrialList(curr,args.optuna_trial_nb)
+            valDic = {id:val for id,val in zip(trialIds,values)}
+
+            bestOfAllPaths = glob.glob("../models/{}/model{}_best_epoch*".format(args.exp_id,args.model_id))
+            if len(bestOfAllPaths) !=1:
+                raise ValueError("Wrong best path number : {} : {}".format(len(bestOfAllPaths),bestOfAllPaths))
+            bestOfAllPath = bestOfAllPaths[0]
+
+            copyfile(bestOfAllPath, bestPath.replace("best","bestOfAll"))
+
+            bestPaths = glob.glob("../models/{}/model{}_trial*_best*".format(args.exp_id,args.model_id))
+
+            args.val_batch_size = 1
+
+            if not os.path.exists("../results/{}/snr.csv".format(args.exp_id)):
+                with open("../results/{}/snr.csv".format(args.exp_id),"w") as text_file:
+                    print("model_id,trial_id,snr,accuracy",file=text_file)
+
+            snr_csv = np.genfromtxt("../results/{}/snr.csv".format(args.exp_id),delimiter=",",dtype=str)
+            trial_ids_done = snr_csv[:,1]
+
+            for path in bestPaths:
+                trialId = int(os.path.basename(path).split("trial")[1].split("_")[0])+1
+                args.trial_id = trialId
+                print("Trial id",trialId,"Accuracy :",valDic[trialId],"Path",path)
+
+                if not trialId in trial_ids_done:
+                    copyfile(path, path.replace("trial{}_best".format(trialId-1),"best"))
+                    run(args)
+
+            copyfile(bestOfAllPath,bestOfAllPath.replace("bestOfAll","best"))
         else:
             run(args)
 
