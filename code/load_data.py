@@ -109,7 +109,7 @@ def buildTrainLoader(args,transf=None,shuffle=True,withSeg=False,reprVec=False):
         bsz = args.batch_size
 
     trainLoader = torch.utils.data.DataLoader(dataset=train_dataset, batch_size=bsz,  # use custom collate function here
-                                              pin_memory=False, num_workers=args.num_workers, **kwargs)
+                                              pin_memory=True, num_workers=args.num_workers, **kwargs)
 
     return trainLoader, train_dataset
 
@@ -150,10 +150,9 @@ def buildTestLoader(args, mode,shuffle=False,withSeg=False,reprVec=False):
         args.val_batch_size = int(args.max_batch_size*3.5)
 
     testLoader = torch.utils.data.DataLoader(dataset=test_dataset, batch_size=args.val_batch_size,
-                                             num_workers=args.num_workers,sampler=sampler)
+                                             num_workers=args.num_workers,sampler=sampler,pin_memory=True)
 
     return testLoader,test_dataset
-
 
 def addArgs(argreader):
     argreader.parser.add_argument('--pretrain_dataset', type=str, metavar='N',
