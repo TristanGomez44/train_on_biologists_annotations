@@ -24,7 +24,6 @@ import metrics
 import utils
 import update
 
-import torch.distributed as dist
 from torch.multiprocessing import Process
 import time
 
@@ -102,9 +101,6 @@ def epochSeqTr(model, optim, log_interval, loader, epoch, args, writer, **kwargs
         loss = kwargs["lossFunc"](output, target, resDict, data).mean()
         loss.backward()
         loss = loss.detach().data.item()
-
-        if args.distributed:
-            average_gradients(model)
 
         if args.grad_exp:
             allGrads = updateGradExp(model,allGrads)
@@ -215,13 +211,6 @@ def normMap(map,minMax=False):
         map = (map-min)/(max-min)
 
     return map
-
-def average_gradients(model):
-    size = float(dist.get_world_size())
-    for param in model.parameters():
-        if not param.grad is None:
-            dist.all_reduce(param.grad.data, op=dist.ReduceOp.SUM)
-            param.grad.data /= size
 
 def epochImgEval(model, log_interval, loader, epoch, args, writer, metricEarlyStop, mode="val",**kwargs):
     ''' Train a model during one epoch
@@ -667,14 +656,6 @@ def addLossTermArgs(argreader):
 
     return argreader
 
-
-def init_process(args, rank, size, fn, backend='gloo'):
-    """ Initialize the distributed environment. """
-    os.environ['MASTER_ADDR'] = '127.0.0.1'
-    os.environ['MASTER_PORT'] = '29500'
-    dist.init_process_group(backend, rank=rank, world_size=size)
-    fn(args)
-
 def initMasterNet(args):
     config = configparser.ConfigParser()
 
@@ -953,161 +934,149 @@ def main(argv=None):
     argreader.writeConfigFile("../models/{}/{}.ini".format(args.exp_id, args.model_id))
     print("Model :", args.model_id, "Experience :", args.exp_id)
 
-    if args.distributed:
-        size = args.distrib_size
-        processes = []
-        for rank in range(size):
-            p = Process(target=init_process, args=(args, rank, size, run))
-            p.start()
-            processes.append(p)
+    if args.optuna:
+        def objective(trial):
+            return run(args,trial=trial)
 
-        for p in processes:
-            p.join()
-    else:
+        study = optuna.create_study(direction="maximize" if args.maximise_val_metric else "minimize",\
+                                    storage="sqlite:///../results/{}/{}_hypSearch.db".format(args.exp_id,args.model_id), \
+                                    study_name=args.model_id,load_if_exists=True)
 
-        if args.optuna:
-            def objective(trial):
-                return run(args,trial=trial)
+        con = sqlite3.connect("../results/{}/{}_hypSearch.db".format(args.exp_id,args.model_id))
+        curr = con.cursor()
 
-            study = optuna.create_study(direction="maximize" if args.maximise_val_metric else "minimize",\
-                                        storage="sqlite:///../results/{}/{}_hypSearch.db".format(args.exp_id,args.model_id), \
-                                        study_name=args.model_id,load_if_exists=True)
+        failedTrials = 0
+        for elem in curr.execute('SELECT trial_id,value FROM trials WHERE study_id == 1').fetchall():
+            if elem[1] is None:
+                failedTrials += 1
+
+        trialsAlreadyDone = len(curr.execute('SELECT trial_id,value FROM trials WHERE study_id == 1').fetchall())
+
+        if trialsAlreadyDone-failedTrials < args.optuna_trial_nb:
+
+            studyDone = False
+            while not studyDone:
+                try:
+                    print("N trials",args.optuna_trial_nb-trialsAlreadyDone+failedTrials)
+                    study.optimize(objective,n_trials=args.optuna_trial_nb-trialsAlreadyDone+failedTrials)
+                    studyDone = True
+                except RuntimeError as e:
+                    if str(e).find("CUDA out of memory.") != -1:
+                        gc.collect()
+                        torch.cuda.empty_cache()
+                        args.max_batch_size -= 5
+                    else:
+                        raise RuntimeError(e)
+
+        curr.execute('SELECT trial_id,value FROM trials WHERE study_id == 1')
+        query_res = curr.fetchall()
+
+        query_res = list(filter(lambda x:not x[1] is None,query_res))
+
+        trialIds = [id_value[0] for id_value in query_res]
+        values = [id_value[1] for id_value in query_res]
+
+        trialIds = trialIds[:args.optuna_trial_nb]
+        values = values[:args.optuna_trial_nb]
+
+        bestTrialId = trialIds[np.array(values).argmax()]
+
+        curr.execute('SELECT param_name,param_value from trial_params WHERE trial_id == {}'.format(bestTrialId))
+        query_res = curr.fetchall()
+
+        bestParamDict = {key:value for key,value in query_res}
+
+        args.lr,args.batch_size = bestParamDict["lr"],int(bestParamDict["batch_size"])
+        args.optim = OPTIM_LIST[int(bestParamDict["optim"])]
+        args.only_test = True
+
+        bestPath = glob.glob("../models/{}/model{}_trial{}_best_epoch*".format(args.exp_id,args.model_id,bestTrialId-1))[0]
+
+        copyfile(bestPath, bestPath.replace("_trial{}".format(bestTrialId-1),""))
+
+        run(args)
+
+    if args.grad_exp:
+
+        if len(glob.glob("../results/{}/{}_allGrads_{}HypParams_epoch*.th".format(args.exp_id,args.model_id,args.grad_exp))) < args.epochs:
 
             con = sqlite3.connect("../results/{}/{}_hypSearch.db".format(args.exp_id,args.model_id))
             curr = con.cursor()
 
-            failedTrials = 0
-            for elem in curr.execute('SELECT trial_id,value FROM trials WHERE study_id == 1').fetchall():
-                if elem[1] is None:
-                    failedTrials += 1
-
-            trialsAlreadyDone = len(curr.execute('SELECT trial_id,value FROM trials WHERE study_id == 1').fetchall())
-
-            if trialsAlreadyDone-failedTrials < args.optuna_trial_nb:
-
-                studyDone = False
-                while not studyDone:
-                    try:
-                        print("N trials",args.optuna_trial_nb-trialsAlreadyDone+failedTrials)
-                        study.optimize(objective,n_trials=args.optuna_trial_nb-trialsAlreadyDone+failedTrials)
-                        studyDone = True
-                    except RuntimeError as e:
-                        if str(e).find("CUDA out of memory.") != -1:
-                            gc.collect()
-                            torch.cuda.empty_cache()
-                            args.max_batch_size -= 5
-                        else:
-                            raise RuntimeError(e)
-
-            curr.execute('SELECT trial_id,value FROM trials WHERE study_id == 1')
-            query_res = curr.fetchall()
-
-            query_res = list(filter(lambda x:not x[1] is None,query_res))
-
-            trialIds = [id_value[0] for id_value in query_res]
-            values = [id_value[1] for id_value in query_res]
-
-            trialIds = trialIds[:args.optuna_trial_nb]
-            values = values[:args.optuna_trial_nb]
-
-            bestTrialId = trialIds[np.array(values).argmax()]
-
-            curr.execute('SELECT param_name,param_value from trial_params WHERE trial_id == {}'.format(bestTrialId))
-            query_res = curr.fetchall()
-
-            bestParamDict = {key:value for key,value in query_res}
-
-            args.lr,args.batch_size = bestParamDict["lr"],int(bestParamDict["batch_size"])
-            args.optim = OPTIM_LIST[int(bestParamDict["optim"])]
-            args.only_test = True
-
-            bestPath = glob.glob("../models/{}/model{}_trial{}_best_epoch*".format(args.exp_id,args.model_id,bestTrialId-1))[0]
-
-            copyfile(bestPath, bestPath.replace("_trial{}".format(bestTrialId-1),""))
-
-            run(args)
-
-
-        if args.grad_exp:
-
-            if len(glob.glob("../results/{}/{}_allGrads_{}HypParams_epoch*.th".format(args.exp_id,args.model_id,args.grad_exp))) < args.epochs:
-
-                con = sqlite3.connect("../results/{}/{}_hypSearch.db".format(args.exp_id,args.model_id))
-                curr = con.cursor()
-
-                if args.grad_exp == "best":
-                    print("Grad exp : Best run")
-                    trialId = getBestTrial(curr,args.optuna_trial_nb)
-                elif args.grad_exp == "worst":
-                    print("Grad exp : worst run")
-                    trialId = getWorstTrial(curr,args.optuna_trial_nb)
-                else:
-                    print("Grad exp : median run")
-                    trialId = getMedianTrial(curr,args.optuna_trial_nb)
-
-                curr.execute('SELECT param_name,param_value from trial_params WHERE trial_id == {}'.format(trialId))
-                query_res = curr.fetchall()
-
-                paramDict = {key:value for key,value in query_res}
-
-                args.lr,args.batch_size = paramDict["lr"],int(paramDict["batch_size"])
-                args.optim = OPTIM_LIST[int(paramDict["optim"])]
-
-                if "dropout" in paramDict:
-                    args.dropout = paramDict["dropout"]
-                    args.weight_decay = paramDict["weight_decay"]
-
-                    if args.optim == "SGD":
-                        args.momentum = paramDict["momentum"]
-                        args.use_scheduler = (paramDict["use_scheduler"]==1.0)
-
-                if args.opt_data_aug:
-                    args.brightness = paramDict["brightness"]
-                    args.saturation = paramDict["saturation"]
-                    args.crop_ratio = paramDict["crop_ratio"]
-
-                args.run_test = False
-                run(args)
+            if args.grad_exp == "best":
+                print("Grad exp : Best run")
+                trialId = getBestTrial(curr,args.optuna_trial_nb)
+            elif args.grad_exp == "worst":
+                print("Grad exp : worst run")
+                trialId = getWorstTrial(curr,args.optuna_trial_nb)
             else:
-                print("Already done")
+                print("Grad exp : median run")
+                trialId = getMedianTrial(curr,args.optuna_trial_nb)
 
-        if args.grad_exp_test:
+            curr.execute('SELECT param_name,param_value from trial_params WHERE trial_id == {}'.format(trialId))
+            query_res = curr.fetchall()
 
-            con = sqlite3.connect("../results/{}/{}_hypSearch.db".format(args.exp_id,args.model_id))
-            curr = con.cursor()
-            trialIds,values = getTrialList(curr,args.optuna_trial_nb)
-            valDic = {id:val for id,val in zip(trialIds,values)}
+            paramDict = {key:value for key,value in query_res}
 
-            bestOfAllPaths = glob.glob("../models/{}/model{}_best_epoch*".format(args.exp_id,args.model_id))
-            if len(bestOfAllPaths) !=1:
-                raise ValueError("Wrong best path number : {} : {}".format(len(bestOfAllPaths),bestOfAllPaths))
-            bestOfAllPath = bestOfAllPaths[0]
+            args.lr,args.batch_size = paramDict["lr"],int(paramDict["batch_size"])
+            args.optim = OPTIM_LIST[int(paramDict["optim"])]
 
-            copyfile(bestOfAllPath, bestPath.replace("best","bestOfAll"))
+            if "dropout" in paramDict:
+                args.dropout = paramDict["dropout"]
+                args.weight_decay = paramDict["weight_decay"]
 
-            bestPaths = glob.glob("../models/{}/model{}_trial*_best*".format(args.exp_id,args.model_id))
+                if args.optim == "SGD":
+                    args.momentum = paramDict["momentum"]
+                    args.use_scheduler = (paramDict["use_scheduler"]==1.0)
 
-            args.val_batch_size = 1
+            if args.opt_data_aug:
+                args.brightness = paramDict["brightness"]
+                args.saturation = paramDict["saturation"]
+                args.crop_ratio = paramDict["crop_ratio"]
 
-            if not os.path.exists("../results/{}/snr.csv".format(args.exp_id)):
-                with open("../results/{}/snr.csv".format(args.exp_id),"w") as text_file:
-                    print("model_id,trial_id,snr,accuracy",file=text_file)
-
-            snr_csv = np.genfromtxt("../results/{}/snr.csv".format(args.exp_id),delimiter=",",dtype=str)
-            trial_ids_done = snr_csv[:,1]
-
-            for path in bestPaths:
-                trialId = int(os.path.basename(path).split("trial")[1].split("_")[0])+1
-                args.trial_id = trialId
-                print("Trial id",trialId,"Accuracy :",valDic[trialId],"Path",path)
-
-                if not trialId in trial_ids_done:
-                    copyfile(path, path.replace("trial{}_best".format(trialId-1),"best"))
-                    run(args)
-
-            copyfile(bestOfAllPath,bestOfAllPath.replace("bestOfAll","best"))
-        else:
+            args.run_test = False
             run(args)
+        else:
+            print("Already done")
+
+    if args.grad_exp_test:
+
+        con = sqlite3.connect("../results/{}/{}_hypSearch.db".format(args.exp_id,args.model_id))
+        curr = con.cursor()
+        trialIds,values = getTrialList(curr,args.optuna_trial_nb)
+        valDic = {id:val for id,val in zip(trialIds,values)}
+
+        bestOfAllPaths = glob.glob("../models/{}/model{}_best_epoch*".format(args.exp_id,args.model_id))
+        if len(bestOfAllPaths) !=1:
+            raise ValueError("Wrong best path number : {} : {}".format(len(bestOfAllPaths),bestOfAllPaths))
+        bestOfAllPath = bestOfAllPaths[0]
+
+        copyfile(bestOfAllPath, bestPath.replace("best","bestOfAll"))
+
+        bestPaths = glob.glob("../models/{}/model{}_trial*_best*".format(args.exp_id,args.model_id))
+
+        args.val_batch_size = 1
+
+        if not os.path.exists("../results/{}/snr.csv".format(args.exp_id)):
+            with open("../results/{}/snr.csv".format(args.exp_id),"w") as text_file:
+                print("model_id,trial_id,snr,accuracy",file=text_file)
+
+        snr_csv = np.genfromtxt("../results/{}/snr.csv".format(args.exp_id),delimiter=",",dtype=str)
+        trial_ids_done = snr_csv[:,1]
+
+        for path in bestPaths:
+            trialId = int(os.path.basename(path).split("trial")[1].split("_")[0])+1
+            args.trial_id = trialId
+            print("Trial id",trialId,"Accuracy :",valDic[trialId],"Path",path)
+
+            if not trialId in trial_ids_done:
+                copyfile(path, path.replace("trial{}_best".format(trialId-1),"best"))
+                run(args)
+
+        copyfile(bestOfAllPath,bestOfAllPath.replace("bestOfAll","best"))
+
+    else:
+        run(args)
 
 def getBestTrial(curr,optuna_trial_nb):
     trialIds,values = getTrialList(curr,optuna_trial_nb)

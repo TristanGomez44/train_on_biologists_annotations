@@ -12,7 +12,6 @@ from PIL import Image
 import time
 import args
 import utils
-import torch.distributed as dist
 from random import Random
 import scipy.io
 import imageDatasetWithSeg
@@ -99,14 +98,7 @@ def buildTrainLoader(args,transf=None,shuffle=True,withSeg=False,reprVec=False):
 
     kwargs = {"shuffle": shuffle}
 
-    if args.distributed:
-        size = dist.get_world_size()
-        bsz = int(args.batch_size / float(size))
-        partition_sizes = [1.0 / size for _ in range(size)]
-        partition = DataPartitioner(train_dataset, partition_sizes)
-        partition = partition.use(dist.get_rank())
-    else:
-        bsz = args.batch_size
+    bsz = args.batch_size
 
     trainLoader = torch.utils.data.DataLoader(dataset=train_dataset, batch_size=bsz,  # use custom collate function here
                                               pin_memory=True, num_workers=args.num_workers, **kwargs)
