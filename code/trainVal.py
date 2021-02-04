@@ -9,7 +9,6 @@ from args import str2bool
 import numpy as np
 import torch
 from torch.nn import functional as F
-from tensorboardX import SummaryWriter
 
 torch.backends.cudnn.benchmark = True
 torch.backends.cudnn.enabled = True
@@ -24,7 +23,6 @@ import metrics
 import utils
 import update
 
-from torch.multiprocessing import Process
 import time
 
 import configparser
@@ -36,13 +34,16 @@ from shutil import copyfile
 
 import gc
 
+import torch.multiprocessing as mp
+import torch.distributed as dist
+
 OPTIM_LIST = ["Adam", "AMSGrad", "SGD"]
 
 class Bunch(object):
     def __init__(self, adict):
         self.__dict__.update(adict)
 
-def epochSeqTr(model, optim, log_interval, loader, epoch, args, writer, **kwargs):
+def epochSeqTr(model, optim, log_interval, loader, epoch, args, **kwargs):
     ''' Train a model during one epoch
 
     Args:
@@ -52,7 +53,6 @@ def epochSeqTr(model, optim, log_interval, loader, epoch, args, writer, **kwargs
     - loader (load_data.TrainLoader): the train data loader
     - epoch (int): the current epoch
     - args (Namespace): the namespace containing all the arguments required for training and building the network
-    - writer (tensorboardX.SummaryWriter): the writer to use to log metrics evolution to tensorboardX
     '''
 
     start_time = time.time() if args.debug or args.benchmark else None
@@ -83,10 +83,10 @@ def epochSeqTr(model, optim, log_interval, loader, epoch, args, writer, **kwargs
             seg = None
 
         if args.cuda:
-            data, target = data.cuda(), target.cuda()
+            data, target = data.cuda(non_blocking=True), target.cuda(non_blocking=True)
 
             if args.with_seg:
-                seg = seg.cuda()
+                seg = seg.cuda(non_blocking=True)
 
         resDict = model(data)
         output = resDict["pred"]
@@ -129,7 +129,7 @@ def epochSeqTr(model, optim, log_interval, loader, epoch, args, writer, **kwargs
 
         if not args.optuna:
             torch.save(model.state_dict(), "../models/{}/model{}_epoch{}".format(args.exp_id, args.model_id, epoch))
-            writeSummaries(metrDict, totalImgNb, writer, epoch, "train", args.model_id, args.exp_id)
+            writeSummaries(metrDict, totalImgNb, epoch, "train", args.model_id, args.exp_id)
 
         if args.debug or args.benchmark:
             totalTime = time.time() - start_time
@@ -212,7 +212,7 @@ def normMap(map,minMax=False):
 
     return map
 
-def epochImgEval(model, log_interval, loader, epoch, args, writer, metricEarlyStop, mode="val",**kwargs):
+def epochImgEval(model, log_interval, loader, epoch, args, metricEarlyStop, mode="val",**kwargs):
     ''' Train a model during one epoch
 
     Args:
@@ -222,7 +222,6 @@ def epochImgEval(model, log_interval, loader, epoch, args, writer, metricEarlySt
     - loader (load_data.TrainLoader): the train data loader
     - epoch (int): the current epoch
     - args (Namespace): the namespace containing all the arguments required for training and building the network
-    - writer (tensorboardX.SummaryWriter): the writer to use to log metrics evolution to tensorboardX
 
     '''
 
@@ -263,10 +262,10 @@ def epochImgEval(model, log_interval, loader, epoch, args, writer, metricEarlySt
 
         # Puting tensors on cuda
         if args.cuda:
-            data, target = data.cuda(), target.cuda()
+            data, target = data.cuda(non_blocking=True), target.cuda(non_blocking=True)
 
             if args.with_seg:
-                seg = seg.cuda()
+                seg = seg.cuda(non_blocking=True)
 
         # Computing predictions
         if compute_latency:
@@ -335,7 +334,7 @@ def epochImgEval(model, log_interval, loader, epoch, args, writer, metricEarlySt
         with open("../results/{}/snr.csv".format(args.exp_id),"a") as text_file:
             print("{},{},{},{}".format(args.model_id,args.trial_id,snr,metrDict["Accuracy"]),file=text_file)
 
-    writeSummaries(metrDict, totalImgNb, writer, epoch, mode, args.model_id, args.exp_id)
+    writeSummaries(metrDict, totalImgNb, epoch, mode, args.model_id, args.exp_id)
 
     if compute_latency:
         latency_list = np.array(latency_list)[:,np.newaxis]
@@ -361,13 +360,12 @@ def writePreds(predBatch, targBatch, epoch, exp_id, model_id, class_nb, batch_id
             print(str(targBatch[i].cpu().detach().numpy()) + "," + ",".join(
                 predBatch[i].cpu().detach().numpy().astype(str)), file=text_file)
 
-def writeSummaries(metrDict, totalImgNb, writer, epoch, mode, model_id, exp_id):
-    ''' Write the metric computed during an evaluation in a tf writer and in a csv file
+def writeSummaries(metrDict, totalImgNb, epoch, mode, model_id, exp_id):
+    ''' Write the metric computed during an evaluation in a csv file
 
     Args:
     - metrDict (dict): the dictionary containing the value of metrics (not divided by the number of batch)
     - totalImgNb (int): the total number of images during the epoch
-    - writer (tensorboardX.SummaryWriter): the writer to use to write the metrics to tensorboardX
     - mode (str): either 'train', 'val' or 'test' to indicate if the epoch was a training epoch or a validation epoch
     - model_id (str): the id of the model
     - exp_id (str): the experience id
@@ -381,13 +379,6 @@ def writeSummaries(metrDict, totalImgNb, writer, epoch, mode, model_id, exp_id):
 
     for metric in metrDict.keys():
         metrDict[metric] /= totalImgNb
-
-    for metric in metrDict:
-        if metric.find("Accuracy_") != -1:
-            suffix = metric[metric.find("_"):]
-            writer.add_scalars("Accuracy", {model_id + suffix + "_" + mode: metrDict[metric]}, epoch)
-        else:
-            writer.add_scalars(metric, {model_id + "_" + mode: metrDict[metric]}, epoch)
 
     header = ",".join([metric.lower().replace(" ", "_") for metric in metrDict.keys()])
 
@@ -710,7 +701,6 @@ def initMasterNet(args):
     return master_net
 
 def run(args,trial=None):
-    writer = SummaryWriter("../results/{}".format(args.exp_id))
 
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)
@@ -719,19 +709,19 @@ def run(args,trial=None):
 
     if not trial is None:
         args.lr = trial.suggest_float("lr", 1e-4, 1e-2, log=True)
-        args.optim = trial.suggest_categorical("optim", OPTIM_LIST)
-        args.batch_size = trial.suggest_int("batch_size", 10, args.max_batch_size, log=True)
-        args.dropout = trial.suggest_float("dropout", 0, 0.6,step=0.2)
-        args.weight_decay = trial.suggest_float("weight_decay", 1e-6, 1e-3, log=True)
+        #args.optim = trial.suggest_categorical("optim", OPTIM_LIST)
+        #args.batch_size = trial.suggest_int("batch_size", 10, args.max_batch_size, log=True)
+        #args.dropout = trial.suggest_float("dropout", 0, 0.6,step=0.2)
+        #args.weight_decay = trial.suggest_float("weight_decay", 1e-6, 1e-3, log=True)
 
-        if args.optim == "SGD":
-            args.momentum = trial.suggest_float("momentum", 0., 0.9,step=0.1)
-            args.use_scheduler = trial.suggest_categorical("use_scheduler",[True,False])
+        #if args.optim == "SGD":
+        #    args.momentum = trial.suggest_float("momentum", 0., 0.9,step=0.1)
+        #    args.use_scheduler = trial.suggest_categorical("use_scheduler",[True,False])
 
-        if args.opt_data_aug:
-            args.brightness = trial.suggest_float("brightness", 0, 0.5, step=0.05)
-            args.saturation = trial.suggest_float("saturation", 0, 0.9, step=0.1)
-            args.crop_ratio = trial.suggest_float("crop_ratio", 0.8, 1, step=0.05)
+        #if args.opt_data_aug:
+        #    args.brightness = trial.suggest_float("brightness", 0, 0.5, step=0.05)
+        #    args.saturation = trial.suggest_float("saturation", 0, 0.9, step=0.1)
+        #    args.crop_ratio = trial.suggest_float("crop_ratio", 0.8, 1, step=0.05)
 
         if args.master_net:
             args.kl_temp = trial.suggest_float("kl_temp", 1, 21, step=5)
@@ -741,19 +731,33 @@ def run(args,trial=None):
                 args.att_weights = trial.suggest_float("att_weights",0.001,4,log=True)
                 args.att_pow = trial.suggest_int("att_pow",1,3,step=1)
 
-        if args.opt_att_maps_nb:
-            args.resnet_bil_nb_parts = trial.suggest_int("resnet_bil_nb_parts", 3, 64, log=True)
+        #if args.opt_att_maps_nb:
+        #    args.resnet_bil_nb_parts = trial.suggest_int("resnet_bil_nb_parts", 3, 64, log=True)
 
-    trainLoader,_ = load_data.buildTrainLoader(args,withSeg=args.with_seg,reprVec=args.repr_vec)
-    valLoader,_ = load_data.buildTestLoader(args,"val",withSeg=args.with_seg,reprVec=args.repr_vec)
+    if not args.distributed:
+        args.world_size = 1
+        train(0,args,trial)
+    else:
+        if args.distributed:
+            args.world_size = torch.cuda.device_count()
+            os.environ['MASTER_ADDR'] = 'localhost'              #
+            os.environ['MASTER_PORT'] = '8889'                      #
+            mp.spawn(train, nprocs=args.world_size, args=(args,trial))
+
+def train(gpu,args,trial):
+    if args.distributed:
+        dist.init_process_group(backend='nccl',init_method='env://',world_size=args.world_size,rank=gpu)
+
+    trainLoader,_ = load_data.buildTrainLoader(args,withSeg=args.with_seg,reprVec=args.repr_vec,gpu=gpu)
+    valLoader,_ = load_data.buildTestLoader(args,"val",withSeg=args.with_seg,reprVec=args.repr_vec,gpu=gpu)
 
     # Building the net
-    net = modelBuilder.netBuilder(args)
+    net = modelBuilder.netBuilder(args,gpu=gpu)
 
     trainFunc = epochSeqTr
     valFunc = epochImgEval
 
-    kwargsTr = {'log_interval': args.log_interval, 'loader': trainLoader, 'args': args, 'writer': writer}
+    kwargsTr = {'log_interval': args.log_interval, 'loader': trainLoader, 'args': args}
     kwargsVal = kwargsTr.copy()
 
     kwargsVal['loader'] = valLoader
@@ -779,8 +783,8 @@ def run(args,trial=None):
         kwargsVal["master_net"] = kwargsTr["master_net"]
 
     lossFunc = Loss(args,reduction="mean")
-    if args.multi_gpu:
-        lossFunc = torch.nn.DataParallel(lossFunc)
+    #if args.multi_gpu:
+    #    lossFunc = torch.nn.DataParallel(lossFunc)
     kwargsTr["lossFunc"],kwargsVal["lossFunc"] = lossFunc,lossFunc
 
     if not args.only_test and not args.grad_cam:
@@ -789,20 +793,9 @@ def run(args,trial=None):
             kwargsTr["epoch"], kwargsVal["epoch"] = epoch, epoch
             kwargsTr["model"], kwargsVal["model"] = net, net
 
-            if not args.no_train:
-
-                trainFunc(**kwargsTr)
-                if not scheduler is None:
-                    writer.add_scalars("LR", {args.model_id: scheduler.get_last_lr()}, epoch)
-                    scheduler.step()
-            else:
-                if not args.no_val:
-                    if args.model_id_no_train == "":
-                        args.model_id_no_train = args.model_id
-                    if args.exp_id_no_train == "":
-                        args.exp_id_no_train = args.exp_id
-
-                    net = preprocessAndLoadParams("../models/{}/model{}_epoch{}".format(args.exp_id_no_train, args.model_id_no_train, epoch),args.cuda,net,args.strict_init)
+            trainFunc(**kwargsTr)
+            if not scheduler is None:
+                scheduler.step()
 
             if not (args.no_val or args.grad_exp):
                 with torch.no_grad():
@@ -811,7 +804,7 @@ def run(args,trial=None):
                 bestEpoch, bestMetricVal, worseEpochNb = update.updateBestModel(metricVal, bestMetricVal, args.exp_id,
                                                                                 args.model_id, bestEpoch, epoch, net,
                                                                                 isBetter, worseEpochNb)
-                if trial is not None:
+                if trial is not None and gpu==0:
                     trial.report(metricVal, epoch)
 
             epoch += 1
@@ -994,7 +987,7 @@ def main(argv=None):
 
         copyfile(bestPath, bestPath.replace("_trial{}".format(bestTrialId-1),""))
 
-        run(args)
+        run(0,args)
 
     if args.grad_exp:
 
@@ -1035,7 +1028,7 @@ def main(argv=None):
                 args.crop_ratio = paramDict["crop_ratio"]
 
             args.run_test = False
-            run(args)
+            run(0,args)
         else:
             print("Already done")
 
@@ -1071,12 +1064,12 @@ def main(argv=None):
 
             if not trialId in trial_ids_done:
                 copyfile(path, path.replace("trial{}_best".format(trialId-1),"best"))
-                run(args)
+                run(0,args)
 
         copyfile(bestOfAllPath,bestOfAllPath.replace("bestOfAll","best"))
 
     else:
-        run(args)
+        run(0,args)
 
 def getBestTrial(curr,optuna_trial_nb):
     trialIds,values = getTrialList(curr,optuna_trial_nb)

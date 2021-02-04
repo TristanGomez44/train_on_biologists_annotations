@@ -352,7 +352,7 @@ def getResnetFeat(backbone_name, backbone_inplanes):
         raise ValueError("Unkown backbone : {}".format(backbone_name))
     return nbFeat
 
-def netBuilder(args):
+def netBuilder(args,gpu=None):
     ############### Visual Model #######################
 
     if not args.repr_vec:
@@ -421,11 +421,16 @@ def netBuilder(args):
 
     net = Model(firstModel, secondModel)
 
-    if args.cuda:
-        net.cuda()
+    if args.distributed:
+        torch.cuda.set_device(gpu)
+        net.cuda(gpu)
+        net = torch.nn.parallel.DistributedDataParallel(net,device_ids=[gpu])
+    else:
+        if args.cuda:
+            net.cuda()
 
-    if args.multi_gpu:
-        net = DataParallelModel(net)
+        if args.multi_gpu:
+            net = DataParallelModel(net)
 
     return net
 

@@ -66,7 +66,7 @@ class DataPartitioner(object):
     def use(self, partition):
         return Partition(self.data, self.partitions[partition])
 
-def buildTrainLoader(args,transf=None,shuffle=True,withSeg=False,reprVec=False):
+def buildTrainLoader(args,transf=None,shuffle=True,withSeg=False,reprVec=False,gpu=None):
 
     if args.very_big_images:
         imgSize = 1792
@@ -96,17 +96,22 @@ def buildTrainLoader(args,transf=None,shuffle=True,withSeg=False,reprVec=False):
     train_dataset, _ = torch.utils.data.random_split(train_dataset, [int(totalLength * train_prop),
                                                                      totalLength - int(totalLength * train_prop)])
 
-    kwargs = {"shuffle": shuffle}
 
     bsz = args.batch_size
 
-    trainLoader = torch.utils.data.DataLoader(dataset=train_dataset, batch_size=bsz,  # use custom collate function here
+    if args.distributed:
+        train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset,num_replicas=args.world_size,rank=gpu,shuffle=shuffle)
+        kwargs = {"sampler": train_sampler}
+    else:
+        kwargs = {"shuffle": shuffle}
+
+    trainLoader = torch.utils.data.DataLoader(dataset=train_dataset, batch_size=bsz,
                                               pin_memory=True, num_workers=args.num_workers, **kwargs)
 
     return trainLoader, train_dataset
 
 
-def buildTestLoader(args, mode,shuffle=False,withSeg=False,reprVec=False):
+def buildTestLoader(args, mode,shuffle=False,withSeg=False,reprVec=False,gpu=None):
     datasetName = getattr(args, "dataset_{}".format(mode))
     imgSize = 448 if args.big_images else 224
     test_dataset = fineGrainedDataset.FineGrainedDataset(datasetName, mode,(imgSize,imgSize),\
@@ -140,6 +145,9 @@ def buildTestLoader(args, mode,shuffle=False,withSeg=False,reprVec=False):
 
     if args.val_batch_size == -1:
         args.val_batch_size = int(args.max_batch_size*3.5)
+
+    if args.distributed:
+        sampler = torch.utils.data.distributed.DistributedSampler(test_dataset,num_replicas=args.world_size,rank=gpu,shuffle=False)
 
     testLoader = torch.utils.data.DataLoader(dataset=test_dataset, batch_size=args.val_batch_size,
                                              num_workers=args.num_workers,sampler=sampler,pin_memory=True)
