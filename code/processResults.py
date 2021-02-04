@@ -55,6 +55,9 @@ import skimage
 import scipy.stats
 import formatData
 
+import sqlite3
+import trainVal
+
 def plotPointsImageDataset(imgNb,redFact,plotDepth,args):
 
     cm = plt.get_cmap('plasma')
@@ -1352,46 +1355,56 @@ def gradExp():
     lineDic = {"worst":":","median":"--","best":"-"}
 
     for model in ["bilRed","clusRed"]:
+
+        perfDic = getPerfs(model)
+
         for run in ["worst","median","best"]:
             ratioList = []
             gradPaths = sorted(glob.glob("../results/CUB10/{}*allGrads*{}*".format(model,run)),key=lambda x:utils.findNumbers(os.path.basename(x)))
 
-            if len(gradPaths) > 0:
-                for gradPath in gradPaths:
-                    print(gradPath)
-                    model_id = os.path.basename(gradPath).split("_")[0]
-                    run = os.path.basename(gradPath).split("_")[2].replace("HypParams","")
+            snrPath ="../results/CUB10/{}_allSNR_{}.npy".format(model,run)
+            if len(gradPaths) > 0 or os.path.exists(snrPath):
+                if not os.path.exists(snrPath):
+                    for gradPath in gradPaths:
+                        print(gradPath)
+                        model_id = os.path.basename(gradPath).split("_")[0]
+                        run = os.path.basename(gradPath).split("_")[2].replace("HypParams","")
 
-                    grads = torch.load(gradPath,map_location="cpu")
-                    grads = grads.view(grads.shape[0],-1)
+                        grads = torch.load(gradPath,map_location="cpu")
+                        grads = grads.view(grads.shape[0],-1)
 
-                    magPath = gradPath.replace("allGrads","allMags")
-                    if not os.path.exists(magPath):
-                        mag = torch.sqrt(torch.pow(grads,2).sum(dim=1))
-                        torch.save(mag,magPath)
-                    else:
-                        mag = torch.load(magPath)
-                    mag = mag.mean(dim=0)
+                        mean = grads.mean(dim=0)
+                        std = grads.std(dim=0)
+                        snr = mean/(std*std)
+                        snr = snr.mean(dim=0)
 
-                    #impossible to compute covar
-                    #covar_mat = np.cov(grads.numpy(),rowvar=False)
-                    #covar_norm = np.linalg.norm(covar_mat,ord="fro")
-                    #ratioList.append(mag/covar_norm)
+                        ratioList.append(snr)
 
-                    varPath = gradPath.replace("allGrads","allVars")
-                    if not os.path.exists(varPath):
-                        var = grads.std()
-                        var = var*var
-                        torch.save(var,varPath)
-                    else:
-                        var = torch.load(varPath)
-                    var = var.mean(dim=0)
+                    np.save(snrPath,np.array(ratioList))
+                else:
+                    ratioList = np.load(snrPath)
 
-                    ratioList.append(mag/var)
+                plt.plot(ratioList,lineDic[run],label=model+"_"+run+":"+str(round(perfDic[run],2)),color=colorDic[model])
 
-                plt.plot(ratioList,lineDic[run],label=model_id+"_"+run,color=colorDic[model])
     plt.legend()
     plt.savefig("../vis/CUB10/gradExp.png")
+
+def getPerfs(model):
+
+    config = configparser.ConfigParser()
+    config.read('../models/CUB10/{}.ini'.format(model))
+    optuna_trial_nb = int(config["default"]["optuna_trial_nb"])
+
+    con = sqlite3.connect("../results/CUB10/{}_hypSearch.db".format(model))
+    curr = con.cursor()
+
+    trials,values = trainVal.getTrialList(curr,optuna_trial_nb)
+
+    best = np.array(values).max()
+    worst = np.array(list(filter(lambda x:x>0.1,values))).min()
+    median = np.median(np.array(values))
+
+    return {"worst":worst,"median":median,"best":best}
 
 def main(argv=None):
 
