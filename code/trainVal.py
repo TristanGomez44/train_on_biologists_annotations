@@ -64,6 +64,7 @@ def epochSeqTr(model, optim, log_interval, loader, epoch, args, **kwargs):
     metrDict = None
     validBatch = 0
     totalImgNb = 0
+    gpu = kwargs["gpu"]
 
     if args.grad_exp:
         allGrads = None
@@ -106,7 +107,8 @@ def epochSeqTr(model, optim, log_interval, loader, epoch, args, **kwargs):
             allGrads = updateGradExp(model,allGrads)
 
         optim.step()
-        update.updateHardWareOccupation(args.debug, args.benchmark, args.cuda, epoch, "train", args.exp_id,
+        if gpu == 0:
+            update.updateHardWareOccupation(args.debug, args.benchmark, args.cuda, epoch, "train", args.exp_id,
                                         args.model_id, batch_idx)
 
         # Metrics
@@ -121,11 +123,11 @@ def epochSeqTr(model, optim, log_interval, loader, epoch, args, **kwargs):
         if validBatch > 3 and args.debug:
             break
 
-    if args.grad_exp:
+    if args.grad_exp and gpu == 0:
         updateGradExp(model,allGrads,True,epoch,args.exp_id,args.model_id,args.grad_exp)
 
     # If the training set is empty (which we might want to just evaluate the model), then allOut and allGT will still be None
-    if validBatch > 0:
+    if validBatch > 0 and gpu==0:
 
         if not args.optuna:
             torch.save(model.state_dict(), "../models/{}/model{}_epoch{}".format(args.exp_id, args.model_id, epoch))
@@ -182,7 +184,6 @@ def computeLoss(args, output, target, resDict, data,reduction="mean"):
 
     return loss
 
-
 def computeAttDiff(att_term_included,studMaps,studFeat,teachMaps,teachFeat,attPow):
 
     studNorm = torch.sqrt(torch.pow(studFeat,2).sum(dim=1,keepdim=True))
@@ -237,6 +238,7 @@ def epochImgEval(model, log_interval, loader, epoch, args, metricEarlyStop, mode
     validBatch = 0
     totalImgNb = 0
     intermVarDict = {"fullAttMap": None, "fullFeatMapSeq": None, "fullNormSeq":None}
+    gpu = kwargs["gpu"]
 
     compute_latency = args.compute_latency and mode == "test"
 
@@ -293,7 +295,8 @@ def epochImgEval(model, log_interval, loader, epoch, args, metricEarlyStop, mode
             intermVarDict = update.catIntermediateVariables(resDict, intermVarDict, validBatch)
 
         # Harware occupation
-        update.updateHardWareOccupation(args.debug, args.benchmark, args.cuda, epoch, mode, args.exp_id, args.model_id,
+        if gpu == 0:
+            update.updateHardWareOccupation(args.debug, args.benchmark, args.cuda, epoch, mode, args.exp_id, args.model_id,
                                         batch_idx)
 
         # Metrics
@@ -302,7 +305,7 @@ def epochImgEval(model, log_interval, loader, epoch, args, metricEarlyStop, mode
         if mode=="test" and args.grad_exp_test:
             loss.backward()
 
-            newGrads = model.secondModel.linLay.grad.data.float().cpu().unsqueeze(0)
+            newGrads = model.secondModel.linLay.weight.grad.data.float().cpu().unsqueeze(0)
 
             if allGrads is None:
                 allGrads = newGrads
@@ -325,24 +328,24 @@ def epochImgEval(model, log_interval, loader, epoch, args, metricEarlyStop, mode
     if mode == "test":
         intermVarDict = update.saveIntermediateVariables(intermVarDict, args.exp_id, args.model_id, epoch, mode)
 
-    if mode == "test" and args.grad_exp_test:
+    writeSummaries(metrDict, totalImgNb, epoch, mode, args.model_id, args.exp_id)
+
+    if mode == "test" and args.grad_exp_test and gpu == 0:
         allGrads = allGrads.view(allGrads.size(0),-1)
         mean = allGrads.mean(dim=0)
         std = allGrads.std(dim=0)
         var = std*std
         snr = (mean/var).mean(dim=0)
-        with open("../results/{}/snr.csv".format(args.exp_id),"a") as text_file:
-            print("{},{},{},{}".format(args.model_id,args.trial_id,snr,metrDict["Accuracy"]),file=text_file)
+        with open("../results/{}/snr_{}.csv".format(args.exp_id,args.model_id),"a") as text_file:
+            print("{},{},{}".format(args.trial_id,snr,metrDict["Accuracy"]),file=text_file)
 
-    writeSummaries(metrDict, totalImgNb, epoch, mode, args.model_id, args.exp_id)
-
-    if compute_latency:
+    if compute_latency and gpu == 0:
         latency_list = np.array(latency_list)[:,np.newaxis]
         batchSize_list = np.array(batchSize_list)[:,np.newaxis]
         latency_list = np.concatenate((latency_list,batchSize_list),axis=1)
         np.savetxt("../results/{}/latency_{}_epoch{}.csv".format(args.exp_id,args.model_id,epoch),latency_list,header="latency,batch_size",delimiter=",")
 
-    if args.debug or args.benchmark:
+    if (args.debug or args.benchmark) and gpu == 0:
         totalTime = time.time() - start_time
         update.updateTimeCSV(epoch, mode, args.exp_id, args.model_id, totalTime, batch_idx)
 
@@ -711,19 +714,19 @@ def run(args,trial=None):
 
     if not trial is None:
         args.lr = trial.suggest_float("lr", 1e-4, 1e-2, log=True)
-        #args.optim = trial.suggest_categorical("optim", OPTIM_LIST)
-        #args.batch_size = trial.suggest_int("batch_size", 10, args.max_batch_size, log=True)
-        #args.dropout = trial.suggest_float("dropout", 0, 0.6,step=0.2)
-        #args.weight_decay = trial.suggest_float("weight_decay", 1e-6, 1e-3, log=True)
+        args.optim = trial.suggest_categorical("optim", OPTIM_LIST)
+        args.batch_size = trial.suggest_int("batch_size", 10, args.max_batch_size, log=True)
+        args.dropout = trial.suggest_float("dropout", 0, 0.6,step=0.2)
+        args.weight_decay = trial.suggest_float("weight_decay", 1e-6, 1e-3, log=True)
 
-        #if args.optim == "SGD":
-        #    args.momentum = trial.suggest_float("momentum", 0., 0.9,step=0.1)
-        #    args.use_scheduler = trial.suggest_categorical("use_scheduler",[True,False])
+        if args.optim == "SGD":
+            args.momentum = trial.suggest_float("momentum", 0., 0.9,step=0.1)
+            args.use_scheduler = trial.suggest_categorical("use_scheduler",[True,False])
 
-        #if args.opt_data_aug:
-        #    args.brightness = trial.suggest_float("brightness", 0, 0.5, step=0.05)
-        #    args.saturation = trial.suggest_float("saturation", 0, 0.9, step=0.1)
-        #    args.crop_ratio = trial.suggest_float("crop_ratio", 0.8, 1, step=0.05)
+        if args.opt_data_aug:
+            args.brightness = trial.suggest_float("brightness", 0, 0.5, step=0.05)
+            args.saturation = trial.suggest_float("saturation", 0, 0.9, step=0.1)
+            args.crop_ratio = trial.suggest_float("crop_ratio", 0.8, 1, step=0.05)
 
         if args.master_net:
             args.kl_temp = trial.suggest_float("kl_temp", 1, 21, step=5)
@@ -733,22 +736,29 @@ def run(args,trial=None):
                 args.att_weights = trial.suggest_float("att_weights",0.001,4,log=True)
                 args.att_pow = trial.suggest_int("att_pow",1,3,step=1)
 
-        #if args.opt_att_maps_nb:
-        #    args.resnet_bil_nb_parts = trial.suggest_int("resnet_bil_nb_parts", 3, 64, log=True)
+        if args.opt_att_maps_nb:
+            args.resnet_bil_nb_parts = trial.suggest_int("resnet_bil_nb_parts", 3, 64, log=True)
 
     if not args.distributed:
         args.world_size = 1
-        train(0,args,trial)
+        value = train(0,args,trial)
+        return value
     else:
         if args.distributed:
             args.world_size = torch.cuda.device_count()
             os.environ['MASTER_ADDR'] = 'localhost'              #
-            os.environ['MASTER_PORT'] = '8889'                      #
+            os.environ['MASTER_PORT'] = '8889'
             mp.spawn(train, nprocs=args.world_size, args=(args,trial))
+            value = np.genfromtxt("../results/{}/{}_{}_valRet.csv".format(args.exp_id,args.model_id,trial.number))
+            return value
 
 def train(gpu,args,trial):
+
     if args.distributed:
         dist.init_process_group(backend='nccl',init_method='env://',world_size=args.world_size,rank=gpu)
+
+    if not trial is None:
+        args.trial_id = trial.number
 
     trainLoader,_ = load_data.buildTrainLoader(args,withSeg=args.with_seg,reprVec=args.repr_vec,gpu=gpu)
     valLoader,_ = load_data.buildTestLoader(args,"val",withSeg=args.with_seg,reprVec=args.repr_vec,gpu=gpu)
@@ -759,7 +769,7 @@ def train(gpu,args,trial):
     trainFunc = epochSeqTr
     valFunc = epochImgEval
 
-    kwargsTr = {'log_interval': args.log_interval, 'loader': trainLoader, 'args': args}
+    kwargsTr = {'log_interval': args.log_interval, 'loader': trainLoader, 'args': args,"gpu":gpu}
     kwargsVal = kwargsTr.copy()
 
     kwargsVal['loader'] = valLoader
@@ -802,8 +812,8 @@ def train(gpu,args,trial):
             if not (args.no_val or args.grad_exp):
                 with torch.no_grad():
                     metricVal = valFunc(**kwargsVal)
-
-                bestEpoch, bestMetricVal, worseEpochNb = update.updateBestModel(metricVal, bestMetricVal, args.exp_id,
+                if gpu == 0:
+                    bestEpoch, bestMetricVal, worseEpochNb = update.updateBestModel(metricVal, bestMetricVal, args.exp_id,
                                                                                 args.model_id, bestEpoch, epoch, net,
                                                                                 isBetter, worseEpochNb)
                 if trial is not None and gpu==0:
@@ -850,8 +860,12 @@ def train(gpu,args,trial):
                     print("{},{}".format(args.model_id,bestEpoch),file=text_file)
 
     else:
-        oldPath = "../models/{}/model{}_best_epoch{}".format(args.exp_id,args.model_id, bestEpoch)
-        os.rename(oldPath, oldPath.replace("best_epoch","trial{}_best_epoch".format(trial.number)))
+        if gpu == 0:
+            oldPath = "../models/{}/model{}_best_epoch{}".format(args.exp_id,args.model_id, bestEpoch)
+            os.rename(oldPath, oldPath.replace("best_epoch","trial{}_best_epoch".format(trial.number)))
+
+            with open("../results/{}/{}_{}_valRet.csv".format(args.exp_id,args.model_id,trial.number),"w") as text:
+                print(metricVal,file=text)
 
         return metricVal
 
@@ -981,17 +995,19 @@ def main(argv=None):
 
         bestParamDict = {key:value for key,value in query_res}
 
-        args.lr,args.batch_size = bestParamDict["lr"],int(bestParamDict["batch_size"])
-        args.optim = OPTIM_LIST[int(bestParamDict["optim"])]
+        #args.lr,args.batch_size = bestParamDict["lr"],int(bestParamDict["batch_size"])
+        #args.optim = OPTIM_LIST[int(bestParamDict["optim"])]
         args.only_test = True
 
         bestPath = glob.glob("../models/{}/model{}_trial{}_best_epoch*".format(args.exp_id,args.model_id,bestTrialId-1))[0]
 
         copyfile(bestPath, bestPath.replace("_trial{}".format(bestTrialId-1),""))
 
-        run(0,args)
+        args.distributed=False
+        print("line 1008")
+        train(0,args,None)
 
-    if args.grad_exp:
+    elif args.grad_exp:
 
         if len(glob.glob("../results/{}/{}_allGrads_{}HypParams_epoch*.th".format(args.exp_id,args.model_id,args.grad_exp))) < args.epochs:
 
@@ -1030,11 +1046,11 @@ def main(argv=None):
                 args.crop_ratio = paramDict["crop_ratio"]
 
             args.run_test = False
-            run(0,args)
+            train(0,args,None)
         else:
             print("Already done")
 
-    if args.grad_exp_test:
+    elif args.grad_exp_test:
 
         con = sqlite3.connect("../results/{}/{}_hypSearch.db".format(args.exp_id,args.model_id))
         curr = con.cursor()
@@ -1050,28 +1066,37 @@ def main(argv=None):
 
         bestPaths = glob.glob("../models/{}/model{}_trial*_best*".format(args.exp_id,args.model_id))
 
-        args.val_batch_size = 1
+        snrPath = "../results/{}/snr_{}.csv".format(args.exp_id,args.model_id)
+        if not os.path.exists(snrPath):
+            with open(snrPath,"w") as text_file:
+                print("trial_id,snr,accuracy",file=text_file)
 
-        if not os.path.exists("../results/{}/snr.csv".format(args.exp_id)):
-            with open("../results/{}/snr.csv".format(args.exp_id),"w") as text_file:
-                print("model_id,trial_id,snr,accuracy",file=text_file)
-
-        snr_csv = np.genfromtxt("../results/{}/snr.csv".format(args.exp_id),delimiter=",",dtype=str)
-        trial_ids_done = snr_csv[:,1]
+        snr_csv = np.genfromtxt(snrPath,delimiter=",",dtype=str)
+        if len(snr_csv.shape) == 1:
+            snr_csv = snr_csv[np.newaxis]
+            trial_ids_done = []
+        else:
+            trial_ids_done = snr_csv[1:,0]
 
         for path in bestPaths:
             trialId = int(os.path.basename(path).split("trial")[1].split("_")[0])+1
             args.trial_id = trialId
+
             print("Trial id",trialId,"Accuracy :",valDic[trialId],"Path",path)
 
-            if not trialId in trial_ids_done:
+            exists=False
+            for doneTrial in trial_ids_done:
+                if str(trialId) == doneTrial:
+                    exists=True
+            args.only_test = True
+            if not exists:
                 copyfile(path, path.replace("trial{}_best".format(trialId-1),"best"))
-                run(0,args)
+                train(0,args,None)
 
-        copyfile(bestOfAllPath,bestOfAllPath.replace("bestOfAll","best"))
+        copyfile(bestOfAllPath.replace("best","bestOfAll"),bestOfAllPath)
 
     else:
-        run(0,args)
+        train(0,args,None)
 
 def getBestTrial(curr,optuna_trial_nb):
     trialIds,values = getTrialList(curr,optuna_trial_nb)
