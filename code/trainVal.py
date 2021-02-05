@@ -1052,6 +1052,8 @@ def main(argv=None):
 
     elif args.grad_exp_test:
 
+        args.distributed = False
+
         con = sqlite3.connect("../results/{}/{}_hypSearch.db".format(args.exp_id,args.model_id))
         curr = con.cursor()
         trialIds,values = getTrialList(curr,args.optuna_trial_nb)
@@ -1063,6 +1065,7 @@ def main(argv=None):
         bestOfAllPath = bestOfAllPaths[0]
 
         copyfile(bestOfAllPath, bestOfAllPath.replace("best","bestOfAll"))
+        os.remove(bestOfAllPath)
 
         bestPaths = glob.glob("../models/{}/model{}_trial*_best*".format(args.exp_id,args.model_id))
 
@@ -1092,6 +1095,8 @@ def main(argv=None):
             if not exists:
                 copyfile(path, path.replace("trial{}_best".format(trialId-1),"best"))
                 train(0,args,None)
+
+                os.remove(path.replace("trial{}_best".format(trialId-1),"best"))
 
         copyfile(bestOfAllPath.replace("best","bestOfAll"),bestOfAllPath)
 
