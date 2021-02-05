@@ -647,13 +647,14 @@ def addLossTermArgs(argreader):
 
     return argreader
 
-def initMasterNet(args):
+def initMasterNet(args,gpu=None):
     config = configparser.ConfigParser()
 
     config.read("../models/{}/{}.ini".format(args.exp_id,args.m_model_id))
     args_master = Bunch(config["default"])
 
     args_master.multi_gpu = args.multi_gpu
+    args_master.distributed = args.distributed
 
     argDic = args.__dict__
     mastDic = args_master.__dict__
@@ -664,7 +665,8 @@ def initMasterNet(args):
                 if not type(argDic[arg]) is bool:
                     mastDic[arg] = type(argDic[arg])(mastDic[arg])
                 else:
-                    mastDic[arg] = str2bool(mastDic[arg]) if arg != "multi_gpu" else mastDic[arg]
+                    if arg != "multi_gpu" and arg != "distributed":
+                        mastDic[arg] = str2bool(mastDic[arg])
             else:
                 mastDic[arg] = None
 
@@ -672,7 +674,7 @@ def initMasterNet(args):
         if not arg in mastDic:
             mastDic[arg] = argDic[arg]
 
-    master_net = modelBuilder.netBuilder(args_master)
+    master_net = modelBuilder.netBuilder(args_master,gpu=gpu)
 
     best_paths = glob.glob("../models/{}/model{}_best_epoch*".format(args.exp_id,args.m_model_id))
 
@@ -779,7 +781,7 @@ def train(gpu,args,trial):
         isBetter = lambda x, y: x < y
 
     if args.master_net:
-        kwargsTr["master_net"] = initMasterNet(args)
+        kwargsTr["master_net"] = initMasterNet(args,gpu=gpu)
         kwargsVal["master_net"] = kwargsTr["master_net"]
 
     lossFunc = Loss(args,reduction="mean")
@@ -1044,7 +1046,7 @@ def main(argv=None):
             raise ValueError("Wrong best path number : {} : {}".format(len(bestOfAllPaths),bestOfAllPaths))
         bestOfAllPath = bestOfAllPaths[0]
 
-        copyfile(bestOfAllPath, bestPath.replace("best","bestOfAll"))
+        copyfile(bestOfAllPath, bestOfAllPath.replace("best","bestOfAll"))
 
         bestPaths = glob.glob("../models/{}/model{}_trial*_best*".format(args.exp_id,args.model_id))
 
