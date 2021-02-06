@@ -47,7 +47,7 @@ def conv1x1(in_planes, out_planes, stride=1,groups=1):
 class BasicBlock(nn.Module):
     expansion = 1
 
-    def __init__(self, inplanes, planes, stride=1, downsample=None, norm_layer=None,dilation=1,groups=1):
+    def __init__(self, inplanes, planes, stride=1, downsample=None, norm_layer=None,dilation=1,groups=1,endRelu=True):
         super(BasicBlock, self).__init__()
         if norm_layer is None:
             norm_layer = nn.BatchNorm2d
@@ -62,6 +62,7 @@ class BasicBlock(nn.Module):
         self.bn2 = norm_layer(planes)
         self.downsample = downsample
         self.stride = stride
+        self.endRelu = endRelu
 
     def forward(self, inp):
 
@@ -79,14 +80,15 @@ class BasicBlock(nn.Module):
             identity = self.downsample(x)
         out += identity
 
-        out = self.relu(out)
+        if self.endRelu:
+            out = self.relu(out)
 
         return out
 
 class Bottleneck(nn.Module):
     expansion = 4
 
-    def __init__(self, inplanes, planes, stride=1, downsample=None, norm_layer=None,dilation=1):
+    def __init__(self, inplanes, planes, stride=1, downsample=None, norm_layer=None,dilation=1,endRelu=True):
         super(Bottleneck, self).__init__()
 
         if norm_layer is None:
@@ -101,6 +103,8 @@ class Bottleneck(nn.Module):
         self.relu = nn.ReLU(inplace=True)
         self.downsample = downsample
         self.stride = stride
+
+        self.endRelu = endRelu
 
     def forward(self, inp):
 
@@ -125,7 +129,8 @@ class Bottleneck(nn.Module):
         else:
             out += identity
 
-        out = self.relu(out)
+        if self.endRelu:
+            out = self.relu(out)
 
         return out
 
@@ -191,7 +196,7 @@ class ResNet(nn.Module):
 
         layers = []
 
-        layers.append(block(self.inplanes, planes, stride, downsample, norm_layer))
+        layers.append(block(self.inplanes, planes, stride, downsample, norm_layer,endRelu=False))
 
         self.inplanes = planes * block.expansion
 
