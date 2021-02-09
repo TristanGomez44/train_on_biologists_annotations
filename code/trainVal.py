@@ -475,6 +475,7 @@ def preprocessAndLoadParams(init_path,cuda,net,strict):
         strict=False
     params = addFeatModZoom(params,net)
     params = changeOldNames(params,net)
+    params = removeConvDense(params)
 
     res = net.load_state_dict(params, strict)
 
@@ -487,6 +488,18 @@ def preprocessAndLoadParams(init_path,cuda,net,strict):
             print("unexpected keys", unexpectedKeys)
 
     return net
+
+def removeConvDense(params):
+
+    keyToRemove = []
+
+    for key in params:
+        if key.find("featMod.fc") != -1:
+            keyToRemove.append(key)
+    for key in keyToRemove:
+        params.pop(key,None)
+
+    return params
 
 def addOrRemoveModule(params,net):
     # Checking if the key of the model start with "module."
@@ -701,6 +714,7 @@ def initMasterNet(args,gpu=None):
                     params[key] = params[key][:master_net.state_dict()[key].shape[0]]
 
         params = addOrRemoveModule(params,master_net)
+        params = removeConvDense(params)
         master_net.load_state_dict(params, strict=True)
 
     master_net.eval()
