@@ -647,7 +647,6 @@ def addLossTermArgs(argreader):
     argreader.parser.add_argument('--supervised_segm_weight', type=float, metavar='FLOAT',
                                   help='The weight of the supervised segmentation term.')
 
-
     return argreader
 
 def initMasterNet(args,gpu=None):
@@ -666,7 +665,10 @@ def initMasterNet(args,gpu=None):
         if arg in argDic:
             if not argDic[arg] is None:
                 if not type(argDic[arg]) is bool:
-                    mastDic[arg] = type(argDic[arg])(mastDic[arg])
+                    if mastDic[arg] != "None":
+                        mastDic[arg] = type(argDic[arg])(mastDic[arg])
+                    else:
+                        mastDic[arg] = None
                 else:
                     if arg != "multi_gpu" and arg != "distributed":
                         mastDic[arg] = str2bool(mastDic[arg])
@@ -1060,14 +1062,19 @@ def main(argv=None):
         valDic = {id:val for id,val in zip(trialIds,values)}
 
         bestOfAllPaths = glob.glob("../models/{}/model{}_best_epoch*".format(args.exp_id,args.model_id))
-        if len(bestOfAllPaths) !=1:
-            raise ValueError("Wrong best path number : {} : {}".format(len(bestOfAllPaths),bestOfAllPaths))
-        bestOfAllPath = bestOfAllPaths[0]
-
-        copyfile(bestOfAllPath, bestOfAllPath.replace("best","bestOfAll"))
-        os.remove(bestOfAllPath)
+        if len(bestOfAllPaths) >1:
+            raise ValueError("Too many best path ({}) : {}".format(len(bestOfAllPaths),bestOfAllPaths))
+        elif len(bestOfAllPaths) == 1:
+            bestOfAllPath = bestOfAllPaths[0]
+            copyfile(bestOfAllPath, bestOfAllPath.replace("best","bestOfAll"))
+            os.remove(bestOfAllPath)
+        else:
+            if len(glob.glob("../models/{}/model{}_bestOfAll_epoch*".format(args.exp_id,args.model_id))) == 0:
+                raise ValueError("No best of bestOfAll weight file.")
 
         bestPaths = glob.glob("../models/{}/model{}_trial*_best*".format(args.exp_id,args.model_id))
+        bestPaths = sorted(bestPaths,key=lambda x:int(os.path.basename(x).split("trial")[1].split("_")[0]))
+        bestPaths = bestPaths[:args.optuna_trial_nb]
 
         snrPath = "../results/{}/snr_{}.csv".format(args.exp_id,args.model_id)
         if not os.path.exists(snrPath):
