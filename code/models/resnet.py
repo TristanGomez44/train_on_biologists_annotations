@@ -166,9 +166,6 @@ class ResNet(nn.Module):
 
         self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
 
-        self.fc = nn.Linear(chan[0]*(2**(4-1)) * block.expansion, num_classes)
-
-
         for m in self.modules():
             if isinstance(m, nn.Conv2d):
                 nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')
@@ -271,7 +268,7 @@ def resnet50(pretrained=True, strict=True,**kwargs):
     if pretrained:
         params = model_zoo.load_url(model_urls['resnet50'])
         params = removeTopLayer(params)
-        model.load_state_dict(params,strict=False)
+        model.load_state_dict(params,strict=True)
     return model
 
 def resnet101(pretrained=True, **kwargs):
