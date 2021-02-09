@@ -402,10 +402,6 @@ def netBuilder(args,gpu=None):
         else:
             raise ValueError("Unknown visual model type : ", args.first_mod)
 
-        if args.freeze_visual:
-            for param in firstModel.parameters():
-                param.requires_grad = False
-
     else:
         firstModel=None
         nbFeat = np.load("../results/{}_reprVec.npy".format(args.dataset_train.split("/")[-1])).shape[-1]
