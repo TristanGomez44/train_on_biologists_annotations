@@ -1406,6 +1406,19 @@ def getPerfs(model):
 
     return {"worst":worst,"median":median,"best":best}
 
+def gradExp_test():
+
+    pts_clusRed = np.genfromtxt("../results/CUB10/snr_clusRed.csv",delimiter=",")[:,1:]
+    pts_bilRed = np.genfromtxt("../results/CUB10/snr_bilRed.csv",delimiter=",")[:,1:]
+
+    plt.figure()
+    plt.scatter(pts_clusRed[:,1],pts_clusRed[:,0],label="clusRed",color="orange")
+    plt.scatter(pts_bilRed[:,1],pts_bilRed[:,0],label="bilRed",color="blue")
+    plt.ylim(0,30)
+    plt.legend()
+    plt.savefig("../vis/CUB10/gradExpTest.png")
+
+
 def main(argv=None):
 
     #Getting arguments from config file and command line
@@ -1518,6 +1531,9 @@ def main(argv=None):
 
     argreader.parser.add_argument('--grad_exp',action="store_true",help='Grad exp plot')
 
+    ####################################### Grad exp ##############################################
+
+    argreader.parser.add_argument('--grad_exp_test',action="store_true",help='Grad exp test plot')
 
     argreader = load_data.addArgs(argreader)
 
@@ -1634,5 +1650,7 @@ def main(argv=None):
         attMapsNbPlot()
     if args.grad_exp:
         gradExp()
+    if args.grad_exp_test:
+        gradExp_test()
 if __name__ == "__main__":
     main()
