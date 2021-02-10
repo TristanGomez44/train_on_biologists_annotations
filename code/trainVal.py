@@ -172,7 +172,7 @@ def computeLoss(args, output, target, resDict, data,reduction="mean"):
         loss = args.nll_weight*(kl*args.kl_interp*args.kl_temp*args.kl_temp+ce*(1-args.kl_interp))
 
         if args.transfer_att_maps:
-            loss += args.att_weights*computeAttDiff(args.att_term_included,resDict["attMaps"],resDict["features"],resDict["master_net_attMaps"],resDict["master_net_features"],args.att_pow)
+            loss += args.att_weights*computeAttDiff(args.att_term_included,resDict["attMaps"],resDict["features"],resDict["master_net_attMaps"],resDict["master_net_features"])
 
     nbTerms = 1
     for key in resDict.keys():
@@ -184,7 +184,7 @@ def computeLoss(args, output, target, resDict, data,reduction="mean"):
 
     return loss
 
-def computeAttDiff(att_term_included,studMaps,studFeat,teachMaps,teachFeat,attPow):
+def computeAttDiff(att_term_included,studMaps,studFeat,teachMaps,teachFeat,attPow=2):
 
     studNorm = torch.sqrt(torch.pow(studFeat,2).sum(dim=1,keepdim=True))
     teachNorm = torch.sqrt(torch.pow(teachFeat,2).sum(dim=1,keepdim=True))
@@ -192,14 +192,14 @@ def computeAttDiff(att_term_included,studMaps,studFeat,teachMaps,teachFeat,attPo
     studMaps = normMap(studMaps,minMax=True)*normMap(studNorm)
     teachMaps = normMap(teachMaps,minMax=True)*normMap(teachNorm)
 
-    teachMaps = F.interpolate(teachMaps,size=(studMaps.size(-2),studMaps.size(-1)),mode='bilinear',align_corners=True)
-
     if att_term_included:
-        stud_pow = torch.pow(studMaps,attPow)
-        teach_pow = torch.pow(1-teachMaps,attPow)
-        term = torch.pow((stud_pow*teach_pow).sum(dim=(2,3)),1.0/attPow).mean()
-    else:
+        kerSize = studMaps.size(-1)//teachMaps.size(-1)
+        studMaps = F.max_pool2d(studMaps,kernel_size=kerSize,stride=kerSize)
         term = torch.pow(torch.pow(torch.abs(teachMaps-studMaps),attPow).sum(dim=(2,3)),1.0/attPow).mean()
+    else:
+        teachMaps = F.interpolate(teachMaps,size=(studMaps.size(-2),studMaps.size(-1)),mode='bilinear',align_corners=True)
+        term = torch.pow(torch.pow(torch.abs(teachMaps-studMaps),attPow).sum(dim=(2,3)),1.0/attPow).mean()
+
     return term
 
 def normMap(map,minMax=False):
@@ -731,7 +731,7 @@ def run(args,trial=None):
     if not trial is None:
         args.lr = trial.suggest_float("lr", 1e-4, 1e-2, log=True)
         args.optim = trial.suggest_categorical("optim", OPTIM_LIST)
-        args.batch_size = trial.suggest_int("batch_size", 4, args.max_batch_size, log=True)
+        #args.batch_size = trial.suggest_int("batch_size", 4, args.max_batch_size, log=True)
         args.dropout = trial.suggest_float("dropout", 0, 0.6,step=0.2)
         args.weight_decay = trial.suggest_float("weight_decay", 1e-6, 1e-3, log=True)
 
@@ -749,8 +749,7 @@ def run(args,trial=None):
             args.kl_interp = trial.suggest_float("kl_interp", 0.1, 1, step=0.1)
 
             if args.transfer_att_maps:
-                args.att_weights = trial.suggest_float("att_weights",0.001,4,log=True)
-                args.att_pow = trial.suggest_int("att_pow",1,3,step=1)
+                args.att_weights = trial.suggest_float("att_weights",0.001,0.5,log=True)
 
         if args.opt_att_maps_nb:
             args.resnet_bil_nb_parts = trial.suggest_int("resnet_bil_nb_parts", 3, 64, log=True)
@@ -814,7 +813,7 @@ def train(gpu,args,trial):
 
     if args.multi_gpu:
         lossFunc = torch.nn.DataParallel(lossFunc,device_ids=[gpu])
-        
+
     kwargsTr["lossFunc"],kwargsVal["lossFunc"] = lossFunc,lossFunc
 
     if not args.only_test and not args.grad_cam:
