@@ -732,9 +732,12 @@ def run(args,trial=None):
         args.lr = trial.suggest_float("lr", 1e-4, 1e-2, log=True)
         args.optim = trial.suggest_categorical("optim", OPTIM_LIST)
 
-        minBS = 10
+        minBS = 12
         if args.max_batch_size <= minBS:
             minBS = 4
+
+            if args.distributed:
+                minBS = 1
 
         args.batch_size = trial.suggest_int("batch_size", minBS, args.max_batch_size, log=True)
         args.dropout = trial.suggest_float("dropout", 0, 0.6,step=0.2)
@@ -998,11 +1001,7 @@ def main(argv=None):
                         args.max_batch_size -= 5
                         print("New max batch size",args.max_batch_size)
                     else:
-                        print("---------------- the error is --------------")
-                        print(e)
-                        sys.exit(0)
-                        print("------ end error -------------")
-                        #raise RuntimeError(e)
+                        raise RuntimeError(e)
 
         curr.execute('SELECT trial_id,value FROM trials WHERE study_id == 1')
         query_res = curr.fetchall()
