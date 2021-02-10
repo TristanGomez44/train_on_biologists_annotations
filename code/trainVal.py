@@ -137,20 +137,43 @@ def epochSeqTr(model, optim, log_interval, loader, epoch, args, **kwargs):
             totalTime = time.time() - start_time
             update.updateTimeCSV(epoch, "train", args.exp_id, args.model_id, totalTime, batch_idx)
 
-def updateGradExp(model,allGrads,end=False,epoch=None,exp_id=None,model_id=None,grad_exp=None):
+def updateGradExp(model,allGrads,end=False,epoch=None,exp_id=None,model_id=None,grad_exp=None,conv=True):
 
     if not end:
-        newGrads = model.secondModel.linLay.weight.grad.data.unsqueeze(0)
+        if conv:
+            newGrads = model.firstModel.featMod.layer4[-1].conv1.weight.grad.data
+            norm_conv1 = torch.sqrt(torch.pow(newGrads.view(-1),2).sum()).unsqueeze(0)
 
-        if allGrads is None:
-            allGrads = newGrads
+            newGrads = model.firstModel.featMod.layer4[-1].conv2.weight.grad.data
+            norm_conv2 = torch.sqrt(torch.pow(newGrads.view(-1),2).sum()).unsqueeze(0)
+
+            newGrads = model.firstModel.featMod.layer4[-1].conv3.weight.grad.data
+            norm_conv3 = torch.sqrt(torch.pow(newGrads.view(-1),2).sum()).unsqueeze(0)
+
+            if allGrads is None:
+                allGrads = {"conv1":norm_conv1,"conv2":norm_conv2,"conv3":norm_conv3}
+            else:
+                allGrads["conv1"] = torch.cat((allGrads["conv1"],norm_conv1),dim=0)
+                allGrads["conv2"] = torch.cat((allGrads["conv2"],norm_conv2),dim=0)
+                allGrads["conv3"] = torch.cat((allGrads["conv3"],norm_conv3),dim=0)
+
         else:
-            allGrads = torch.cat((allGrads,newGrads),dim=0)
+            newGrads = model.secondModel.linLay.weight.grad.data.unsqueeze(0)
+
+            if allGrads is None:
+                allGrads = newGrads
+            else:
+                allGrads = torch.cat((allGrads,newGrads),dim=0)
 
         return allGrads
 
     else:
-        torch.save(allGrads.float(),"../results/{}/{}_allGrads_{}HypParams_epoch{}.th".format(exp_id,model_id,grad_exp,epoch))
+        if conv:
+            torch.save(allGrads["conv1"].float(),"../results/{}/{}_allGradsConv1_{}HypParams_epoch{}.th".format(exp_id,model_id,grad_exp,epoch))
+            torch.save(allGrads["conv2"].float(),"../results/{}/{}_allGradsConv2_{}HypParams_epoch{}.th".format(exp_id,model_id,grad_exp,epoch))
+            torch.save(allGrads["conv3"].float(),"../results/{}/{}_allGradsConv3_{}HypParams_epoch{}.th".format(exp_id,model_id,grad_exp,epoch))
+        else:
+            torch.save(allGrads.float(),"../results/{}/{}_allGrads_{}HypParams_epoch{}.th".format(exp_id,model_id,grad_exp,epoch))
 
 class Loss(torch.nn.Module):
 
@@ -1072,6 +1095,8 @@ def main(argv=None):
                 args.crop_ratio = paramDict["crop_ratio"]
 
             args.run_test = False
+            args.distributed = False
+            args.optuna = False
             train(0,args,None)
         else:
             print("Already done")

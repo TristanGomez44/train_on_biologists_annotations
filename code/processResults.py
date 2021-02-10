@@ -1449,6 +1449,26 @@ def gradExp_test():
 
     plt.savefig("../vis/CUB10/gradExpTest.png")
 
+def gradExp2():
+
+    convs = ["Conv1","Conv2","Conv3"]
+
+    colors = {"clusRed":{"Conv1":"yellow","Conv2":"orange","Conv3":"red"},
+                "bilRed":{"Conv1":"cyan","Conv2":"blue","Conv3":"violet"}}
+
+    plt.figure()
+    for conv in convs:
+
+        gradNorm = torch.load("../results/CUB10/clusRed_allGrads{}_bestHypParams_epoch1.th".format(conv),map_location="cpu")[:-1]
+        x = np.arange(len(gradNorm))/len(gradNorm)
+        plt.plot(x,gradNorm.numpy(),label="BR-CNN-{}".format(conv),color=colors["clusRed"][conv])
+        gradNorm = torch.load("../results/CUB10/bilRed_allGrads{}_bestHypParams_epoch1.th".format(conv),map_location="cpu")[:-1]
+        x = np.arange(len(gradNorm))/len(gradNorm)
+        plt.plot(x,gradNorm.numpy(),label="B-CNN-{}".format(conv),color=colors["bilRed"][conv])
+
+    plt.legend()
+    plt.savefig("../vis/CUB10/gradExp2.png")
+
 def main(argv=None):
 
     #Getting arguments from config file and command line
@@ -1560,10 +1580,8 @@ def main(argv=None):
     ####################################### Grad exp ##############################################
 
     argreader.parser.add_argument('--grad_exp',action="store_true",help='Grad exp plot')
-
-    ####################################### Grad exp ##############################################
-
     argreader.parser.add_argument('--grad_exp_test',action="store_true",help='Grad exp test plot')
+    argreader.parser.add_argument('--grad_exp2',action="store_true",help='Grad exp 2 plot')
 
     argreader = load_data.addArgs(argreader)
 
@@ -1682,5 +1700,7 @@ def main(argv=None):
         gradExp()
     if args.grad_exp_test:
         gradExp_test()
+    if args.grad_exp2:
+        gradExp2()
 if __name__ == "__main__":
     main()
