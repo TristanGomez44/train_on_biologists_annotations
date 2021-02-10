@@ -89,7 +89,7 @@ class BasicBlock(nn.Module):
 class Bottleneck(nn.Module):
     expansion = 4
 
-    def __init__(self, inplanes, planes, stride=1, downsample=None, norm_layer=None,dilation=1):
+    def __init__(self, inplanes, planes, stride=1, downsample=None, norm_layer=None,dilation=1,endRelu=True):
         super(Bottleneck, self).__init__()
 
         if norm_layer is None:
@@ -104,6 +104,8 @@ class Bottleneck(nn.Module):
         self.relu = nn.ReLU(inplace=True)
         self.downsample = downsample
         self.stride = stride
+
+        self.endRelu = endRelu
 
     def forward(self, x):
 
@@ -128,14 +130,15 @@ class Bottleneck(nn.Module):
         else:
             out += identity
 
-        out = self.relu(out)
+        if self.endRelu:
+            out = self.relu(out)
 
         return out
 
 class ResNet(nn.Module):
 
     def __init__(self, block, layers, num_classes=1000, zero_init_residual=False, norm_layer=None,stride=2,\
-                    strideLay2=2,strideLay3=2,strideLay4=2,chan=64,inChan=3,dilation=1):
+                    strideLay2=2,strideLay3=2,strideLay4=2,chan=64,inChan=3,dilation=1,endRelu=True):
 
         super(ResNet, self).__init__()
         if norm_layer is None:
@@ -156,7 +159,7 @@ class ResNet(nn.Module):
         elif len(dilation) != 3:
             raise ValueError("dilation must be a list of 3 int or an int.")
 
-        self.nbLayers = len(layers)
+        self.endRelu = endRelu
 
         #All layers are built but they will not necessarily be used
         self.layer1 = self._make_layer(block, chan[0], layers[0], stride=1,norm_layer=norm_layer,dilation=1)
@@ -196,7 +199,7 @@ class ResNet(nn.Module):
 
         layers = []
 
-        layers.append(block(self.inplanes, planes, stride, downsample, norm_layer))
+        layers.append(block(self.inplanes, planes, stride, downsample, norm_layer,endRelu=self.endRelu))
 
         self.inplanes = planes * block.expansion
 
