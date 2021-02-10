@@ -731,7 +731,7 @@ def run(args,trial=None):
     if not trial is None:
         args.lr = trial.suggest_float("lr", 1e-4, 1e-2, log=True)
         args.optim = trial.suggest_categorical("optim", OPTIM_LIST)
-        #args.batch_size = trial.suggest_int("batch_size", 4, args.max_batch_size, log=True)
+        args.batch_size = trial.suggest_int("batch_size", 4, args.max_batch_size, log=True)
         args.dropout = trial.suggest_float("dropout", 0, 0.6,step=0.2)
         args.weight_decay = trial.suggest_float("weight_decay", 1e-6, 1e-3, log=True)
 
