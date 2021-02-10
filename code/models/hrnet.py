@@ -488,8 +488,22 @@ class HighResolutionNet(nn.Module):
             pretrained_dict = {k: v for k, v in pretrained_dict.items()
                                if k in model_dict.keys()}
             model_dict.update(pretrained_dict)
+            model_dict = removeTop(model_dict)
             self.load_state_dict(model_dict)
 
+def removeTop(params):
+
+    keyToRemove = []
+    for key in params:
+        if key.find("incre_modules") != -1 or key.find("downsamp_modules" != -1) or \
+            key.find("final_layer") != -1 or key.find("classifier") != -1:
+
+            keyToRemove.append(key)
+
+    for key in keyToRemove:
+        params.pop(key)
+
+    return params
 
 def get_cls_net(w=44,**kwargs):
     if w == 44:
