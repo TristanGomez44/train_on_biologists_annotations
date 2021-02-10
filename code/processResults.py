@@ -1408,16 +1408,46 @@ def getPerfs(model):
 
 def gradExp_test():
 
-    pts_clusRed = np.genfromtxt("../results/CUB10/snr_clusRed.csv",delimiter=",")[:,1:]
-    pts_bilRed = np.genfromtxt("../results/CUB10/snr_bilRed.csv",delimiter=",")[:,1:]
+    pts_clusRed = np.genfromtxt("../results/CUB10/snr_clusRed.csv",delimiter=",")[1:,1:]
+    pts_bilRed = np.genfromtxt("../results/CUB10/snr_bilRed.csv",delimiter=",")[1:,1:]
+
+    pts_clusRed = pts_clusRed[~np.isnan(pts_clusRed[:,0])]
+    pts_bilRed = pts_bilRed[~np.isnan(pts_bilRed[:,0])]
 
     plt.figure()
     plt.scatter(pts_clusRed[:,1],pts_clusRed[:,0],label="clusRed",color="orange")
     plt.scatter(pts_bilRed[:,1],pts_bilRed[:,0],label="bilRed",color="blue")
-    plt.ylim(0,30)
+    plt.ylim(0,60)
+    plt.xlim(0.4,0.9)
     plt.legend()
     plt.savefig("../vis/CUB10/gradExpTest.png")
 
+    plt.figure()
+
+    pts_clusRed = pts_clusRed[pts_clusRed[:,1] > 0.6]
+    pts_bilRed = pts_bilRed[pts_bilRed[:,1] > 0.6]
+
+    clusAcc = pts_clusRed[:,1]
+    bilAcc = pts_bilRed[:,1]
+
+    best,median,worst = clusAcc.max(),np.median(clusAcc),clusAcc.min()
+    snr_best = pts_clusRed[:,0][clusAcc==best][0]
+    #snr_median = pts_clusRed[:,0][clusAcc==median][0]
+    snr_worst = pts_clusRed[:,0][clusAcc==worst][0]
+    #plt.bar(np.arange(3),[snr_worst,snr_median,snr_best],width=0.2,label="clusRed")
+    plt.bar(np.arange(2),[snr_worst,snr_best],width=0.2,label="clusRed")
+
+    best,median,worst = bilAcc.max(),np.median(bilAcc),bilAcc.min()
+    snr_best = pts_bilRed[:,0][bilAcc==best][0]
+    #snr_median = pts_bilRed[:,0][bilAcc==median][0]
+    snr_worst = pts_bilRed[:,0][bilAcc==worst][0]
+    #plt.bar(np.arange(3)+.1,[snr_worst,snr_median,snr_best],width=0.2,label="bilAcc")
+    plt.bar(np.arange(2)+.1,[snr_worst,snr_best],width=0.2,label="bilAcc")
+
+
+    plt.legend()
+
+    plt.savefig("../vis/CUB10/gradExpTest.png")
 
 def main(argv=None):
 
