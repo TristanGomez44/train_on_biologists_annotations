@@ -58,6 +58,8 @@ import formatData
 import sqlite3
 import trainVal
 
+from scipy.signal import savgol_filter
+
 def plotPointsImageDataset(imgNb,redFact,plotDepth,args):
 
     cm = plt.get_cmap('plasma')
@@ -1456,18 +1458,50 @@ def gradExp2():
     colors = {"clusRed":{"Conv1":"yellow","Conv2":"orange","Conv3":"red"},
                 "bilRed":{"Conv1":"cyan","Conv2":"blue","Conv3":"violet"}}
 
-    plt.figure()
+    epochs = len(glob.glob("../results/CUB10/clusRed_allGradsConv1_bestHypParams_epoch*.th"))
+
+
     for conv in convs:
+        plt.figure()
 
-        gradNorm = torch.load("../results/CUB10/clusRed_allGrads{}_bestHypParams_epoch1.th".format(conv),map_location="cpu")[:-1]
+        gradNorm,gradNorm_sm = getAllNorm("clusRed",conv,epochs)
         x = np.arange(len(gradNorm))/len(gradNorm)
-        plt.plot(x,gradNorm.numpy(),label="BR-CNN-{}".format(conv),color=colors["clusRed"][conv])
-        gradNorm = torch.load("../results/CUB10/bilRed_allGrads{}_bestHypParams_epoch1.th".format(conv),map_location="cpu")[:-1]
-        x = np.arange(len(gradNorm))/len(gradNorm)
-        plt.plot(x,gradNorm.numpy(),label="B-CNN-{}".format(conv),color=colors["bilRed"][conv])
+        plt.plot(x,gradNorm_sm,color="orange",label="BR-CNN")
+        plt.plot(x,gradNorm,color="orange",alpha=0.5)
 
-    plt.legend()
-    plt.savefig("../vis/CUB10/gradExp2.png")
+        gradNorm,gradNorm_sm = getAllNorm("bilRed",conv,epochs)
+        x = np.arange(len(gradNorm))/len(gradNorm)
+        plt.plot(x,gradNorm_sm,color="blue",label="B-CNN")
+        plt.plot(x,gradNorm,color="blue",alpha=0.5)
+
+        plt.xlabel("Training epochs")
+        ticks = np.arange(epochs//2+1)
+        plt.xticks(ticks/(epochs//2),2*ticks,rotation=25)
+        plt.ylabel("{} gradient norm".format(conv))
+
+        plt.legend()
+        plt.savefig("../vis/CUB10/gradExp2_{}.png".format(conv))
+
+def getAllNorm(model,conv,epochs):
+
+    gradNorm = None
+    for epoch in range(1,epochs+1):
+        gradNorm_epoch = torch.load("../results/CUB10/{}_allGrads{}_bestHypParams_epoch{}.th".format(model,conv,epoch),map_location="cpu")[:-1]
+        gradNorm = cat(gradNorm,gradNorm_epoch)
+
+    gradNorm_sm = smooth(gradNorm.numpy())
+
+    return gradNorm,gradNorm_sm
+
+def smooth(x):
+    return savgol_filter(x, 51, 3)
+
+def cat(all,new):
+    if all is None:
+        all = new
+    else:
+        all = torch.cat((all,new),dim=0)
+    return all
 
 def main(argv=None):
 
