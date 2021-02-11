@@ -8,6 +8,7 @@ plt.switch_backend('agg')
 
 from models import resnet
 from models import hrnet
+from models import inception
 import args
 
 def buildFeatModel(featModelName, **kwargs):
@@ -27,6 +28,8 @@ def buildFeatModel(featModelName, **kwargs):
         featModel = hrnet.get_cls_net(w=64)
     elif featModelName == "hrnet18":
         featModel = hrnet.get_cls_net(w=18)
+    elif featModelName == "inception":
+        featModel = inception.inception_v3(pretrained=True)
     else:
         raise ValueError("Unknown model type : ", featModelName)
 
@@ -348,6 +351,8 @@ def getResnetFeat(backbone_name, backbone_inplanes):
         nbFeat = 64
     elif backbone_name == "hrnet18":
         nbFeat = 16
+    elif backbone_name == "inception":
+        nbFeat = 2048
     else:
         raise ValueError("Unkown backbone : {}".format(backbone_name))
     return nbFeat
@@ -356,52 +361,49 @@ def netBuilder(args,gpu=None):
     ############### Visual Model #######################
 
     if not args.repr_vec:
-        if args.first_mod.find("resnet") != -1 or args.first_mod.find("bagnet") != -1 or args.first_mod.find("hrnet") != -1:
 
-            nbFeat = getResnetFeat(args.first_mod, args.resnet_chan)
+        nbFeat = getResnetFeat(args.first_mod, args.resnet_chan)
 
-            if args.resnet_bilinear:
-                CNNconst = CNN2D_bilinearAttPool
-                kwargs = {"inFeat":nbFeat,"nb_parts":args.resnet_bil_nb_parts,\
-                          "cluster":args.bil_cluster,"cluster_ensemble":args.bil_cluster_ensemble,\
-                          "applySoftmaxOnSim":args.apply_softmax_on_sim,\
-                          "softmCoeff":args.softm_coeff,\
-                          "no_refine":args.bil_cluster_norefine,\
-                          "rand_vec":args.bil_cluster_randvec,\
-                          "update_sco_by_norm_sim":args.bil_clust_update_sco_by_norm_sim,\
-                          "vect_gate":args.bil_clus_vect_gate,\
-                          "vect_ind_to_use":args.bil_clus_vect_ind_to_use,\
-                          "cluster_lay_ind":args.bil_cluster_lay_ind}
+        if args.resnet_bilinear:
+            CNNconst = CNN2D_bilinearAttPool
+            kwargs = {"inFeat":nbFeat,"nb_parts":args.resnet_bil_nb_parts,\
+                      "cluster":args.bil_cluster,"cluster_ensemble":args.bil_cluster_ensemble,\
+                      "applySoftmaxOnSim":args.apply_softmax_on_sim,\
+                      "softmCoeff":args.softm_coeff,\
+                      "no_refine":args.bil_cluster_norefine,\
+                      "rand_vec":args.bil_cluster_randvec,\
+                      "update_sco_by_norm_sim":args.bil_clust_update_sco_by_norm_sim,\
+                      "vect_gate":args.bil_clus_vect_gate,\
+                      "vect_ind_to_use":args.bil_clus_vect_ind_to_use,\
+                      "cluster_lay_ind":args.bil_cluster_lay_ind}
 
-                if not args.bil_cluster_ensemble:
+            if not args.bil_cluster_ensemble:
 
-                    if args.bil_cluster_lay_ind != 4:
-                        if nbFeat == 2048:
-                            nbFeat = nbFeat//2**(4-args.bil_cluster_lay_ind)
-                        elif nbFeat == 512:
-                            nbFeat = nbFeat//2**(4-args.bil_cluster_lay_ind)
-                        else:
-                            raise ValueError("Unknown feature nb.")
-
-                    if args.bil_clus_vect_ind_to_use == "all":
-                        nbFeat *= args.resnet_bil_nb_parts
+                if args.bil_cluster_lay_ind != 4:
+                    if nbFeat == 2048:
+                        nbFeat = nbFeat//2**(4-args.bil_cluster_lay_ind)
+                    elif nbFeat == 512:
+                        nbFeat = nbFeat//2**(4-args.bil_cluster_lay_ind)
                     else:
-                        nbFeat *= len(args.bil_clus_vect_ind_to_use.split(","))
+                        raise ValueError("Unknown feature nb.")
 
-            else:
-                CNNconst = CNN2D
-                kwargs = {}
+                if args.bil_clus_vect_ind_to_use == "all":
+                    nbFeat *= args.resnet_bil_nb_parts
+                else:
+                    nbFeat *= len(args.bil_clus_vect_ind_to_use.split(","))
 
-            if args.first_mod.find("bagnet") == -1 and args.first_mod.find("hrnet") == -1:
-                firstModel = CNNconst(args.first_mod,chan=args.resnet_chan, stride=args.resnet_stride,\
-                                      strideLay2=args.stride_lay2,strideLay3=args.stride_lay3,\
-                                      strideLay4=args.stride_lay4,\
-                                      endRelu=args.end_relu,\
-                                      **kwargs)
-            else:
-                firstModel = CNNconst(args.first_mod,**kwargs)
         else:
-            raise ValueError("Unknown visual model type : ", args.first_mod)
+            CNNconst = CNN2D
+            kwargs = {}
+
+        if args.first_mod.find("bagnet") == -1 and args.first_mod.find("hrnet") == -1:
+            firstModel = CNNconst(args.first_mod,chan=args.resnet_chan, stride=args.resnet_stride,\
+                                  strideLay2=args.stride_lay2,strideLay3=args.stride_lay3,\
+                                  strideLay4=args.stride_lay4,\
+                                  endRelu=args.end_relu,\
+                                  **kwargs)
+        else:
+            firstModel = CNNconst(args.first_mod,**kwargs)
 
     else:
         firstModel=None
@@ -421,7 +423,7 @@ def netBuilder(args,gpu=None):
     if args.distributed:
         torch.cuda.set_device(gpu)
         net.cuda(gpu)
-        net = torch.nn.parallel.DistributedDataParallel(net,device_ids=[gpu])
+        net = torch.nn.parallel.DistributedDataParallel(net,device_ids=[gpu],find_unused_parameters=True)
     else:
         if args.cuda:
             net.cuda()
