@@ -9,6 +9,7 @@ plt.switch_backend('agg')
 from models import resnet
 from models import hrnet
 from models import inception
+from models import efficientnet
 import args
 
 def buildFeatModel(featModelName, **kwargs):
@@ -30,6 +31,8 @@ def buildFeatModel(featModelName, **kwargs):
         featModel = hrnet.get_cls_net(w=18)
     elif featModelName == "inception":
         featModel = inception.inception_v3(pretrained=True)
+    elif featModelName.find("efficientnet") != -1:
+        featModel = getattr(efficientnet,featModelName)()
     else:
         raise ValueError("Unknown model type : ", featModelName)
 
@@ -353,6 +356,8 @@ def getResnetFeat(backbone_name, backbone_inplanes):
         nbFeat = 16
     elif backbone_name == "inception":
         nbFeat = 2048
+    elif backbone_name.find("efficientnet") != -1:
+        nbFeat = 1280
     else:
         raise ValueError("Unkown backbone : {}".format(backbone_name))
     return nbFeat
