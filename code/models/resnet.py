@@ -1,19 +1,9 @@
 import torch.nn as nn
 import torch.utils.model_zoo as model_zoo
 
-import numpy as np
-from  torch.nn.modules.upsampling import Upsample
 
-from torch.nn.functional import interpolate as interpo
-import sys
-import glob
-import torch
 
-from skimage.transform import resize
-import torch.nn.functional as F
 
-import modelBuilder
-import torchvision
 '''
 
 Just a modification of the torchvision resnet model to get the before-to-last activation
