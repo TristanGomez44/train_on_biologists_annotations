@@ -218,7 +218,9 @@ def computeAttDiff(att_term_included,studMaps,studFeat,teachMaps,teachFeat,attPo
     if att_term_included:
         kerSize = studMaps.size(-1)//teachMaps.size(-1)
         studMaps = F.max_pool2d(studMaps,kernel_size=kerSize,stride=kerSize)
-        term = torch.pow(torch.pow(torch.abs(teachMaps-studMaps),attPow).sum(dim=(2,3)),1.0/attPow).mean()
+        term = torch.pow(torch.abs(teachMaps-studMaps),attPow)
+        term *= (1-teachMaps)
+        term = term.sum(dim=(2,3)).mean()
     else:
         teachMaps = F.interpolate(teachMaps,size=(studMaps.size(-2),studMaps.size(-1)),mode='bilinear',align_corners=True)
         term = torch.pow(torch.pow(torch.abs(teachMaps-studMaps),attPow).sum(dim=(2,3)),1.0/attPow).mean()
@@ -310,7 +312,10 @@ def epochImgEval(model, log_interval, loader, epoch, args, metricEarlyStop, mode
             resDict["master_net_features"] = mastDict["features"]
 
         # Loss
-        loss = kwargs["lossFunc"](output, target, resDict, data).mean()
+        if not (mode=="test" and args.grad_exp_test):
+            loss = 0
+        else:
+            loss = kwargs["lossFunc"](output, target, resDict, data).mean()
 
         # Other variables produced by the net
         if mode == "test":
@@ -337,7 +342,11 @@ def epochImgEval(model, log_interval, loader, epoch, args, metricEarlyStop, mode
 
             model.zero_grad()
 
-        metDictSample["Loss"] = loss.detach().data.item()
+        if (mode=="test" and args.grad_exp_test):
+            metDictSample["Loss"] = loss.detach().data.item()
+        else:
+            metDictSample["Loss"] = loss
+
         metrDict = metrics.updateMetrDict(metrDict, metDictSample)
 
         writePreds(output, target, epoch, args.exp_id, args.model_id, args.class_nb, batch_idx,mode)
@@ -780,7 +789,7 @@ def run(args,trial=None):
             args.kl_interp = trial.suggest_float("kl_interp", 0.1, 1, step=0.1)
 
             if args.transfer_att_maps:
-                args.att_weights = trial.suggest_float("att_weights",0.001,0.5,log=True)
+                args.att_weights = trial.suggest_float("att_weights",0.005,0.5,log=True)
 
         if args.opt_att_maps_nb:
             args.resnet_bil_nb_parts = trial.suggest_int("resnet_bil_nb_parts", 3, 64, log=True)
