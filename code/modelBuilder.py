@@ -317,6 +317,7 @@ class LinearSecondModel(SecondModel):
                 x = self.avgpool(x).squeeze(-1).squeeze(-1)
 
             x = self.dropout(x)
+
             pred = self.linLay(x)
 
             retDict = {"pred": pred}
@@ -357,7 +358,7 @@ def getResnetFeat(backbone_name, backbone_inplanes):
     elif backbone_name == "inception":
         nbFeat = 2048
     elif backbone_name.find("efficientnet") != -1:
-        nbFeat = 1280
+        nbFeat = 1408
     else:
         raise ValueError("Unkown backbone : {}".format(backbone_name))
     return nbFeat
