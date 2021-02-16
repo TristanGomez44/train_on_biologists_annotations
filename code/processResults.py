@@ -1337,16 +1337,24 @@ def effPlot(red=True):
 
 def attMapsNbPlot():
 
-    testPaths = glob.glob("../results/CUB10/model*N*test*csv")
-    perfList,NList = [],[]
-
     plt.figure()
-    for path in sorted(testPaths,key=lambda x:utils.findNumbers(os.path.basename(x))):
-        perfList.append(float(np.genfromtxt(path,delimiter=",")[1,0]))
-        NList.append(os.path.basename(path).split("modelN")[1].split("_")[0])
 
-    plt.plot(NList,perfList)
-    plt.ylim(0,1)
+    pattlist = ["../results/CUB10/modelN*test*csv","../results/CUB10/modelbilN*_3_epoch*test*csv"]
+    labList = ["BR-CNN","B-CNN"]
+    rootList = ["modelN","modelbilN"]
+
+    for i,patt in enumerate(pattlist):
+        testPaths = glob.glob(patt)
+        perfList,NList = [],[]
+
+        for path in sorted(testPaths,key=lambda x:utils.findNumbers(os.path.basename(x))):
+            perfList.append(float(np.genfromtxt(path,delimiter=",")[1,0]))
+            NList.append(os.path.basename(path).split(rootList[i])[1].split("_")[0])
+
+        plt.plot(NList,perfList,label=labList[i])
+
+    plt.legend()
+    #plt.ylim(0,1)
     plt.savefig("../vis/CUB10/N_acc.png")
 
 def gradExp():
