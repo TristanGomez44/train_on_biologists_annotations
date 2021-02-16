@@ -515,6 +515,7 @@ def addArgs(argreader):
     argreader.parser.add_argument('--att_weights', type=float, help='Attention map transfer weight.')
     argreader.parser.add_argument('--att_pow', type=int, help='The power at which to compute the difference between the maps.')
     argreader.parser.add_argument('--att_term_included', type=args.str2bool, help='To force the studen att maps to be included in the teach att maps.')
+    argreader.parser.add_argument('--att_term_reg', type=args.str2bool, help='To force the student att maps to be centered where the teach maps are centered.')
 
     argreader.parser.add_argument('--end_relu', type=args.str2bool, help='To add a relu at the end of the first block of each layer.')
 

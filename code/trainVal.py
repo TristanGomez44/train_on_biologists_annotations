@@ -195,7 +195,7 @@ def computeLoss(args, output, target, resDict, data,reduction="mean"):
         loss = args.nll_weight*(kl*args.kl_interp*args.kl_temp*args.kl_temp+ce*(1-args.kl_interp))
 
         if args.transfer_att_maps:
-            loss += args.att_weights*computeAttDiff(args.att_term_included,resDict["attMaps"],resDict["features"],resDict["master_net_attMaps"],resDict["master_net_features"])
+            loss += args.att_weights*computeAttDiff(args.att_term_included,args.att_term_reg,resDict["attMaps"],resDict["features"],resDict["master_net_attMaps"],resDict["master_net_features"])
 
     nbTerms = 1
     for key in resDict.keys():
@@ -207,25 +207,53 @@ def computeLoss(args, output, target, resDict, data,reduction="mean"):
 
     return loss
 
-def computeAttDiff(att_term_included,studMaps,studFeat,teachMaps,teachFeat,attPow=2):
+def computeAttDiff(att_term_included,att_term_reg,studMaps,studFeat,teachMaps,teachFeat,attPow=2):
 
     studNorm = torch.sqrt(torch.pow(studFeat,2).sum(dim=1,keepdim=True))
     teachNorm = torch.sqrt(torch.pow(teachFeat,2).sum(dim=1,keepdim=True))
 
-    studMaps = normMap(studMaps,minMax=True)*normMap(studNorm)
-    teachMaps = normMap(teachMaps,minMax=True)*normMap(teachNorm)
-
     if att_term_included:
+        studMaps = normMap(studMaps,minMax=True)*normMap(studNorm)
+        teachMaps = normMap(teachMaps,minMax=True)*normMap(teachNorm)
+
         kerSize = studMaps.size(-1)//teachMaps.size(-1)
         studMaps = F.max_pool2d(studMaps,kernel_size=kerSize,stride=kerSize)
         term = torch.pow(torch.abs(teachMaps-studMaps),attPow)
         term *= (1-teachMaps)
         term = term.sum(dim=(2,3)).mean()
+
+    elif att_term_reg:
+        studMaps = normMap(studMaps,minMax=True)*normMap(studNorm,minMax=True)
+        teachMaps = normMap(teachMaps,minMax=True)*normMap(teachNorm,minMax=True)
+
+        teachX,teachY = softCoord(teachMaps)
+        ratio = studMaps.size(-1)//teachMaps.size(-1)
+        teachX,teachY = teachX*ratio,teachY*ratio
+        studX,studY = softCoord(studMaps)
+
+        term = torch.sqrt(torch.pow(studX-teachX,2)+torch.pow(studY-teachY,2)).mean()
+
     else:
+        studMaps = normMap(studMaps,minMax=True)*normMap(studNorm)
+        teachMaps = normMap(teachMaps,minMax=True)*normMap(teachNorm)
+
         teachMaps = F.interpolate(teachMaps,size=(studMaps.size(-2),studMaps.size(-1)),mode='bilinear',align_corners=True)
         term = torch.pow(torch.pow(torch.abs(teachMaps-studMaps),attPow).sum(dim=(2,3)),1.0/attPow).mean()
 
     return term
+
+def softCoord(maps):
+
+    x = torch.arange(maps.size(3)).unsqueeze(0).expand(maps.size(2),-1).to(maps.device)
+    y = torch.arange(maps.size(2)).unsqueeze(1).expand(-1,maps.size(3)).to(maps.device)
+
+    valX = (x.unsqueeze(0).unsqueeze(0)*maps).sum(dim=(2,3))
+    valX /= maps.sum(dim=(2,3))
+
+    valY = (y.unsqueeze(0).unsqueeze(0)*maps).sum(dim=(2,3))
+    valY /= maps.sum(dim=(2,3))
+
+    return valX,valY
 
 def normMap(map,minMax=False):
     if not minMax:
@@ -716,7 +744,7 @@ def initMasterNet(args,gpu=None):
                         mastDic[arg] = None
                 else:
                     if arg != "multi_gpu" and arg != "distributed":
-                        mastDic[arg] = str2bool(mastDic[arg])
+                        mastDic[arg] = str2bool(mastDic[arg]) if mastDic[arg] != "None" else False
             else:
                 mastDic[arg] = None
 
@@ -789,7 +817,7 @@ def run(args,trial=None):
             args.kl_interp = trial.suggest_float("kl_interp", 0.1, 1, step=0.1)
 
             if args.transfer_att_maps:
-                args.att_weights = trial.suggest_float("att_weights",0.005,0.5,log=True)
+                args.att_weights = trial.suggest_float("att_weights",0.001,0.5,log=True)
 
         if args.opt_att_maps_nb:
             args.resnet_bil_nb_parts = trial.suggest_int("resnet_bil_nb_parts", 3, 64, log=True)
