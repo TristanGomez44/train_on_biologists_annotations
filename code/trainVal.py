@@ -792,12 +792,16 @@ def run(args,trial=None):
         args.lr = trial.suggest_float("lr", 1e-4, 1e-2, log=True)
         args.optim = trial.suggest_categorical("optim", OPTIM_LIST)
 
-        minBS = 12
-        if args.max_batch_size <= minBS:
-            minBS = 4
-
-            if args.distributed:
+        if args.distributed:
+            if args.max_batch_size <= 12//torch.cuda.device_count():
                 minBS = 1
+            else:
+                minBS = 12//torch.cuda.device_count()
+        else:
+            if args.max_batch_size <= 12:
+                minBS = 4
+            else:
+                minBS = 12
 
         args.batch_size = trial.suggest_int("batch_size", minBS, args.max_batch_size, log=True)
         args.dropout = trial.suggest_float("dropout", 0, 0.6,step=0.2)
