@@ -146,7 +146,8 @@ def buildTestLoader(args, mode,shuffle=False,withSeg=False,reprVec=False,gpu=Non
     if args.val_batch_size == -1:
         args.val_batch_size = int(args.max_batch_size*3.5)
 
-    if args.distributed:
+
+    if args.distributed and (not gpu is None):
         sampler = torch.utils.data.distributed.DistributedSampler(test_dataset,num_replicas=args.world_size,rank=gpu,shuffle=False)
 
     testLoader = torch.utils.data.DataLoader(dataset=test_dataset, batch_size=args.val_batch_size,
