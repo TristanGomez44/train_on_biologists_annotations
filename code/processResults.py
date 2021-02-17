@@ -283,10 +283,11 @@ def plotPointsImageDatasetGrid(exp_id,imgNb,epochs,model_ids,reduction_fact_list
 
     fnt = ImageFont.truetype("arial.ttf", 40)
 
-    pred = np.genfromtxt("../results/{}/{}_epoch{}_test.csv".format(exp_id,model_ids[0],epochs[0]),delimiter=",")[1:,1:].argmax(axis=1)
-    class_aSort = list(formatData.labelDict.keys())
-    class_aSort.sort()
-    class_realSort = [formatData.getRevLab()[i] for i in range(len(class_aSort))]
+    if exp_id.find("EMB") != -1:
+        pred = np.genfromtxt("../results/{}/{}_epoch{}_test.csv".format(exp_id,model_ids[0],epochs[0]),delimiter=",")[1:,1:].argmax(axis=1)
+        class_aSort = list(formatData.labelDict.keys())
+        class_aSort.sort()
+        class_realSort = [formatData.getRevLab()[i] for i in range(len(class_aSort))]
 
     for i in range(imgNb):
 
@@ -302,11 +303,13 @@ def plotPointsImageDatasetGrid(exp_id,imgNb,epochs,model_ids,reduction_fact_list
         imgDraw.rectangle([(0,0), (220, 40)],fill="white")
 
         imgDraw.text((0,0), str(i+1)+" ", font=fnt,fill=(0,0,0))
-        if class_aSort[pred[inds[i]]] == class_realSort[testDataset[inds[i]][1]]:
-            imgDraw.text((50,0), class_aSort[pred[inds[i]]], font=fnt,fill=(0,230,0))
-        else:
-            imgDraw.text((50,0), class_aSort[pred[inds[i]]], font=fnt,fill=(255,0,0))
-            imgDraw.text((150,0), "("+class_realSort[testDataset[inds[i]][1]]+")", font=fnt,fill=(0,0,0))
+
+        if exp_id.find("EMB") != -1:
+            if class_aSort[pred[inds[i]]] == class_realSort[testDataset[inds[i]][1]]:
+                imgDraw.text((50,0), class_aSort[pred[inds[i]]], font=fnt,fill=(0,230,0))
+            else:
+                imgDraw.text((50,0), class_aSort[pred[inds[i]]], font=fnt,fill=(255,0,0))
+                imgDraw.text((150,0), "("+class_realSort[testDataset[inds[i]][1]]+")", font=fnt,fill=(0,0,0))
 
         img = torch.tensor(np.array(imgPIL)).permute(2,0,1).unsqueeze(0).float()/255
 
