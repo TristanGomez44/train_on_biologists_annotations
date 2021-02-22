@@ -139,7 +139,7 @@ def compRecField(architecture):
 def plotPointsImageDatasetGrid(exp_id,imgNb,epochs,model_ids,reduction_fact_list,inverse_xy,mode,nbClass,\
                                 useDropped_list,forceFeat,fullAttMap,threshold,maps_inds,plotId,luminosity,\
                                 receptive_field,cluster,cluster_attention,pond_by_norm,gradcam,nrows,correctness,\
-                                agregateMultiAtt,plotVecEmb,onlyNorm,class_index,args):
+                                agregateMultiAtt,plotVecEmb,onlyNorm,class_index,ind_to_keep,args):
 
     if (correctness == "True" or correctness == "False") and len(model_ids)>1:
         raise ValueError("correctness can only be used with a single model.")
@@ -238,6 +238,10 @@ def plotPointsImageDatasetGrid(exp_id,imgNb,epochs,model_ids,reduction_fact_list
                 endInd = maxInd
 
             inds = torch.randint(startInd,endInd,size=(imgNb,))
+
+            if not ind_to_keep is None:
+                ind_to_keep = np.array(ind_to_keep)-1
+                inds = inds[ind_to_keep]
 
             #In case there is not enough images
             imgNb = min(len(inds),imgNb)
@@ -1570,6 +1574,8 @@ def main(argv=None):
     argreader.parser.add_argument('--nrows',type=int,metavar="INT",help='The number of rows',default=4)
     argreader.parser.add_argument('--class_index',type=int,metavar="INT",help='The class index to show')
 
+    argreader.parser.add_argument('--ind_to_keep',type=int,nargs="*",metavar="INT",help='The index of the images to keep')
+
     ######################################## Find failure cases #########################################""
 
     argreader.parser.add_argument('--list_best_pred',action="store_true",help='To create a file listing the prediction for all models at their best epoch')
@@ -1679,7 +1685,7 @@ def main(argv=None):
         plotPointsImageDatasetGrid(args.exp_id,args.image_nb,args.epoch_list,args.model_ids,args.reduction_fact_list,args.inverse_xy,args.mode,\
                                     args.class_nb,args.use_dropped_list,args.force_feat,args.full_att_map,args.use_threshold,args.maps_inds,args.plot_id,\
                                     args.luminosity,args.receptive_field,args.cluster,args.cluster_attention,args.pond_by_norm,args.gradcam,args.nrows,\
-                                    args.correctness,args.agregate_multi_att,args.plot_vec_emb,args.only_norm,args.class_index,args)
+                                    args.correctness,args.agregate_multi_att,args.plot_vec_emb,args.only_norm,args.class_index,args.ind_to_keep,args)
     if args.plot_prob_maps:
         plotProbMaps(args.image_nb,args,args.norm)
     if args.list_best_pred:
