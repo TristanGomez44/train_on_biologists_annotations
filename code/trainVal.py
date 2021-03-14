@@ -22,6 +22,9 @@ import load_data
 import metrics
 import utils
 import update
+from gradcam import GradCAM, GradCAMpp
+import guided_backprop
+from score_map import ScoreCam
 
 import time
 
@@ -36,6 +39,7 @@ import gc
 
 import torch.multiprocessing as mp
 import torch.distributed as dist
+import torchvision
 
 OPTIM_LIST = ["Adam", "AMSGrad", "SGD"]
 
@@ -988,7 +992,8 @@ def main(argv=None):
 
     argreader.parser.add_argument('--do_test_again', type=str2bool, help='Does the test evaluation even if it has already been done')
     argreader.parser.add_argument('--compute_latency', type=str2bool, help='To write in a file the latency at each forward pass.')
-    argreader.parser.add_argument('--grad_cam', type=str2bool, help='To compute grad cam instead of training or testing.')
+    argreader.parser.add_argument('--grad_cam', type=int, help='To compute grad cam instead of training or testing.',nargs="*")
+
     argreader.parser.add_argument('--optuna', type=str2bool, help='To run a hyper-parameter study')
     argreader.parser.add_argument('--optuna_trial_nb', type=int, help='The number of hyper-parameter trial to run.')
     argreader.parser.add_argument('--opt_data_aug', type=str2bool, help='To optimise data augmentation hyper-parameter.')
@@ -1141,7 +1146,6 @@ def main(argv=None):
             train(0,args,None)
         else:
             print("Already done")
-
     elif args.grad_exp_test:
 
         args.distributed = False
@@ -1196,6 +1200,70 @@ def main(argv=None):
                 os.remove(path.replace("trial{}_best".format(trialId-1),"best"))
 
         copyfile(bestOfAllPath.replace("best","bestOfAll"),bestOfAllPath)
+
+
+    elif args.grad_cam:
+
+        args.val_batch_size = 1
+        testLoader,testDataset = load_data.buildTestLoader(args, "test",withSeg=args.with_seg)
+
+        bestPath = glob.glob("../models/{}/model{}_best_epoch*".format(args.exp_id, args.model_id))[0]
+        bestEpoch = int(os.path.basename(bestPath).split("epoch")[1])
+
+        net = modelBuilder.netBuilder(args,gpu=0)
+        net = preprocessAndLoadParams(bestPath,args.cuda,net,args.strict_init)
+
+        net = modelBuilder.RepVecFeatMod(net)
+
+        model_dict = dict(type=args.first_mod, arch=net, layer_name='layer4', input_size=(448, 448))
+        grad_cam = GradCAM(model_dict, True)
+        grad_cam_pp = GradCAMpp(model_dict,True)
+        #score_map = ScoreCam(net,target_layer=4)
+        guided_backprop_mod = guided_backprop.GuidedBackprop(net)
+
+        allMask = None
+        allMask_pp = None
+        #allMask_sc= None
+        #allMaps = None
+
+        #for batch_idx, batch in enumerate(testLoader):
+            #data,targ = batch[0],batch[1]
+
+            #if (batch_idx % args.log_interval == 0):
+            #    print("\t", batch_idx * len(data), "/", len(testLoader.dataset))
+
+        for i in args.grad_cam:
+            batch = testDataset.__getitem__(i)
+            data,targ = batch[0].unsqueeze(0),torch.tensor(batch[1]).unsqueeze(0)
+
+            if args.cuda:
+                data = data.cuda()
+                targ = torch.tensor(targ).cuda()
+
+            mask = grad_cam(data).detach().cpu()
+            #mask = (255*(mask-mask.min())/(mask.max()-mask.min())).byte()
+
+            mask_pp = grad_cam_pp(data).detach().cpu()
+            #mask_pp = (255*(mask_pp-mask_pp.min())/(mask_pp.max()-mask_pp.min())).byte()
+
+            #mask_sc = score_map.generate_cam(data,targ)
+            map = guided_backprop_mod.generate_gradients(data,targ).detach().cpu()
+
+            if allMask is None:
+                allMask = mask
+                allMask_pp = mask_pp
+                #allMask_sc = mask_sc
+                allMaps = map
+            else:
+                allMask = torch.cat((allMask,mask),dim=0)
+                allMask_pp = torch.cat((allMask_pp,mask_pp),dim=0)
+                #allMask_sc = np.concatenate((allMask_sc,mask_sc),axis=0)
+                allMaps = torch.cat((allMaps,map),dim=0)
+
+        np.save("../results/{}/gradcam_{}_epoch{}_test.npy".format(args.exp_id,args.model_id,bestEpoch),allMask.numpy())
+        np.save("../results/{}/gradcam_pp_{}_epoch{}_test.npy".format(args.exp_id,args.model_id,bestEpoch),allMask_pp.numpy())
+        #np.save("../results/{}/scorecam_{}_epoch{}_test.npy".format(args.exp_id,args.model_id,bestEpoch),allMask_sc)
+        np.save("../results/{}/gradcam_maps_{}_epoch{}_test.npy".format(args.exp_id,args.model_id,bestEpoch),allMaps.numpy())
 
     else:
         train(0,args,None)

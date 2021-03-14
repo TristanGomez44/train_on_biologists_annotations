@@ -56,7 +56,7 @@ import scipy.stats
 import formatData
 
 import sqlite3
-import trainVal
+
 
 from scipy.signal import savgol_filter
 
@@ -138,8 +138,8 @@ def compRecField(architecture):
 
 def plotPointsImageDatasetGrid(exp_id,imgNb,epochs,model_ids,reduction_fact_list,inverse_xy,mode,nbClass,\
                                 useDropped_list,forceFeat,fullAttMap,threshold,maps_inds,plotId,luminosity,\
-                                receptive_field,cluster,cluster_attention,pond_by_norm,gradcam,nrows,correctness,\
-                                agregateMultiAtt,plotVecEmb,onlyNorm,class_index,ind_to_keep,args):
+                                receptive_field,cluster,cluster_attention,pond_by_norm,gradcam,gradcam_maps,gradcam_pp,nrows,correctness,\
+                                agregateMultiAtt,plotVecEmb,onlyNorm,class_index,ind_to_keep,interp,direct_ind,args):
 
     if (correctness == "True" or correctness == "False") and len(model_ids)>1:
         raise ValueError("correctness can only be used with a single model.")
@@ -159,20 +159,34 @@ def plotPointsImageDatasetGrid(exp_id,imgNb,epochs,model_ids,reduction_fact_list
             paths = glob.glob("../models/{}/model{}_best_epoch*".format(exp_id,model_ids[j]))
             if len(paths) > 1:
                 raise ValueError("There should only be one best weight file.",model_ids[j],"has several.")
+            elif len(paths) == 0:
 
-            fileName = os.path.basename(paths[0])
-            epochs.append(utils.findLastNumbers(fileName))
+                paths = glob.glob("../results/{}/attMaps_{}_epoch*_test.npy".format(exp_id,model_ids[j]))
+
+                if len(paths) > 1:
+                    raise ValueError("There should only be one best att maps file.",model_ids[j],"has several.")
+                else:
+                    epochs.append(int(os.path.basename(paths[0]).split("epoch")[1].split("_")[0]))
+            else:
+                fileName = os.path.basename(paths[0])
+                epochs.append(utils.findLastNumbers(fileName))
 
     pointPaths,pointWeightPaths = [],[]
     for j in range(len(model_ids)):
         if useDropped_list[j]:
             pointPaths.append("../results/{}/points_dropped_{}_epoch{}_{}.npy".format(exp_id,model_ids[j],epochs[j],mode))
             pointWeightPaths.append("../results/{}/points_dropped_{}_epoch{}_{}.npy".format(exp_id,model_ids[j],epochs[j],mode))
-        elif fullAttMap[j]:
-            pointPaths.append("../results/{}/attMaps_{}_epoch{}_{}.npy".format(exp_id,model_ids[j],epochs[j],mode))
+        elif gradcam_maps[j]:
+            pointPaths.append("../results/{}/gradcam_maps_{}_epoch{}_{}.npy".format(exp_id,model_ids[j],epochs[j],mode))
+            pointWeightPaths.append("")
+        elif gradcam_pp[j]:
+            pointPaths.append("../results/{}/gradcam_pp_{}_epoch{}_{}.npy".format(exp_id,model_ids[j],epochs[j],mode))
             pointWeightPaths.append("")
         elif gradcam[j]:
             pointPaths.append("../results/{}/gradcam_{}_epoch{}_{}.npy".format(exp_id,model_ids[j],epochs[j],mode))
+            pointWeightPaths.append("")
+        elif fullAttMap[j]:
+            pointPaths.append("../results/{}/attMaps_{}_epoch{}_{}.npy".format(exp_id,model_ids[j],epochs[j],mode))
             pointWeightPaths.append("")
         else:
             pointPaths.append("../results/{}/points_{}_epoch{}_{}.npy".format(exp_id,model_ids[j],epochs[j],mode))
@@ -194,7 +208,7 @@ def plotPointsImageDatasetGrid(exp_id,imgNb,epochs,model_ids,reduction_fact_list
         #imgBatch = torch.cat([testDataset[ind][0].unsqueeze(0) for ind in inds],dim=0)
     else:
         imgLoader,testDataset = load_data.buildTestLoader(args,mode,shuffle=False)
-        print(correctness)
+
         if (correctness == "True" or correctness == "False"):
             targPreds = np.genfromtxt("../results/{}/{}_epoch{}.csv".format(exp_id,model_ids[0],epochs[0]),delimiter=",")[-len(testDataset):]
             targ = targPreds[:,0]
@@ -211,15 +225,25 @@ def plotPointsImageDatasetGrid(exp_id,imgNb,epochs,model_ids,reduction_fact_list
 
             for i in range(len(pointPaths)):
 
-                if maxInd is None:
-                    maxInd = len(np.load(pointPaths[i]))
-                else:
-                    indAtt = len(np.load(pointPaths[i],mmap_mode="r"))
-                    indFeat = len(np.load(pointPaths[i].replace("attMaps","features"),mmap_mode="r"))
-                    if maxInd > indAtt:
-                        maxInd = indAtt
-                    if maxInd > indFeat:
-                        maxInd = indFeat
+                if not direct_ind[i]:
+                    if maxInd is None:
+                        if gradcam[i]:
+                            maxInd = len(np.load(pointPaths[i].replace("attMaps","gradcam"),mmap_mode="r"))
+                        else:
+                            maxInd = len(np.load(pointPaths[i]))
+                    else:
+                        indAtt = len(np.load(pointPaths[i],mmap_mode="r"))
+
+                        if os.path.exists(pointPaths[i].replace("attMaps","features")):
+                            print(pointPaths[i])
+                            indFeat = len(np.load(pointPaths[i].replace("attMaps","features"),mmap_mode="r"))
+                        else:
+                            indFeat = len(np.load(pointPaths[i].replace("attMaps","norm"),mmap_mode="r"))
+
+                        if maxInd > indAtt:
+                            maxInd = indAtt
+                        if maxInd > indFeat:
+                            maxInd = indFeat
 
             #Looking for the image at which the class we want begins
             if not class_index is None:
@@ -243,6 +267,8 @@ def plotPointsImageDatasetGrid(exp_id,imgNb,epochs,model_ids,reduction_fact_list
                 ind_to_keep = np.array(ind_to_keep)-1
                 inds = inds[ind_to_keep]
 
+
+            print("inds",inds)
             #In case there is not enough images
             imgNb = min(len(inds),imgNb)
 
@@ -263,16 +289,22 @@ def plotPointsImageDatasetGrid(exp_id,imgNb,epochs,model_ids,reduction_fact_list
 
     normDict = {}
     for j in range(len(pointPaths)):
-        if pond_by_norm[j] or onlyNorm[j]:
+        if (pond_by_norm[j] or onlyNorm[j]) and ((not gradcam[j]) or gradcam_maps[j]):
 
-            if j>0 and model_ids[j] == model_ids[j-1] and pond_by_norm[j-1]:
+            if j>0 and model_ids[j] == model_ids[j-1] and pond_by_norm[j-1] and (not normDict[j-1] is None):
                 normDict[j] = normDict[j-1]
             else:
-                if not os.path.exists(pointPaths[j].replace("attMaps","norm")):
-                    normDict[j] = compNorm(pointPaths[j].replace("attMaps","features"))
-                    np.save(pointPaths[j].replace("attMaps","norm"),normDict[j])
+                if gradcam_maps[j]:
+                    normDict[j] = np.load(pointPaths[j].replace("gradcam_maps","gradcam"))
                 else:
-                    normDict[j] = np.load(pointPaths[j].replace("attMaps","norm"))
+                    if not os.path.exists(pointPaths[j].replace("attMaps","norm")):
+                        normDict[j] = compNorm(pointPaths[j].replace("attMaps","features"))
+                        np.save(pointPaths[j].replace("attMaps","norm"),normDict[j])
+                    else:
+                        normDict[j] = np.load(pointPaths[j].replace("attMaps","norm"))
+                if len(normDict[j].shape) == 3:
+                    normDict[j] = normDict[j][:,np.newaxis]
+
         else:
             normDict[j] = None
 
@@ -296,26 +328,26 @@ def plotPointsImageDatasetGrid(exp_id,imgNb,epochs,model_ids,reduction_fact_list
     for i in range(imgNb):
 
         print("i",i)
-        print("inds",inds[i])
 
         img = imgBatch[i:i+1]
 
         img = (img-img.min())/(img.max()-img.min())
 
-        imgPIL = Image.fromarray((255*img[0].permute(1,2,0).numpy()).astype("uint8"))
-        imgDraw = ImageDraw.Draw(imgPIL)
-        imgDraw.rectangle([(0,0), (220, 40)],fill="white")
+        if args.print_ind:
+            imgPIL = Image.fromarray((255*img[0].permute(1,2,0).numpy()).astype("uint8"))
+            imgDraw = ImageDraw.Draw(imgPIL)
+            imgDraw.rectangle([(0,0), (220, 40)],fill="white")
 
-        imgDraw.text((0,0), str(i+1)+" ", font=fnt,fill=(0,0,0))
+            imgDraw.text((0,0), str(i+1)+" ", font=fnt,fill=(0,0,0))
 
-        if exp_id.find("EMB") != -1:
-            if class_aSort[pred[inds[i]]] == class_realSort[testDataset[inds[i]][1]]:
-                imgDraw.text((50,0), class_aSort[pred[inds[i]]], font=fnt,fill=(0,230,0))
-            else:
-                imgDraw.text((50,0), class_aSort[pred[inds[i]]], font=fnt,fill=(255,0,0))
-                imgDraw.text((150,0), "("+class_realSort[testDataset[inds[i]][1]]+")", font=fnt,fill=(0,0,0))
+            if exp_id.find("EMB") != -1:
+                if class_aSort[pred[inds[i]]] == class_realSort[testDataset[inds[i]][1]]:
+                    imgDraw.text((50,0), class_aSort[pred[inds[i]]], font=fnt,fill=(0,230,0))
+                else:
+                    imgDraw.text((50,0), class_aSort[pred[inds[i]]], font=fnt,fill=(255,0,0))
+                    imgDraw.text((150,0), "("+class_realSort[testDataset[inds[i]][1]]+")", font=fnt,fill=(0,0,0))
 
-        img = torch.tensor(np.array(imgPIL)).permute(2,0,1).unsqueeze(0).float()/255
+            img = torch.tensor(np.array(imgPIL)).permute(2,0,1).unsqueeze(0).float()/255
 
         if gridImage is None:
             gridImage = img
@@ -326,10 +358,20 @@ def plotPointsImageDatasetGrid(exp_id,imgNb,epochs,model_ids,reduction_fact_list
 
             if fullAttMap[j] or gradcam[j]:
                 ptsImageCopy = ptsImage.clone()
-                attMap = np.load(pointPaths[j])[inds[i]]
+
+                if not direct_ind[j]:
+                    attMap = np.load(pointPaths[j],mmap_mode="r")[inds[i]]
+                else:
+                    attMap = np.load(pointPaths[j],mmap_mode="r")[i]
 
                 if gradcam[j]:
                     attMap = (attMap-attMap.min())/(attMap.max()-attMap.min())
+
+                    if gradcam_maps[j]:
+                        attMap = np.abs(attMap-attMap.mean())
+                        attMap = attMap.mean(axis=0,keepdims=True)
+                        attMap = (attMap-attMap.min())/(attMap.max()-attMap.min())
+                        attMap = F.max_pool2d(torch.tensor(attMap).unsqueeze(0),4).numpy()[0]
 
                 if attMap.shape[0] != 1 and not onlyNorm[j]:
                     if maps_inds[j] == -1:
@@ -352,12 +394,16 @@ def plotPointsImageDatasetGrid(exp_id,imgNb,epochs,model_ids,reduction_fact_list
                         attMap = (attMap-attMap.min())/(attMap.max()-attMap.min())
                         attMap = (attMap > 0.5).astype(float)
                 else:
-                    norm = normDict[j][inds[i]]
-                    norm = (norm-norm.min())/(norm.max()-norm.min())
-                    attMap = norm
+                    if not gradcam[j]:
+                        norm = normDict[j][inds[i]]
+                        norm = (norm-norm.min())/(norm.max()-norm.min())
+                        attMap = norm
 
-                if pond_by_norm[j]:
-                    norm = normDict[j][inds[i]]
+                if pond_by_norm[j] and ((not gradcam[j])):
+                    if direct_ind[j]:
+                        norm = normDict[j][i]
+                    else:
+                        norm = normDict[j][inds[i]]
                     norm = (norm-norm.min())/(norm.max()-norm.min())
 
                     if norm.shape[1:] != attMap.shape[1:]:
@@ -365,6 +411,7 @@ def plotPointsImageDatasetGrid(exp_id,imgNb,epochs,model_ids,reduction_fact_list
                         norm = np.transpose(norm,(2,0,1))
 
                     attMap = norm*attMap
+                    attMap = (attMap-attMap.min())/(attMap.max()-attMap.min())
 
                 if not luminosity:
                     if cluster[j]:
@@ -405,7 +452,9 @@ def plotPointsImageDatasetGrid(exp_id,imgNb,epochs,model_ids,reduction_fact_list
                             attMap = np.transpose(attMap,(1,2,0))
                 else:
                     attMap = attMap[0][:,:,np.newaxis]
-                ptsImageCopy = torch.tensor(resize(attMap, (ptsImageCopy.shape[1],ptsImageCopy.shape[2]),anti_aliasing=True,mode="constant",order=0)).permute(2,0,1).float().unsqueeze(0)
+
+                interpOrder = 1 if interp[j] else 0
+                ptsImageCopy = torch.tensor(resize(attMap, (ptsImageCopy.shape[1],ptsImageCopy.shape[2]),anti_aliasing=True,mode="constant",order=interpOrder)).permute(2,0,1).float().unsqueeze(0)
 
             else:
 
@@ -458,11 +507,14 @@ def plotPointsImageDatasetGrid(exp_id,imgNb,epochs,model_ids,reduction_fact_list
             else:
                 img = imgBatch[i:i+1].mean(dim=1,keepdim=True)
                 img = (img-img.min())/(img.max()-img.min())
+
                 ptsImageCopy = 0.8*ptsImageCopy+0.2*img
 
             gridImage = torch.cat((gridImage,ptsImageCopy),dim=0)
 
-    torchvision.utils.save_image(gridImage, "../vis/{}/{}.png".format(exp_id,plotId), nrow=(len(model_ids)+1)*nrows,padding=5,pad_value=0.5)
+    outPath = "../vis/{}/{}.png".format(exp_id,plotId)
+    torchvision.utils.save_image(gridImage, outPath, nrow=(len(model_ids)+1)*nrows,padding=5,pad_value=0.5)
+    os.system("convert  -resize 20% {} {}".format(outPath,outPath.replace(".png","_small.png")))
 
 def plotProbMaps(imgNb,args,norm=False):
 
@@ -1358,10 +1410,11 @@ def attMapsNbPlot():
             perfList.append(float(np.genfromtxt(path,delimiter=",")[1,0]))
             NList.append(os.path.basename(path).split(rootList[i])[1].split("_")[0])
 
-        plt.plot(NList,perfList,label=labList[i])
+        plt.plot(NList,perfList,label=labList[i],marker="o")
 
     plt.legend()
-    #plt.ylim(0,1)
+    plt.ylabel("Test accuracy")
+    plt.xlabel("Attention map number (N)")
     plt.savefig("../vis/CUB10/N_acc.png")
 
 def gradExp():
@@ -1406,6 +1459,20 @@ def gradExp():
     plt.legend()
     plt.savefig("../vis/CUB10/gradExp.png")
 
+def getTrialList(curr,optuna_trial_nb):
+    curr.execute('SELECT trial_id,value FROM trials WHERE study_id == 1')
+    query_res = curr.fetchall()
+
+    query_res = list(filter(lambda x:not x[1] is None,query_res))
+
+    trialIds = [id_value[0] for id_value in query_res]
+    values = [id_value[1] for id_value in query_res]
+
+    trialIds = trialIds[:optuna_trial_nb]
+    values = values[:optuna_trial_nb]
+    return trialIds,values
+
+
 def getPerfs(model):
 
     config = configparser.ConfigParser()
@@ -1415,7 +1482,7 @@ def getPerfs(model):
     con = sqlite3.connect("../results/CUB10/{}_hypSearch.db".format(model))
     curr = con.cursor()
 
-    trials,values = trainVal.getTrialList(curr,optuna_trial_nb)
+    trials,values = getTrialList(curr,optuna_trial_nb)
 
     best = np.array(values).max()
     worst = np.array(list(filter(lambda x:x>0.1,values))).min()
@@ -1563,8 +1630,10 @@ def main(argv=None):
     argreader.parser.add_argument('--pond_by_norm',type=str2bool,nargs="*",metavar="BOOL",help='To also show the norm of pixels along with the attention weights.',default=[])
     argreader.parser.add_argument('--only_norm',type=str2bool,nargs="*",metavar="BOOL",help='To only plot the norm of pixels',default=[])
 
-
     argreader.parser.add_argument('--gradcam',type=str2bool,nargs="*",metavar="BOOL",help='To plot gradcam instead of attention maps',default=[])
+    argreader.parser.add_argument('--gradcam_maps',type=str2bool,nargs="*",metavar="BOOL",help='To plot gradcam w guided backprop instead of default gradcam',default=[])
+    argreader.parser.add_argument('--gradcam_pp',type=str2bool,nargs="*",metavar="BOOL",help='To plot gradcam pp instead of default gradcam',default=[])
+
     argreader.parser.add_argument('--correctness',type=str,metavar="CORRECT",help='Set this to True to only show image where the model has given a correct answer.',default=None)
     argreader.parser.add_argument('--agregate_multi_att',type=str2bool,nargs="*",metavar="BOOL",help='Set this to True to agregate the multiple attention map when there\'s several.',default=[])
 
@@ -1575,6 +1644,9 @@ def main(argv=None):
     argreader.parser.add_argument('--class_index',type=int,metavar="INT",help='The class index to show')
 
     argreader.parser.add_argument('--ind_to_keep',type=int,nargs="*",metavar="INT",help='The index of the images to keep')
+    argreader.parser.add_argument('--interp',type=str2bool,nargs="*",metavar="BOOL",help='To smoothly interpolate the att map.',default=[])
+    argreader.parser.add_argument('--direct_ind',type=str2bool,nargs="*",metavar="BOOL",help='To use direct indices',default=[])
+
 
     ######################################## Find failure cases #########################################""
 
@@ -1584,6 +1656,8 @@ def main(argv=None):
     argreader.parser.add_argument('--threshold',type=float,metavar="INT",help='Accuracy threshold above which a model is taken into account')
     argreader.parser.add_argument('--dataset_name',type=str,metavar="NAME",help='Name of the dataset')
     argreader.parser.add_argument('--nb_class',type=int,metavar="NAME",help='Nb of big classes')
+
+    argreader.parser.add_argument('--print_ind',type=str2bool,metavar="BOOL",help='To print image index',default=False)
 
     ####################################### Efficiency plot #########################################"""
 
@@ -1652,6 +1726,10 @@ def main(argv=None):
             args.receptive_field = [False for _ in range(len(args.model_ids))]
         if len(args.gradcam) == 0:
             args.gradcam = [False for _ in range(len(args.model_ids))]
+        if len(args.gradcam_maps) == 0:
+            args.gradcam_maps = [False for _ in range(len(args.model_ids))]
+        if len(args.gradcam_pp) == 0:
+            args.gradcam_pp = [False for _ in range(len(args.model_ids))]
         if len(args.cluster) == 0:
             args.cluster = [False for _ in range(len(args.model_ids))]
         if len(args.cluster_attention) == 0:
@@ -1678,14 +1756,16 @@ def main(argv=None):
             args.maps_inds = [-1 for _ in range(len(args.model_ids))]
         if len(args.full_att_map) ==  0:
             args.full_att_map = [True for _ in range(len(args.model_ids))]
-
-        print(args.model_ids)
-        print(args.use_dropped_list)
+        if len(args.interp) == 0:
+            args.interp = [False for _ in range(len(args.model_ids))]
+        if len(args.direct_ind) == 0:
+            args.direct_ind = [False for _ in range(len(args.model_ids))]
 
         plotPointsImageDatasetGrid(args.exp_id,args.image_nb,args.epoch_list,args.model_ids,args.reduction_fact_list,args.inverse_xy,args.mode,\
                                     args.class_nb,args.use_dropped_list,args.force_feat,args.full_att_map,args.use_threshold,args.maps_inds,args.plot_id,\
-                                    args.luminosity,args.receptive_field,args.cluster,args.cluster_attention,args.pond_by_norm,args.gradcam,args.nrows,\
-                                    args.correctness,args.agregate_multi_att,args.plot_vec_emb,args.only_norm,args.class_index,args.ind_to_keep,args)
+                                    args.luminosity,args.receptive_field,args.cluster,args.cluster_attention,args.pond_by_norm,args.gradcam,args.gradcam_maps,args.gradcam_pp,\
+                                    args.nrows,args.correctness,args.agregate_multi_att,args.plot_vec_emb,args.only_norm,args.class_index,args.ind_to_keep,\
+                                    args.interp,args.direct_ind,args)
     if args.plot_prob_maps:
         plotProbMaps(args.image_nb,args,args.norm)
     if args.list_best_pred:
