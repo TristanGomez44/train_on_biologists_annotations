@@ -11,7 +11,7 @@ from PIL import Image
 
 import time
 import args
-import utils
+
 from random import Random
 import scipy.io
 import imageDatasetWithSeg
