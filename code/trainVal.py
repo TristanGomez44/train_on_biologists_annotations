@@ -993,6 +993,7 @@ def main(argv=None):
     argreader.parser.add_argument('--do_test_again', type=str2bool, help='Does the test evaluation even if it has already been done')
     argreader.parser.add_argument('--compute_latency', type=str2bool, help='To write in a file the latency at each forward pass.')
     argreader.parser.add_argument('--grad_cam', type=int, help='To compute grad cam instead of training or testing.',nargs="*")
+    argreader.parser.add_argument('--attention_metrics', type=str2bool, help='To compute the IAUC and DAUC metrics',nargs="*")
 
     argreader.parser.add_argument('--optuna', type=str2bool, help='To run a hyper-parameter study')
     argreader.parser.add_argument('--optuna_trial_nb', type=int, help='The number of hyper-parameter trial to run.')
@@ -1201,7 +1202,6 @@ def main(argv=None):
 
         copyfile(bestOfAllPath.replace("best","bestOfAll"),bestOfAllPath)
 
-
     elif args.grad_cam:
 
         args.val_batch_size = 1
@@ -1265,6 +1265,83 @@ def main(argv=None):
         #np.save("../results/{}/scorecam_{}_epoch{}_test.npy".format(args.exp_id,args.model_id,bestEpoch),allMask_sc)
         np.save("../results/{}/gradcam_maps_{}_epoch{}_test.npy".format(args.exp_id,args.model_id,bestEpoch),allMaps.numpy())
 
+    
+    elif args.attention_metrics:
+
+        args.val_batch_size = 1
+        testLoader,testDataset = load_data.buildTestLoader(args, "test",withSeg=args.with_seg)
+
+        bestPath = glob.glob("../models/{}/model{}_best_epoch*".format(args.exp_id, args.model_id))[0]
+        bestEpoch = int(os.path.basename(bestPath).split("epoch")[1])
+
+        net = modelBuilder.netBuilder(args,gpu=0)
+        net = preprocessAndLoadParams(bestPath,args.cuda,net,args.strict_init)
+
+        #net = modelBuilder.RepVecFeatMod(net)
+
+        model_dict = dict(type=args.first_mod, arch=net, layer_name='layer4', input_size=(448, 448))
+        #grad_cam = GradCAM(model_dict, True)
+        #grad_cam_pp = GradCAMpp(model_dict,True)
+        #guided_backprop_mod = guided_backprop.GuidedBackprop(net)
+
+        stepNb = 100
+        nbImgs = 10
+
+        allScoreList = []
+
+        torch.manual_seed(0)
+        inds = torch.randint(len(testDataset),size=(nbImgs,))
+
+        for i in inds:
+            print(i)
+
+            batch = testDataset.__getitem__(i)
+            data,targ = batch[0].unsqueeze(0),torch.tensor(batch[1]).unsqueeze(0)
+
+            data = data.cuda() if args.cuda else data
+            targ = targ.cuda() if args.cuda else targ
+
+            resDic = net(data)
+
+            scores = torch.softmax(resDic["pred"],dim=-1)
+            predClassInd = scores.argmax(dim=-1)
+
+            attMaps = torch.sqrt(torch.pow(resDic["features"],2).sum(dim=1,keepdim=True))
+            #attMaps = resDic["attMaps"][:,0:1]
+
+            totalPxlNb = attMaps.size(2)*attMaps.size(3)
+            leftPxlNb = totalPxlNb
+
+            score_prop_list = []
+
+            while leftPxlNb > 1:
+
+                _,ind_max = attMaps[0,0].view(-1).topk(k=totalPxlNb//stepNb)
+                ind_max = ind_max[:leftPxlNb]
+
+                x_max,y_max = ind_max % attMaps.shape[3],ind_max // attMaps.shape[3]
+                
+                ratio = data.size(-1)//attMaps.size(-1)
+
+                #print(y_max*ratio,y_max*ratio+ratio-1,x_max*ratio,x_max*ratio+ratio-1)
+                #print(data.shape)
+
+                data[0,:,y_max*ratio:y_max*ratio+ratio-1,x_max*ratio:x_max*ratio+ratio-1] = 0
+                attMaps[0,0,y_max,x_max] = -np.inf
+
+                leftPxlNb -= totalPxlNb//stepNb
+
+                resDic = net(data)
+
+                score = torch.softmax(resDic["pred"],dim=-1)[:,predClassInd[0]]
+
+                score_prop_list.append((leftPxlNb,score.item()))
+
+            allScoreList.append(score_prop_list)
+            
+        np.save("../results/{}/attMetrDel_{}.npy".format(args.exp_id,args.model_id),allScoreList)
+        np.save("../results/{}/attMetrInds_{}.npy".format(args.exp_id,args.model_id),inds)
+        
     else:
         train(0,args,None)
 

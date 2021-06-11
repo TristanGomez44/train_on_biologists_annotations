@@ -1601,6 +1601,24 @@ def cat(all,new):
         all = torch.cat((all,new),dim=0)
     return all
 
+def attMetrics(exp_id,model_id):
+
+    delPairs = np.load("../results/{}/attMetrDel_{}.npy".format(exp_id,model_id))
+
+    for i in range(len(delPairs)):
+        
+        delPairs[i,:,0] = 1 - delPairs[i,:,0]/delPairs[i,:,0].max()
+        delPairs[i,:,1] = delPairs[i,:,1]/delPairs[i,:,1].max()
+
+        plt.figure()
+        plt.plot(delPairs[i,:,0],delPairs[i,:,1])
+        plt.gca().invert_xaxis()
+        plt.savefig("../vis/{}/attMetrDel_{}_{}.png".format(exp_id,model_id,i))
+        plt.close()
+
+        auc = np.trapz(delPairs[i,:,1],delPairs[i,:,0])
+        print(auc)
+
 def main(argv=None):
 
     #Getting arguments from config file and command line
@@ -1724,6 +1742,10 @@ def main(argv=None):
     argreader.parser.add_argument('--grad_exp',action="store_true",help='Grad exp plot')
     argreader.parser.add_argument('--grad_exp_test',action="store_true",help='Grad exp test plot')
     argreader.parser.add_argument('--grad_exp2',action="store_true",help='Grad exp 2 plot')
+
+    ####################################### Attention metrics #################################################
+
+    argreader.parser.add_argument('--att_metrics',action="store_true",help='Grad exp plot') 
 
     argreader = load_data.addArgs(argreader)
 
@@ -1852,5 +1874,7 @@ def main(argv=None):
         gradExp_test()
     if args.grad_exp2:
         gradExp2()
+    if args.att_metrics:
+        attMetrics(args.exp_id,args.model_id)
 if __name__ == "__main__":
     main()
