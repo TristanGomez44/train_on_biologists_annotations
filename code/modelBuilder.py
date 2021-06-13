@@ -38,31 +38,21 @@ def buildFeatModel(featModelName, **kwargs):
 
     return featModel
 
-class RepVecFeatMod(torch.nn.Module):
-    def __init__(self,net,repVec=False):
+class GradCamMod(torch.nn.Module):
+    def __init__(self,net):
         super().__init__()
         self.net = net
         self.layer4 = net.firstModel.featMod.layer4
-        self.repVec = repVec
         self.features = net.firstModel.featMod
 
-    def forward(self,x,retFeat=False):
+    def forward(self,x):
         feat = self.net.firstModel.featMod(x)["x"]
 
-        if self.repVec:
-            vecList,_ = representativeVectors(feat,3)
-            features_agr = torch.cat(vecList,dim=-1)
-            x = self.net.secondModel.linLay(features_agr)
-        else:
-            x = torch.nn.functional.adaptive_avg_pool2d(feat,(1,1))
-            x = x.view(x.size(0),-1)
-            x = self.net.secondModel.linLay(x)
+        x = torch.nn.functional.adaptive_avg_pool2d(feat,(1,1))
+        x = x.view(x.size(0),-1)
+        x = self.net.secondModel.linLay(x)
 
-        if retFeat:
-            return feat,x
-        else:
-            del feat
-            return x
+        return x
 
 # This class is just the class nn.DataParallel that allow running computation on multiple gpus
 # but it adds the possibility to access the attribute of the model

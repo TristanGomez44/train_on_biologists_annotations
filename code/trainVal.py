@@ -993,7 +993,7 @@ def main(argv=None):
     argreader.parser.add_argument('--do_test_again', type=str2bool, help='Does the test evaluation even if it has already been done')
     argreader.parser.add_argument('--compute_latency', type=str2bool, help='To write in a file the latency at each forward pass.')
     argreader.parser.add_argument('--grad_cam', type=int, help='To compute grad cam instead of training or testing.',nargs="*")
-    argreader.parser.add_argument('--attention_metrics', type=str2bool, help='To compute the IAUC and DAUC metrics',nargs="*")
+    argreader.parser.add_argument('--attention_metrics', type=int, help='To compute the IAUC and DAUC metrics')
 
     argreader.parser.add_argument('--optuna', type=str2bool, help='To run a hyper-parameter study')
     argreader.parser.add_argument('--optuna_trial_nb', type=int, help='The number of hyper-parameter trial to run.')
@@ -1213,7 +1213,7 @@ def main(argv=None):
         net = modelBuilder.netBuilder(args,gpu=0)
         net = preprocessAndLoadParams(bestPath,args.cuda,net,args.strict_init)
 
-        net = modelBuilder.RepVecFeatMod(net)
+        net = modelBuilder.GradCamMod(net)
 
         model_dict = dict(type=args.first_mod, arch=net, layer_name='layer4', input_size=(448, 448))
         grad_cam = GradCAM(model_dict, True)
@@ -1277,15 +1277,13 @@ def main(argv=None):
         net = modelBuilder.netBuilder(args,gpu=0)
         net = preprocessAndLoadParams(bestPath,args.cuda,net,args.strict_init)
 
-        #net = modelBuilder.RepVecFeatMod(net)
+        if not args.resnet_bilinear:
+            net = modelBuilder.GradCamMod(net)
+            model_dict = dict(type=args.first_mod, arch=net, layer_name='layer4', input_size=(448, 448))
+            grad_cam = GradCAM(model_dict, True)
 
-        model_dict = dict(type=args.first_mod, arch=net, layer_name='layer4', input_size=(448, 448))
-        #grad_cam = GradCAM(model_dict, True)
-        #grad_cam_pp = GradCAMpp(model_dict,True)
-        #guided_backprop_mod = guided_backprop.GuidedBackprop(net)
-
-        stepNb = 100
-        nbImgs = 10
+        stepNb = 50
+        nbImgs = args.attention_metrics
 
         allScoreList = []
 
@@ -1301,12 +1299,19 @@ def main(argv=None):
             data = data.cuda() if args.cuda else data
             targ = targ.cuda() if args.cuda else targ
 
-            resDic = net(data)
-
+            if not args.resnet_bilinear:
+                resDic = net.net(data)
+            else:
+                resDic = net(data)
+            
             scores = torch.softmax(resDic["pred"],dim=-1)
             predClassInd = scores.argmax(dim=-1)
 
-            attMaps = torch.sqrt(torch.pow(resDic["features"],2).sum(dim=1,keepdim=True))
+            if not args.resnet_bilinear:
+                attMaps = grad_cam(data)
+            else:
+                attMaps = torch.sqrt(torch.pow(resDic["features"],2).sum(dim=1,keepdim=True))
+                attMaps *= resDic["attMaps"].mean(dim=1,keepdim=True)
             #attMaps = resDic["attMaps"][:,0:1]
 
             totalPxlNb = attMaps.size(2)*attMaps.size(3)
@@ -1314,7 +1319,7 @@ def main(argv=None):
 
             score_prop_list = []
 
-            while leftPxlNb > 1:
+            while leftPxlNb > 0:
 
                 _,ind_max = attMaps[0,0].view(-1).topk(k=totalPxlNb//stepNb)
                 ind_max = ind_max[:leftPxlNb]
@@ -1323,15 +1328,16 @@ def main(argv=None):
                 
                 ratio = data.size(-1)//attMaps.size(-1)
 
-                #print(y_max*ratio,y_max*ratio+ratio-1,x_max*ratio,x_max*ratio+ratio-1)
-                #print(data.shape)
-
-                data[0,:,y_max*ratio:y_max*ratio+ratio-1,x_max*ratio:x_max*ratio+ratio-1] = 0
-                attMaps[0,0,y_max,x_max] = -np.inf
+                for i in range(len(x_max)):
+                    data[0,:,y_max[i]*ratio:y_max[i]*ratio+ratio-1,x_max[i]*ratio:x_max[i]*ratio+ratio-1] = 0
+                    attMaps[0,0,y_max[i],x_max[i]] = -np.inf
 
                 leftPxlNb -= totalPxlNb//stepNb
-
-                resDic = net(data)
+                
+                if not args.resnet_bilinear:
+                    resDic = net.net(data)
+                else:
+                    resDic = net(data)
 
                 score = torch.softmax(resDic["pred"],dim=-1)[:,predClassInd[0]]
 

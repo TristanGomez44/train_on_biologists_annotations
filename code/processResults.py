@@ -1601,23 +1601,37 @@ def cat(all,new):
         all = torch.cat((all,new),dim=0)
     return all
 
-def attMetrics(exp_id,model_id):
+def attMetrics(exp_id):
 
-    delPairs = np.load("../results/{}/attMetrDel_{}.npy".format(exp_id,model_id))
+    delPaths = sorted(glob.glob("../results/{}/attMetrDel_*.npy".format(exp_id)))
 
-    for i in range(len(delPairs)):
+    resDic = {}
+
+    for path in delPaths:
+
+        model_id = os.path.basename(path).split("attMetrDel_")[1].split("*.npy")[0]
         
-        delPairs[i,:,0] = 1 - delPairs[i,:,0]/delPairs[i,:,0].max()
-        delPairs[i,:,1] = delPairs[i,:,1]/delPairs[i,:,1].max()
+        delPairs = np.load(path)
 
-        plt.figure()
-        plt.plot(delPairs[i,:,0],delPairs[i,:,1])
-        plt.gca().invert_xaxis()
-        plt.savefig("../vis/{}/attMetrDel_{}_{}.png".format(exp_id,model_id,i))
-        plt.close()
+        allAuC = []
 
-        auc = np.trapz(delPairs[i,:,1],delPairs[i,:,0])
-        print(auc)
+        for i in range(len(delPairs)):
+            
+            delPairs[i,:,0] = 1 - delPairs[i,:,0]/delPairs[i,:,0].max()
+            delPairs[i,:,1] = delPairs[i,:,1]/delPairs[i,:,1].max()
+
+            plt.figure()
+            plt.plot(delPairs[i,:,0],delPairs[i,:,1])
+            plt.gca().invert_xaxis()
+            plt.savefig("../vis/{}/attMetrDel_{}_{}.png".format(exp_id,model_id,i))
+            plt.close()
+
+            auc = np.trapz(delPairs[i,:,1],delPairs[i,:,0])
+            allAuC.append(auc)
+        
+        resDic[model_id] = np.array(allAuC).mean()
+
+    print(resDic)
 
 def main(argv=None):
 
@@ -1875,6 +1889,6 @@ def main(argv=None):
     if args.grad_exp2:
         gradExp2()
     if args.att_metrics:
-        attMetrics(args.exp_id,args.model_id)
+        attMetrics(args.exp_id)
 if __name__ == "__main__":
     main()
