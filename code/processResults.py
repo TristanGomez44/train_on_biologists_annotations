@@ -1609,7 +1609,66 @@ def attMetrics(exp_id):
 
     for path in delPaths:
 
-        model_id = os.path.basename(path).split("attMetrDel_")[1].split("*.npy")[0]
+        model_id = os.path.basename(path).split("attMetrDel_")[1].split(".npy")[0]
+        
+        delPairs = np.load(path,allow_pickle=True)
+
+        allAuC = []
+
+        for i in range(len(delPairs)):
+            
+            delPairs_i = np.array(delPairs[i])
+
+            delPairs_i[:,0] = (delPairs_i[:,0]-delPairs_i[:,0].min())/(delPairs_i[:,0].max()-delPairs_i[:,0].min())
+            delPairs_i[:,0] = 1-delPairs_i[:,0]
+            delPairs_i[:,1] = delPairs_i[:,1]/delPairs_i[:,1].max()
+
+            plt.figure()
+            plt.plot(delPairs_i[:,0],delPairs_i[:,1])
+            plt.savefig("../vis/{}/attMetrDel_{}_{}.png".format(exp_id,model_id,i))
+            plt.close()
+
+            #print(delPairs[delPairs[:,0].argmax()])
+            #print(delPairs[delPairs[:,0].argmin()])
+            #print(delPairs[delPairs[:,1].argmax()])
+            #print(delPairs[delPairs[:,1].argmin()])
+
+            auc = np.trapz(delPairs_i[:,1],delPairs_i[:,0])
+            allAuC.append(auc)
+        
+        resDic[model_id] = np.array(allAuC).mean()
+
+    print(resDic)
+
+def attMetricsStats(exp_id):
+
+    statsPaths = sorted(glob.glob("../results/{}/attMetrStatsDel_*.npy".format(exp_id)))
+
+    for path in statsPaths:
+
+        model_id = os.path.basename(path).split("attMetrStatsDel_")[1].split(".npy")[0]
+        
+        statsTriplet = np.load(path,allow_pickle=True)
+
+        for i in range(len(statsTriplet)):
+        
+            plt.figure()
+            plt.plot(np.array(statsTriplet[i])[:,0],label=("min"))
+            plt.plot(np.array(statsTriplet[i])[:,1],label=("mean"))   
+            plt.plot(np.array(statsTriplet[i])[:,2],label=("max"))   
+            plt.legend() 
+            plt.savefig("../vis/{}/attMetrStatsDel_{}_{}.png".format(exp_id,model_id,i))
+            plt.close()                 
+
+def attMetricsAdd(exp_id):
+
+    delPaths = sorted(glob.glob("../results/{}/attMetrAdd_*.npy".format(exp_id)))
+
+    resDic = {}
+
+    for path in delPaths:
+
+        model_id = os.path.basename(path).split("attMetrAdd_")[1].split(".npy")[0]
         
         delPairs = np.load(path)
 
@@ -1617,14 +1676,18 @@ def attMetrics(exp_id):
 
         for i in range(len(delPairs)):
             
-            delPairs[i,:,0] = 1 - delPairs[i,:,0]/delPairs[i,:,0].max()
+            delPairs[i,:,0] = 1-delPairs[i,:,0]/delPairs[i,:,0].max()
             delPairs[i,:,1] = delPairs[i,:,1]/delPairs[i,:,1].max()
 
             plt.figure()
             plt.plot(delPairs[i,:,0],delPairs[i,:,1])
-            plt.gca().invert_xaxis()
-            plt.savefig("../vis/{}/attMetrDel_{}_{}.png".format(exp_id,model_id,i))
+            plt.savefig("../vis/{}/attMetrAdd_{}_{}.png".format(exp_id,model_id,i))
             plt.close()
+
+            #print(delPairs[delPairs[:,0].argmax()])
+            #print(delPairs[delPairs[:,0].argmin()])
+            #print(delPairs[delPairs[:,1].argmax()])
+            #print(delPairs[delPairs[:,1].argmin()])
 
             auc = np.trapz(delPairs[i,:,1],delPairs[i,:,0])
             allAuC.append(auc)
@@ -1632,6 +1695,9 @@ def attMetrics(exp_id):
         resDic[model_id] = np.array(allAuC).mean()
 
     print(resDic)
+
+
+
 
 def main(argv=None):
 
@@ -1760,6 +1826,8 @@ def main(argv=None):
     ####################################### Attention metrics #################################################
 
     argreader.parser.add_argument('--att_metrics',action="store_true",help='Grad exp plot') 
+    argreader.parser.add_argument('--att_metrics_add',action="store_true",help='Grad exp plot') 
+    argreader.parser.add_argument('--att_metrics_stats',action="store_true",help='Grad exp plot') 
 
     argreader = load_data.addArgs(argreader)
 
@@ -1890,5 +1958,10 @@ def main(argv=None):
         gradExp2()
     if args.att_metrics:
         attMetrics(args.exp_id)
+    if args.att_metrics_stats:
+        attMetricsStats(args.exp_id)
+    if args.att_metrics_add:
+        attMetricsAdd(args.exp_id)
+
 if __name__ == "__main__":
     main()
