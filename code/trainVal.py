@@ -993,7 +993,8 @@ def main(argv=None):
     argreader.parser.add_argument('--do_test_again', type=str2bool, help='Does the test evaluation even if it has already been done')
     argreader.parser.add_argument('--compute_latency', type=str2bool, help='To write in a file the latency at each forward pass.')
     argreader.parser.add_argument('--grad_cam', type=int, help='To compute grad cam instead of training or testing.',nargs="*")
-    argreader.parser.add_argument('--attention_metrics', type=int, help='To compute the IAUC and DAUC metrics')
+    argreader.parser.add_argument('--attention_metrics', type=int, help='To compute the DAUC metric')
+    argreader.parser.add_argument('--attention_metrics_add', type=int, help='To compute the IAUC metrics')
 
     argreader.parser.add_argument('--optuna', type=str2bool, help='To run a hyper-parameter study')
     argreader.parser.add_argument('--optuna_trial_nb', type=int, help='The number of hyper-parameter trial to run.')
@@ -1265,8 +1266,162 @@ def main(argv=None):
         #np.save("../results/{}/scorecam_{}_epoch{}_test.npy".format(args.exp_id,args.model_id,bestEpoch),allMask_sc)
         np.save("../results/{}/gradcam_maps_{}_epoch{}_test.npy".format(args.exp_id,args.model_id,bestEpoch),allMaps.numpy())
 
-    
     elif args.attention_metrics:
+     
+        args.val_batch_size = 1
+        testLoader,testDataset = load_data.buildTestLoader(args, "test",withSeg=args.with_seg)
+
+        bestPath = glob.glob("../models/{}/model{}_best_epoch*".format(args.exp_id, args.model_id))[0]
+        bestEpoch = int(os.path.basename(bestPath).split("epoch")[1])
+
+        net = modelBuilder.netBuilder(args,gpu=0)
+        net = preprocessAndLoadParams(bestPath,args.cuda,net,args.strict_init)
+
+        if not args.resnet_bilinear:
+            net = modelBuilder.GradCamMod(net)
+            model_dict = dict(type=args.first_mod, arch=net, layer_name='layer4', input_size=(448, 448))
+            grad_cam = GradCAM(model_dict, True)
+
+        else:
+            torch.set_grad_enabled(False)
+
+        nbImgs = args.attention_metrics
+
+        allScoreList = []
+
+        allStatsList = []
+
+        torch.manual_seed(0)
+        inds = torch.randint(len(testDataset),size=(nbImgs,))
+
+        blurWeight = torch.ones(120,120)
+        blurWeight = blurWeight/blurWeight.numel()
+        blurWeight = blurWeight.unsqueeze(0).unsqueeze(0).expand(3,1,-1,-1)
+        blurWeight = blurWeight.cuda() if args.cuda else blurWeight
+
+        for imgInd,i in enumerate(inds):
+            print(i)
+
+            batch = testDataset.__getitem__(i)
+            data,targ = batch[0].unsqueeze(0),torch.tensor(batch[1]).unsqueeze(0)
+
+            data = data.cuda() if args.cuda else data
+            targ = targ.cuda() if args.cuda else targ
+
+            allData = data.clone().cpu()
+
+            if not args.resnet_bilinear:
+                resDic = net.net(data)
+            else:
+                resDic = net(data)
+            
+            scores = torch.softmax(resDic["pred"],dim=-1)
+            predClassInd = scores.argmax(dim=-1)
+
+            if not args.resnet_bilinear:
+                attMaps = grad_cam(data,upsample=False)
+            else:
+                attMaps = torch.sqrt(torch.pow(resDic["features"],2).sum(dim=1,keepdim=True))
+                attMaps = (attMaps-attMaps.min())/(attMaps.max()-attMaps.min())
+
+                if not args.bil_cluster:
+                    attMaps *= resDic["attMaps"].mean(dim=1,keepdim=True)
+                else:
+                    first,sec,third = 77.3,73.2,56.8
+                    resDic["attMaps"] = (resDic["attMaps"][:,0]*first+resDic["attMaps"][:,1]*sec+resDic["attMaps"][:,2]*third)/(first+sec+third)
+                    attMaps *= resDic["attMaps"]
+
+                attMaps = (attMaps-attMaps.min())/(attMaps.max()-attMaps.min())
+
+                #attMaps *= resDic["attMaps"].mean(dim=1,keepdim=True)
+                #attMaps = resDic["attMaps"][:,0:1]
+                #attMaps = resDic["attMaps"]
+                #attMaps = torch.nn.functional.adaptive_avg_pool2d(attMaps,output_size=(7,7))
+
+                mask = torch.ones_like(attMaps)
+
+            allAttMaps = attMaps.clone().cpu()
+            origAttMaps = attMaps.clone()
+            statsList = []
+
+            totalPxlNb = attMaps.size(2)*attMaps.size(3)
+            leftPxlNb = totalPxlNb
+
+            #stepNb = totalPxlNb
+            stepNb = 196 if totalPxlNb == 196 else totalPxlNb
+
+            score_prop_list = []
+
+            #j=0
+            ratio = data.size(-1)//attMaps.size(-1)
+            backgrPatch = data[0,:,:ratio,:ratio]
+            #blurredInp = F.conv2d(data,blurWeight,padding=blurWeight.size(-1)//2,groups=blurWeight.size(0))
+
+            stepCount = 0
+            while leftPxlNb > 0:
+
+                attMin,attMean,attMax = attMaps.min().item(),attMaps.mean().item(),attMaps.max().item()
+                statsList.append((attMin,attMean,attMax))
+
+                #for j in range(attMaps.size(1)):
+                _,ind_max = (attMaps)[0,0].view(-1).topk(k=totalPxlNb//stepNb)
+                ind_max = ind_max[:leftPxlNb]
+
+                x_max,y_max = ind_max % attMaps.shape[3],ind_max // attMaps.shape[3]
+                
+                ratio = data.size(-1)//attMaps.size(-1)
+
+                for i in range(len(x_max)):
+                    data[0,:,y_max[i]*ratio:y_max[i]*ratio+ratio,x_max[i]*ratio:x_max[i]*ratio+ratio] = 0
+
+                    #if np.random.random() > 0.5:
+                    #    x_bckgr,y_bckgr = int(np.random.random()*attMaps.shape[2]),0
+                    #else:
+                    #    x_bckgr,y_bckgr = 0,int(np.random.random()*attMaps.shape[3])
+
+                    #backgrPatch = data[0,:,y_bckgr*ratio:y_bckgr*ratio+ratio,x_bckgr*ratio:x_bckgr*ratio+ratio]
+                    #data[0,:,y_max[i]*ratio:y_max[i]*ratio+ratio,x_max[i]*ratio:x_max[i]*ratio+ratio] = backgrPatch
+
+                    attMaps[0,:,y_max[i],x_max[i]] = 0                       
+                    #mask[0,:,y_max[i],x_max[i]] = 0 
+                    #origAttMaps[0,:,y_max[i],x_max[i]] = 0 
+
+                leftPxlNb -= totalPxlNb//stepNb
+
+                #if leftPxlNb < totalPxlNb*(attMaps.size(1)-j-1)/attMaps.size(1):
+                #    if j < attMaps.size(1)-1:
+                #        j += 1
+
+                if stepCount % 30 == 0:
+                    allAttMaps = torch.cat((allAttMaps,attMaps.cpu()),dim=0)
+                    allData = torch.cat((allData,data.cpu()),dim=0)
+                stepCount += 1
+
+                if not args.resnet_bilinear:
+                    resDic = net.net(data)
+                else:
+                    resDic = net(data)
+
+                score = torch.softmax(resDic["pred"],dim=-1)[:,predClassInd[0]]
+
+                score_prop_list.append((leftPxlNb,score.item()))
+
+                #attMaps = torch.sqrt(torch.pow(resDic["features"],2).sum(dim=1,keepdim=True))  
+                #attMaps = (attMaps-attMaps.min())/(attMaps.max()-attMaps.min()) 
+                #attMaps = torch.nn.functional.adaptive_avg_pool2d(attMaps,output_size=(7,7))  
+
+            allScoreList.append(score_prop_list)
+            allStatsList.append(statsList)
+
+            allAttMaps = (allAttMaps - allAttMaps.min())/(allAttMaps.max() - allAttMaps.min())
+            torchvision.utils.save_image(allAttMaps,"../vis/{}/attMetrAttMapDel_{}_{}.png".format(args.exp_id,args.model_id,imgInd))
+            torchvision.utils.save_image(allData,"../vis/{}/attMetrInpDel_{}_{}.png".format(args.exp_id,args.model_id,imgInd))
+
+        np.save("../results/{}/attMetrStatsDel_{}.npy".format(args.exp_id,args.model_id),np.array(allStatsList,dtype=object))
+        np.save("../results/{}/attMetrDel_{}.npy".format(args.exp_id,args.model_id),np.array(allScoreList,dtype=object))
+        np.save("../results/{}/attMetrIndsDel_{}.npy".format(args.exp_id,args.model_id),inds)
+
+    elif args.attention_metrics_add:
 
         args.val_batch_size = 1
         testLoader,testDataset = load_data.buildTestLoader(args, "test",withSeg=args.with_seg)
@@ -1283,14 +1438,19 @@ def main(argv=None):
             grad_cam = GradCAM(model_dict, True)
 
         stepNb = 50
-        nbImgs = args.attention_metrics
+        nbImgs = args.attention_metrics_add
 
         allScoreList = []
 
         torch.manual_seed(0)
         inds = torch.randint(len(testDataset),size=(nbImgs,))
 
-        for i in inds:
+        blurWeight = torch.ones(19,19)
+        blurWeight = blurWeight/blurWeight.numel()
+        blurWeight = blurWeight.unsqueeze(0).unsqueeze(0).expand(3,1,-1,-1)
+        blurWeight = blurWeight.cuda() if args.cuda else blurWeight
+
+        for imgInd,i in enumerate(inds):
             print(i)
 
             batch = testDataset.__getitem__(i)
@@ -1298,6 +1458,10 @@ def main(argv=None):
 
             data = data.cuda() if args.cuda else data
             targ = targ.cuda() if args.cuda else targ
+
+            allData = data.clone()
+            origData = data.clone()
+            data = F.conv2d(data,blurWeight,padding=blurWeight.size(-1)//2,groups=blurWeight.size(0))
 
             if not args.resnet_bilinear:
                 resDic = net.net(data)
@@ -1308,11 +1472,12 @@ def main(argv=None):
             predClassInd = scores.argmax(dim=-1)
 
             if not args.resnet_bilinear:
-                attMaps = grad_cam(data)
+                attMaps = grad_cam(data,upsample=False)
             else:
                 attMaps = torch.sqrt(torch.pow(resDic["features"],2).sum(dim=1,keepdim=True))
                 attMaps *= resDic["attMaps"].mean(dim=1,keepdim=True)
-            #attMaps = resDic["attMaps"][:,0:1]
+
+            allAttMaps = attMaps.clone()
 
             totalPxlNb = attMaps.size(2)*attMaps.size(3)
             leftPxlNb = totalPxlNb
@@ -1329,11 +1494,14 @@ def main(argv=None):
                 ratio = data.size(-1)//attMaps.size(-1)
 
                 for i in range(len(x_max)):
-                    data[0,:,y_max[i]*ratio:y_max[i]*ratio+ratio-1,x_max[i]*ratio:x_max[i]*ratio+ratio-1] = 0
+                    data[0,:,y_max[i]*ratio:y_max[i]*ratio+ratio,x_max[i]*ratio:x_max[i]*ratio+ratio] = origData[0,:,y_max[i]*ratio:y_max[i]*ratio+ratio,x_max[i]*ratio:x_max[i]*ratio+ratio]
                     attMaps[0,0,y_max[i],x_max[i]] = -np.inf
-
-                leftPxlNb -= totalPxlNb//stepNb
                 
+                leftPxlNb -= totalPxlNb//stepNb
+
+                allAttMaps = torch.cat((allAttMaps,attMaps),dim=0)
+                allData = torch.cat((allData,data),dim=0)
+
                 if not args.resnet_bilinear:
                     resDic = net.net(data)
                 else:
@@ -1344,10 +1512,13 @@ def main(argv=None):
                 score_prop_list.append((leftPxlNb,score.item()))
 
             allScoreList.append(score_prop_list)
-            
-        np.save("../results/{}/attMetrDel_{}.npy".format(args.exp_id,args.model_id),allScoreList)
-        np.save("../results/{}/attMetrInds_{}.npy".format(args.exp_id,args.model_id),inds)
-        
+
+            torchvision.utils.save_image(allAttMaps,"../vis/{}/attMetrAttMapAdd_{}_{}.png".format(args.exp_id,args.model_id,imgInd))
+            torchvision.utils.save_image(allData,"../vis/{}/attMetrInpAdd_{}_{}.png".format(args.exp_id,args.model_id,imgInd))
+
+        np.save("../results/{}/attMetrAdd_{}_{}.npy".format(args.exp_id,args.model_id,imgInd),allScoreList)
+        np.save("../results/{}/attMetrIndsAdd_{}_{}.npy".format(args.exp_id,args.model_id,imgInd),inds)
+
     else:
         train(0,args,None)
 
