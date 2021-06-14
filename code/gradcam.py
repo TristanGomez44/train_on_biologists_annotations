@@ -64,7 +64,7 @@ class GradCAM(object):
                 print('saliency_map size :', self.activations['value'].shape[2:])
 
 
-    def forward(self, input, class_idx=None, retain_graph=False):
+    def forward(self, input, class_idx=None, retain_graph=False,upsample=False):
         """
         Args:
             input: input image with shape of (1, 3, H, W)
@@ -95,14 +95,17 @@ class GradCAM(object):
 
         saliency_map = (weights*activations).sum(1, keepdim=True)
         saliency_map = F.relu(saliency_map)
-        saliency_map = F.upsample(saliency_map, size=(h, w), mode='bilinear', align_corners=False)
+        
+        if upsample:
+            saliency_map = F.upsample(saliency_map, size=(h, w), mode='bilinear', align_corners=False)
+        
         saliency_map_min, saliency_map_max = saliency_map.min(), saliency_map.max()
         saliency_map = (saliency_map - saliency_map_min).div(saliency_map_max - saliency_map_min+0.00001).data
 
         return saliency_map
 
-    def __call__(self, input, class_idx=None, retain_graph=False):
-        return self.forward(input, class_idx, retain_graph)
+    def __call__(self, input, class_idx=None, retain_graph=False,upsample=False):
+        return self.forward(input, class_idx, retain_graph,upsample=upsample)
 
 class GradCAMpp(GradCAM):
     """Calculate GradCAM++ salinecy map.
