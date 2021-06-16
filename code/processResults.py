@@ -1621,7 +1621,7 @@ def attMetrics(exp_id):
 
             delPairs_i[:,0] = (delPairs_i[:,0]-delPairs_i[:,0].min())/(delPairs_i[:,0].max()-delPairs_i[:,0].min())
             delPairs_i[:,0] = 1-delPairs_i[:,0]
-            delPairs_i[:,1] = delPairs_i[:,1]/delPairs_i[:,1].max()
+            #delPairs_i[:,1] = delPairs_i[:,1]/delPairs_i[:,1].max()
 
             plt.figure()
             plt.plot(delPairs_i[:,0],delPairs_i[:,1])
@@ -1639,6 +1639,10 @@ def attMetrics(exp_id):
         resDic[model_id] = np.array(allAuC).mean()
 
     print(resDic)
+
+    csv = "\n".join(["{},{}".format(key,resDic[key]) for key in resDic])
+    with open("../results/{}/attMetrics_del.csv".format(exp_id),"w") as file:
+        print(csv,file=file)
 
 def attMetricsStats(exp_id):
 
@@ -1677,7 +1681,7 @@ def attMetricsAdd(exp_id):
         for i in range(len(delPairs)):
             
             delPairs[i,:,0] = 1-delPairs[i,:,0]/delPairs[i,:,0].max()
-            delPairs[i,:,1] = delPairs[i,:,1]/delPairs[i,:,1].max()
+            #delPairs[i,:,1] = delPairs[i,:,1]/delPairs[i,:,1].max()
 
             plt.figure()
             plt.plot(delPairs[i,:,0],delPairs[i,:,1])
@@ -1696,8 +1700,9 @@ def attMetricsAdd(exp_id):
 
     print(resDic)
 
-
-
+    csv = "\n".join(["{},{}".format(key,resDic[key]) for key in resDic])
+    with open("../results/{}/attMetrics_add.csv".format(exp_id),"w") as file:
+        print(csv,file=file)
 
 def main(argv=None):
 

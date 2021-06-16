@@ -995,6 +995,12 @@ def main(argv=None):
     argreader.parser.add_argument('--grad_cam', type=int, help='To compute grad cam instead of training or testing.',nargs="*")
     argreader.parser.add_argument('--attention_metrics', type=int, help='To compute the DAUC metric')
     argreader.parser.add_argument('--attention_metrics_add', type=int, help='To compute the IAUC metrics')
+    argreader.parser.add_argument('--att_metrics_gradcam_pp', type=str2bool, help='To use gradcam++ instead of gradcam')
+    argreader.parser.add_argument('--att_metrics_guided', type=str2bool, help='To use guided backprop instead of gradcam')
+
+    argreader.parser.add_argument('--att_metrics_max_brnpa', type=str2bool, help='To agregate br-npa maps with max instead of mean')
+    argreader.parser.add_argument('--att_metrics_onlyfirst_brnpa', type=str2bool, help='To agregate br-npa maps with max instead of mean')
+    argreader.parser.add_argument('--att_metrics_few_steps', type=str2bool, help='To do as much step for high res than for low res')
 
     argreader.parser.add_argument('--optuna', type=str2bool, help='To run a hyper-parameter study')
     argreader.parser.add_argument('--optuna_trial_nb', type=int, help='The number of hyper-parameter trial to run.')
@@ -1279,8 +1285,14 @@ def main(argv=None):
 
         if not args.resnet_bilinear:
             net = modelBuilder.GradCamMod(net)
-            model_dict = dict(type=args.first_mod, arch=net, layer_name='layer4', input_size=(448, 448))
-            grad_cam = GradCAM(model_dict, True)
+            if not args.att_metrics_guided:
+                model_dict = dict(type=args.first_mod, arch=net, layer_name='layer4', input_size=(448, 448))
+                if args.att_metrics_gradcam_pp:
+                    grad_cam = GradCAMpp(model_dict,True)
+                else:
+                    grad_cam = GradCAM(model_dict, True)
+            else:
+                guided_backprop_mod = guided_backprop.GuidedBackprop(net)
 
         else:
             torch.set_grad_enabled(False)
@@ -1319,7 +1331,10 @@ def main(argv=None):
             predClassInd = scores.argmax(dim=-1)
 
             if not args.resnet_bilinear:
-                attMaps = grad_cam(data,upsample=False)
+                if args.att_metrics_guided:
+                    attMaps = guided_backprop_mod.generate_gradients(data,targ).detach().cpu()
+                else:
+                    attMaps = grad_cam(data,upsample=False)
             else:
                 attMaps = torch.sqrt(torch.pow(resDic["features"],2).sum(dim=1,keepdim=True))
                 attMaps = (attMaps-attMaps.min())/(attMaps.max()-attMaps.min())
@@ -1327,9 +1342,12 @@ def main(argv=None):
                 if not args.bil_cluster:
                     attMaps *= resDic["attMaps"].mean(dim=1,keepdim=True)
                 else:
-                    first,sec,third = 77.3,73.2,56.8
-                    resDic["attMaps"] = (resDic["attMaps"][:,0]*first+resDic["attMaps"][:,1]*sec+resDic["attMaps"][:,2]*third)/(first+sec+third)
-                    attMaps *= resDic["attMaps"]
+                    if args.att_metrics_max_brnpa:
+                        attMaps *= resDic["attMaps"].max(dim=1,keepdim=True)[1]
+                    elif args.att_metrics_onlyfirst_brnpa:
+                        attMaps *= resDic["attMaps"][:,0:1]
+                    else:
+                        attMaps *= resDic["attMaps"].mean(dim=1,keepdim=True)
 
                 attMaps = (attMaps-attMaps.min())/(attMaps.max()-attMaps.min())
 
@@ -1348,7 +1366,11 @@ def main(argv=None):
             leftPxlNb = totalPxlNb
 
             #stepNb = totalPxlNb
-            stepNb = 196 if totalPxlNb == 196 else totalPxlNb
+
+            if args.att_metrics_few_steps:
+                stepNb = 196 
+            else:
+                stepNb = totalPxlNb
 
             score_prop_list = []
 
@@ -1382,7 +1404,7 @@ def main(argv=None):
                     #backgrPatch = data[0,:,y_bckgr*ratio:y_bckgr*ratio+ratio,x_bckgr*ratio:x_bckgr*ratio+ratio]
                     #data[0,:,y_max[i]*ratio:y_max[i]*ratio+ratio,x_max[i]*ratio:x_max[i]*ratio+ratio] = backgrPatch
 
-                    attMaps[0,:,y_max[i],x_max[i]] = 0                       
+                    attMaps[0,:,y_max[i],x_max[i]] = -1                       
                     #mask[0,:,y_max[i],x_max[i]] = 0 
                     #origAttMaps[0,:,y_max[i],x_max[i]] = 0 
 
@@ -1393,7 +1415,7 @@ def main(argv=None):
                 #        j += 1
 
                 if stepCount % 30 == 0:
-                    allAttMaps = torch.cat((allAttMaps,attMaps.cpu()),dim=0)
+                    allAttMaps = torch.cat((allAttMaps,torch.clamp(attMaps,0,attMaps.max()).cpu()),dim=0)
                     allData = torch.cat((allData,data.cpu()),dim=0)
                 stepCount += 1
 
@@ -1417,6 +1439,18 @@ def main(argv=None):
             torchvision.utils.save_image(allAttMaps,"../vis/{}/attMetrAttMapDel_{}_{}.png".format(args.exp_id,args.model_id,imgInd))
             torchvision.utils.save_image(allData,"../vis/{}/attMetrInpDel_{}_{}.png".format(args.exp_id,args.model_id,imgInd))
 
+        if args.att_metrics_gradcam_pp:
+            args.model_id = args.model_id + "-gradcampp"
+        elif args.att_metrics_max_brnpa:
+            print("MAX")
+            args.model_id = args.model_id + "-max"
+        elif args.att_metrics_onlyfirst_brnpa:
+            print("ONLYFIRST")
+            args.model_id = args.model_id + "-onlyfirst"
+
+        if args.att_metrics_few_steps:
+            args.model_id = args.model_id + "-fewsteps"
+
         np.save("../results/{}/attMetrStatsDel_{}.npy".format(args.exp_id,args.model_id),np.array(allStatsList,dtype=object))
         np.save("../results/{}/attMetrDel_{}.npy".format(args.exp_id,args.model_id),np.array(allScoreList,dtype=object))
         np.save("../results/{}/attMetrIndsDel_{}.npy".format(args.exp_id,args.model_id),inds)
@@ -1434,10 +1468,20 @@ def main(argv=None):
 
         if not args.resnet_bilinear:
             net = modelBuilder.GradCamMod(net)
-            model_dict = dict(type=args.first_mod, arch=net, layer_name='layer4', input_size=(448, 448))
-            grad_cam = GradCAM(model_dict, True)
 
-        stepNb = 50
+            if not args.att_metrics_guided:
+                model_dict = dict(type=args.first_mod, arch=net, layer_name='layer4', input_size=(448, 448))
+                
+                if args.att_metrics_gradcam_pp:
+                    grad_cam = GradCAMpp(model_dict,True)
+                else:
+                    grad_cam = GradCAM(model_dict, True)
+            else:
+                guided_backprop_mod = guided_backprop.GuidedBackprop(net)
+       
+        else:
+            torch.set_grad_enabled(False)
+
         nbImgs = args.attention_metrics_add
 
         allScoreList = []
@@ -1445,7 +1489,7 @@ def main(argv=None):
         torch.manual_seed(0)
         inds = torch.randint(len(testDataset),size=(nbImgs,))
 
-        blurWeight = torch.ones(19,19)
+        blurWeight = torch.ones(121,121)
         blurWeight = blurWeight/blurWeight.numel()
         blurWeight = blurWeight.unsqueeze(0).unsqueeze(0).expand(3,1,-1,-1)
         blurWeight = blurWeight.cuda() if args.cuda else blurWeight
@@ -1461,29 +1505,58 @@ def main(argv=None):
 
             allData = data.clone()
             origData = data.clone()
-            data = F.conv2d(data,blurWeight,padding=blurWeight.size(-1)//2,groups=blurWeight.size(0))
-
+   
             if not args.resnet_bilinear:
                 resDic = net.net(data)
             else:
                 resDic = net(data)
-            
+
+            data = F.conv2d(data,blurWeight,padding=blurWeight.size(-1)//2,groups=blurWeight.size(0))
+
             scores = torch.softmax(resDic["pred"],dim=-1)
             predClassInd = scores.argmax(dim=-1)
 
             if not args.resnet_bilinear:
-                attMaps = grad_cam(data,upsample=False)
+                if args.att_metrics_guided:
+                    attMaps = guided_backprop_mod.generate_gradients(data,targ).detach().cpu()
+                else:
+                    attMaps = grad_cam(data,upsample=False)
             else:
                 attMaps = torch.sqrt(torch.pow(resDic["features"],2).sum(dim=1,keepdim=True))
-                attMaps *= resDic["attMaps"].mean(dim=1,keepdim=True)
+                attMaps = (attMaps-attMaps.min())/(attMaps.max()-attMaps.min())
+
+                if not args.bil_cluster:
+                    attMaps *= resDic["attMaps"].mean(dim=1,keepdim=True)
+                else:
+                    if args.att_metrics_max_brnpa:
+                        attMaps *= resDic["attMaps"].max(dim=1,keepdim=True)[1]
+                    elif args.att_metrics_onlyfirst_brnpa:
+                        attMaps *= resDic["attMaps"][:,0:1]
+                    else:
+                        attMaps *= resDic["attMaps"].mean(dim=1,keepdim=True)
+
+                attMaps = (attMaps-attMaps.min())/(attMaps.max()-attMaps.min())
+
+                #attMaps *= resDic["attMaps"].mean(dim=1,keepdim=True)
+                #attMaps = resDic["attMaps"][:,0:1]
+                #attMaps = resDic["attMaps"]
+                #attMaps = torch.nn.functional.adaptive_avg_pool2d(attMaps,output_size=(7,7))
+
+                mask = torch.ones_like(attMaps)
 
             allAttMaps = attMaps.clone()
 
             totalPxlNb = attMaps.size(2)*attMaps.size(3)
             leftPxlNb = totalPxlNb
 
+            if args.att_metrics_few_steps:
+                stepNb = 196 
+            else:
+                stepNb = totalPxlNb
+
             score_prop_list = []
 
+            stepCount = 0
             while leftPxlNb > 0:
 
                 _,ind_max = attMaps[0,0].view(-1).topk(k=totalPxlNb//stepNb)
@@ -1495,12 +1568,13 @@ def main(argv=None):
 
                 for i in range(len(x_max)):
                     data[0,:,y_max[i]*ratio:y_max[i]*ratio+ratio,x_max[i]*ratio:x_max[i]*ratio+ratio] = origData[0,:,y_max[i]*ratio:y_max[i]*ratio+ratio,x_max[i]*ratio:x_max[i]*ratio+ratio]
-                    attMaps[0,0,y_max[i],x_max[i]] = -np.inf
+                    attMaps[0,:,y_max[i],x_max[i]] = -1   
                 
                 leftPxlNb -= totalPxlNb//stepNb
 
-                allAttMaps = torch.cat((allAttMaps,attMaps),dim=0)
-                allData = torch.cat((allData,data),dim=0)
+                if stepCount % 30 == 0:
+                    allAttMaps = torch.cat((allAttMaps,torch.clamp(attMaps,0,attMaps.max())),dim=0)
+                    allData = torch.cat((allData,data),dim=0)
 
                 if not args.resnet_bilinear:
                     resDic = net.net(data)
@@ -1511,10 +1585,24 @@ def main(argv=None):
 
                 score_prop_list.append((leftPxlNb,score.item()))
 
+                stepCount += 1 
+
             allScoreList.append(score_prop_list)
 
             torchvision.utils.save_image(allAttMaps,"../vis/{}/attMetrAttMapAdd_{}_{}.png".format(args.exp_id,args.model_id,imgInd))
             torchvision.utils.save_image(allData,"../vis/{}/attMetrInpAdd_{}_{}.png".format(args.exp_id,args.model_id,imgInd))
+
+        if args.att_metrics_gradcam_pp:
+            args.model_id = args.model_id + "-gradcampp"
+        elif args.att_metrics_max_brnpa:
+            print("MAX")
+            args.model_id = args.model_id + "-max"
+        elif args.att_metrics_onlyfirst_brnpa:
+            print("ONLYFIRST")
+            args.model_id = args.model_id + "-onlyfirst"
+            
+        if args.att_metrics_few_steps:
+            args.model_id = args.model_id + "-fewsteps"
 
         np.save("../results/{}/attMetrAdd_{}_{}.npy".format(args.exp_id,args.model_id,imgInd),allScoreList)
         np.save("../results/{}/attMetrIndsAdd_{}_{}.npy".format(args.exp_id,args.model_id,imgInd),inds)
