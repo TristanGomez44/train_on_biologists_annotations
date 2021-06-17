@@ -1607,36 +1607,35 @@ def attMetrics(exp_id):
 
     resDic = {}
 
+    indsToUse,modelToIgn = getIndsToUse(delPaths)
+
     for path in delPaths:
 
         model_id = os.path.basename(path).split("attMetrDel_")[1].split(".npy")[0]
         
-        delPairs = np.load(path,allow_pickle=True)
+        if model_id not in modelToIgn:
+            delPairs = np.load(path,allow_pickle=True)
 
-        allAuC = []
+            allAuC = []
 
-        for i in range(len(delPairs)):
+            for i in range(len(delPairs)):
+                if i in indsToUse:
+                #if i in indsToUseDic[model_id]:
+
+                    delPairs_i = np.array(delPairs[i])
+
+                    delPairs_i[:,0] = (delPairs_i[:,0]-delPairs_i[:,0].min())/(delPairs_i[:,0].max()-delPairs_i[:,0].min())
+                    delPairs_i[:,0] = 1-delPairs_i[:,0]
+
+                    plt.figure()
+                    plt.plot(delPairs_i[:,0],delPairs_i[:,1])
+                    plt.savefig("../vis/{}/attMetrDel_{}_{}.png".format(exp_id,model_id,i))
+                    plt.close()
+
+                    auc = np.trapz(delPairs_i[:,1],delPairs_i[:,0])
+                    allAuC.append(auc)
             
-            delPairs_i = np.array(delPairs[i])
-
-            delPairs_i[:,0] = (delPairs_i[:,0]-delPairs_i[:,0].min())/(delPairs_i[:,0].max()-delPairs_i[:,0].min())
-            delPairs_i[:,0] = 1-delPairs_i[:,0]
-            #delPairs_i[:,1] = delPairs_i[:,1]/delPairs_i[:,1].max()
-
-            plt.figure()
-            plt.plot(delPairs_i[:,0],delPairs_i[:,1])
-            plt.savefig("../vis/{}/attMetrDel_{}_{}.png".format(exp_id,model_id,i))
-            plt.close()
-
-            #print(delPairs[delPairs[:,0].argmax()])
-            #print(delPairs[delPairs[:,0].argmin()])
-            #print(delPairs[delPairs[:,1].argmax()])
-            #print(delPairs[delPairs[:,1].argmin()])
-
-            auc = np.trapz(delPairs_i[:,1],delPairs_i[:,0])
-            allAuC.append(auc)
-        
-        resDic[model_id] = np.array(allAuC).mean()
+            resDic[model_id] = np.array(allAuC).mean()
 
     print(resDic)
 
@@ -1666,43 +1665,70 @@ def attMetricsStats(exp_id):
 
 def attMetricsAdd(exp_id):
 
-    delPaths = sorted(glob.glob("../results/{}/attMetrAdd_*.npy".format(exp_id)))
+    addPaths = sorted(glob.glob("../results/{}/attMetrAdd_*.npy".format(exp_id)))
 
     resDic = {}
 
-    for path in delPaths:
+    indsToUse,modelToIgn = getIndsToUse(addPaths)
+
+    print(indsToUse)
+
+    for path in addPaths:
 
         model_id = os.path.basename(path).split("attMetrAdd_")[1].split(".npy")[0]
         
-        delPairs = np.load(path)
+        if model_id not in modelToIgn:
+            delPairs = np.load(path)
 
-        allAuC = []
+            allAuC = []
 
-        for i in range(len(delPairs)):
+            for i in range(len(delPairs)):
+
+                if i in indsToUse or len(delPairs) == len(indsToUse):
+                    delPairs[i,:,0] = 1-delPairs[i,:,0]/delPairs[i,:,0].max()
+
+                    plt.figure()
+                    plt.plot(delPairs[i,:,0],delPairs[i,:,1])
+                    plt.savefig("../vis/{}/attMetrAdd_{}_{}.png".format(exp_id,model_id,i))
+                    plt.close()
+
+                    auc = np.trapz(delPairs[i,:,1],delPairs[i,:,0])
+                    allAuC.append(auc)
             
-            delPairs[i,:,0] = 1-delPairs[i,:,0]/delPairs[i,:,0].max()
-            #delPairs[i,:,1] = delPairs[i,:,1]/delPairs[i,:,1].max()
-
-            plt.figure()
-            plt.plot(delPairs[i,:,0],delPairs[i,:,1])
-            plt.savefig("../vis/{}/attMetrAdd_{}_{}.png".format(exp_id,model_id,i))
-            plt.close()
-
-            #print(delPairs[delPairs[:,0].argmax()])
-            #print(delPairs[delPairs[:,0].argmin()])
-            #print(delPairs[delPairs[:,1].argmax()])
-            #print(delPairs[delPairs[:,1].argmin()])
-
-            auc = np.trapz(delPairs[i,:,1],delPairs[i,:,0])
-            allAuC.append(auc)
-        
-        resDic[model_id] = np.array(allAuC).mean()
+            resDic[model_id] = np.array(allAuC).mean()
 
     print(resDic)
 
     csv = "\n".join(["{},{}".format(key,resDic[key]) for key in resDic])
     with open("../results/{}/attMetrics_add.csv".format(exp_id),"w") as file:
         print(csv,file=file)
+
+def getIndsToUse(paths):
+    
+    modelToIgn = []
+    targs = np.load(paths[0].replace("Add","Targ").replace("Del","Targ"))
+    indsToUseBool = np.array([True for _ in range(len(targs))])
+    indsToUseDic = {}
+    for path in paths:
+        
+        if os.path.basename(path).find("Add") != -1:
+            model_id = os.path.basename(path).split("attMetrAdd_")[1].split(".npy")[0]
+        else:
+            model_id = os.path.basename(path).split("attMetrDel_")[1].split(".npy")[0]
+        
+        model_id_nosuff = model_id.replace("-max","").replace("-onlyfirst","").replace("-fewsteps","")
+
+        predPath = path.replace("Add","Preds").replace("Del","Preds").replace(model_id,model_id_nosuff)
+        if os.path.exists(predPath):
+            preds = np.load(predPath)
+            indsToUseDic[model_id] = np.argwhere(preds==targs)
+            indsToUseBool = indsToUseBool*(preds==targs)
+        else:
+            modelToIgn.append(model_id)
+            print(predPath)
+
+    indsToUse =  np.argwhere(indsToUseBool)
+    return indsToUse,modelToIgn 
 
 def main(argv=None):
 
