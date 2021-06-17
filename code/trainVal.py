@@ -1107,7 +1107,7 @@ def main(argv=None):
         copyfile(bestPath, bestPath.replace("_trial{}".format(bestTrialId-1),""))
 
         args.distributed=False
-        print("line 1008")
+
         train(0,args,None)
 
     elif args.grad_exp:
