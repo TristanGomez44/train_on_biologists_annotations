@@ -118,3 +118,46 @@ python3 processResults.py -c model_cars10.config --exp_id CARS10 --plot_points_i
 													--gradcam_pp   False  False True  False False False \
 													--interp 				True   True True  True  True  False \
 													--direct_ind 		True  True True False False False
+
+##################### Vis compt with RISE #################################
+
+python3 processResults.py -c model_cub10.config --exp_id CUB10 --plot_points_image_dataset_grid --image_nb 100 \
+													--model_ids noneRed noneRed noneRed noneRed noneRed noneRed noneRed noneRed bilRed clus_masterClusRed \
+													--plot_id comp_rise  \
+													--ind_to_keep 47 29 84 --nrows 1 \
+													--only_norm     False False False True  False False False False False False \
+													--rise 		    False False False False True  False False False False False \
+													--gradcam 	    True  True  True  False False True 	True  True  False False \
+													--gradcam_maps  True  False False False False False False False False False \
+													--gradcam_pp    False False True  False False False False False False False \
+													--score_map     False False False False False True	False False False False \
+													--vargrad       False False False False False False	True  False False False \
+													--smoothgrad_sq False False False False False False	False True  False False \
+													--interp 	    True  True  True  True  True  True 	True  True  True  False \
+													--direct_ind    True  True  True  False True  True 	True  True  False False
+
+python3 processResults.py -c model_air10.config --exp_id AIR10 --plot_points_image_dataset_grid --image_nb 200 \
+													--model_ids noneRed noneRed noneRed noneRed noneRed noneRed bilRed clus_mast     \
+													--plot_id comp_rise_air  \
+													--ind_to_keep 61 78 126 --nrows 1 \
+													--only_norm    False False False True  False False 	False False \
+													--rise 		   False False False False True  False 	False False \
+													--gradcam 	   True  True  True  False False True 	False False \
+													--gradcam_maps True  False False False False False 	False False \
+													--gradcam_pp   False False True  False False False 	False False \
+													--score_map    False False False False False True	False False \
+													--interp 	   True  True  True  True  True  True 	True  False \
+													--direct_ind   True  True  True  False True  True 	False False
+
+python3 processResults.py -c model_cars10.config --exp_id CARS10 --plot_points_image_dataset_grid --image_nb 200 \
+													--model_ids noneRed noneRed noneRed noneRed noneRed noneRed bilRed clus_mast       \
+													--plot_id comp_rise_cars  \
+													--ind_to_keep 135 39 84 --nrows 1 \
+													--only_norm    False False False True  False False 	False False \
+													--rise 		   False False False False True  False 	False False \
+													--gradcam 	   True  True  True  False False True 	False False \
+													--gradcam_maps True  False False False False False 	False False \
+													--gradcam_pp   False False True  False False False 	False False \
+													--score_map    False False False False False True	False False \
+													--interp 	   True  True  True  True  True  True 	True  False \
+													--direct_ind   True  True  True  False True  True 	False False

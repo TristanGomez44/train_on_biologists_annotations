@@ -138,7 +138,7 @@ def compRecField(architecture):
 
 def plotPointsImageDatasetGrid(exp_id,imgNb,epochs,model_ids,reduction_fact_list,inverse_xy,mode,nbClass,\
                                 useDropped_list,forceFeat,fullAttMap,threshold,maps_inds,plotId,luminosity,\
-                                receptive_field,cluster,cluster_attention,pond_by_norm,gradcam,gradcam_maps,gradcam_pp,nrows,correctness,\
+                                receptive_field,cluster,cluster_attention,pond_by_norm,gradcam,gradcam_maps,gradcam_pp,score_map,varGrad,smoothGradSq,rise,nrows,correctness,\
                                 agregateMultiAtt,plotVecEmb,onlyNorm,class_index,ind_to_keep,interp,direct_ind,no_ref,args):
 
     if (correctness == "True" or correctness == "False") and len(model_ids)>1:
@@ -155,7 +155,7 @@ def plotPointsImageDatasetGrid(exp_id,imgNb,epochs,model_ids,reduction_fact_list
 
     if len(epochs) == 0:
         for j in range(len(model_ids)):
-
+            print("../models/{}/model{}_best_epoch*".format(exp_id,model_ids[j]))
             paths = glob.glob("../models/{}/model{}_best_epoch*".format(exp_id,model_ids[j]))
             if len(paths) > 1:
                 raise ValueError("There should only be one best weight file.",model_ids[j],"has several.")
@@ -182,8 +182,20 @@ def plotPointsImageDatasetGrid(exp_id,imgNb,epochs,model_ids,reduction_fact_list
         elif gradcam_pp[j]:
             pointPaths.append("../results/{}/gradcam_pp_{}_epoch{}_{}.npy".format(exp_id,model_ids[j],epochs[j],mode))
             pointWeightPaths.append("")
+        elif score_map[j]:
+            pointPaths.append("../results/{}/score_maps_{}_epoch{}_{}.npy".format(exp_id,model_ids[j],epochs[j],mode))
+            pointWeightPaths.append("")   
+        elif varGrad[j]:
+            pointPaths.append("../results/{}/vargrad_{}_epoch{}_{}.npy".format(exp_id,model_ids[j],epochs[j],mode))
+            pointWeightPaths.append("")   
+        elif smoothGradSq[j]:
+            pointPaths.append("../results/{}/smoothgrad_sq_{}_epoch{}_{}.npy".format(exp_id,model_ids[j],epochs[j],mode))
+            pointWeightPaths.append("")              
         elif gradcam[j]:
             pointPaths.append("../results/{}/gradcam_{}_epoch{}_{}.npy".format(exp_id,model_ids[j],epochs[j],mode))
+            pointWeightPaths.append("")
+        elif rise[j]:
+            pointPaths.append("../results/{}/rise_maps_{}_epoch{}_{}.npy".format(exp_id,model_ids[j],epochs[j],mode))
             pointWeightPaths.append("")
         elif fullAttMap[j]:
             pointPaths.append("../results/{}/attMaps_{}_epoch{}_{}.npy".format(exp_id,model_ids[j],epochs[j],mode))
@@ -249,14 +261,17 @@ def plotPointsImageDatasetGrid(exp_id,imgNb,epochs,model_ids,reduction_fact_list
             if not class_index is None:
                 startInd = 0
 
+                classes = sorted(map(lambda x:x.split("/")[-2],glob.glob("../data/{}/*/".format(args.dataset_test))))
+                print(classes)
                 for ind in range(class_index):
-                    print(ind,formatData.getRevLab()[ind])
-                    className = formatData.getRevLab()[ind]
+                    print(ind,classes[ind])
+                    className = classes[ind]
                     startInd += len(glob.glob("../data/{}/{}/*".format(args.dataset_test,className)))
 
-                className = formatData.getRevLab()[class_index]
-                print(class_index,className)
+                className = classes[class_index]
+
                 endInd = startInd + len(glob.glob("../data/{}/{}/*".format(args.dataset_test,className)))
+
             else:
                 startInd = 0
                 endInd = maxInd
@@ -337,20 +352,17 @@ def plotPointsImageDatasetGrid(exp_id,imgNb,epochs,model_ids,reduction_fact_list
             imgPIL = Image.fromarray((255*img[0].permute(1,2,0).numpy()).astype("uint8"))
             imgDraw = ImageDraw.Draw(imgPIL)
 
-            if len(str(i+1)) == 2:
-                rectW = 50
-            else:
-                rectW = 25
+            rectW = 180
 
             imgDraw.rectangle([(0,0), (rectW, 40)],fill="white")
 
             imgDraw.text((0,0), str(i+1)+" ", font=fnt,fill=(0,0,0))
 
             if exp_id.find("EMB") != -1:
-                if class_aSort[pred[inds[i]]] == class_realSort[testDataset[inds[i]][1]]:
-                    imgDraw.text((50,0), class_aSort[pred[inds[i]]], font=fnt,fill=(0,230,0))
+                if pred[inds[i]] == testDataset[inds[i]][1]:
+                    imgDraw.text((60,0), class_realSort[pred[inds[i]]], font=fnt,fill=(0,230,0))
                 else:
-                    imgDraw.text((50,0), class_aSort[pred[inds[i]]], font=fnt,fill=(255,0,0))
+                    imgDraw.text((60,0), class_realSort[pred[inds[i]]], font=fnt,fill=(255,0,0))
                     imgDraw.text((150,0), "("+class_realSort[testDataset[inds[i]][1]]+")", font=fnt,fill=(0,0,0))
 
             img = torch.tensor(np.array(imgPIL)).permute(2,0,1).unsqueeze(0).float()/255
@@ -362,7 +374,7 @@ def plotPointsImageDatasetGrid(exp_id,imgNb,epochs,model_ids,reduction_fact_list
 
         for j in range(len(pointPaths)):
 
-            if fullAttMap[j] or gradcam[j]:
+            if fullAttMap[j] or gradcam[j] or rise[j]:
                 ptsImageCopy = ptsImage.clone()
 
                 if not direct_ind[j]:
@@ -370,11 +382,14 @@ def plotPointsImageDatasetGrid(exp_id,imgNb,epochs,model_ids,reduction_fact_list
                 else:
                     attMap = np.load(pointPaths[j],mmap_mode="r")[i]
 
+                print(varGrad[j],attMap.shape)
+                print(smoothGradSq[j],attMap.shape)
+
                 if no_ref[j]:
                     attMap_max = attMap.max(axis=-1,keepdims=True).max(axis=-2,keepdims=True)
                     attMap = attMap*(attMap==attMap_max)
 
-                if gradcam[j]:
+                if gradcam[j] or rise[j]:
                     attMap = (attMap-attMap.min())/(attMap.max()-attMap.min()+0.0001)
 
                     if gradcam_maps[j]:
@@ -404,12 +419,12 @@ def plotPointsImageDatasetGrid(exp_id,imgNb,epochs,model_ids,reduction_fact_list
                         attMap = (attMap-attMap.min())/(attMap.max()-attMap.min())
                         attMap = (attMap > 0.5).astype(float)
                 else:
-                    if not gradcam[j]:
+                    if not gradcam[j] and not rise[j]:
                         norm = normDict[j][inds[i]]
                         norm = (norm-norm.min())/(norm.max()-norm.min())
                         attMap = norm
 
-                if pond_by_norm[j] and ((not gradcam[j])):
+                if pond_by_norm[j] and not (gradcam[j] or rise[j]):
                     if direct_ind[j]:
                         norm = normDict[j][i]
                     else:
@@ -1778,6 +1793,12 @@ def main(argv=None):
     argreader.parser.add_argument('--gradcam',type=str2bool,nargs="*",metavar="BOOL",help='To plot gradcam instead of attention maps',default=[])
     argreader.parser.add_argument('--gradcam_maps',type=str2bool,nargs="*",metavar="BOOL",help='To plot gradcam w guided backprop instead of default gradcam',default=[])
     argreader.parser.add_argument('--gradcam_pp',type=str2bool,nargs="*",metavar="BOOL",help='To plot gradcam pp instead of default gradcam',default=[])
+    argreader.parser.add_argument('--score_map',type=str2bool,nargs="*",metavar="BOOL",help='To plot score_map',default=[])
+
+    argreader.parser.add_argument('--vargrad',type=str2bool,nargs="*",metavar="BOOL",help='To plot the varGrad method',default=[])
+    argreader.parser.add_argument('--smoothgrad_sq',type=str2bool,nargs="*",metavar="BOOL",help='To plot the smooth grad sq method',default=[])
+    
+    argreader.parser.add_argument('--rise',type=str2bool,nargs="*",metavar="BOOL",help='To plot rise maps',default=[])
 
     argreader.parser.add_argument('--correctness',type=str,metavar="CORRECT",help='Set this to True to only show image where the model has given a correct answer.',default=None)
     argreader.parser.add_argument('--agregate_multi_att',type=str2bool,nargs="*",metavar="BOOL",help='Set this to True to agregate the multiple attention map when there\'s several.',default=[])
@@ -1882,6 +1903,14 @@ def main(argv=None):
             args.gradcam_maps = [False for _ in range(len(args.model_ids))]
         if len(args.gradcam_pp) == 0:
             args.gradcam_pp = [False for _ in range(len(args.model_ids))]
+        if len(args.score_map) == 0:
+            args.score_map = [False for _ in range(len(args.model_ids))]  
+        if len(args.vargrad) == 0:
+            args.vargrad = [False for _ in range(len(args.model_ids))]   
+        if len(args.smoothgrad_sq) == 0:
+            args.smoothgrad_sq = [False for _ in range(len(args.model_ids))]           
+        if len(args.rise) == 0:
+            args.rise = [False for _ in range(len(args.model_ids))]
         if len(args.cluster) == 0:
             args.cluster = [False for _ in range(len(args.model_ids))]
         if len(args.cluster_attention) == 0:
@@ -1918,6 +1947,7 @@ def main(argv=None):
         plotPointsImageDatasetGrid(args.exp_id,args.image_nb,args.epoch_list,args.model_ids,args.reduction_fact_list,args.inverse_xy,args.mode,\
                                     args.class_nb,args.use_dropped_list,args.force_feat,args.full_att_map,args.use_threshold,args.maps_inds,args.plot_id,\
                                     args.luminosity,args.receptive_field,args.cluster,args.cluster_attention,args.pond_by_norm,args.gradcam,args.gradcam_maps,args.gradcam_pp,\
+                                    args.score_map,args.vargrad,args.smoothgrad_sq,args.rise,\
                                     args.nrows,args.correctness,args.agregate_multi_att,args.plot_vec_emb,args.only_norm,args.class_index,args.ind_to_keep,\
                                     args.interp,args.direct_ind,args.no_ref,args)
     if args.plot_prob_maps:

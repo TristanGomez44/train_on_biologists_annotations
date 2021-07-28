@@ -23,6 +23,8 @@ import metrics
 import utils
 import update
 from gradcam import GradCAM, GradCAMpp
+from score_map import ScoreCam
+from rise import RISE
 import guided_backprop
 from score_map import ScoreCam
 
@@ -40,6 +42,8 @@ import gc
 import torch.multiprocessing as mp
 import torch.distributed as dist
 import torchvision
+
+from captum.attr import (IntegratedGradients,NoiseTunnel)
 
 OPTIM_LIST = ["Adam", "AMSGrad", "SGD"]
 
@@ -73,6 +77,9 @@ def epochSeqTr(model, optim, log_interval, loader, epoch, args, **kwargs):
     if args.grad_exp:
         allGrads = None
 
+    acc_size = 0
+    acc_nb = 0
+
     for batch_idx, batch in enumerate(loader):
         optim.zero_grad()
 
@@ -81,6 +88,14 @@ def epochSeqTr(model, optim, log_interval, loader, epoch, args, **kwargs):
             print("\t", processedImgNb, "/", len(loader.dataset))
 
         data, target = batch[0], batch[1]
+
+        if acc_size + data.size(0) > args.batch_size:
+            data = data[:args.batch_size-acc_size]
+            target = target[:args.batch_size-acc_size]
+            acc_size = args.batch_size
+        else:
+            acc_size += data.size(0)
+        acc_nb += 1
 
         if args.with_seg:
             seg = batch[2]
@@ -105,6 +120,16 @@ def epochSeqTr(model, optim, log_interval, loader, epoch, args, **kwargs):
 
         loss = kwargs["lossFunc"](output, target, resDict, data).mean()
         loss.backward()
+
+        if acc_size == args.batch_size:
+            for p in model.parameters():
+                if p.grad is not None:
+                    p.grad /= acc_nb
+            optim.step()
+            optim.zero_grad()
+            acc_size = 0
+            acc_nb = 0
+
         loss = loss.detach().data.item()
 
         if args.grad_exp:
@@ -381,7 +406,8 @@ def epochImgEval(model, log_interval, loader, epoch, args, metricEarlyStop, mode
 
         metrDict = metrics.updateMetrDict(metrDict, metDictSample)
 
-        writePreds(output, target, epoch, args.exp_id, args.model_id, args.class_nb, batch_idx,mode)
+        if mode == "test":
+            writePreds(output, target, epoch, args.exp_id, args.model_id, args.class_nb, batch_idx,mode)
 
         validBatch += 1
         totalImgNb += target.size(0)
@@ -480,6 +506,10 @@ def getOptim_and_Scheduler(optimStr, lr,momentum,weightDecay,useScheduler,maxEpo
 
     if useScheduler:
         scheduler = torch.optim.lr_scheduler.StepLR(optim, step_size=2, gamma=0.9)
+        print("Sched",scheduler.get_last_lr())
+        for _ in range(lastEpoch):
+            scheduler.step()
+        print("Sched",scheduler.get_last_lr())
     else:
         scheduler = None
 
@@ -521,15 +551,12 @@ def initialize_Net_And_EpochNumber(net, exp_id, model_id, cuda, start_mode, init
 
         net = preprocessAndLoadParams(init_path,cuda,net,strict)
 
-        # Start epoch is 1 if strict if false because strict=False means that it is another model which is being trained
-        if strict:
-            startEpoch = utils.findLastNumbers(init_path)+1
-        else:
-            startEpoch = 1
+        startEpoch = utils.findLastNumbers(init_path)+1
 
     return startEpoch
 
 def preprocessAndLoadParams(init_path,cuda,net,strict):
+    print(init_path)
     params = torch.load(init_path, map_location="cpu" if not cuda else None)
 
     params = addOrRemoveModule(params,net)
@@ -675,6 +702,8 @@ def addOptimArgs(argreader):
                                   help='Weight decay')
     argreader.parser.add_argument('--use_scheduler', type=args.str2bool, metavar='M',
                                   help='To use a learning rate scheduler')
+    argreader.parser.add_argument('--always_sched', type=args.str2bool, metavar='M',
+                                  help='To always use a learning rate scheduler when optimizing hyper params')
 
     argreader.parser.add_argument('--optim', type=str, metavar='OPTIM',
                                   help='the optimizer to use (default: \'SGD\')')
@@ -813,7 +842,11 @@ def run(args,trial=None):
 
         if args.optim == "SGD":
             args.momentum = trial.suggest_float("momentum", 0., 0.9,step=0.1)
-            args.use_scheduler = trial.suggest_categorical("use_scheduler",[True,False])
+            if not args.always_sched:
+                args.use_scheduler = trial.suggest_categorical("use_scheduler",[True,False])
+    
+        if args.always_sched:
+            args.use_scheduler = True
 
         if args.opt_data_aug:
             args.brightness = trial.suggest_float("brightness", 0, 0.5, step=0.05)
@@ -869,7 +902,7 @@ def train(gpu,args,trial):
     startEpoch = initialize_Net_And_EpochNumber(net, args.exp_id, args.model_id, args.cuda, args.start_mode,
                                                 args.init_path, args.strict_init)
 
-    kwargsTr["optim"],scheduler = getOptim_and_Scheduler(args.optim, args.lr,args.momentum,args.weight_decay,args.use_scheduler,args.epochs,-1,net)
+    kwargsTr["optim"],scheduler = getOptim_and_Scheduler(args.optim, args.lr,args.momentum,args.weight_decay,args.use_scheduler,args.epochs,startEpoch,net)
 
     epoch = startEpoch
     bestEpoch, worseEpochNb = getBestEpochInd_and_WorseEpochNb(args.start_mode, args.exp_id, args.model_id, epoch)
@@ -893,6 +926,10 @@ def train(gpu,args,trial):
     kwargsTr["lossFunc"],kwargsVal["lossFunc"] = lossFunc,lossFunc
 
     if not args.only_test and not args.grad_cam:
+
+        actual_bs = args.batch_size if args.batch_size < args.max_batch_size_single_pass else args.max_batch_size_single_pass
+        args.batch_per_epoch = len(trainLoader.dataset)//actual_bs if len(trainLoader.dataset) > actual_bs else 1
+
         while epoch < args.epochs + 1 and worseEpochNb < args.max_worse_epoch_nb:
 
             kwargsTr["epoch"], kwargsVal["epoch"] = epoch, epoch
@@ -993,6 +1030,10 @@ def main(argv=None):
     argreader.parser.add_argument('--do_test_again', type=str2bool, help='Does the test evaluation even if it has already been done')
     argreader.parser.add_argument('--compute_latency', type=str2bool, help='To write in a file the latency at each forward pass.')
     argreader.parser.add_argument('--grad_cam', type=int, help='To compute grad cam instead of training or testing.',nargs="*")
+    argreader.parser.add_argument('--rise', type=str2bool, help='To compute rise instead or gradcam')
+    argreader.parser.add_argument('--score_map', type=str2bool, help='To compute score_map instead or gradcam')
+    argreader.parser.add_argument('--noise_tunnel', type=str2bool, help='To compute the methods based on noise tunnel instead or gradcam')
+
     argreader.parser.add_argument('--attention_metrics', type=int, help='To compute the DAUC metric')
     argreader.parser.add_argument('--attention_metrics_add', type=int, help='To compute the IAUC metrics')
     argreader.parser.add_argument('--att_metrics_gradcam_pp', type=str2bool, help='To use gradcam++ instead of gradcam')
@@ -1103,8 +1144,10 @@ def main(argv=None):
         args.only_test = True
 
         bestPath = glob.glob("../models/{}/model{}_trial{}_best_epoch*".format(args.exp_id,args.model_id,bestTrialId-1))[0]
+        print(bestPath)
 
         copyfile(bestPath, bestPath.replace("_trial{}".format(bestTrialId-1),""))
+
 
         args.distributed=False
 
@@ -1218,59 +1261,106 @@ def main(argv=None):
         bestEpoch = int(os.path.basename(bestPath).split("epoch")[1])
 
         net = modelBuilder.netBuilder(args,gpu=0)
-        net = preprocessAndLoadParams(bestPath,args.cuda,net,args.strict_init)
+        net_raw = preprocessAndLoadParams(bestPath,args.cuda,net,args.strict_init)
 
-        net = modelBuilder.GradCamMod(net)
+        if not args.rise and not args.score_map and not args.noise_tunnel:
+            net = modelBuilder.GradCamMod(net_raw)
+            model_dict = dict(type=args.first_mod, arch=net, layer_name='layer4', input_size=(448, 448))
+            grad_cam = GradCAM(model_dict, True)
+            grad_cam_pp = GradCAMpp(model_dict,True)
+            guided_backprop_mod = guided_backprop.GuidedBackprop(net)
+            
+            allMask = None
+            allMask_pp = None
+            allMaps = None 
+        elif args.score_map:
+            score_mod = ScoreCam(net_raw)
+            allScore = None
+        elif args.noise_tunnel:
+            torch.backends.cudnn.benchmark = False
+            #torch.backends.cudnn.enabled = False
 
-        model_dict = dict(type=args.first_mod, arch=net, layer_name='layer4', input_size=(448, 448))
-        grad_cam = GradCAM(model_dict, True)
-        grad_cam_pp = GradCAMpp(model_dict,True)
-        #score_map = ScoreCam(net,target_layer=4)
-        guided_backprop_mod = guided_backprop.GuidedBackprop(net)
+            net_raw.eval()
+            net = modelBuilder.GradCamMod(net_raw)
 
-        allMask = None
-        allMask_pp = None
-        #allMask_sc= None
-        #allMaps = None
+            ig = IntegratedGradients(net)
+            nt = NoiseTunnel(ig)
 
-        #for batch_idx, batch in enumerate(testLoader):
-            #data,targ = batch[0],batch[1]
+            batch = testDataset.__getitem__(0)
+            data_base = torch.zeros_like(batch[0].unsqueeze(0))
+            if args.cuda:
+                data_base = data_base.cuda()
+            
+            allSq = None 
+            allVar = None
 
-            #if (batch_idx % args.log_interval == 0):
-            #    print("\t", batch_idx * len(data), "/", len(testLoader.dataset))
+        else:
+            rise_mod = RISE(net_raw)
+            allRise = None
 
+        if args.grad_cam == [-1]:
+            args.grad_cam = np.arange(len(testDataset))
+        
         for i in args.grad_cam:
             batch = testDataset.__getitem__(i)
             data,targ = batch[0].unsqueeze(0),torch.tensor(batch[1]).unsqueeze(0)
 
             if args.cuda:
                 data = data.cuda()
-                targ = torch.tensor(targ).cuda()
+                targ = targ.cuda()
 
-            mask = grad_cam(data).detach().cpu()
-            #mask = (255*(mask-mask.min())/(mask.max()-mask.min())).byte()
+            if not args.rise and not args.score_map and not args.noise_tunnel:
+                mask = grad_cam(data).detach().cpu()
+                mask_pp = grad_cam_pp(data).detach().cpu()
+                map = guided_backprop_mod.generate_gradients(data,targ).detach().cpu()
 
-            mask_pp = grad_cam_pp(data).detach().cpu()
-            #mask_pp = (255*(mask_pp-mask_pp.min())/(mask_pp.max()-mask_pp.min())).byte()
+                if allMask is None:
+                    allMask = mask
+                    allMask_pp = mask_pp
+                    allMaps = map
+                else:
+                    allMask = torch.cat((allMask,mask),dim=0)
+                    allMask_pp = torch.cat((allMask_pp,mask_pp),dim=0)
+                    allMaps = torch.cat((allMaps,map),dim=0)
+            elif args.score_map:
+                score_map = score_mod.generate_cam(data)
 
-            #mask_sc = score_map.generate_cam(data,targ)
-            map = guided_backprop_mod.generate_gradients(data,targ).detach().cpu()
+                if allScore is None:
+                    allScore = torch.tensor(score_map)
+                else:
+                    allScore = torch.cat((allScore,torch.tensor(score_map)),dim=0)       
+            elif args.noise_tunnel:    
+                with torch.no_grad():
+                    target = torch.argmax(net_raw(data)["pred"][0])
 
-            if allMask is None:
-                allMask = mask
-                allMask_pp = mask_pp
-                #allMask_sc = mask_sc
-                allMaps = map
+                attr_sq = nt.attribute(data, nt_type='smoothgrad_sq', stdevs=0.02, nt_samples=4,nt_samples_batch_size=4,baselines=data_base, target=target)
+                attr_var = nt.attribute(data, nt_type='vargrad', stdevs=0.02, nt_samples=4,nt_samples_batch_size=4,baselines=data_base, target=target)
+
+                if allSq is None:
+                    allSq,allVar = attr_sq,attr_var
+                else:
+                    allSq,allVar = torch.cat((allSq,attr_sq),dim=0),torch.cat((allVar,attr_var),dim=0)
+
             else:
-                allMask = torch.cat((allMask,mask),dim=0)
-                allMask_pp = torch.cat((allMask_pp,mask_pp),dim=0)
-                #allMask_sc = np.concatenate((allMask_sc,mask_sc),axis=0)
-                allMaps = torch.cat((allMaps,map),dim=0)
+                with torch.no_grad():
+                    rise_map = rise_mod(data).detach().cpu()
 
-        np.save("../results/{}/gradcam_{}_epoch{}_test.npy".format(args.exp_id,args.model_id,bestEpoch),allMask.numpy())
-        np.save("../results/{}/gradcam_pp_{}_epoch{}_test.npy".format(args.exp_id,args.model_id,bestEpoch),allMask_pp.numpy())
-        #np.save("../results/{}/scorecam_{}_epoch{}_test.npy".format(args.exp_id,args.model_id,bestEpoch),allMask_sc)
-        np.save("../results/{}/gradcam_maps_{}_epoch{}_test.npy".format(args.exp_id,args.model_id,bestEpoch),allMaps.numpy())
+                if allRise is None:
+                    allRise = rise_map
+                else:
+                    allRise = torch.cat((allRise,rise_map),dim=0)
+
+        if not args.rise and not args.score_map and not args.noise_tunnel:
+            np.save("../results/{}/gradcam_{}_epoch{}_test.npy".format(args.exp_id,args.model_id,bestEpoch),allMask.numpy())
+            np.save("../results/{}/gradcam_pp_{}_epoch{}_test.npy".format(args.exp_id,args.model_id,bestEpoch),allMask_pp.numpy())
+            np.save("../results/{}/gradcam_maps_{}_epoch{}_test.npy".format(args.exp_id,args.model_id,bestEpoch),allMaps.numpy())
+        elif args.score_map:
+            np.save("../results/{}/score_maps_{}_epoch{}_test.npy".format(args.exp_id,args.model_id,bestEpoch),allScore.numpy())
+        elif args.noise_tunnel:
+            np.save("../results/{}/smoothgrad_sq_{}_epoch{}_test.npy".format(args.exp_id,args.model_id,bestEpoch),allSq.numpy())
+            np.save("../results/{}/vargrad_{}_epoch{}_test.npy".format(args.exp_id,args.model_id,bestEpoch),allVar.numpy())
+        else:
+            np.save("../results/{}/rise_maps_{}_epoch{}_test.npy".format(args.exp_id,args.model_id,bestEpoch),allRise.numpy())
 
     elif args.attention_metrics:
      

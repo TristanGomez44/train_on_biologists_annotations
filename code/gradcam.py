@@ -61,8 +61,6 @@ class GradCAM(object):
             else:
                 device = 'cuda' if next(self.model_arch.parameters()).is_cuda else 'cpu'
                 self.model_arch(torch.zeros(1, 3, *(input_size), device=device))
-                print('saliency_map size :', self.activations['value'].shape[2:])
-
 
     def forward(self, input, class_idx=None, retain_graph=False,upsample=False):
         """
@@ -74,6 +72,7 @@ class GradCAM(object):
             mask: saliency map of the same spatial dimension with input
             logit: model output
         """
+
         b, c, h, w = input.size()
 
         logit = self.model_arch(input)
@@ -139,6 +138,7 @@ class GradCAMpp(GradCAM):
             mask: saliency map of the same spatial dimension with input
             logit: model output
         """
+
         b, c, h, w = input.size()
 
         logits = self.model_arch(input)

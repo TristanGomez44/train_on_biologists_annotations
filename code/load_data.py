@@ -96,8 +96,8 @@ def buildTrainLoader(args,transf=None,shuffle=True,withSeg=False,reprVec=False,g
     train_dataset, _ = torch.utils.data.random_split(train_dataset, [int(totalLength * train_prop),
                                                                      totalLength - int(totalLength * train_prop)])
 
-
     bsz = args.batch_size
+    bsz = bsz if bsz < args.max_batch_size_single_pass else args.max_batch_size_single_pass
 
     if args.distributed:
         train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset,num_replicas=args.world_size,rank=gpu,shuffle=shuffle)
@@ -163,7 +163,7 @@ def addArgs(argreader):
                                   help='The batchsize to use for training')
     argreader.parser.add_argument('--val_batch_size', type=int, metavar='BS',
                                   help='The batchsize to use for validation')
-    argreader.parser.add_argument('--max_sub_batch_size', type=int, metavar='BS',
+    argreader.parser.add_argument('--max_batch_size_single_pass', type=int, metavar='BS',
                                   help='The maximum sub batch size when using very big images.')
 
     argreader.parser.add_argument('--train_prop', type=float, metavar='END',
