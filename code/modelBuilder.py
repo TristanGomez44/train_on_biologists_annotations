@@ -11,6 +11,7 @@ from models import hrnet
 from models import inception
 from models import efficientnet
 import args
+import time 
 
 def buildFeatModel(featModelName, **kwargs):
     ''' Build a visual feature model
@@ -78,6 +79,7 @@ class Model(nn.Module):
         if not self.firstModel is None:
 
             visResDict = self.firstModel(origImgBatch)
+
             resDict = self.secondModel(visResDict)
             resDict = merge(visResDict,resDict)
 
@@ -118,6 +120,7 @@ class CNN2D(FirstModel):
 
         # N x C x H x L
         featModRetDict = self.featMod(x)
+
         features = featModRetDict["x"]
 
         spatialWeights = torch.pow(features, 2).sum(dim=1, keepdim=True)
@@ -382,54 +385,50 @@ def getResnetFeat(backbone_name, backbone_inplanes):
 def netBuilder(args,gpu=None):
     ############### Visual Model #######################
 
-    if not args.repr_vec:
+    nbFeat = getResnetFeat(args.first_mod, args.resnet_chan)
 
-        nbFeat = getResnetFeat(args.first_mod, args.resnet_chan)
+    if args.resnet_bilinear:
+        CNNconst = CNN2D_bilinearAttPool
+        kwargs = {"inFeat":nbFeat,"nb_parts":args.resnet_bil_nb_parts,\
+                    "cluster":args.bil_cluster,"cluster_ensemble":args.bil_cluster_ensemble,\
+                    "applySoftmaxOnSim":args.apply_softmax_on_sim,\
+                    "softmCoeff":args.softm_coeff,\
+                    "no_refine":args.bil_cluster_norefine,\
+                    "rand_vec":args.bil_cluster_randvec,\
+                    "update_sco_by_norm_sim":args.bil_clust_update_sco_by_norm_sim,\
+                    "vect_gate":args.bil_clus_vect_gate,\
+                    "vect_ind_to_use":args.bil_clus_vect_ind_to_use,\
+                    "cluster_lay_ind":args.bil_cluster_lay_ind}
 
-        if args.resnet_bilinear:
-            CNNconst = CNN2D_bilinearAttPool
-            kwargs = {"inFeat":nbFeat,"nb_parts":args.resnet_bil_nb_parts,\
-                      "cluster":args.bil_cluster,"cluster_ensemble":args.bil_cluster_ensemble,\
-                      "applySoftmaxOnSim":args.apply_softmax_on_sim,\
-                      "softmCoeff":args.softm_coeff,\
-                      "no_refine":args.bil_cluster_norefine,\
-                      "rand_vec":args.bil_cluster_randvec,\
-                      "update_sco_by_norm_sim":args.bil_clust_update_sco_by_norm_sim,\
-                      "vect_gate":args.bil_clus_vect_gate,\
-                      "vect_ind_to_use":args.bil_clus_vect_ind_to_use,\
-                      "cluster_lay_ind":args.bil_cluster_lay_ind}
+        if not args.bil_cluster_ensemble:
 
-            if not args.bil_cluster_ensemble:
-
-                if args.bil_cluster_lay_ind != 4:
-                    if nbFeat == 2048:
-                        nbFeat = nbFeat//2**(4-args.bil_cluster_lay_ind)
-                    elif nbFeat == 512:
-                        nbFeat = nbFeat//2**(4-args.bil_cluster_lay_ind)
-                    else:
-                        raise ValueError("Unknown feature nb.")
-
-                if args.bil_clus_vect_ind_to_use == "all":
-                    nbFeat *= args.resnet_bil_nb_parts
+            if args.bil_cluster_lay_ind != 4:
+                if nbFeat == 2048:
+                    nbFeat = nbFeat//2**(4-args.bil_cluster_lay_ind)
+                elif nbFeat == 512:
+                    nbFeat = nbFeat//2**(4-args.bil_cluster_lay_ind)
                 else:
-                    nbFeat *= len(args.bil_clus_vect_ind_to_use.split(","))
+                    raise ValueError("Unknown feature nb.")
 
-        else:
-            CNNconst = CNN2D
-            kwargs = {}
-
-        if args.first_mod.find("bagnet") == -1 and args.first_mod.find("hrnet") == -1:
-            firstModel = CNNconst(args.first_mod,chan=args.resnet_chan, stride=args.resnet_stride,\
-                                  strideLay2=args.stride_lay2,strideLay3=args.stride_lay3,\
-                                  strideLay4=args.stride_lay4,\
-                                  endRelu=args.end_relu,\
-                                  **kwargs)
-        else:
-            firstModel = CNNconst(args.first_mod,**kwargs)
+            if args.bil_clus_vect_ind_to_use == "all":
+                nbFeat *= args.resnet_bil_nb_parts
+            else:
+                nbFeat *= len(args.bil_clus_vect_ind_to_use.split(","))
 
     else:
-        firstModel=None
-        nbFeat = np.load("../results/{}_reprVec.npy".format(args.dataset_train.split("/")[-1])).shape[-1]
+        CNNconst = CNN2D
+        kwargs = {}
+
+    if args.first_mod.find("bagnet") == -1 and args.first_mod.find("hrnet") == -1:
+        firstModel = CNNconst(args.first_mod,chan=args.resnet_chan, stride=args.resnet_stride,\
+                                strideLay2=args.stride_lay2,strideLay3=args.stride_lay3,\
+                                strideLay4=args.stride_lay4,\
+                                endRelu=args.end_relu,\
+                                **kwargs)
+    else:
+        firstModel = CNNconst(args.first_mod,**kwargs)
+
+
     ############### Second Model #######################
 
     if args.second_mod == "linear":
@@ -449,7 +448,6 @@ def netBuilder(args,gpu=None):
     else:
         if args.cuda:
             net.cuda()
-
         if args.multi_gpu:
             net = DataParallelModel(net)
 
