@@ -12,6 +12,8 @@ from models import inception
 from models import efficientnet
 import args
 import time 
+import sys 
+EPS = 0.000001
 
 def buildFeatModel(featModelName, **kwargs):
     ''' Build a visual feature model
@@ -295,6 +297,52 @@ class CNN2D_bilinearAttPool(FirstModel):
 
         return retDict
 
+
+class CNN2D_protoNet(FirstModel):
+
+    def __init__(self, featModelName,
+                 inFeat=512,nb_parts=3,protoPerClass=10,classNb=200,**kwargs):
+
+        super().__init__(featModelName,**kwargs)
+        self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
+
+        self.proto = torch.nn.Parameter(torch.zeros(protoPerClass*classNb,inFeat))
+        stdv = 1. / math.sqrt(self.proto.size(1))
+        self.proto.data.uniform_(0, 2*stdv)
+
+        self.nb_parts = nb_parts
+
+    def forward(self, x):
+        # N x C x H x L
+        self.batchSize = x.size(0)
+        # N x C x H x L
+        output = self.featMod(x)
+
+        feat = output["x"]
+
+        feat = feat.view(feat.size(0),feat.size(1),-1).permute(0,2,1).unsqueeze(-2)
+        #feat N HW 1 C 
+        proto = self.proto.unsqueeze(0).unsqueeze(0)
+        #proto 1 1 Nc C
+        dist = torch.pow(feat-proto,2).sum(dim=-1)
+        #dist N HW Nc 
+
+        sim = torch.log((dist+1)/(dist+EPS))
+
+        simMaxPool,_ = torch.max(sim,1)
+
+        _,ind = torch.topk(simMaxPool,self.nb_parts,1)
+
+        sim = sim.permute(0,2,1)[torch.arange(ind.size(0)).unsqueeze(1),ind]
+        sim = sim.view(sim.size(0),sim.size(1),output["x"].size(2),output["x"].size(2))
+
+        retDict = {}
+        retDict["x"] = simMaxPool
+        retDict["attMaps"] = sim
+        retDict["features"] = output["x"]
+
+        return retDict
+
 ################################ Temporal Model ########################""
 
 class SecondModel(nn.Module):
@@ -415,6 +463,9 @@ def netBuilder(args,gpu=None):
             else:
                 nbFeat *= len(args.bil_clus_vect_ind_to_use.split(","))
 
+    elif args.protonet:
+        CNNconst = CNN2D_protoNet
+        kwargs = {"inFeat":nbFeat,"nb_parts":args.resnet_bil_nb_parts,"protoPerClass":args.proto_nb,"classNb":args.class_nb}
     else:
         CNNconst = CNN2D
         kwargs = {}
@@ -432,6 +483,9 @@ def netBuilder(args,gpu=None):
     ############### Second Model #######################
 
     if args.second_mod == "linear":
+        if args.protonet:
+            nbFeat = args.class_nb*args.proto_nb
+
         secondModel = LinearSecondModel(nbFeat, args.class_nb, args.dropout,bil_cluster_ensemble=args.bil_cluster_ensemble,\
                                         bias=args.lin_lay_bias,aux_on_masked=args.aux_on_masked)
     else:
@@ -513,6 +567,11 @@ def addArgs(argreader):
 
     argreader.parser.add_argument('--bil_cluster_lay_ind', type=int, metavar='BOOL',
                                   help="The layer at which to group pixels.")
+
+    argreader.parser.add_argument('--protonet', type=args.str2bool, metavar='BOOL',
+                                  help="To train a protonet model")
+    argreader.parser.add_argument('--proto_nb', type=int, metavar='BOOL',
+                                  help="The nb of prototypes per class.")
 
     argreader.parser.add_argument('--lin_lay_bias', type=args.str2bool, metavar='BOOL',
                                   help="To add a bias to the final layer.")
