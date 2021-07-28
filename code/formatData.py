@@ -70,20 +70,20 @@ def removeVid(videoPaths,videoToRemoveNames):
 
 def formatEmbryo():
 
-    allPaths = sorted(glob.glob("../data/big/*avi"))
+	allPaths = sorted(glob.glob("../data/big/*avi"))
 
-    allPaths = removeVid(allPaths,getNoAnnotVideos())
-    allPaths = removeVid(allPaths,getEmptyAnnotVideos())
-    allPaths = removeVid(allPaths,getTooFewPhaseVideos(6))
+	allPaths = removeVid(allPaths,getNoAnnotVideos())
+	allPaths = removeVid(allPaths,getEmptyAnnotVideos())
+	allPaths = removeVid(allPaths,getTooFewPhaseVideos(6))
 
-    random.seed(0)
-    random.shuffle(allPaths)
+	random.seed(0)
+	random.shuffle(allPaths)
 
-    trainPaths = allPaths[:len(allPaths)//2]
-    testPaths = allPaths[len(allPaths)//2:]
+	trainPaths = allPaths[:len(allPaths)//2]
+	testPaths = allPaths[len(allPaths)//2:]
 
-    makeDataset(trainPaths,"train",prop=1.0/5)
-    makeDataset(testPaths,"test",prop=1.0/5)
+	makeDataset(trainPaths,"train",prop=1.0/5)
+	makeDataset(testPaths,"test",prop=1.0/5)
 
 def makeDataset(paths,mode,prop):
 
