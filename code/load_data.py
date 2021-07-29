@@ -106,7 +106,7 @@ def buildTrainLoader(args,transf=None,shuffle=True,withSeg=False,reprVec=False,g
         kwargs = {"shuffle": shuffle}
 
     trainLoader = torch.utils.data.DataLoader(dataset=train_dataset, batch_size=bsz,
-                                              pin_memory=True, num_workers=args.num_workers, **kwargs)
+                                              pin_memory=True, num_workers=args.num_workers,drop_last=args.drop_last, **kwargs)
 
     return trainLoader, train_dataset
 
@@ -151,7 +151,7 @@ def buildTestLoader(args, mode,shuffle=False,withSeg=False,reprVec=False,gpu=Non
         sampler = torch.utils.data.distributed.DistributedSampler(test_dataset,num_replicas=args.world_size,rank=gpu,shuffle=False)
 
     testLoader = torch.utils.data.DataLoader(dataset=test_dataset, batch_size=args.val_batch_size,
-                                             num_workers=args.num_workers,sampler=sampler,pin_memory=True)
+                                             num_workers=args.num_workers,sampler=sampler,pin_memory=True,drop_last=args.drop_last)
 
     return testLoader,test_dataset
 
@@ -201,6 +201,10 @@ def addArgs(argreader):
                                   help='To resize the images to 448 pixels instead of 224')
     argreader.parser.add_argument('--very_big_images', type=args.str2bool, metavar='S',
                                     help='To resize the images to 1792 pixels instead of 224')
+
+
+    argreader.parser.add_argument('--drop_last', type=args.str2bool, metavar='S',
+                                    help='To drop the last batch in case it does not fit the batch size.')
 
 
     argreader.parser.add_argument('--normalize_data', type=args.str2bool, metavar='S',
