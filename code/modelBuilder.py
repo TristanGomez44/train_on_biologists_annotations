@@ -4,16 +4,21 @@ import torch
 from torch import nn
 import numpy as np
 import matplotlib.pyplot as plt
+from torch.nn.modules.linear import Identity
 plt.switch_backend('agg')
 
 from models import resnet
 from models import hrnet
 from models import inception
 from models import efficientnet
+from models import inter_by_parts
+from models import prototree
 import args
 import time 
 import sys 
 EPS = 0.000001
+
+import torch.nn.functional as F
 
 def buildFeatModel(featModelName, **kwargs):
     ''' Build a visual feature model
@@ -83,7 +88,9 @@ class Model(nn.Module):
             visResDict = self.firstModel(origImgBatch)
 
             resDict = self.secondModel(visResDict)
-            resDict = merge(visResDict,resDict)
+
+            if visResDict != resDict:
+                resDict = merge(visResDict,resDict)
 
         else:
             resDict = self.secondModel(origImgBatch)
@@ -343,6 +350,35 @@ class CNN2D_protoNet(FirstModel):
 
         return retDict
 
+
+class CNN2D_interbyparts(FirstModel):
+
+    def __init__(self,featModelName,classNb,**kwargs):
+
+        super().__init__(featModelName,**kwargs)
+
+        self.mod = inter_by_parts.ResNet50(classNb)
+
+    def forward(self,x):
+
+        pred,att = self.mod(x)
+        
+        return {"pred":pred,"attMaps":att}
+
+class CNN2D_prototree(FirstModel):
+
+    def __init__(self,featModelName,classNb,**kwargs):
+
+        super().__init__(featModelName,**kwargs)
+
+        self.mod = prototree.prototree(classNb)
+
+    def forward(self,x):
+
+        pred,_,att = self.mod(x)
+        
+        return {"pred":pred,"attMaps":att}
+
 ################################ Temporal Model ########################""
 
 class SecondModel(nn.Module):
@@ -409,6 +445,15 @@ class LinearSecondModel(SecondModel):
 
         return retDict
 
+
+class Identity(SecondModel):
+
+    def __init__(self,nbFeat,nbClass):
+        super().__init__(nbFeat, nbClass)
+
+    def forward(self, x):
+        return x
+
 def getResnetFeat(backbone_name, backbone_inplanes):
     if backbone_name in ["resnet50","resnet101","resnet152"]:
         nbFeat = backbone_inplanes * 4 * 2 ** (4 - 1)
@@ -466,6 +511,12 @@ def netBuilder(args,gpu=None):
     elif args.protonet:
         CNNconst = CNN2D_protoNet
         kwargs = {"inFeat":nbFeat,"nb_parts":args.resnet_bil_nb_parts,"protoPerClass":args.proto_nb,"classNb":args.class_nb}
+    elif args.inter_by_parts:
+        CNNconst = CNN2D_interbyparts
+        kwargs = {"classNb":args.class_nb}
+    elif args.prototree:
+        CNNconst = CNN2D_prototree
+        kwargs = {"classNb":args.class_nb}
     else:
         CNNconst = CNN2D
         kwargs = {}
@@ -483,11 +534,15 @@ def netBuilder(args,gpu=None):
     ############### Second Model #######################
 
     if args.second_mod == "linear":
-        if args.protonet:
-            nbFeat = args.class_nb*args.proto_nb
+        if args.inter_by_parts or args.prototree:
+            secondModel = Identity(nbFeat,args.class_nb)
+        else:
+            if args.protonet:
+                nbFeat = args.class_nb*args.proto_nb
 
-        secondModel = LinearSecondModel(nbFeat, args.class_nb, args.dropout,bil_cluster_ensemble=args.bil_cluster_ensemble,\
-                                        bias=args.lin_lay_bias,aux_on_masked=args.aux_on_masked)
+            secondModel = LinearSecondModel(nbFeat, args.class_nb, args.dropout,bil_cluster_ensemble=args.bil_cluster_ensemble,\
+                                            bias=args.lin_lay_bias,aux_on_masked=args.aux_on_masked)
+
     else:
         raise ValueError("Unknown second model type : ", args.second_mod)
 
@@ -572,6 +627,10 @@ def addArgs(argreader):
                                   help="To train a protonet model")
     argreader.parser.add_argument('--proto_nb', type=int, metavar='BOOL',
                                   help="The nb of prototypes per class.")
+    argreader.parser.add_argument('--inter_by_parts', type=args.str2bool, metavar='BOOL',
+                                  help="To train the model from https://github.com/zxhuang1698/interpretability-by-parts/tree/650f1af573075a41f04f2f715f2b2d4bc0363d31")
+    argreader.parser.add_argument('--prototree', type=args.str2bool, metavar='BOOL',
+                                  help="To train the model from https://github.com/M-Nauta/ProtoTree/blob/86b9bfb38a009576c8e073100b92dd2f639c01e3")
 
     argreader.parser.add_argument('--lin_lay_bias', type=args.str2bool, metavar='BOOL',
                                   help="To add a bias to the final layer.")
