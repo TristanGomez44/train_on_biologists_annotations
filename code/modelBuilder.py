@@ -347,6 +347,7 @@ class CNN2D_protoNet(FirstModel):
         retDict["x"] = simMaxPool
         retDict["attMaps"] = sim
         retDict["features"] = output["x"]
+        retDict["dist"] = dist
 
         return retDict
 

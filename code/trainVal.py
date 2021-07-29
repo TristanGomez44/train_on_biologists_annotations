@@ -1,3 +1,4 @@
+from home.E144069X.Work.embryo.code.models import inter_by_parts
 import os
 import sys
 import glob
@@ -218,6 +219,22 @@ def computeLoss(args, output, target, resDict, data,reduction="mean"):
 
     if not args.master_net:
         loss = args.nll_weight * F.cross_entropy(output, target,reduction=reduction)
+
+        if args.protonet:
+            dist = resDict["dist"]
+            dist = dist.view(dist.size(0),dist.size(1),args.proto_nb,args.class_nb)
+            print(dist.size())
+            dist_class = dist[:,:,:,target]
+            clst = 0.8*dist_class.min(dim=1)[0].min(dim=1)[0].mean()
+
+            dist_other_class = torch.cat((dist[:,:,:,:target],dist[:,:,:,target+1:]),dim=-1)
+            sep = -0.08*dist_other_class.min(dim=1)[0].min(dim=1)[0].mean()
+
+            loss += clst+sep
+            
+        elif args.inter_by_parts:
+            loss += 0.5*inter_by_parts.shapingLoss(resDict["attMaps"],args.resnet_bil_nb_parts,args)
+
     else:
         kl = F.kl_div(F.log_softmax(output/args.kl_temp, dim=1),F.softmax(resDict["master_net_pred"]/args.kl_temp, dim=1),reduction="batchmean")
         ce = F.cross_entropy(output, target)
