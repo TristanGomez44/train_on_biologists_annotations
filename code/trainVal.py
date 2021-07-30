@@ -1,4 +1,4 @@
-from home.E144069X.Work.embryo.code.models import inter_by_parts
+from models import inter_by_parts
 import os
 import sys
 import glob
@@ -221,17 +221,28 @@ def computeLoss(args, output, target, resDict, data,reduction="mean"):
         loss = args.nll_weight * F.cross_entropy(output, target,reduction=reduction)
 
         if args.protonet:
+            
             dist = resDict["dist"]
             dist = dist.view(dist.size(0),dist.size(1),args.proto_nb,args.class_nb)
-            print(dist.size())
-            dist_class = dist[:,:,:,target]
+
+            mask = torch.zeros_like(dist)
+            for i in range(dist.size(0)):
+                mask[i,:,:,target[i]] = 1
+
+            dist_class = dist[mask.bool()]
+
+            dist_class = dist_class.view(dist.size(0),dist.size(1),dist.size(2))
+
             clst = 0.8*dist_class.min(dim=1)[0].min(dim=1)[0].mean()
 
-            dist_other_class = torch.cat((dist[:,:,:,:target],dist[:,:,:,target+1:]),dim=-1)
+            dist_other_class = dist[~mask.bool()]
+
+            dist_other_class = dist_other_class.view(dist.size(0),dist.size(1),dist.size(2),dist.size(3)-1)
+
             sep = -0.08*dist_other_class.min(dim=1)[0].min(dim=1)[0].mean()
 
             loss += clst+sep
-            
+  
         elif args.inter_by_parts:
             loss += 0.5*inter_by_parts.shapingLoss(resDict["attMaps"],args.resnet_bil_nb_parts,args)
 
