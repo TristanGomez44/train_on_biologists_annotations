@@ -20,18 +20,21 @@ case $1 in
                 --resnet_bil_nb_parts 1 --always_sched True
     ;;
   "protoPN")
-    python trainVal.py -c model_cub10.config --model_id protopn   --protonet True --val_batch_size 30 --max_batch_size_single_pass 14 \
-                --stride_lay3 2 --stride_lay4 2  --max_batch_size 130 --resnet_bil_nb_parts 3 --always_sched True --big_images False 
+    python trainVal.py -c model_cub10.config --model_id protopn   --protonet True --val_batch_size 20 --max_batch_size_single_pass 10 \
+                --stride_lay3 2 --stride_lay4 2  --max_batch_size 130 --resnet_bil_nb_parts 3 --always_sched True --big_images False \
+                --strict_init False --start_mode fine_tune --init_path ../models/CUB10/modelnoneRed_best_epoch34 --epochs 85 --drop_last True
     ;;
   "inter_by_parts")
     #Trained on 2 GPUs without distributed.
-    python trainVal.py -c model_cub10.config --model_id interbyparts   --inter_by_parts True --val_batch_size 300 --max_batch_size_single_pass 130 \
-                --stride_lay3 2 --stride_lay4 2  --max_batch_size 130 --always_sched True --drop_last True 
+    python trainVal.py -c model_cub10.config --model_id interbyparts   --inter_by_parts True --val_batch_size 30 --max_batch_size_single_pass 22 \
+                --stride_lay3 2 --stride_lay4 2  --max_batch_size 130 --always_sched True --drop_last True \
+                --strict_init False --start_mode fine_tune --init_path ../models/CUB10/modelnoneRed_best_epoch34 --epochs 85
     ;;
   "prototree")
     #Trained on 2 GPUs without distributed.
     python trainVal.py -c model_cub10.config --model_id prototree   --prototree True --val_batch_size 300 --max_batch_size_single_pass 130 \
-                --stride_lay3 2 --stride_lay4 2  --max_batch_size 130 --always_sched True --drop_last True 
+                --stride_lay3 2 --stride_lay4 2  --max_batch_size 130 --always_sched True --drop_last True \
+                --strict_init False --start_mode fine_tune --init_path ../models/CUB10/modelnoneRed_best_epoch34 --epochs 85
     ;;
   "*")
     echo "no such model"
