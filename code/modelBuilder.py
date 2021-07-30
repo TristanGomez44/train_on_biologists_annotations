@@ -354,15 +354,15 @@ class CNN2D_protoNet(FirstModel):
 
 class CNN2D_interbyparts(FirstModel):
 
-    def __init__(self,featModelName,classNb,**kwargs):
+    def __init__(self,featModelName,classNb,nb_parts,**kwargs):
 
         super().__init__(featModelName,**kwargs)
 
-        self.mod = inter_by_parts.ResNet50(classNb)
+        self.featMod = inter_by_parts.ResNet50(classNb,nb_parts)
 
     def forward(self,x):
 
-        pred,att = self.mod(x)
+        pred,att = self.featMod(x)
         
         return {"pred":pred,"attMaps":att}
 
@@ -373,6 +373,8 @@ class CNN2D_prototree(FirstModel):
         super().__init__(featModelName,**kwargs)
 
         self.mod = prototree.prototree(classNb)
+        
+        self.featMod = self.mod._net
 
     def forward(self,x):
 
@@ -514,7 +516,7 @@ def netBuilder(args,gpu=None):
         kwargs = {"inFeat":nbFeat,"nb_parts":args.resnet_bil_nb_parts,"protoPerClass":args.proto_nb,"classNb":args.class_nb}
     elif args.inter_by_parts:
         CNNconst = CNN2D_interbyparts
-        kwargs = {"classNb":args.class_nb}
+        kwargs = {"classNb":args.class_nb,"nb_parts":args.resnet_bil_nb_parts}
     elif args.prototree:
         CNNconst = CNN2D_prototree
         kwargs = {"classNb":args.class_nb}
