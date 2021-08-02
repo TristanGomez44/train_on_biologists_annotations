@@ -15,26 +15,27 @@ case $1 in
      --resnet_bil_nb_parts 1 --always_sched True --epochs 83 --optuna_trial_nb 40
     ;;
   "clusRed")
-    python trainVal.py -c model_cub10.config --model_id clusRed_3   --resnet_bilinear True --bil_cluster True --val_batch_size 90 --max_batch_size_single_pass 22 \
-                --stride_lay3 2 --stride_lay4 2  --max_batch_size 130 --strict_init False --start_mode fine_tune --init_path ../models/CUB10/modelclusRed_best_epoch43 
-                --resnet_bil_nb_parts 1 --always_sched True
+    python trainVal.py -c model_cub10.config --model_id clusRed_3   --resnet_bilinear True --bil_cluster True --val_batch_size 150 --max_batch_size_single_pass 38 \
+                --stride_lay3 2 --stride_lay4 2  --max_batch_size 130 --strict_init False --start_mode fine_tune --init_path ../models/CUB10/modelclusRed_best_epoch43 \
+                --resnet_bil_nb_parts 1 --always_sched True --epochs 59
     ;;
   "protoPN")
-    python trainVal.py -c model_cub10.config --model_id protopn   --protonet True --val_batch_size 20 --max_batch_size_single_pass 10 \
-                --stride_lay3 2 --stride_lay4 2  --max_batch_size 130 --resnet_bil_nb_parts 3 --always_sched True --big_images False \
-                --strict_init False --start_mode fine_tune --init_path ../models/CUB10/modelnoneRed_best_epoch34 --epochs 85 --drop_last True
+    python trainVal.py -c model_cub10.config --model_id protopn   --protonet True --val_batch_size 160 --max_batch_size_single_pass 130 \
+                --stride_lay3 2 --stride_lay4 2  --max_batch_size 130 --resnet_bil_nb_parts 3 --always_sched True --big_images False --drop_last True \
+                --protonet_warm 5 \
+                --strict_init False --start_mode fine_tune --init_path ../models/CUB10/modelnoneRed_best_epoch34 --epochs 85
     ;;
   "inter_by_parts")
     #Trained on 2 GPUs without distributed.
     python trainVal.py -c model_cub10.config --model_id interbyparts   --inter_by_parts True --val_batch_size 30 --max_batch_size_single_pass 22 \
-                --stride_lay3 2 --stride_lay4 2  --max_batch_size 130 --always_sched True --drop_last True \
+                --stride_lay3 2 --stride_lay4 2  --max_batch_size 130 --always_sched True --drop_last False \
                 --strict_init False --start_mode fine_tune --init_path ../models/CUB10/modelnoneRed_best_epoch34 --epochs 85
     ;;
   "prototree")
     #Trained on 2 GPUs without distributed.
-    python trainVal.py -c model_cub10.config --model_id prototree   --prototree True --val_batch_size 300 --max_batch_size_single_pass 130 \
+    python trainVal.py -c model_cub10.config --model_id prototree   --prototree True --val_batch_size 75 --max_batch_size_single_pass 35 \
                 --stride_lay3 2 --stride_lay4 2  --max_batch_size 130 --always_sched True --drop_last True \
-                --strict_init False --start_mode fine_tune --init_path ../models/CUB10/modelnoneRed_best_epoch34 --epochs 85
+                --strict_init False --start_mode fine_tune --init_path ../models/CUB10/modelnoneRed_best_epoch34 --epochs 85 
     ;;
   "*")
     echo "no such model"
