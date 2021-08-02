@@ -43,6 +43,7 @@ import gc
 import torch.multiprocessing as mp
 import torch.distributed as dist
 import torchvision
+from models import protopnet 
 
 from captum.attr import (IntegratedGradients,NoiseTunnel)
 
@@ -219,30 +220,36 @@ def computeLoss(args, output, target, resDict, data,reduction="mean"):
 
     if not args.master_net:
         loss = args.nll_weight * F.cross_entropy(output, target,reduction=reduction)
-
+        #loss = 0
         if args.protonet:
+
+            min_distances = resDict["dist"]
+            protoShape = resDict["prototype_shape"]
+            prototypeClassID = resDict["prototype_class_identity"]
+
+            max_dist = (protoShape[1]* protoShape[2]* protoShape[3])
+
+            # prototypes_of_correct_class is a tensor of shape batch_size * num_prototypes
+            # calculate cluster cost
+            prototypes_of_correct_class = torch.t(prototypeClassID[:,target]).cuda()
+            inverted_distances, _ = torch.max((max_dist - min_distances) * prototypes_of_correct_class, dim=1)
+            cluster_cost = torch.mean(max_dist - inverted_distances)
+
+            # calculate separation cost
+            prototypes_of_wrong_class = 1 - prototypes_of_correct_class
+            inverted_distances_to_nontarget_prototypes, _ = \
+                torch.max((max_dist - min_distances) * prototypes_of_wrong_class, dim=1)
+            separation_cost = torch.mean(max_dist - inverted_distances_to_nontarget_prototypes)
+
+            # calculate avg cluster cost
+            avg_separation_cost = \
+                torch.sum(min_distances * prototypes_of_wrong_class, dim=1) / torch.sum(prototypes_of_wrong_class, dim=1)
+            avg_separation_cost = torch.mean(avg_separation_cost)
             
-            dist = resDict["dist"]
-            dist = dist.view(dist.size(0),dist.size(1),args.proto_nb,args.class_nb)
+            #loss += 0.8*cluster_cost-0.08*avg_separation_cost
+            
+            loss += args.nll_weight * F.cross_entropy(resDict["pred_aux"], target,reduction=reduction)
 
-            mask = torch.zeros_like(dist)
-            for i in range(dist.size(0)):
-                mask[i,:,:,target[i]] = 1
-
-            dist_class = dist[mask.bool()]
-
-            dist_class = dist_class.view(dist.size(0),dist.size(1),dist.size(2))
-
-            clst = 0.8*dist_class.min(dim=1)[0].min(dim=1)[0].mean()
-
-            dist_other_class = dist[~mask.bool()]
-
-            dist_other_class = dist_other_class.view(dist.size(0),dist.size(1),dist.size(2),dist.size(3)-1)
-
-            sep = -0.08*dist_other_class.min(dim=1)[0].min(dim=1)[0].mean()
-
-            loss += clst+sep
-  
         elif args.inter_by_parts:
             loss += 0.5*inter_by_parts.shapingLoss(resDict["attMaps"],args.resnet_bil_nb_parts,args)
 
@@ -962,6 +969,14 @@ def train(gpu,args,trial):
 
             kwargsTr["epoch"], kwargsVal["epoch"] = epoch, epoch
             kwargsTr["model"], kwargsVal["model"] = net, net
+
+            if args.protonet:
+                if epoch - startEpoch > args.protonet_warm:
+                    print("Joint")
+                    protopnet.joint(net.module.firstModel.protopnet)
+                else:
+                    print("Warmup")
+                    protopnet.warm_only(net.module.firstModel.protopnet)
 
             trainFunc(**kwargsTr)
             if not scheduler is None:

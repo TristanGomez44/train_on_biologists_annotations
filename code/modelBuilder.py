@@ -13,6 +13,7 @@ from models import inception
 from models import efficientnet
 from models import inter_by_parts
 from models import prototree
+from models import protopnet
 import args
 import time 
 import sys 
@@ -313,44 +314,23 @@ class CNN2D_protoNet(FirstModel):
         super().__init__(featModelName,**kwargs)
         self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
 
-        self.proto = torch.nn.Parameter(torch.zeros(protoPerClass*classNb,inFeat))
-        stdv = 1. / math.sqrt(self.proto.size(1))
-        self.proto.data.uniform_(0, 2*stdv)
+        self.featMod = protopnet.resnet50_features(pretrained=True)
+        self.protopnet = protopnet.construct_PPNet(self.featMod,num_parts=nb_parts, num_classes=classNb,prototype_activation_function="linear")
 
         self.nb_parts = nb_parts
+        self.linLay_aux = nn.Linear(2048,200)
 
     def forward(self, x):
-        # N x C x H x L
-        self.batchSize = x.size(0)
-        # N x C x H x L
-        output = self.featMod(x)
 
-        feat = output["x"]
+        logits, min_distances,distances,features = self.protopnet(x)
 
-        feat = feat.view(feat.size(0),feat.size(1),-1).permute(0,2,1).unsqueeze(-2)
-        #feat N HW 1 C 
-        proto = self.proto.unsqueeze(0).unsqueeze(0)
-        #proto 1 1 Nc C
-        dist = torch.pow(feat-proto,2).sum(dim=-1)
-        #dist N HW Nc 
+        retDict = {"pred":logits,"dist":min_distances,"attMaps":distances,"features":features}
 
-        sim = torch.log((dist+1)/(dist+EPS))
-
-        simMaxPool,_ = torch.max(sim,1)
-
-        _,ind = torch.topk(simMaxPool,self.nb_parts,1)
-
-        sim = sim.permute(0,2,1)[torch.arange(ind.size(0)).unsqueeze(1),ind]
-        sim = sim.view(sim.size(0),sim.size(1),output["x"].size(2),output["x"].size(2))
-
-        retDict = {}
-        retDict["x"] = simMaxPool
-        retDict["attMaps"] = sim
-        retDict["features"] = output["x"]
-        retDict["dist"] = dist
+        retDict["prototype_shape"] = self.protopnet.prototype_shape
+        retDict["prototype_class_identity"] = self.protopnet.prototype_class_identity
+        retDict["pred_aux"] = self.linLay_aux(features.mean(dim=-1).mean(dim=-1))
 
         return retDict
-
 
 class CNN2D_interbyparts(FirstModel):
 
@@ -362,9 +342,9 @@ class CNN2D_interbyparts(FirstModel):
 
     def forward(self,x):
 
-        pred,att = self.featMod(x)
+        pred,att,features = self.featMod(x)
         
-        return {"pred":pred,"attMaps":att}
+        return {"pred":pred,"attMaps":att,"features":features}
 
 class CNN2D_prototree(FirstModel):
 
@@ -376,11 +356,14 @@ class CNN2D_prototree(FirstModel):
         
         self.featMod = self.mod._net
 
+
+
     def forward(self,x):
 
-        pred,_,att = self.mod(x)
+        pred,_,att,features = self.mod(x)
         
-        return {"pred":pred,"attMaps":att}
+ 
+        return {"pred":pred,"attMaps":att,"features":features}
 
 ################################ Temporal Model ########################""
 
@@ -396,12 +379,18 @@ class SecondModel(nn.Module):
 class LinearSecondModel(SecondModel):
 
     def __init__(self, nbFeat, nbClass, dropout,bil_cluster_ensemble=False,\
-                        bias=True,aux_on_masked=False):
+                        bias=True,aux_on_masked=False,protonet=False,num_parts=None):
 
         super().__init__(nbFeat, nbClass)
         self.dropout = nn.Dropout(p=dropout)
 
-        self.linLay = nn.Linear(self.nbFeat, self.nbClass,bias=bias)
+        self.linLay = nn.Linear(self.nbFeat, self.nbClass,bias=bias and not protonet)
+
+        if protonet:
+            self.linLay.requires_grad = False
+            self.linLay.weight.data[:,:] = 0.5
+            for classInd in range(nbFeat//num_parts):
+                self.linLay.weight.data[classInd,classInd*num_parts:(classInd+1)*num_parts] = 1
 
         self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
         self.bil_cluster_ensemble = bil_cluster_ensemble
@@ -537,14 +526,14 @@ def netBuilder(args,gpu=None):
     ############### Second Model #######################
 
     if args.second_mod == "linear":
-        if args.inter_by_parts or args.prototree:
+        if args.inter_by_parts or args.prototree or args.protonet:
             secondModel = Identity(nbFeat,args.class_nb)
         else:
-            if args.protonet:
-                nbFeat = args.class_nb*args.proto_nb
+            #if args.protonet:
+            #    nbFeat = args.class_nb*args.proto_nb
 
             secondModel = LinearSecondModel(nbFeat, args.class_nb, args.dropout,bil_cluster_ensemble=args.bil_cluster_ensemble,\
-                                            bias=args.lin_lay_bias,aux_on_masked=args.aux_on_masked)
+                                            bias=args.lin_lay_bias,aux_on_masked=args.aux_on_masked,protonet=args.protonet,num_parts=args.resnet_bil_nb_parts)
 
     else:
         raise ValueError("Unknown second model type : ", args.second_mod)
@@ -630,6 +619,9 @@ def addArgs(argreader):
                                   help="To train a protonet model")
     argreader.parser.add_argument('--proto_nb', type=int, metavar='BOOL',
                                   help="The nb of prototypes per class.")
+    argreader.parser.add_argument('--protonet_warm', type=int, metavar='BOOL',
+                                  help="Warmup epoch number")
+
     argreader.parser.add_argument('--inter_by_parts', type=args.str2bool, metavar='BOOL',
                                   help="To train the model from https://github.com/zxhuang1698/interpretability-by-parts/tree/650f1af573075a41f04f2f715f2b2d4bc0363d31")
     argreader.parser.add_argument('--prototree', type=args.str2bool, metavar='BOOL',
