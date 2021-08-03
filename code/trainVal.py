@@ -248,10 +248,10 @@ def computeLoss(args, output, target, resDict, data,reduction="mean"):
             
             #loss += 0.8*cluster_cost-0.08*avg_separation_cost
             
-            loss += args.nll_weight * F.cross_entropy(resDict["pred_aux"], target,reduction=reduction)
-
         elif args.inter_by_parts:
             loss += 0.5*inter_by_parts.shapingLoss(resDict["attMaps"],args.resnet_bil_nb_parts,args)
+        elif args.prototree:
+            loss += args.nll_weight * F.cross_entropy(resDict["pred_aux"], target,reduction=reduction)
 
     else:
         kl = F.kl_div(F.log_softmax(output/args.kl_temp, dim=1),F.softmax(resDict["master_net_pred"]/args.kl_temp, dim=1),reduction="batchmean")
@@ -977,6 +977,11 @@ def train(gpu,args,trial):
                 else:
                     print("Warmup")
                     protopnet.warm_only(net.module.firstModel.protopnet)
+            elif args.prototree:
+                if  epoch-startEpoch < args.protonet_warm:
+                    net.module.firstModel.featMod.requires_grad= False 
+                else:
+                    net.module.firstModel.featMod.requires_grad= True
 
             trainFunc(**kwargsTr)
             if not scheduler is None:
