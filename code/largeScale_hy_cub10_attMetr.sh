@@ -15,9 +15,9 @@ case $1 in
      --resnet_bil_nb_parts 1 --always_sched True --epochs 83 --optuna_trial_nb 40
     ;;
   "clusRed")
-    python trainVal.py -c model_cub10.config --model_id clusRed_3   --resnet_bilinear True --bil_cluster True --val_batch_size 150 --max_batch_size_single_pass 38 \
+    python trainVal.py -c model_cub10.config --model_id clusRed_3   --resnet_bilinear True --bil_cluster True --val_batch_size 150 --max_batch_size_single_pass 22 \
                 --stride_lay3 2 --stride_lay4 2  --max_batch_size 130 --strict_init False --start_mode fine_tune --init_path ../models/CUB10/modelclusRed_best_epoch43 \
-                --resnet_bil_nb_parts 1 --always_sched True --epochs 59
+                --resnet_bil_nb_parts 3 --always_sched True --epochs 69
     ;;
   "protoPN")
     python trainVal.py -c model_cub10.config --model_id protopn   --protonet True --val_batch_size 160 --max_batch_size_single_pass 130 \
