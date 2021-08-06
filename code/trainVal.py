@@ -138,9 +138,11 @@ def epochSeqTr(model, optim, log_interval, loader, epoch, args, **kwargs):
         loss = kwargs["lossFunc"](output, target, resDict, data).mean()
         loss.backward()
 
-        print(model.firstModel.mod.prototype_layer.prototype_vectors.grad.abs().mean().item(),round(model.firstModel.mod.prototype_layer.prototype_vectors.abs().mean().item(),3))
-        print("leaf",model.firstModel.mod._root.l.l.l.l.l.l.l.l.l._dist_params.grad.abs().mean().item(),round(model.firstModel.mod._root.l.l.l.l.l.l.l.l.l._dist_params.abs().mean().item(),3))
+        #print(model.firstModel.mod.prototype_layer.prototype_vectors.grad.abs().mean().item(),round(model.firstModel.mod.prototype_layer.prototype_vectors.abs().mean().item(),3))
+        #print("leaf",model.firstModel.mod._root.l.l.l.l.l.l.l.l.l._dist_params.grad.abs().mean().item(),round(model.firstModel.mod._root.l.l.l.l.l.l.l.l.l._dist_params.abs().mean().item(),3))
+        #print("aux",model.firstModel.linLay_aux.weight.grad.abs().mean().item(),round(model.firstModel.linLay_aux.weight.grad.abs().mean().item(),3))
         
+        #print("leaf",model.firstModel.mod._root.l.l.l.l._dist_params.grad.abs().mean().item(),round(model.firstModel.mod._root.l.l.l.l._dist_params.abs().mean().item(),3))
         #print("linlay",model.firstModel.linLay_aux.weight.grad.abs().mean().item(),round(model.firstModel.linLay_aux.weight.abs().mean().item(),3))
 
         if acc_size == args.batch_size:
