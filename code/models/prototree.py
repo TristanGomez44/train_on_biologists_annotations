@@ -24,6 +24,11 @@ import os
 import copy
 import sys
 
+import matplotlib.pyplot as plt
+
+plt.switch_backend('agg')
+
+
 model_urls = {
     'resnet18': 'https://download.pytorch.org/models/resnet18-5c106cde.pth',
     'resnet34': 'https://download.pytorch.org/models/resnet34-333f7ec4.pth',
@@ -368,7 +373,11 @@ class L2Conv2D(nn.Module):
         # Each prototype is a latent representation of shape (num_features, w_1, h_1)
         prototype_shape = (num_prototypes, num_features, w_1, h_1)
 
-        self.prototype_vectors = torch.relu(torch.randn(prototype_shape))
+        #self.prototype_vectors = torch.relu(torch.randn(prototype_shape))
+        self.prototype_vectors = torch.rand(prototype_shape)*0.25
+        #self.prototype_vectors = self.prototype_vectors + self.prototype_vectors.min()
+
+        #self.prototype_vectors = torch.distributions.gamma.Gamma(torch.Tensor([1]),torch.Tensor([1])).rsample(prototype_shape).squeeze(-1)
         self.prototype_vectors = nn.Parameter(self.prototype_vectors, requires_grad=True)
 
     def forward(self, xs):
@@ -382,6 +391,7 @@ class L2Conv2D(nn.Module):
         :return: a tensor of shape (batch_size, num_prototypes, W, H) obtained from computing the squared L2 distances
                  for patches of the input using all prototypes
         """
+
         # Adapted from ProtoPNet
         # Computing ||xs - ps ||^2 is equivalent to ||xs||^2 + ||ps||^2 - 2 * xs * ps
         # where ps is some prototype image
@@ -417,7 +427,7 @@ class L2Conv2D(nn.Module):
 
         if torch.isnan(distance).any():
             raise Exception('Error: NaN values! Using the --log_probabilities flag might fix this issue')
-        return distance/48  # Shape: (bs, num_prototypes, w_in, h_in)
+        return distance  # Shape: (bs, num_prototypes, w_in, h_in)
         #return -6*cos 
 
 class Node(nn.Module):
@@ -835,6 +845,14 @@ class ProtoTree(nn.Module):
 
         if not self._log_probabilities:
             similarities = torch.exp(-min_distances)
+            #similarities = -min_distances
+
+            similarities = (similarities-similarities.min())/(similarities.max()-similarities.min())
+            # similarities = 0.9*similarities
+            # similarities = similarities + 0.05
+
+            #print("sim",similarities.min().item(),similarities.mean().item(),similarities.max().item())
+
             #similarities = -min_distances
         else:
             # Omit the exp since we require log probabilities
