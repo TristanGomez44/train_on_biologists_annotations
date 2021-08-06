@@ -9,10 +9,9 @@ case $1 in
      --m_model_id clusRed --strict_init False --start_mode fine_tune --init_path ../models/CUB10/modelclus_masterClusRed_best_epoch40 --max_batch_size_single_pass 9 \
      --resnet_bil_nb_parts 1 --always_sched True 
     ;;
-  "clus_mast_2")
-    python trainVal.py -c model_cub10.config --model_id clus_mast_1map_2   --resnet_bilinear True --bil_cluster True --max_batch_size 130 --val_batch_size 30 --master_net True \
-     --m_model_id bilRed_1map --strict_init False --start_mode fine_tune --init_path ../models/CUB10/modelclus_masterClusRed_best_epoch40 --max_batch_size_single_pass 9 \
-     --resnet_bil_nb_parts 1 --always_sched True --epochs 83 --optuna_trial_nb 40
+  "clus_mast_3")
+    python trainVal.py -c model_cub10.config --model_id clus_mast_1map_3   --resnet_bilinear True --bil_cluster True --max_batch_size 130 --val_batch_size 30 --master_net True \
+                --m_model_id clusRed_3 --max_batch_size_single_pass 9 --resnet_bil_nb_parts 1 --always_sched True --optuna_trial_nb 25
     ;;
   "clusRed")
     python trainVal.py -c model_cub10.config --model_id clusRed_3   --resnet_bilinear True --bil_cluster True --val_batch_size 150 --max_batch_size_single_pass 22 \
