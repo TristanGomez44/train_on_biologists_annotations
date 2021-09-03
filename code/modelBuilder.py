@@ -358,12 +358,14 @@ class CNN2D_prototree(FirstModel):
 
         self.linLay_aux = nn.Linear(2048,200)
 
+        self.linLay_auxDist = nn.Linear(255,200)
+
     def forward(self,x):
 
-        pred,info,att,features = self.mod(x)
- 
+        pred,info,att,features,min_distances = self.mod(x)
+
         #return {"pred":pred,"attMaps":att,"features":features,"pred_aux":self.linLay_aux(features.mean(dim=-1).mean(dim=-1)),"info":info}
-        return {"pred":pred,"attMaps":att,"features":features}
+        return {"pred":pred,"attMaps":att,"features":features,"pred_dist_aux":self.linLay_auxDist(min_distances),"info":info}
 
 ################################ Temporal Model ########################""
 
