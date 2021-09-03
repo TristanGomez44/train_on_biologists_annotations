@@ -27,7 +27,7 @@ from gradcam import GradCAM, GradCAMpp
 from score_map import ScoreCam
 from rise import RISE
 import guided_backprop
-from score_map import ScoreCam
+
 
 import time
 
@@ -139,7 +139,7 @@ def epochSeqTr(model, optim, log_interval, loader, epoch, args, **kwargs):
         loss.backward()
 
         #print(model.firstModel.mod.prototype_layer.prototype_vectors.grad.abs().mean().item(),round(model.firstModel.mod.prototype_layer.prototype_vectors.abs().mean().item(),3))
-        #print("leaf",model.firstModel.mod._root.l.l.l.l.l.l.l.l.l._dist_params.grad.abs().mean().item(),round(model.firstModel.mod._root.l.l.l.l.l.l.l.l.l._dist_params.abs().mean().item(),3))
+        #print("leaf",model.firstModel.mod._root.l.l.l.l.l.l.l.l._dist_params.grad.abs().mean().item(),round(model.firstModel.mod._root.l.l.l.l.l.l.l.l._dist_params.abs().mean().item(),3))
         #print("aux",model.firstModel.linLay_aux.weight.grad.abs().mean().item(),round(model.firstModel.linLay_aux.weight.grad.abs().mean().item(),3))
         
         #print("leaf",model.firstModel.mod._root.l.l.l.l._dist_params.grad.abs().mean().item(),round(model.firstModel.mod._root.l.l.l.l._dist_params.abs().mean().item(),3))
@@ -160,7 +160,7 @@ def epochSeqTr(model, optim, log_interval, loader, epoch, args, **kwargs):
             tree = model.firstModel.mod
             #Update leaves with derivate-free algorithm
             #Make sure the tree is in eval mode
-            tree.eval()
+            model.eval()
             info = resDict["info"]
             ys_pred = resDict["pred"]
             with torch.no_grad():
@@ -172,7 +172,7 @@ def epochSeqTr(model, optim, log_interval, loader, epoch, args, **kwargs):
                     else:
                         update = torch.sum((info['pa_tensor'][leaf.index] * leaf.distribution() * target_eye)/ys_pred, dim=0)  
                     leaf._dist_params -= (_old_dist_params[leaf]/nr_batches)
-                    leaf._dist_params = F.relu_(leaf._dist_params) #dist_params values can get slightly negative because of floating point issues. therefore, set to zero.
+                    #leaf._dist_params = F.relu_(leaf._dist_params) #dist_params values can get slightly negative because of floating point issues. therefore, set to zero.
                     leaf._dist_params += update
         '''
         if args.grad_exp:
@@ -257,8 +257,9 @@ class Loss(torch.nn.Module):
 def computeLoss(args, output, target, resDict, data,reduction="mean"):
 
     if not args.master_net:
-        loss = args.nll_weight * F.cross_entropy(output, target,reduction=reduction)
+        #loss = args.nll_weight * F.cross_entropy(output, target,reduction=reduction)
         #loss = args.nll_weight * F.nll_loss(output, target,reduction=reduction)
+        loss = F.nll_loss(torch.log(output), target,reduction=reduction)
         #loss = 0
         if args.protonet:
 
@@ -290,7 +291,7 @@ def computeLoss(args, output, target, resDict, data,reduction="mean"):
         elif args.inter_by_parts:
             loss += 0.5*inter_by_parts.shapingLoss(resDict["attMaps"],args.resnet_bil_nb_parts,args)
         #elif args.prototree:
-        #    loss += args.nll_weight * F.cross_entropy(resDict["pred_aux"], target,reduction=reduction)
+        #    loss += args.nll_weight * F.cross_entropy(resDict["pred_dist_aux"], target,reduction=reduction)
 
     else:
         kl = F.kl_div(F.log_softmax(output/args.kl_temp, dim=1),F.softmax(resDict["master_net_pred"]/args.kl_temp, dim=1),reduction="batchmean")
