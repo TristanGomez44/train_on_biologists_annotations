@@ -717,13 +717,13 @@ class ProtoTree(nn.Module):
     def __init__(self,
                  num_classes: int,
                  feature_net: torch.nn.Module,
-                 add_on_layers: nn.Module = nn.Identity(),
+                 add_on_layers: nn.Module = nn.Sequential(nn.Conv2d(in_channels=2048, out_channels=2048, kernel_size=1, bias=False),nn.Sigmoid())
                  ):
         super().__init__()
 
         args = argparse.Namespace
 
-        args.depth = 9
+        args.depth = 8
         args.W1 = 1
         args.H1 = 1
         args.num_features = 2048 
@@ -746,7 +746,7 @@ class ProtoTree(nn.Module):
         self.num_features = args.num_features
         self.num_prototypes = self.num_branches
         self.prototype_shape = (args.W1, args.H1, args.num_features)
-        
+        print("Num proto",self.num_prototypes)
         # Keep a dict that stores a reference to each node's parent
         # Key: node -> Value: the node's parent
         # The root of the tree is mapped to None
@@ -887,7 +887,7 @@ class ProtoTree(nn.Module):
 
         # Generate the output based on the chosen sampling strategy
         if sampling_strategy == ProtoTree.SAMPLING_STRATEGIES[0]:  # Distributed
-            return out, info, attMaps,features
+            return out, info, attMaps,features,min_distances
         if sampling_strategy == ProtoTree.SAMPLING_STRATEGIES[1]:  # Sample max
             # Get the batch size
             batch_size = xs.size(0)
@@ -912,7 +912,7 @@ class ProtoTree(nn.Module):
             # Store the indices of the leaves with the highest path probability
             info['out_leaf_ix'] = [leaves[i.item()].index for i in ix]
 
-            return dists, info, attMaps,features
+            return dists, info, attMaps,features,min_distances
         if sampling_strategy == ProtoTree.SAMPLING_STRATEGIES[2]:  # Greedy
             # At every decision node, the child with highest probability will be chosen
             batch_size = xs.size(0)
@@ -929,7 +929,7 @@ class ProtoTree(nn.Module):
                     if attr[node, 'ps'][i].item() > threshold:
                         node = node.r
                     else:
-                        node = node.l
+                        node = node.l,min_distances
                 routing[i] += [node]
 
             # Obtain output distributions of each leaf
@@ -941,7 +941,7 @@ class ProtoTree(nn.Module):
             # Store info
             info['out_leaf_ix'] = [path[-1].index for path in routing]
 
-            return dists, info, attMaps,features
+            return dists, info, attMaps,features,min_distances
         raise Exception('Sampling strategy not recognized!')
 
     def forward_partial(self, xs: torch.Tensor) -> tuple:
