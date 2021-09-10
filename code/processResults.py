@@ -166,7 +166,7 @@ def plotPointsImageDatasetGrid(exp_id,imgNb,epochs,model_ids,reduction_fact_list
                 if len(paths) > 1:
                     raise ValueError("There should only be one best att maps file.",model_ids[j],"has several.")
                 else:
-                    epochs.append(int(os.path.basename(paths[0]).split("epoch")[1].split("_")[0]))
+                    epochs.append(os.path.basename(paths[0]).split("epoch")[1].split("_{}".format(mode))[0])
             else:
                 fileName = os.path.basename(paths[0])
                 epochs.append(utils.findLastNumbers(fileName))
@@ -382,9 +382,6 @@ def plotPointsImageDatasetGrid(exp_id,imgNb,epochs,model_ids,reduction_fact_list
                 else:
                     attMap = np.load(pointPaths[j],mmap_mode="r")[i]
 
-                print(varGrad[j],attMap.shape)
-                print(smoothGradSq[j],attMap.shape)
-
                 if no_ref[j]:
                     attMap_max = attMap.max(axis=-1,keepdims=True).max(axis=-2,keepdims=True)
                     attMap = attMap*(attMap==attMap_max)
@@ -393,8 +390,6 @@ def plotPointsImageDatasetGrid(exp_id,imgNb,epochs,model_ids,reduction_fact_list
                     attMap = (attMap-attMap.min())/(attMap.max()-attMap.min()+0.0001)
 
                     if gradcam_maps[j]:
-                        attMap = np.abs(attMap-attMap.mean())
-                        attMap = attMap.mean(axis=0,keepdims=True)
                         attMap = (attMap-attMap.min())/(attMap.max()-attMap.min())
                         attMap = F.max_pool2d(torch.tensor(attMap).unsqueeze(0),4).numpy()[0]
 
