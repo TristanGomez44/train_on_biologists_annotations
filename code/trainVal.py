@@ -45,6 +45,7 @@ import torch.distributed as dist
 import torchvision
 from models import protopnet 
 
+import captum
 from captum.attr import (IntegratedGradients,NoiseTunnel)
 
 OPTIM_LIST = ["Adam", "AMSGrad", "SGD"]
@@ -960,7 +961,10 @@ def train(gpu,args,trial):
     if not trial is None:
         args.trial_id = trial.number
 
-    trainLoader,_ = load_data.buildTrainLoader(args,withSeg=args.with_seg,reprVec=args.repr_vec,gpu=gpu)
+    if not args.only_test:
+        trainLoader,_ = load_data.buildTrainLoader(args,withSeg=args.with_seg,reprVec=args.repr_vec,gpu=gpu)
+    else:
+        trainLoader = None
     valLoader,_ = load_data.buildTestLoader(args,"val",withSeg=args.with_seg,reprVec=args.repr_vec,gpu=gpu)
 
     # Building the net
@@ -1232,6 +1236,7 @@ def main(argv=None):
         #args.optim = OPTIM_LIST[int(bestParamDict["optim"])]
         args.only_test = True
 
+        print("bestTrialId-1",bestTrialId-1)
         bestPath = glob.glob("../models/{}/model{}_trial{}_best_epoch*".format(args.exp_id,args.model_id,bestTrialId-1))[0]
         print(bestPath)
 
@@ -1355,9 +1360,11 @@ def main(argv=None):
         if not args.rise and not args.score_map and not args.noise_tunnel:
             net = modelBuilder.GradCamMod(net_raw)
             model_dict = dict(type=args.first_mod, arch=net, layer_name='layer4', input_size=(448, 448))
-            grad_cam = GradCAM(model_dict, True)
+            #grad_cam = GradCAM(model_dict, True)
+            grad_cam = captum.attr.LayerGradCam(net.forward,net.layer4)
             grad_cam_pp = GradCAMpp(model_dict,True)
-            guided_backprop_mod = guided_backprop.GuidedBackprop(net)
+            #guided_backprop_mod = guided_backprop.GuidedBackprop(net)
+            guided_backprop_mod = captum.attr.GuidedBackprop(net)
             
             allMask = None
             allMask_pp = None
@@ -1399,9 +1406,10 @@ def main(argv=None):
                 targ = targ.cuda()
 
             if not args.rise and not args.score_map and not args.noise_tunnel:
-                mask = grad_cam(data).detach().cpu()
-                mask_pp = grad_cam_pp(data).detach().cpu()
-                map = guided_backprop_mod.generate_gradients(data,targ).detach().cpu()
+
+                mask = grad_cam.attribute(data,targ).detach().cpu()
+                mask_pp = grad_cam_pp(data,targ).detach().cpu()
+                map = guided_backprop_mod.attribute(data,targ).detach().cpu()
 
                 if allMask is None:
                     allMask = mask
@@ -1419,11 +1427,9 @@ def main(argv=None):
                 else:
                     allScore = torch.cat((allScore,torch.tensor(score_map)),dim=0)       
             elif args.noise_tunnel:    
-                with torch.no_grad():
-                    target = torch.argmax(net_raw(data)["pred"][0])
 
-                attr_sq = nt.attribute(data, nt_type='smoothgrad_sq', stdevs=0.02, nt_samples=4,nt_samples_batch_size=4,baselines=data_base, target=target)
-                attr_var = nt.attribute(data, nt_type='vargrad', stdevs=0.02, nt_samples=4,nt_samples_batch_size=4,baselines=data_base, target=target)
+                attr_sq = nt.attribute(data, nt_type='smoothgrad_sq', stdevs=0.02, nt_samples=4,nt_samples_batch_size=4,baselines=data_base, target=targ)
+                attr_var = nt.attribute(data, nt_type='vargrad', stdevs=0.02, nt_samples=4,nt_samples_batch_size=4,baselines=data_base, target=targ)
 
                 if allSq is None:
                     allSq,allVar = attr_sq,attr_var
