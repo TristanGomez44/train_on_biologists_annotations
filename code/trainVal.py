@@ -1360,10 +1360,8 @@ def main(argv=None):
         if not args.rise and not args.score_map and not args.noise_tunnel:
             net = modelBuilder.GradCamMod(net_raw)
             model_dict = dict(type=args.first_mod, arch=net, layer_name='layer4', input_size=(448, 448))
-            #grad_cam = GradCAM(model_dict, True)
             grad_cam = captum.attr.LayerGradCam(net.forward,net.layer4)
             grad_cam_pp = GradCAMpp(model_dict,True)
-            #guided_backprop_mod = guided_backprop.GuidedBackprop(net)
             guided_backprop_mod = captum.attr.GuidedBackprop(net)
             
             allMask = None
@@ -1374,7 +1372,6 @@ def main(argv=None):
             allScore = None
         elif args.noise_tunnel:
             torch.backends.cudnn.benchmark = False
-            #torch.backends.cudnn.enabled = False
 
             net_raw.eval()
             net = modelBuilder.GradCamMod(net_raw)
