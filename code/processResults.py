@@ -252,9 +252,9 @@ def plotPointsImageDatasetGrid(exp_id,imgNb,epochs,model_ids,reduction_fact_list
                         else:
                             indFeat = len(np.load(pointPaths[i].replace("attMaps","norm"),mmap_mode="r"))
 
-                        if maxInd > indAtt:
+                        if maxInd < indAtt:
                             maxInd = indAtt
-                        if maxInd > indFeat:
+                        if maxInd < indFeat:
                             maxInd = indFeat
 
             #Looking for the image at which the class we want begins
@@ -387,11 +387,11 @@ def plotPointsImageDatasetGrid(exp_id,imgNb,epochs,model_ids,reduction_fact_list
                     attMap = attMap*(attMap==attMap_max)
 
                 if gradcam[j] or rise[j]:
-                    attMap = (attMap-attMap.min())/(attMap.max()-attMap.min()+0.0001)
+                    attMap = (attMap-attMap.min())/(attMap.max()-attMap.min())
 
-                    if gradcam_maps[j]:
-                        attMap = (attMap-attMap.min())/(attMap.max()-attMap.min())
-                        attMap = F.max_pool2d(torch.tensor(attMap).unsqueeze(0),4).numpy()[0]
+                    #if gradcam_maps[j]:
+                        #attMap = (attMap-attMap.min())/(attMap.max()-attMap.min())
+                        #attMap = F.max_pool2d(torch.tensor(attMap).unsqueeze(0),4).numpy()[0]
 
                 if attMap.shape[0] != 1 and not onlyNorm[j]:
                     if maps_inds[j] == -1:
