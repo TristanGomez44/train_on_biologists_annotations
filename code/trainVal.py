@@ -1,3 +1,5 @@
+from multiprocessing import Value
+from ssl import ALERT_DESCRIPTION_CERTIFICATE_EXPIRED
 from models import inter_by_parts
 import os
 import sys
@@ -632,7 +634,7 @@ def initialize_Net_And_EpochNumber(net, exp_id, model_id, cuda, start_mode, init
     return startEpoch
 
 def preprocessAndLoadParams(init_path,cuda,net,strict):
-    print(init_path)
+    print("Init from",init_path)
     params = torch.load(init_path, map_location="cpu" if not cuda else None)
 
     params = addOrRemoveModule(params,net)
@@ -1129,8 +1131,14 @@ def main(argv=None):
 
     argreader.parser.add_argument('--attention_metrics', type=int, help='To compute the DAUC metric')
     argreader.parser.add_argument('--attention_metrics_add', type=int, help='To compute the IAUC metrics')
-    argreader.parser.add_argument('--att_metrics_gradcam_pp', type=str2bool, help='To use gradcam++ instead of gradcam')
-    argreader.parser.add_argument('--att_metrics_guided', type=str2bool, help='To use guided backprop instead of gradcam')
+    argreader.parser.add_argument('--att_metrics_post_hoc', type=str, help='The post-hoc method to use instead of the model ')
+    #argreader.parser.add_argument('--att_metrics_gradcam_pp', type=str2bool, help='To use gradcam++ instead of the model')
+    #argreader.parser.add_argument('--att_metrics_guided', type=str2bool, help='To use guided backprop instead of the model')
+    #argreader.parser.add_argument('--att_metrics_norm', type=str2bool, help='To use norm instead of the model')
+    #argreader.parser.add_argument('--att_metrics_rise', type=str2bool, help='To use rise instead of the model')
+    #argreader.parser.add_argument('--att_metrics_score_map', type=str2bool, help='To use score map instead of the model')
+    #argreader.parser.add_argument('--att_metrics_var', type=str2bool, help='To use varGrad instead of the model')
+    #argreader.parser.add_argument('--att_metrics_smooth', type=str2bool, help='To use smoothGrad instead of the model')
 
     argreader.parser.add_argument('--att_metrics_max_brnpa', type=str2bool, help='To agregate br-npa maps with max instead of mean')
     argreader.parser.add_argument('--att_metrics_onlyfirst_brnpa', type=str2bool, help='To agregate br-npa maps with max instead of mean')
@@ -1465,18 +1473,15 @@ def main(argv=None):
         net = modelBuilder.netBuilder(args,gpu=0)
         net = preprocessAndLoadParams(bestPath,args.cuda,net,args.strict_init)
 
-        if not args.resnet_bilinear:
-            net = modelBuilder.GradCamMod(net)
-            if not args.att_metrics_guided:
-                model_dict = dict(type=args.first_mod, arch=net, layer_name='layer4', input_size=(448, 448))
-                if args.att_metrics_gradcam_pp:
-                    grad_cam = GradCAMpp(model_dict,True)
-                else:
-                    grad_cam = GradCAM(model_dict, True)
-            else:
-                guided_backprop_mod = guided_backprop.GuidedBackprop(net)
-
+        if args.att_metrics_post_hoc:
+            attrFunc,kwargs = getAttMetrMod(net,testDataset,args)
         else:
+            attMaps_dataset,norm_dataset = loadAttMaps(args.exp_id,args.model_id)
+
+            if not args.resnet_bilinear or (args.resnet_bilinear and args.bil_cluster):
+                attrFunc = lambda i:(attMaps_dataset[i,0:1]*norm_dataset[i]).unsqueeze(0)
+            else:
+                attrFunc = lambda i:(attMaps_dataset[i].float().mean(dim=0,keepdim=True).byte()*norm_dataset[i]).unsqueeze(0)
             torch.set_grad_enabled(False)
 
         nbImgs = args.attention_metrics
@@ -1495,7 +1500,8 @@ def main(argv=None):
         blurWeight = blurWeight.cuda() if args.cuda else blurWeight
 
         for imgInd,i in enumerate(inds):
-            print(i)
+            if imgInd % 20 == 0 :
+                print("Img",i.item(),"(",imgInd,"/",len(inds),")")
 
             batch = testDataset.__getitem__(i)
             data,targ = batch[0].unsqueeze(0),torch.tensor(batch[1]).unsqueeze(0)
@@ -1505,38 +1511,40 @@ def main(argv=None):
 
             allData = data.clone().cpu()
 
-            if not args.resnet_bilinear:
-                resDic = net.net(data)
-            else:
-                resDic = net(data)
+            resDic = net(data)
             
             scores = torch.softmax(resDic["pred"],dim=-1)
             predClassInd = scores.argmax(dim=-1)
             allPreds.append(predClassInd.item())
             allTarg.append(targ.item())
 
-            if not args.resnet_bilinear:
-                if args.att_metrics_guided:
-                    attMaps = guided_backprop_mod.generate_gradients(data,targ).detach().cpu()
+            if args.att_metrics_post_hoc:
+                if args.att_metrics_post_hoc.find("var") == -1 and args.att_metrics_post_hoc.find("smooth") == -1:
+                    argList = [data,targ]
                 else:
-                    attMaps = grad_cam(data,upsample=False)
+                    argList = [data]
+
+                attMaps = attrFunc(*argList,**kwargs)
             else:
-                attMaps = torch.sqrt(torch.pow(resDic["features"],2).sum(dim=1,keepdim=True))
-                attMaps = (attMaps-attMaps.min())/(attMaps.max()-attMaps.min())
+                attMaps = attrFunc(i)
 
-                if not args.bil_cluster:
-                    attMaps *= resDic["attMaps"].mean(dim=1,keepdim=True)
-                else:
-                    if args.att_metrics_max_brnpa:
-                        attMaps *= resDic["attMaps"].max(dim=1,keepdim=True)[1]
-                    elif args.att_metrics_onlyfirst_brnpa:
-                        attMaps *= resDic["attMaps"][:,0:1]
-                    else:
-                        attMaps *= resDic["attMaps"].mean(dim=1,keepdim=True)
+                #attMaps = torch.sqrt(torch.pow(resDic["features"],2).sum(dim=1,keepdim=True))
+                #attMaps = (    if i % 500 == 0:    if i % 500 == 0:-attMaps.min())/(attMaps.max()-attMaps.min())
 
-                attMaps = (attMaps-attMaps.min())/(attMaps.max()-attMaps.min())
+                #if not args.bil_cluster:
+                #    attMaps *= resDic["attMaps"].mean(dim=1,keepdim=True)
+                #else:
+                #    if args.att_metrics_max_brnpa:
+                #        attMaps *= resDic["attMaps"].max(dim=1,keepdim=True)[1]
+                #    elif args.att_metrics_onlyfirst_brnpa:
+                #        attMaps *= resDic["attMaps"][:,0:1]
+                #    else:
+                #        attMaps *= resDic["attMaps"].mean(dim=1,keepdim=True)
+                #attMaps = (attMaps-attMaps.min())/(attMaps.max()-attMaps.min())
 
                 mask = torch.ones_like(attMaps)
+
+            attMaps = (attMaps-attMaps.min())/(attMaps.max()-attMaps.min())
 
             allAttMaps = attMaps.clone().cpu()
             origAttMaps = attMaps.clone()
@@ -1557,7 +1565,6 @@ def main(argv=None):
  
             stepCount = 0
             while leftPxlNb > 0:
-                break
 
                 attMin,attMean,attMax = attMaps.min().item(),attMaps.mean().item(),attMaps.max().item()
                 statsList.append((attMin,attMean,attMax))
@@ -1573,49 +1580,45 @@ def main(argv=None):
                     data[0,:,y_max[i]*ratio:y_max[i]*ratio+ratio,x_max[i]*ratio:x_max[i]*ratio+ratio] = 0
 
                     attMaps[0,:,y_max[i],x_max[i]] = -1                       
-     
+
                 leftPxlNb -= totalPxlNb//stepNb
 
-
                 if stepCount % 30 == 0:
-                    allAttMaps = torch.cat((allAttMaps,torch.clamp(attMaps,0,attMaps.max()).cpu()),dim=0)
+                    allAttMaps = torch.cat((allAttMaps,torch.clamp(attMaps,0,attMaps.max().item()).cpu()),dim=0)
                     allData = torch.cat((allData,data.cpu()),dim=0)
                 stepCount += 1
 
-                if not args.resnet_bilinear:
-                    resDic = net.net(data)
-                else:
-                    resDic = net(data)
+                resDic = net(data)
 
                 score = torch.softmax(resDic["pred"],dim=-1)[:,predClassInd[0]]
 
                 score_prop_list.append((leftPxlNb,score.item()))
 
-            #allScoreList.append(score_prop_list)
+            allPreds.append(score_prop_list)
             #allStatsList.append(statsList)
 
             #allAttMaps = (allAttMaps - allAttMaps.min())/(allAttMaps.max() - allAttMaps.min())
             #torchvision.utils.save_image(allAttMaps,"../vis/{}/attMetrAttMapDel_{}_{}.png".format(args.exp_id,args.model_id,imgInd))
             #torchvision.utils.save_image(allData,"../vis/{}/attMetrInpDel_{}_{}.png".format(args.exp_id,args.model_id,imgInd))
 
-        if args.att_metrics_gradcam_pp:
-            args.model_id = args.model_id + "-gradcampp"
-        elif args.att_metrics_max_brnpa:
-            print("MAX")
-            args.model_id = args.model_id + "-max"
-        elif args.att_metrics_onlyfirst_brnpa:
-            print("ONLYFIRST")
-            args.model_id = args.model_id + "-onlyfirst"
+        if args.att_metrics_post_hoc:
+            args.model_id = args.model_id + "-"+args.att_metrics_post_hoc
+        #elif args.att_metrics_max_brnpa:
+        #    print("MAX")
+        #    args.model_id = args.model_id + "-max"
+        #elif args.att_metrics_onlyfirst_brnpa:
+        #    print("ONLYFIRST")
+        #    args.model_id = args.model_id + "-onlyfirst"
 
-        if args.att_metrics_few_steps:
-            args.model_id = args.model_id + "-fewsteps"
+        #if args.att_metrics_few_steps:
+        #    args.model_id = args.model_id + "-fewsteps"
         
         np.save("../results/{}/attMetrPreds_{}.npy".format(args.exp_id,args.model_id),np.array(allPreds))
         np.save("../results/{}/attMetrTarg_{}.npy".format(args.exp_id,args.model_id),np.array(allTarg))
-        sys.exit(0)
-        np.save("../results/{}/attMetrStatsDel_{}.npy".format(args.exp_id,args.model_id),np.array(allStatsList,dtype=object))
-        np.save("../results/{}/attMetrDel_{}.npy".format(args.exp_id,args.model_id),np.array(allScoreList,dtype=object))
-        np.save("../results/{}/attMetrIndsDel_{}.npy".format(args.exp_id,args.model_id),inds)
+        #sys.exit(0)
+        #np.save("../results/{}/attMetrStatsDel_{}.npy".format(args.exp_id,args.model_id),np.array(allStatsList,dtype=object))
+        #np.save("../results/{}/attMetrDel_{}.npy".format(args.exp_id,args.model_id),np.array(allScoreList,dtype=object))
+        #np.save("../results/{}/attMetrIndsDel_{}.npy".format(args.exp_id,args.model_id),inds)
 
     elif args.attention_metrics_add:
 
@@ -1771,6 +1774,65 @@ def main(argv=None):
 
     else:
         train(0,args,None)
+
+def getAttMetrMod(net,testDataset,args):
+    if args.att_metrics_post_hoc == "gradcam":
+        netGradMod = modelBuilder.GradCamMod(net)
+        attrMod = captum.attr.LayerGradCam(netGradMod.forward,netGradMod.layer4)
+        attrFunc = attrMod.attribute
+        kwargs = {}
+    elif args.att_metrics_post_hoc == "gradcam_pp":
+        netGradMod = modelBuilder.GradCamMod(net)
+        model_dict = dict(type=args.first_mod, arch=netGradMod, layer_name='layer4', input_size=(448, 448))
+        attrMod = GradCAMpp(model_dict,True)
+        attrFunc = attrMod.__call__
+        kwargs = {}
+    elif args.att_metrics_post_hoc == "guided":
+        netGradMod = modelBuilder.GradCamMod(net)
+        attrMod = captum.attr.GuidedBackprop(netGradMod)
+        attrFunc = attrMod.attribute
+        kwargs = {}
+    elif args.att_metrics_post_hoc == "score_map":
+        attrMod = ScoreCam(net)
+        attrFunc = attrMod.generate_cam
+        kwargs = {}
+    elif args.att_metrics_post_hoc == "varGrad" or args.att_metrics_post_hoc == "smoothGrad":
+        torch.backends.cudnn.benchmark = False
+        torch.set_grad_enabled(False)
+        
+        net.eval()
+        netGradMod = modelBuilder.GradCamMod(net)
+
+        ig = IntegratedGradients(netGradMod)
+        attrMod = NoiseTunnel(ig)
+        attrFunc = attrMod.attribute
+
+        batch = testDataset.__getitem__(0)
+        data_base = torch.zeros_like(batch[0].unsqueeze(0))
+
+        if args.cuda:
+            data_base = data_base.cuda()
+        kwargs = {"nt_type":'smoothgrad_sq' if args.att_metrics_post_hoc == "smoothGrad" else "vargrad", \
+                        "stdevs":0.02, "nt_samples":1,"nt_samples_batch_size":1}
+    elif args.att_metrics_post_hoc == "rise":
+        torch.set_grad_enabled(False)
+        attrMod = RISE(net)
+        attrFunc = attrMod.__call__
+        kwargs = {}
+    else:
+        raise ValueError("Unknown post-hoc method",args.att_metrics_post_hoc)
+    return attrFunc,kwargs
+
+def loadAttMaps(exp_id,model_id):
+
+    paths = glob.glob("../results/{}/attMaps_{}_epoch*.npy".format(exp_id,model_id))
+
+    if len(paths) >1 or len(paths) == 0:
+        raise ValueError("Wrong path number for",exp_id,model_id)
+
+    attMaps,norm = np.load(paths[0],mmap_mode="r"),np.load(paths[0].replace("attMaps","norm"),mmap_mode="r")
+    
+    return torch.tensor(attMaps),torch.tensor(norm)
 
 def getBestTrial(curr,optuna_trial_nb):
     trialIds,values = getTrialList(curr,optuna_trial_nb)

@@ -305,33 +305,6 @@ class CNN2D_bilinearAttPool(FirstModel):
 
         return retDict
 
-
-class CNN2D_protoNet(FirstModel):
-
-    def __init__(self, featModelName,
-                 inFeat=512,nb_parts=3,protoPerClass=10,classNb=200,**kwargs):
-
-        super().__init__(featModelName,**kwargs)
-        self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
-
-        self.featMod = protopnet.resnet50_features(pretrained=True)
-        self.protopnet = protopnet.construct_PPNet(self.featMod,num_parts=nb_parts, num_classes=classNb,prototype_activation_function="linear")
-
-        self.nb_parts = nb_parts
-        self.linLay_aux = nn.Linear(2048,200)
-
-    def forward(self, x):
-
-        logits, min_distances,distances,features = self.protopnet(x)
-
-        retDict = {"pred":logits,"dist":min_distances,"attMaps":distances,"features":features}
-
-        retDict["prototype_shape"] = self.protopnet.prototype_shape
-        retDict["prototype_class_identity"] = self.protopnet.prototype_class_identity
-        retDict["pred_aux"] = self.linLay_aux(features.mean(dim=-1).mean(dim=-1))
-
-        return retDict
-
 class CNN2D_interbyparts(FirstModel):
 
     def __init__(self,featModelName,classNb,nb_parts,**kwargs):
@@ -502,28 +475,27 @@ def netBuilder(args,gpu=None):
             else:
                 nbFeat *= len(args.bil_clus_vect_ind_to_use.split(","))
 
-    elif args.protonet:
-        CNNconst = CNN2D_protoNet
-        kwargs = {"inFeat":nbFeat,"nb_parts":args.resnet_bil_nb_parts,"protoPerClass":args.proto_nb,"classNb":args.class_nb}
     elif args.inter_by_parts:
         CNNconst = CNN2D_interbyparts
         kwargs = {"classNb":args.class_nb,"nb_parts":args.resnet_bil_nb_parts}
+    elif args.protonet:
+        CNNconst = protopnet.construct_PPNet
+        kwargs = {"base_architecture":args.first_mod,"num_classes":args.class_nb}
     elif args.prototree:
-        CNNconst = CNN2D_prototree
-        kwargs = {"classNb":args.class_nb}
+        CNNconst = prototree.construct_prototree
+        kwargs = {"feature_mod":args.first_mod,"num_classes":args.class_nb}
     else:
         CNNconst = CNN2D
         kwargs = {}
 
-    if args.first_mod.find("bagnet") == -1 and args.first_mod.find("hrnet") == -1:
+    if not args.protonet and not args.prototree:
         firstModel = CNNconst(args.first_mod,chan=args.resnet_chan, stride=args.resnet_stride,\
                                 strideLay2=args.stride_lay2,strideLay3=args.stride_lay3,\
                                 strideLay4=args.stride_lay4,\
                                 endRelu=args.end_relu,\
                                 **kwargs)
     else:
-        firstModel = CNNconst(args.first_mod,**kwargs)
-
+        firstModel = CNNconst(**kwargs)
 
     ############### Second Model #######################
 
@@ -542,7 +514,10 @@ def netBuilder(args,gpu=None):
 
     ############### Whole Model ##########################
 
-    net = Model(firstModel, secondModel)
+    if not args.protonet and not args.prototree:
+        net = Model(firstModel, secondModel)
+    else:
+        net = firstModel
 
     if args.distributed:
         torch.cuda.set_device(gpu)

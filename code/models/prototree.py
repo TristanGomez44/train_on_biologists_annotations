@@ -1,12 +1,160 @@
-import os
-import argparse
-import pickle
-import numpy as np
-
 import torch
 import torch.nn as nn
 
-#This comes from https://github.com/M-Nauta/ProtoTree/blob/86b9bfb38a009576c8e073100b92dd2f639c01e3/prototree/prototree.py
+class Node(nn.Module):
+
+    def __init__(self, index: int):
+        super().__init__()
+        self._index = index
+
+    def forward(self, *args, **kwargs):
+        raise NotImplementedError
+
+    @property
+    def index(self) -> int:
+        return self._index
+
+    @property
+    def size(self) -> int:
+        raise NotImplementedError
+
+    @property
+    def nodes(self) -> set:
+        return self.branches.union(self.leaves)
+
+    @property
+    def leaves(self) -> set:
+        raise NotImplementedError
+
+    @property
+    def branches(self) -> set:
+        raise NotImplementedError
+
+    @property
+    def nodes_by_index(self) -> dict:
+        raise NotImplementedError
+
+    @property
+    def num_branches(self) -> int:
+        return len(self.branches)
+
+    @property
+    def num_leaves(self) -> int:
+        return len(self.leaves)
+
+    @property
+    def depth(self) -> int:
+        raise NotImplementedError
+
+import argparse
+
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+class Leaf(Node):
+
+    def __init__(self,
+                 index: int,
+                 num_classes: int,
+                 args: argparse.Namespace
+                 ):
+        super().__init__(index)
+
+        # Initialize the distribution parameters
+        if args.disable_derivative_free_leaf_optim:
+            self._dist_params = nn.Parameter(torch.randn(num_classes), requires_grad=True)
+        elif args.kontschieder_normalization:
+            self._dist_params = nn.Parameter(torch.ones(num_classes), requires_grad=False)
+        else:
+            self._dist_params = nn.Parameter(torch.zeros(num_classes), requires_grad=False)
+
+        # Flag that indicates whether probabilities or log probabilities are computed
+        self._log_probabilities = args.log_probabilities
+
+        self._kontschieder_normalization = args.kontschieder_normalization
+
+    def forward(self, xs: torch.Tensor, **kwargs):
+
+        # Get the batch size
+        batch_size = xs.size(0)
+
+        # Keep a dict to assign attributes to nodes. Create one if not already existent
+        node_attr = kwargs.setdefault('attr', dict())
+        # In this dict, store the probability of arriving at this node.
+        # It is assumed that when a parent node calls forward on this node it passes its node_attr object with the call
+        # and that it sets the path probability of arriving at its child
+        # Therefore, if this attribute is not present this node is assumed to not have a parent.
+        # The probability of arriving at this node should thus be set to 1 (as this would be the root in this case)
+        # The path probability is tracked for all x in the batch
+        if not self._log_probabilities:
+            node_attr.setdefault((self, 'pa'), torch.ones(batch_size, device=xs.device))
+        else:
+            node_attr.setdefault((self, 'pa'), torch.zeros(batch_size, device=xs.device))
+
+        # Obtain the leaf distribution
+        dist = self.distribution()  # shape: (k,)
+        # Reshape the distribution to a matrix with one single row
+        dist = dist.view(1, -1)  # shape: (1, k)
+        # Duplicate the row for all x in xs
+        dists = torch.cat((dist,) * batch_size, dim=0)  # shape: (bs, k)
+
+        # Store leaf distributions as node property
+        node_attr[self, 'ds'] = dists
+
+        # Return both the result of the forward pass as well as the node properties
+        return dists, node_attr
+
+    def distribution(self) -> torch.Tensor:
+        if not self._kontschieder_normalization:
+            if self._log_probabilities:
+                return F.log_softmax(self._dist_params, dim=0)
+            else:
+                # Return numerically stable softmax (see http://www.deeplearningbook.org/contents/numerical.html)
+                return F.softmax(self._dist_params - torch.max(self._dist_params), dim=0)
+        
+        else:
+            #kontschieder_normalization's version that uses a normalization factor instead of softmax:
+            if self._log_probabilities:
+                return torch.log((self._dist_params / torch.sum(self._dist_params))+1e-10) #add small epsilon for numerical stability
+            else:
+                return (self._dist_params / torch.sum(self._dist_params))
+        
+    @property
+    def requires_grad(self) -> bool:
+        return self._dist_params.requires_grad
+
+    @requires_grad.setter
+    def requires_grad(self, val: bool):
+        self._dist_params.requires_grad = val
+
+    @property
+    def size(self) -> int:
+        return 1
+
+    @property
+    def leaves(self) -> set:
+        return {self}
+
+    @property
+    def branches(self) -> set:
+        return set()
+
+    @property
+    def nodes_by_index(self) -> dict:
+        return {self.index: self}
+
+    @property
+    def num_branches(self) -> int:
+        return 0
+
+    @property
+    def num_leaves(self) -> int:
+        return 1
+
+    @property
+    def depth(self) -> int:
+        return 0
 
 import argparse
 
@@ -16,26 +164,584 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+class Branch(Node):
+
+    def __init__(self,
+                 index: int,
+                 l: Node,
+                 r: Node,
+                 args: argparse.Namespace
+                 ):
+        super().__init__(index)
+        self.l = l
+        self.r = r
+
+        # Flag that indicates whether probabilities or log probabilities are computed
+        self._log_probabilities = args.log_probabilities
+
+    def forward(self, xs: torch.Tensor, **kwargs):
+
+        # Get the batch size
+        batch_size = xs.size(0)
+
+        # Keep a dict to assign attributes to nodes. Create one if not already existent
+        node_attr = kwargs.setdefault('attr', dict())
+        # In this dict, store the probability of arriving at this node.
+        # It is assumed that when a parent node calls forward on this node it passes its node_attr object with the call
+        # and that it sets the path probability of arriving at its child
+        # Therefore, if this attribute is not present this node is assumed to not have a parent.
+        # The probability of arriving at this node should thus be set to 1 (as this would be the root in this case)
+        # The path probability is tracked for all x in the batch
+        if not self._log_probabilities:
+            pa = node_attr.setdefault((self, 'pa'), torch.ones(batch_size, device=xs.device))
+        else:
+            pa = node_attr.setdefault((self, 'pa'), torch.ones(batch_size, device=xs.device))
+
+        # Obtain the probabilities of taking the right subtree
+        ps = self.g(xs, **kwargs)  # shape: (bs,)
+
+        if not self._log_probabilities:
+            # Store decision node probabilities as node attribute
+            node_attr[self, 'ps'] = ps
+            # Store path probabilities of arriving at child nodes as node attributes
+            node_attr[self.l, 'pa'] = (1 - ps) * pa
+            node_attr[self.r, 'pa'] = ps * pa
+            # # Store alpha value for this batch for this decision node
+            # node_attr[self, 'alpha'] = torch.sum(pa * ps) / torch.sum(pa)
+
+            # Obtain the unweighted probability distributions from the child nodes
+            l_dists, _ = self.l.forward(xs, **kwargs)  # shape: (bs, k)
+            r_dists, _ = self.r.forward(xs, **kwargs)  # shape: (bs, k)
+            # Weight the probability distributions by the decision node's output
+            ps = ps.view(batch_size, 1)
+            return (1 - ps) * l_dists + ps * r_dists, node_attr  # shape: (bs, k)
+        else:
+            # Store decision node probabilities as node attribute
+            node_attr[self, 'ps'] = ps
+
+            # Store path probabilities of arriving at child nodes as node attributes
+            # source: rewritten to pytorch from
+            # https://github.com/tensorflow/probability/blob/v0.9.0/tensorflow_probability/python/math/generic.py#L447-L471
+            x = torch.abs(ps) + 1e-7  # add small epsilon for numerical stability
+            oneminusp = torch.where(x < np.log(2), torch.log(-torch.expm1(-x)), torch.log1p(-torch.exp(-x)))
+
+            node_attr[self.l, 'pa'] = oneminusp + pa
+            node_attr[self.r, 'pa'] = ps + pa
+
+            # Obtain the unweighted probability distributions from the child nodes
+            l_dists, _ = self.l.forward(xs, **kwargs)  # shape: (bs, k)
+            r_dists, _ = self.r.forward(xs, **kwargs)  # shape: (bs, k)
+
+            # Weight the probability distributions by the decision node's output
+            ps = ps.view(batch_size, 1)
+            oneminusp = oneminusp.view(batch_size, 1)
+            logs_stacked = torch.stack((oneminusp + l_dists, ps + r_dists))
+            return torch.logsumexp(logs_stacked, dim=0), node_attr  # shape: (bs,)
+
+    def g(self, xs: torch.Tensor, **kwargs):
+        out_map = kwargs['out_map']  # Obtain the mapping from decision nodes to conv net outputs
+        conv_net_output = kwargs['conv_net_output']  # Obtain the conv net outputs
+        out = conv_net_output[out_map[self]]  # Obtain the output corresponding to this decision node
+        return out.squeeze(dim=1)
+
+    @property
+    def size(self) -> int:
+        return 1 + self.l.size + self.r.size
+
+    @property
+    def leaves(self) -> set:
+        return self.l.leaves.union(self.r.leaves)
+
+    @property
+    def branches(self) -> set:
+        return {self} \
+            .union(self.l.branches) \
+            .union(self.r.branches)
+
+    @property
+    def nodes_by_index(self) -> dict:
+        return {self.index: self,
+                **self.l.nodes_by_index,
+                **self.r.nodes_by_index}
+
+    @property
+    def num_branches(self) -> int:
+        return 1 + self.l.num_branches + self.r.num_branches
+
+    @property
+    def num_leaves(self) -> int:
+        return self.l.num_leaves + self.r.num_leaves
+
+    @property
+    def depth(self) -> int:
+        return self.l.depth + 1
+
+import os
+import argparse
+import pickle
+import numpy as np
+
+import torch
+import torch.nn as nn
+
+import torch
+import torch.nn.functional as F
+from collections import Counter
+import numpy as np
+
+def min_pool2d(xs, **kwargs):
+    return -F.max_pool2d(-xs, **kwargs)
+
+
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+class L2Conv2D(nn.Module):
+
+    """
+    Convolutional layer that computes the squared L2 distance instead of the conventional inner product. 
+    """
+
+    def __init__(self, num_prototypes, num_features, w_1, h_1):
+        """
+        Create a new L2Conv2D layer
+        :param num_prototypes: The number of prototypes in the layer
+        :param num_features: The number of channels in the input features
+        :param w_1: Width of the prototypes
+        :param h_1: Height of the prototypes
+        """
+        super().__init__()
+        # Each prototype is a latent representation of shape (num_features, w_1, h_1)
+        prototype_shape = (num_prototypes, num_features, w_1, h_1)
+        self.prototype_vectors = nn.Parameter(torch.randn(prototype_shape), requires_grad=True)
+
+    def forward(self, xs):
+        """
+        Perform convolution over the input using the squared L2 distance for all prototypes in the layer
+        :param xs: A batch of input images obtained as output from some convolutional neural network F. Following the
+                   notation from the paper, let the shape of xs be (batch_size, D, W, H), where
+                     - D is the number of output channels of the conv net F
+                     - W is the width of the convolutional output of F
+                     - H is the height of the convolutional output of F
+        :return: a tensor of shape (batch_size, num_prototypes, W, H) obtained from computing the squared L2 distances
+                 for patches of the input using all prototypes
+        """
+        # Adapted from ProtoPNet
+        # Computing ||xs - ps ||^2 is equivalent to ||xs||^2 + ||ps||^2 - 2 * xs * ps
+        # where ps is some prototype image
+
+        # So first we compute ||xs||^2  (for all patches in the input image that is. We can do this by using convolution
+        # with weights set to 1 so each patch just has its values summed)
+        ones = torch.ones_like(self.prototype_vectors,
+                               device=xs.device)  # Shape: (num_prototypes, num_features, w_1, h_1)
+        xs_squared_l2 = F.conv2d(xs ** 2, weight=ones)  # Shape: (bs, num_prototypes, w_in, h_in)
+
+        # Now compute ||ps||^2
+        # We can just use a sum here since ||ps||^2 is the same for each patch in the input image when computing the
+        # squared L2 distance
+        ps_squared_l2 = torch.sum(self.prototype_vectors ** 2,
+                                  dim=(1, 2, 3))  # Shape: (num_prototypes,)
+        # Reshape the tensor so the dimensions match when computing ||xs||^2 + ||ps||^2
+        ps_squared_l2 = ps_squared_l2.view(-1, 1, 1)
+
+        # Compute xs * ps (for all patches in the input image)
+        xs_conv = F.conv2d(xs, weight=self.prototype_vectors)  # Shape: (bs, num_prototypes, w_in, h_in)
+
+        # Use the values to compute the squared L2 distance
+        distance = xs_squared_l2 + ps_squared_l2 - 2 * xs_conv
+        distance = torch.sqrt(torch.abs(distance)+1e-14) #L2 distance (not squared). Small epsilon added for numerical stability
+        
+        if torch.isnan(distance).any():
+            raise Exception('Error: NaN values! Using the --log_probabilities flag might fix this issue')
+        return distance  # Shape: (bs, num_prototypes, w_in, h_in)
+
+class ProtoTree(nn.Module):
+
+    ARGUMENTS = ['depth', 'num_features', 'W1', 'H1', 'log_probabilities']
+
+    SAMPLING_STRATEGIES = ['distributed', 'sample_max', 'greedy']
+
+    def __init__(self,
+                 num_classes: int,
+                 feature_net: torch.nn.Module,
+                 args: argparse.Namespace,
+                 add_on_layers: nn.Module = nn.Identity(),
+                 ):
+        super().__init__()
+        assert args.depth > 0
+        assert num_classes > 0
+
+        self._num_classes = num_classes
+
+        # Build the tree
+        self._root = self._init_tree(num_classes, args)
+
+        self.num_features = args.num_features
+        self.num_prototypes = self.num_branches
+        self.prototype_shape = (args.W1, args.H1, args.num_features)
+        
+        # Keep a dict that stores a reference to each node's parent
+        # Key: node -> Value: the node's parent
+        # The root of the tree is mapped to None
+        self._parents = dict()
+        self._set_parents()  # Traverse the tree to build the self._parents dict
+
+        # Set the feature network
+        self._net = feature_net
+        self._add_on = add_on_layers
+
+        # Flag that indicates whether probabilities or log probabilities are computed
+        self._log_probabilities = args.log_probabilities
+
+        # Flag that indicates whether a normalization factor should be used instead of softmax. 
+        self._kontschieder_normalization = args.kontschieder_normalization
+        self._kontschieder_train = args.kontschieder_train
+        # Map each decision node to an output of the feature net
+        self._out_map = {n: i for i, n in zip(range(2 ** (args.depth) - 1), self.branches)}
+
+        self.prototype_layer = L2Conv2D(self.num_prototypes,
+                                        self.num_features,
+                                        args.W1,
+                                        args.H1)
+
+    @property
+    def root(self) -> Node:
+        return self._root
+
+    @property
+    def leaves_require_grad(self) -> bool:
+        return any([leaf.requires_grad for leaf in self.leaves])
+
+    @leaves_require_grad.setter
+    def leaves_require_grad(self, val: bool):
+        for leaf in self.leaves:
+            leaf.requires_grad = val
+
+    @property
+    def prototypes_require_grad(self) -> bool:
+        return self.prototype_layer.prototype_vectors.requires_grad
+
+    @prototypes_require_grad.setter
+    def prototypes_require_grad(self, val: bool):
+        self.prototype_layer.prototype_vectors.requires_grad = val
+
+    @property
+    def features_require_grad(self) -> bool:
+        return any([param.requires_grad for param in self._net.parameters()])
+
+    @features_require_grad.setter
+    def features_require_grad(self, val: bool):
+        for param in self._net.parameters():
+            param.requires_grad = val
+
+    @property
+    def add_on_layers_require_grad(self) -> bool:
+        return any([param.requires_grad for param in self._add_on.parameters()])
+
+    @add_on_layers_require_grad.setter
+    def add_on_layers_require_grad(self, val: bool):
+        for param in self._add_on.parameters():
+            param.requires_grad = val
+
+    def forward(self,
+                xs: torch.Tensor,
+                sampling_strategy: str = SAMPLING_STRATEGIES[0],  # `distributed` by default
+                **kwargs,
+                ) -> tuple:
+        assert sampling_strategy in ProtoTree.SAMPLING_STRATEGIES
+
+        '''
+            PERFORM A FORWARD PASS THROUGH THE FEATURE NET
+        '''
+
+        # Perform a forward pass with the conv net
+        features = self._net(xs)
+        features = self._add_on(features)
+        bs, D, W, H = features.shape
+
+        '''
+            COMPUTE THE PROTOTYPE SIMILARITIES GIVEN THE COMPUTED FEATURES
+        '''
+
+        # Use the features to compute the distances from the prototypes
+        distances = self.prototype_layer(features)  # Shape: (batch_size, num_prototypes, W, H)
+
+        # Perform global min pooling to see the minimal distance for each prototype to any patch of the input image
+        min_distances = min_pool2d(distances, kernel_size=(W, H))
+        min_distances = min_distances.view(bs, self.num_prototypes)
+
+        if not self._log_probabilities:
+            similarities = torch.exp(-min_distances)
+        else:
+            # Omit the exp since we require log probabilities
+            similarities = -min_distances
+
+        # Add the conv net output to the kwargs dict to be passed to the decision nodes in the tree
+        # Split (or chunk) the conv net output tensor of shape (batch_size, num_decision_nodes) into individual tensors
+        # of shape (batch_size, 1) containing the logits that are relevant to single decision nodes
+        kwargs['conv_net_output'] = similarities.chunk(similarities.size(1), dim=1)
+        # Add the mapping of decision nodes to conv net outputs to the kwargs dict to be passed to the decision nodes in
+        # the tree
+        kwargs['out_map'] = dict(self._out_map)  # Use a copy of self._out_map, as the original should not be modified
+
+        '''
+            PERFORM A FORWARD PASS THROUGH THE TREE GIVEN THE COMPUTED SIMILARITIES
+        '''
+
+        # Perform a forward pass through the tree
+        out, attr = self._root.forward(xs, **kwargs)
+
+        info = dict()
+        # Store the probability of arriving at all nodes in the decision tree
+        info['pa_tensor'] = {n.index: attr[n, 'pa'].unsqueeze(1) for n in self.nodes}
+        # Store the output probabilities of all decision nodes in the tree
+        info['ps'] = {n.index: attr[n, 'ps'].unsqueeze(1) for n in self.branches}
+
+        # Generate the output based on the chosen sampling strategy
+        if sampling_strategy == ProtoTree.SAMPLING_STRATEGIES[0]:  # Distributed
+            if "final_eval" in kwargs and kwargs["final_eval"]:
+                return out,info,features,similarities,distances
+            else:
+                return out, info
+        if sampling_strategy == ProtoTree.SAMPLING_STRATEGIES[1]:  # Sample max
+            # Get the batch size
+            batch_size = xs.size(0)
+            # Get an ordering of all leaves in the tree
+            leaves = list(self.leaves)
+            # Obtain path probabilities of arriving at each leaf
+            pas = [attr[l, 'pa'].view(batch_size, 1) for l in leaves]  # All shaped (bs, 1)
+            # Obtain output distributions of each leaf
+            dss = [attr[l, 'ds'].view(batch_size, 1, self._num_classes) for l in leaves]  # All shaped (bs, 1, k)
+            # Prepare data for selection of most probable distributions
+            # Let L denote the number of leaves in this tree
+            pas = torch.cat(tuple(pas), dim=1)  # shape: (bs, L)
+            dss = torch.cat(tuple(dss), dim=1)  # shape: (bs, L, k)
+            # Select indices (in the 'leaves' variable) of leaves with highest path probability
+            ix = torch.argmax(pas, dim=1).long()  # shape: (bs,)
+            # Select distributions of leafs with highest path probability
+            dists = []
+            for j, i in zip(range(dss.shape[0]), ix):
+                dists += [dss[j][i].view(1, -1)]  # All shaped (1, k)
+            dists = torch.cat(tuple(dists), dim=0)  # shape: (bs, k)
+
+            # Store the indices of the leaves with the highest path probability
+            info['out_leaf_ix'] = [leaves[i.item()].index for i in ix]
+            if "final_eval" in kwargs and kwargs["final_eval"]:
+                return dists,info,features,similarities,distances
+            else:
+                return dists, info
+        if sampling_strategy == ProtoTree.SAMPLING_STRATEGIES[2]:  # Greedy
+            # At every decision node, the child with highest probability will be chosen
+            batch_size = xs.size(0)
+            # Set the threshold for when either child is more likely
+            threshold = 0.5 if not self._log_probabilities else np.log(0.5)
+            # Keep track of the routes taken for each of the items in the batch
+            routing = [[] for _ in range(batch_size)]
+            # Traverse the tree for all items
+            # Keep track of all nodes encountered
+            for i in range(batch_size):
+                node = self._root
+                while node in self.branches:
+                    routing[i] += [node]
+                    if attr[node, 'ps'][i].item() > threshold:
+                        node = node.r
+                    else:
+                        node = node.l
+                routing[i] += [node]
+
+            # Obtain output distributions of each leaf
+            # Each selected leaf is at the end of a path stored in the `routing` variable
+            dists = [attr[path[-1], 'ds'][0] for path in routing]
+            # Concatenate the dists in a new batch dimension
+            dists = torch.cat([dist.unsqueeze(0) for dist in dists], dim=0).to(device=xs.device)
+
+            # Store info
+            info['out_leaf_ix'] = [path[-1].index for path in routing]
+            if "final_eval" in kwargs and kwargs["final_eval"]:
+                return dists,info,features,similarities,distances
+            else:
+                return dists, info
+        raise Exception('Sampling strategy not recognized!')
+
+    def forward_partial(self, xs: torch.Tensor) -> tuple:
+
+        # Perform a forward pass with the conv net
+        features = self._net(xs)
+        features = self._add_on(features)
+
+        # Use the features to compute the distances from the prototypes
+        distances = self.prototype_layer(features)  # Shape: (batch_size, num_prototypes, W, H)
+
+        return features, distances, dict(self._out_map)
+
+    @property
+    def depth(self) -> int:
+        d = lambda node: 1 if isinstance(node, Leaf) else 1 + max(d(node.l), d(node.r))
+        return d(self._root)
+
+    @property
+    def size(self) -> int:
+        return self._root.size
+
+    @property
+    def nodes(self) -> set:
+        return self._root.nodes
+
+    @property
+    def nodes_by_index(self) -> dict:
+        return self._root.nodes_by_index
+
+    @property
+    def node_depths(self) -> dict:
+
+        def _assign_depths(node, d):
+            if isinstance(node, Leaf):
+                return {node: d}
+            if isinstance(node, Branch):
+                return {node: d, **_assign_depths(node.r, d + 1), **_assign_depths(node.l, d + 1)}
+
+        return _assign_depths(self._root, 0)
+
+    @property
+    def branches(self) -> set:
+        return self._root.branches
+
+    @property
+    def leaves(self) -> set:
+        return self._root.leaves
+
+    @property
+    def num_branches(self) -> int:
+        return self._root.num_branches
+
+    @property
+    def num_leaves(self) -> int:
+        return self._root.num_leaves
+
+    def save(self, directory_path: str):
+        # Make sure the target directory exists
+        if not os.path.isdir(directory_path):
+            os.mkdir(directory_path)
+        # Save the model to the target directory
+        with open(directory_path + '/model.pth', 'wb') as f:
+            torch.save(self, f)
+
+    def save_state(self, directory_path: str):
+        # Make sure the target directory exists
+        if not os.path.isdir(directory_path):
+            os.mkdir(directory_path)
+        # Save the model to the target directory
+        with open(directory_path + '/model_state.pth', 'wb') as f:
+            torch.save(self.state_dict(), f)
+        # Save the out_map of the model to the target directory
+        with open(directory_path + '/tree.pkl', 'wb') as f:
+            pickle.dump(self, f, protocol=pickle.HIGHEST_PROTOCOL)
+
+        
+    @staticmethod
+    def load(directory_path: str):
+        return torch.load(directory_path + '/model.pth')      
+       
+    def _init_tree(self,
+                   num_classes,
+                   args: argparse.Namespace) -> Node:
+
+        def _init_tree_recursive(i: int, d: int) -> Node:  # Recursively build the tree
+            if d == args.depth:
+                return Leaf(i,
+                            num_classes,
+                            args
+                            )
+            else:
+                left = _init_tree_recursive(i + 1, d + 1)
+                return Branch(i,
+                              left,
+                              _init_tree_recursive(i + left.size + 1, d + 1),
+                              args,
+                              )
+
+        return _init_tree_recursive(0, 0)
+
+    def _set_parents(self) -> None:
+        self._parents.clear()
+        self._parents[self._root] = None
+
+        def _set_parents_recursively(node: Node):
+            if isinstance(node, Branch):
+                self._parents[node.r] = node
+                self._parents[node.l] = node
+                _set_parents_recursively(node.r)
+                _set_parents_recursively(node.l)
+                return
+            if isinstance(node, Leaf):
+                return  # Nothing to do here!
+            raise Exception('Unrecognized node type!')
+
+        # Set all parents by traversing the tree starting from the root
+        _set_parents_recursively(self._root)
+
+    def path_to(self, node: Node):
+        assert node in self.leaves or node in self.branches
+        path = [node]
+        while isinstance(self._parents[node], Node):
+            node = self._parents[node]
+            path = [node] + path
+        return path
+
+base_architecture_to_features = {'resnet50': resnet50_features,
+                                 'resnet50_inat': resnet50_features_inat}
+
+"""
+    Create network with pretrained features and 1x1 convolutional layer
+
+"""
+def get_network(net: argparse.Namespace):
+    # Define a conv net for estimating the probabilities at each decision node
+    features = base_architecture_to_features[net](pretrained=True)            
+    features_name = str(features).upper()
+    if features_name.startswith('VGG') or features_name.startswith('RES'):
+        first_add_on_layer_in_channels = \
+            [i for i in features.modules() if isinstance(i, nn.Conv2d)][-1].out_channels
+    elif features_name.startswith('DENSE'):
+        first_add_on_layer_in_channels = \
+            [i for i in features.modules() if isinstance(i, nn.BatchNorm2d)][-1].num_features
+    else:
+        raise Exception('other base base_architecture NOT implemented')
+    
+    add_on_layers = nn.Sequential(
+                    nn.Conv2d(in_channels=first_add_on_layer_in_channels, out_channels=args.num_features, kernel_size=1, bias=False),
+                    nn.Sigmoid()
+                    ) 
+    return features, add_on_layers
+
+def freeze(tree: ProtoTree, epoch: int, params_to_freeze: list, params_to_train: list, args: argparse.Namespace, log: Log):
+    if args.freeze_epochs>0:
+        if epoch == 1:
+            log.log_message("\nNetwork frozen")
+            if 'resnet50' in args.net or args.net=='densenet121': #finetune last block and freeze rest
+                for parameter in params_to_freeze:
+                    parameter.requires_grad = False
+            else: #freeze complete network
+                for parameter in tree._net.parameters():
+                    parameter.requires_grad = False
+        elif epoch == args.freeze_epochs + 1:
+            log.log_message("\nNetwork unfrozen")
+            if 'resnet50' in args.net or args.net=='densenet121':
+                for parameter in params_to_freeze:
+                    parameter.requires_grad = True
+            else: #unfreeze complete network
+                for parameter in tree._net.parameters():
+                    parameter.requires_grad = True
+
 import torch
 import torch.nn as nn
 import torchvision.models as models
 import torch.utils.model_zoo as model_zoo
 import os
 import copy
-import sys
 
-import matplotlib.pyplot as plt
-
-plt.switch_backend('agg')
-
-
-model_urls = {
-    'resnet18': 'https://download.pytorch.org/models/resnet18-5c106cde.pth',
-    'resnet34': 'https://download.pytorch.org/models/resnet34-333f7ec4.pth',
-    'resnet50': 'https://download.pytorch.org/models/resnet50-19c8e357.pth',
-    'resnet101': 'https://download.pytorch.org/models/resnet101-5d3b4d8f.pth',
-    'resnet152': 'https://download.pytorch.org/models/resnet152-b121ed2d.pth',
-}
+model_urls = {'resnet50': 'https://download.pytorch.org/models/resnet50-19c8e357.pth'}
 
 model_dir = './pretrained_models'
 
@@ -251,32 +957,7 @@ class ResNet_features(nn.Module):
         template = 'resnet{}_features'
         return template.format(self.num_layers() + 1)
 
-def resnet18_features(pretrained=False, **kwargs):
-    """Constructs a ResNet-18 model.
-    Args:
-        pretrained (bool): If True, returns a model pre-trained on ImageNet
-    """
-    model = ResNet_features(BasicBlock, [2, 2, 2, 2], **kwargs)
-    if pretrained:
-        my_dict = model_zoo.load_url(model_urls['resnet18'], model_dir=model_dir)
-        my_dict.pop('fc.weight')
-        my_dict.pop('fc.bias')
-        model.load_state_dict(my_dict, strict=False)
-    return model
 
-
-def resnet34_features(pretrained=False, **kwargs):
-    """Constructs a ResNet-34 model.
-    Args:
-        pretrained (bool): If True, returns a model pre-trained on ImageNet
-    """
-    model = ResNet_features(BasicBlock, [3, 4, 6, 3], **kwargs)
-    if pretrained:
-        my_dict = model_zoo.load_url(model_urls['resnet34'], model_dir=model_dir)
-        my_dict.pop('fc.weight')
-        my_dict.pop('fc.bias')
-        model.load_state_dict(my_dict, strict=False)
-    return model
 
 def resnet50_features(pretrained=False, **kwargs):
     """Constructs a ResNet-50 model.
@@ -322,758 +1003,19 @@ def resnet50_features_inat(pretrained=False, **kwargs):
     return model
 
 
-def resnet101_features(pretrained=False, **kwargs):
-    """Constructs a ResNet-101 model.
-    Args:
-        pretrained (bool): If True, returns a model pre-trained on ImageNet
-    """
-    model = ResNet_features(Bottleneck, [3, 4, 23, 3], **kwargs)
-    if pretrained:
-        my_dict = model_zoo.load_url(model_urls['resnet101'], model_dir=model_dir)
-        my_dict.pop('fc.weight')
-        my_dict.pop('fc.bias')
-        model.load_state_dict(my_dict, strict=False)
-    return model
-
-
-def resnet152_features(pretrained=False, **kwargs):
-    """Constructs a ResNet-152 model.
-    Args:
-        pretrained (bool): If True, returns a model pre-trained on ImageNet
-    """
-    model = ResNet_features(Bottleneck, [3, 8, 36, 3], **kwargs)
-    if pretrained:
-        my_dict = model_zoo.load_url(model_urls['resnet152'], model_dir=model_dir)
-        my_dict.pop('fc.weight')
-        my_dict.pop('fc.bias')
-        model.load_state_dict(my_dict, strict=False)
-    return model
-
-
-#########" PROTOTREE ################"
-
-def min_pool2d(xs, **kwargs):
-    return -F.max_pool2d(-xs, **kwargs)
-
-class L2Conv2D(nn.Module):
-
-    """
-    Convolutional layer that computes the squared L2 distance instead of the conventional inner product. 
-    """
-
-    def __init__(self, num_prototypes, num_features, w_1, h_1):
-        """
-        Create a new L2Conv2D layer
-        :param num_prototypes: The number of prototypes in the layer
-        :param num_features: The number of channels in the input features
-        :param w_1: Width of the prototypes
-        :param h_1: Height of the prototypes
-        """
-        super().__init__()
-        # Each prototype is a latent representation of shape (num_features, w_1, h_1)
-        prototype_shape = (num_prototypes, num_features, w_1, h_1)
-
-        #self.prototype_vectors = torch.relu(torch.randn(prototype_shape))
-        self.prototype_vectors = torch.rand(prototype_shape)*0.25
-        #self.prototype_vectors = self.prototype_vectors + self.prototype_vectors.min()
-
-        #self.prototype_vectors = torch.distributions.gamma.Gamma(torch.Tensor([1]),torch.Tensor([1])).rsample(prototype_shape).squeeze(-1)
-        self.prototype_vectors = nn.Parameter(self.prototype_vectors, requires_grad=True)
-
-    def forward(self, xs):
-        """
-        Perform convolution over the input using the squared L2 distance for all prototypes in the layer
-        :param xs: A batch of input images obtained as output from some convolutional neural network F. Following the
-                   notation from the paper, let the shape of xs be (batch_size, D, W, H), where
-                     - D is the number of output channels of the conv net F
-                     - W is the width of the convolutional output of F
-                     - H is the height of the convolutional output of F
-        :return: a tensor of shape (batch_size, num_prototypes, W, H) obtained from computing the squared L2 distances
-                 for patches of the input using all prototypes
-        """
-
-        # Adapted from ProtoPNet
-        # Computing ||xs - ps ||^2 is equivalent to ||xs||^2 + ||ps||^2 - 2 * xs * ps
-        # where ps is some prototype image
-
-        # So first we compute ||xs||^2  (for all patches in the input image that is. We can do this by using convolution
-        # with weights set to 1 so each patch just has its values summed)
-        ones = torch.ones_like(self.prototype_vectors,
-                               device=xs.device)  # Shape: (num_prototypes, num_features, w_1, h_1)
-        xs_squared_l2 = F.conv2d(xs ** 2, weight=ones)  # Shape: (bs, num_prototypes, w_in, h_in)
-
-        # Now compute ||ps||^2
-        # We can just use a sum here since ||ps||^2 is the same for each patch in the input image when computing the
-        # squared L2 distance
-        ps_squared_l2 = torch.sum(self.prototype_vectors ** 2,
-                                  dim=(1, 2, 3))  # Shape: (num_prototypes,)
-        # Reshape the tensor so the dimensions match when computing ||xs||^2 + ||ps||^2
-        ps_squared_l2 = ps_squared_l2.view(-1, 1, 1)
-
-        # Compute xs * ps (for all patches in the input image)
-        xs_conv = F.conv2d(xs, weight=self.prototype_vectors)  # Shape: (bs, num_prototypes, w_in, h_in)
-
-        # Use the values to compute the squared L2 distance
-        distance = xs_squared_l2 + ps_squared_l2 - 2 * xs_conv
-        #print("terms",xs_squared_l2.mean().item(),ps_squared_l2.mean().item(),xs_conv.mean().item())
-        cos = xs_conv/(torch.sqrt(xs_squared_l2)*torch.sqrt(ps_squared_l2))
-        #print("cos",cos.min(),cos.mean(),cos.max())
-       
-        distance = torch.sqrt(torch.abs(distance)+1e-14) #L2 distance (not squared). Small epsilon added for numerical stability
-        
-        #print("dist",distance.mean(dim=-1).mean(dim=-1).abs().mean().item())
-        #print(round(xs.mean(dim=-1).mean(dim=-1).abs().mean().item(),3))
-        #print(self.prototype_vectors.size())
-
-        if torch.isnan(distance).any():
-            raise Exception('Error: NaN values! Using the --log_probabilities flag might fix this issue')
-        return distance  # Shape: (bs, num_prototypes, w_in, h_in)
-        #return -6*cos 
-
-class Node(nn.Module):
-
-    def __init__(self, index: int):
-        super().__init__()
-        self._index = index
-
-    def forward(self, *args, **kwargs):
-        raise NotImplementedError
-
-    @property
-    def index(self) -> int:
-        return self._index
-
-    @property
-    def size(self) -> int:
-        raise NotImplementedError
-
-    @property
-    def nodes(self) -> set:
-        return self.branches.union(self.leaves)
-
-    @property
-    def leaves(self) -> set:
-        raise NotImplementedError
-
-    @property
-    def branches(self) -> set:
-        raise NotImplementedError
-
-    @property
-    def nodes_by_index(self) -> dict:
-        raise NotImplementedError
-
-    @property
-    def num_branches(self) -> int:
-        return len(self.branches)
-
-    @property
-    def num_leaves(self) -> int:
-        return len(self.leaves)
-
-    @property
-    def depth(self) -> int:
-        raise NotImplementedError
-
-class Leaf(Node):
-
-    def __init__(self,
-                 index: int,
-                 num_classes: int,
-                 args: argparse.Namespace
-                 ):
-        super().__init__(index)
-
-        # Initialize the distribution parameters
-        if args.disable_derivative_free_leaf_optim:
-            self._dist_params = nn.Parameter(torch.randn(num_classes), requires_grad=True)
-
-            #torch.nn. init.uniform_(self._dist_params, -4, 4)
-
-        elif args.kontschieder_normalization:
-            self._dist_params = nn.Parameter(torch.ones(num_classes), requires_grad=False)
-        else:
-            self._dist_params = nn.Parameter(torch.zeros(num_classes), requires_grad=False)
-
-        # Flag that indicates whether probabilities or log probabilities are computed
-        self._log_probabilities = args.log_probabilities
-
-        self._kontschieder_normalization = args.kontschieder_normalization
-
-    def forward(self, xs: torch.Tensor, **kwargs):
-
-        # Get the batch size
-        batch_size = xs.size(0)
-
-        # Keep a dict to assign attributes to nodes. Create one if not already existent
-        node_attr = kwargs.setdefault('attr', dict())
-        # In this dict, store the probability of arriving at this node.
-        # It is assumed that when a parent node calls forward on this node it passes its node_attr object with the call
-        # and that it sets the path probability of arriving at its child
-        # Therefore, if this attribute is not present this node is assumed to not have a parent.
-        # The probability of arriving at this node should thus be set to 1 (as this would be the root in this case)
-        # The path probability is tracked for all x in the batch
-        if not self._log_probabilities:
-            node_attr.setdefault((self, 'pa'), torch.ones(batch_size, device=xs.device))
-        else:
-            node_attr.setdefault((self, 'pa'), torch.zeros(batch_size, device=xs.device))
-
-        # Obtain the leaf distribution
-        dist = self.distribution()  # shape: (k,)
-        # Reshape the distribution to a matrix with one single row
-        dist = dist.view(1, -1)  # shape: (1, k)
-        # Duplicate the row for all x in xs
-        dists = torch.cat((dist,) * batch_size, dim=0)  # shape: (bs, k)
-
-        # Store leaf distributions as node property
-        node_attr[self, 'ds'] = dists
-
-        #print("leaf",self.index,xs.mean().item(),dists.mean().item())
-
-        # Return both the result of the forward pass as well as the node properties
-        return dists, node_attr
-
-    def distribution(self) -> torch.Tensor:
-        if not self._kontschieder_normalization:
-            if self._log_probabilities:
-                return F.log_softmax(self._dist_params, dim=0)
-            else:
-                # Return numerically stable softmax (see http://www.deeplearningbook.org/contents/numerical.html)
-                #return F.softmax(self._dist_params - torch.max(self._dist_params), dim=0)
-                return self._dist_params
-        
-        else:
-            #kontschieder_normalization's version that uses a normalization factor instead of softmax:
-            if self._log_probabilities:
-                return torch.log((self._dist_params / torch.sum(self._dist_params))+1e-10) #add small epsilon for numerical stability
-            else:
-                return (self._dist_params / torch.sum(self._dist_params))
-        
-    @property
-    def requires_grad(self) -> bool:
-        return self._dist_params.requires_grad
-
-    @requires_grad.setter
-    def requires_grad(self, val: bool):
-        self._dist_params.requires_grad = val
-
-    @property
-    def size(self) -> int:
-        return 1
-
-    @property
-    def leaves(self) -> set:
-        return {self}
-
-    @property
-    def branches(self) -> set:
-        return set()
-
-    @property
-    def nodes_by_index(self) -> dict:
-        return {self.index: self}
-
-    @property
-    def num_branches(self) -> int:
-        return 0
-
-    @property
-    def num_leaves(self) -> int:
-        return 1
-
-    @property
-    def depth(self) -> int:
-        return 0
-
-class Branch(Node):
-
-    def __init__(self,
-                 index: int,
-                 l: Node,
-                 r: Node,
-                 args: argparse.Namespace
-                 ):
-        super().__init__(index)
-        self.l = l
-        self.r = r
-
-        # Flag that indicates whether probabilities or log probabilities are computed
-        self._log_probabilities = args.log_probabilities
-
-    def forward(self, xs: torch.Tensor, **kwargs):
-
-        # Get the batch size
-        batch_size = xs.size(0)
-
-        # Keep a dict to assign attributes to nodes. Create one if not already existent
-        node_attr = kwargs.setdefault('attr', dict())
-        # In this dict, store the probability of arriving at this node.
-        # It is assumed that when a parent node calls forward on this node it passes its node_attr object with the call
-        # and that it sets the path probability of arriving at its child
-        # Therefore, if this attribute is not present this node is assumed to not have a parent.
-        # The probability of arriving at this node should thus be set to 1 (as this would be the root in this case)
-        # The path probability is tracked for all x in the batch
-        if not self._log_probabilities:
-            pa = node_attr.setdefault((self, 'pa'), torch.ones(batch_size, device=xs.device))
-        else:
-            pa = node_attr.setdefault((self, 'pa'), torch.ones(batch_size, device=xs.device))
-
-        # Obtain the probabilities of taking the right subtree
-        ps = self.g(xs, **kwargs)  # shape: (bs,)
-
-        #print("PS",self.index,ps.size(),ps.mean().item())
-        if not self._log_probabilities:
-            # Store decision node probabilities as node attribute
-            node_attr[self, 'ps'] = ps
-            # Store path probabilities of arriving at child nodes as node attributes
-            node_attr[self.l, 'pa'] = (1 - ps) * pa
-            node_attr[self.r, 'pa'] = ps * pa
-            # # Store alpha value for this batch for this decision node
-            # node_attr[self, 'alpha'] = torch.sum(pa * ps) / torch.sum(pa)
-
-            # Obtain the unweighted probability distributions from the child nodes
-            l_dists, _ = self.l.forward(xs, **kwargs)  # shape: (bs, k)
-            r_dists, _ = self.r.forward(xs, **kwargs)  # shape: (bs, k)
-            #print("branch",ps.mean().item(),self.index,l_dists.size(),l_dists.mean().item(),r_dists.mean().item())
-            # Weight the probability distributions by the decision node's output
-            ps = ps.view(batch_size, 1)
-
-            #print(self.index,node_attr[self.r, 'pa'].mean().item(),node_attr[self.l, 'pa'].mean().item())
-
-            return (1 - ps) * l_dists + ps * r_dists, node_attr  # shape: (bs, k)
-        else:
-            # Store decision node probabilities as node attribute
-            node_attr[self, 'ps'] = ps
-
-            # Store path probabilities of arriving at child nodes as node attributes
-            # source: rewritten to pytorch from
-            # https://github.com/tensorflow/probability/blob/v0.9.0/tensorflow_probability/python/math/generic.py#L447-L471
-            x = torch.abs(ps) + 1e-7  # add small epsilon for numerical stability
-            oneminusp = torch.where(x < np.log(2), torch.log(-torch.expm1(-x)), torch.log1p(-torch.exp(-x)))
-
-            node_attr[self.l, 'pa'] = oneminusp + pa
-            node_attr[self.r, 'pa'] = ps + pa
-
-            # Obtain the unweighted probability distributions from the child nodes
-            l_dists, _ = self.l.forward(xs, **kwargs)  # shape: (bs, k)
-            r_dists, _ = self.r.forward(xs, **kwargs)  # shape: (bs, k)
-
-            # Weight the probability distributions by the decision node's output
-            ps = ps.view(batch_size, 1)
-            oneminusp = oneminusp.view(batch_size, 1)
-            logs_stacked = torch.stack((oneminusp + l_dists, ps + r_dists))
-            return torch.logsumexp(logs_stacked, dim=0), node_attr  # shape: (bs,)
-
-    def g(self, xs: torch.Tensor, **kwargs):
-        out_map = kwargs['out_map']  # Obtain the mapping from decision nodes to conv net outputs
-        conv_net_output = kwargs['conv_net_output']  # Obtain the conv net outputs
-        #try:  
-        out = conv_net_output[out_map[self]]  # Obtain the output corresponding to this decision node
-        #except:
-        #    print(out_map[self].keys)
-        #    print(conv_net_output.keys())
-        #    sys.exit(0)
-        
-        return out.squeeze(dim=1)
-
-    @property
-    def size(self) -> int:
-        return 1 + self.l.size + self.r.size
-
-    @property
-    def leaves(self) -> set:
-        return self.l.leaves.union(self.r.leaves)
-
-    @property
-    def branches(self) -> set:
-        return {self} \
-            .union(self.l.branches) \
-            .union(self.r.branches)
-
-    @property
-    def nodes_by_index(self) -> dict:
-        return {self.index: self,
-                **self.l.nodes_by_index,
-                **self.r.nodes_by_index}
-
-    @property
-    def num_branches(self) -> int:
-        return 1 + self.l.num_branches + self.r.num_branches
-
-    @property
-    def num_leaves(self) -> int:
-        return self.l.num_leaves + self.r.num_leaves
-
-    @property
-    def depth(self) -> int:
-        return self.l.depth + 1
-
-class ProtoTree(nn.Module):
-
-    ARGUMENTS = ['depth', 'num_features', 'W1', 'H1', 'log_probabilities']
-
-    SAMPLING_STRATEGIES = ['distributed', 'sample_max', 'greedy']
-
-    def __init__(self,
-                 num_classes: int,
-                 feature_net: torch.nn.Module,
-                 add_on_layers: nn.Module = nn.Sequential(nn.Conv2d(in_channels=2048, out_channels=2048, kernel_size=1, bias=False),nn.Sigmoid())
-                 ):
-        super().__init__()
-
-        args = argparse.Namespace
-
-        args.depth = 8
-        args.W1 = 1
-        args.H1 = 1
-        args.num_features = 2048 
-        args.upsample_threshold = 0.98 
-        args.pruning_threshold_leaves = 0.01 
-        args.nr_trees_ensemble = 5
-        args.disable_derivative_free_leaf_optim = True
-        args.kontschieder_normalization=False
-        args.log_probabilities = False
-        args.kontschieder_train = False
-    
-        assert args.depth > 0
-        assert num_classes > 0
-
-        self._num_classes = num_classes
-
-        # Build the tree
-        self._root = self._init_tree(num_classes, args)
-
-        self.num_features = args.num_features
-        self.num_prototypes = self.num_branches
-        self.prototype_shape = (args.W1, args.H1, args.num_features)
-        print("Num proto",self.num_prototypes)
-        # Keep a dict that stores a reference to each node's parent
-        # Key: node -> Value: the node's parent
-        # The root of the tree is mapped to None
-        self._parents = dict()
-        self._set_parents()  # Traverse the tree to build the self._parents dict
-
-        # Set the feature network
-        self._net = feature_net
-        self._add_on = add_on_layers
-
-        # Flag that indicates whether probabilities or log probabilities are computed
-        self._log_probabilities = args.log_probabilities
-
-        # Flag that indicates whether a normalization factor should be used instead of softmax. 
-        self._kontschieder_normalization = args.kontschieder_normalization
-        self._kontschieder_train = args.kontschieder_train
-        # Map each decision node to an output of the feature net
-        self._out_map = {n: i for i, n in zip(range(2 ** (args.depth) - 1), self.branches)}
-
-        self.prototype_layer = L2Conv2D(self.num_prototypes,
-                                        self.num_features,
-                                        args.W1,
-                                        args.H1)
-
-    @property
-    def root(self) -> Node:
-        return self._root
-
-    @property
-    def leaves_require_grad(self) -> bool:
-        return any([leaf.requires_grad for leaf in self.leaves])
-
-    @leaves_require_grad.setter
-    def leaves_require_grad(self, val: bool):
-        for leaf in self.leaves:
-            leaf.requires_grad = val
-
-    @property
-    def prototypes_require_grad(self) -> bool:
-        return self.prototype_layer.prototype_vectors.requires_grad
-
-    @prototypes_require_grad.setter
-    def prototypes_require_grad(self, val: bool):
-        self.prototype_layer.prototype_vectors.requires_grad = val
-
-    @property
-    def features_require_grad(self) -> bool:
-        return any([param.requires_grad for param in self._net.parameters()])
-
-    @features_require_grad.setter
-    def features_require_grad(self, val: bool):
-        for param in self._net.parameters():
-            param.requires_grad = val
-
-    @property
-    def add_on_layers_require_grad(self) -> bool:
-        return any([param.requires_grad for param in self._add_on.parameters()])
-
-    @add_on_layers_require_grad.setter
-    def add_on_layers_require_grad(self, val: bool):
-        for param in self._add_on.parameters():
-            param.requires_grad = val
-
-    def forward(self,
-                xs: torch.Tensor,
-                sampling_strategy: str = SAMPLING_STRATEGIES[0],  # `distributed` by default
-                **kwargs,
-                ) -> tuple:
-        assert sampling_strategy in ProtoTree.SAMPLING_STRATEGIES
-
-        '''
-            PERFORM A FORWARD PASS THROUGH THE FEATURE NET
-        '''
-
-        # Perform a forward pass with the conv net
-        features = self._net(xs)
-        features = self._add_on(features)
-        bs, D, W, H = features.shape
-
-        '''
-            COMPUTE THE PROTOTYPE SIMILARITIES GIVEN THE COMPUTED FEATURES
-        '''
-
-        # Use the features to compute the distances from the prototypes
-        distances = self.prototype_layer(features)  # Shape: (batch_size, num_prototypes, W, H)
-
-        attMaps = distances
-
-        #print("dists",distances.mean().item())
-
-        # Perform global min pooling to see the minimal distance for each prototype to any patch of the input image
-        min_distances = min_pool2d(distances, kernel_size=(W, H))
-        min_distances = min_distances.view(bs, self.num_prototypes)
-
-        #print(min_distances.mean().item())
-
-        if not self._log_probabilities:
-            similarities = torch.exp(-min_distances)
-            #similarities = -min_distances
-
-            similarities = (similarities-similarities.min())/(similarities.max()-similarities.min())
-            # similarities = 0.9*similarities
-            # similarities = similarities + 0.05
-
-            #print("sim",similarities.min().item(),similarities.mean().item(),similarities.max().item())
-
-            #similarities = -min_distances
-        else:
-            # Omit the exp since we require log probabilities
-            similarities = -min_distances
-
-        #print("sim",similarities.min().item(),similarities.mean().item(),similarities.max().item())
-
-        # Add the conv net output to the kwargs dict to be passed to the decision nodes in the tree
-        # Split (or chunk) the conv net output tensor of shape (batch_size, num_decision_nodes) into individual tensors
-        # of shape (batch_size, 1) containing the logits that are relevant to single decision nodes
-        kwargs['conv_net_output'] = similarities.chunk(similarities.size(1), dim=1)
-        # Add the mapping of decision nodes to conv net outputs to the kwargs dict to be passed to the decision nodes in
-        # the tree
-        kwargs['out_map'] = dict(self._out_map)  # Use a copy of self._out_map, as the original should not be modified
-
-        '''
-            PERFORM A FORWARD PASS THROUGH THE TREE GIVEN THE COMPUTED SIMILARITIES
-        '''
-
-        # Perform a forward pass through the tree
-        out, attr = self._root.forward(xs, **kwargs)
-
-        #print("xs",out.mean().item(),xs.mean().item())
-
-        info = dict()
-        # Store the probability of arriving at all nodes in the decision tree
-        info['pa_tensor'] = {n.index: attr[n, 'pa'].unsqueeze(1) for n in self.nodes}
-        # Store the output probabilities of all decision nodes in the tree
-        info['ps'] = {n.index: attr[n, 'ps'].unsqueeze(1) for n in self.branches}
-
-        #print("out",out.mean().item())
-
-        # Generate the output based on the chosen sampling strategy
-        if sampling_strategy == ProtoTree.SAMPLING_STRATEGIES[0]:  # Distributed
-            return out, info, attMaps,features,min_distances
-        if sampling_strategy == ProtoTree.SAMPLING_STRATEGIES[1]:  # Sample max
-            # Get the batch size
-            batch_size = xs.size(0)
-            # Get an ordering of all leaves in the tree
-            leaves = list(self.leaves)
-            # Obtain path probabilities of arriving at each leaf
-            pas = [attr[l, 'pa'].view(batch_size, 1) for l in leaves]  # All shaped (bs, 1)
-            # Obtain output distributions of each leaf
-            dss = [attr[l, 'ds'].view(batch_size, 1, self._num_classes) for l in leaves]  # All shaped (bs, 1, k)
-            # Prepare data for selection of most probable distributions
-            # Let L denote the number of leaves in this tree
-            pas = torch.cat(tuple(pas), dim=1)  # shape: (bs, L)
-            dss = torch.cat(tuple(dss), dim=1)  # shape: (bs, L, k)
-            # Select indices (in the 'leaves' variable) of leaves with highest path probability
-            ix = torch.argmax(pas, dim=1).long()  # shape: (bs,)
-            # Select distributions of leafs with highest path probability
-            dists = []
-            for j, i in zip(range(dss.shape[0]), ix):
-                dists += [dss[j][i].view(1, -1)]  # All shaped (1, k)
-            dists = torch.cat(tuple(dists), dim=0)  # shape: (bs, k)
-
-            # Store the indices of the leaves with the highest path probability
-            info['out_leaf_ix'] = [leaves[i.item()].index for i in ix]
-
-            return dists, info, attMaps,features,min_distances
-        if sampling_strategy == ProtoTree.SAMPLING_STRATEGIES[2]:  # Greedy
-            # At every decision node, the child with highest probability will be chosen
-            batch_size = xs.size(0)
-            # Set the threshold for when either child is more likely
-            threshold = 0.5 if not self._log_probabilities else np.log(0.5)
-            # Keep track of the routes taken for each of the items in the batch
-            routing = [[] for _ in range(batch_size)]
-            # Traverse the tree for all items
-            # Keep track of all nodes encountered
-            for i in range(batch_size):
-                node = self._root
-                while node in self.branches:
-                    routing[i] += [node]
-                    if attr[node, 'ps'][i].item() > threshold:
-                        node = node.r
-                    else:
-                        node = node.l,min_distances
-                routing[i] += [node]
-
-            # Obtain output distributions of each leaf
-            # Each selected leaf is at the end of a path stored in the `routing` variable
-            dists = [attr[path[-1], 'ds'][0] for path in routing]
-            # Concatenate the dists in a new batch dimension
-            dists = torch.cat([dist.unsqueeze(0) for dist in dists], dim=0).to(device=xs.device)
-
-            # Store info
-            info['out_leaf_ix'] = [path[-1].index for path in routing]
-
-            return dists, info, attMaps,features,min_distances
-        raise Exception('Sampling strategy not recognized!')
-
-    def forward_partial(self, xs: torch.Tensor) -> tuple:
-
-        # Perform a forward pass with the conv net
-        features = self._net(xs)
-        features = self._add_on(features)
-
-        # Use the features to compute the distances from the prototypes
-        distances = self.prototype_layer(features)  # Shape: (batch_size, num_prototypes, W, H)
-
-        return features, distances, dict(self._out_map)
-
-    @property
-    def depth(self) -> int:
-        d = lambda node: 1 if isinstance(node, Leaf) else 1 + max(d(node.l), d(node.r))
-        return d(self._root)
-
-    @property
-    def size(self) -> int:
-        return self._root.size
-
-    @property
-    def nodes(self) -> set:
-        return self._root.nodes
-
-    @property
-    def nodes_by_index(self) -> dict:
-        return self._root.nodes_by_index
-
-    @property
-    def node_depths(self) -> dict:
-
-        def _assign_depths(node, d):
-            if isinstance(node, Leaf):
-                return {node: d}
-            if isinstance(node, Branch):
-                return {node: d, **_assign_depths(node.r, d + 1), **_assign_depths(node.l, d + 1)}
-
-        return _assign_depths(self._root, 0)
-
-    @property
-    def branches(self) -> set:
-        return self._root.branches
-
-    @property
-    def leaves(self) -> set:
-        return self._root.leaves
-
-    @property
-    def num_branches(self) -> int:
-        return self._root.num_branches
-
-    @property
-    def num_leaves(self) -> int:
-        return self._root.num_leaves
-
-    def save(self, directory_path: str):
-        # Make sure the target directory exists
-        if not os.path.isdir(directory_path):
-            os.mkdir(directory_path)
-        # Save the model to the target directory
-        with open(directory_path + '/model.pth', 'wb') as f:
-            torch.save(self, f)
-
-    def save_state(self, directory_path: str):
-        # Make sure the target directory exists
-        if not os.path.isdir(directory_path):
-            os.mkdir(directory_path)
-        # Save the model to the target directory
-        with open(directory_path + '/model_state.pth', 'wb') as f:
-            torch.save(self.state_dict(), f)
-        # Save the out_map of the model to the target directory
-        with open(directory_path + '/tree.pkl', 'wb') as f:
-            pickle.dump(self, f, protocol=pickle.HIGHEST_PROTOCOL)
-
-        
-    @staticmethod
-    def load(directory_path: str):
-        return torch.load(directory_path + '/model.pth')      
-       
-    def _init_tree(self,
-                   num_classes,
-                   args: argparse.Namespace) -> Node:
-
-        def _init_tree_recursive(i: int, d: int) -> Node:  # Recursively build the tree
-            if d == args.depth:
-                return Leaf(i,
-                            num_classes,
-                            args
-                            )
-            else:
-                left = _init_tree_recursive(i + 1, d + 1)
-                return Branch(i,
-                              left,
-                              _init_tree_recursive(i + left.size + 1, d + 1),
-                              args,
-                              )
-
-        return _init_tree_recursive(0, 0)
-
-    def _set_parents(self) -> None:
-        self._parents.clear()
-        self._parents[self._root] = None
-
-        def _set_parents_recursively(node: Node):
-            if isinstance(node, Branch):
-                self._parents[node.r] = node
-                self._parents[node.l] = node
-                _set_parents_recursively(node.r)
-                _set_parents_recursively(node.l)
-                return
-            if isinstance(node, Leaf):
-                return  # Nothing to do here!
-            raise Exception('Unrecognized node type!')
-
-        # Set all parents by traversing the tree starting from the root
-        _set_parents_recursively(self._root)
-
-    def path_to(self, node: Node):
-        assert node in self.leaves or node in self.branches
-        path = [node]
-        while isinstance(self._parents[node], Node):
-            node = self._parents[node]
-            path = [node] + path
-        return path
-
-def prototree(num_classes):
-
-    backbone = resnet50_features(pretrained=True)
-
-    tree = ProtoTree(num_classes=num_classes,
-                feature_net = backbone)
-    
-    return tree
+def construct_prototree(feature_mod,num_classes):
+    features_net, add_on_layers = get_network(feature_mod)
+
+    args = argparse.Namespace()
+    args.disable_derivative_free_leaf_optim = False
+    args.kontschieder_normalization = False
+    args.log_probabilities = False 
+    args.depth = 9
+    args.num_features = 256
+    args.H1,args.W1 = 1,1
+    args.kontschieder_train = False 
+    args.freeze_epochs = 30 
+    args.net = "resnet50"
+
+    tree = ProtoTree(num_classes=num_classes,feature_net = features_net,args = args,add_on_layers = add_on_layers)
+    return tree 

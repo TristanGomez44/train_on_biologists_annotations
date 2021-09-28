@@ -3,25 +3,12 @@ import torch.nn as nn
 import torch.utils.model_zoo as model_zoo
 import torch.nn.functional as F
 
-#from resnet_features import resnet18_features, resnet34_features, resnet50_features, resnet101_features, resnet152_features
-
-#from receptive_field import compute_proto_layer_rf_info_v2
-
 import torch
 import torch.nn as nn
 import torch.utils.model_zoo as model_zoo
-
-model_urls = {
-    'resnet18': 'https://download.pytorch.org/models/resnet18-5c106cde.pth',
-    'resnet34': 'https://download.pytorch.org/models/resnet34-333f7ec4.pth',
-    'resnet50': 'https://download.pytorch.org/models/resnet50-19c8e357.pth',
-    'resnet101': 'https://download.pytorch.org/models/resnet101-5d3b4d8f.pth',
-    'resnet152': 'https://download.pytorch.org/models/resnet152-b121ed2d.pth',
-}
-
-model_dir = './pretrained_models'
-
 import math
+
+##########################" REC FIELD ############################"
 
 def compute_layer_rf_info(layer_filter_size, layer_stride, layer_padding,
                           previous_layer_rf_info):
@@ -146,6 +133,7 @@ def compute_proto_layer_rf_info_v2(img_size, layer_filter_sizes, layer_strides, 
 
     return proto_layer_rf_info
 
+###################"" RESNET FEAT ####################""""
 
 def conv3x3(in_planes, out_planes, stride=1):
     """3x3 convolution with padding"""
@@ -202,7 +190,6 @@ class BasicBlock(nn.Module):
 
         return block_kernel_sizes, block_strides, block_paddings
 
-
 class Bottleneck(nn.Module):
     # class attribute
     expansion = 4
@@ -251,7 +238,6 @@ class Bottleneck(nn.Module):
         block_paddings = [0, 1, 0]
 
         return block_kernel_sizes, block_strides, block_paddings
-
 
 class ResNet_features(nn.Module):
     '''
@@ -369,10 +355,23 @@ def resnet50_features(pretrained=False, **kwargs):
         my_dict = model_zoo.load_url(model_urls['resnet50'], model_dir=model_dir)
         my_dict.pop('fc.weight')
         my_dict.pop('fc.bias')
-        res = model.load_state_dict(my_dict, strict=False)
-        print(res)
+        model.load_state_dict(my_dict, strict=False)
     return model
 
+
+#########################"" PROTOPNET ############################""
+
+model_urls = {
+    'resnet18': 'https://download.pytorch.org/models/resnet18-5c106cde.pth',
+    'resnet34': 'https://download.pytorch.org/models/resnet34-333f7ec4.pth',
+    'resnet50': 'https://download.pytorch.org/models/resnet50-19c8e357.pth',
+    'resnet101': 'https://download.pytorch.org/models/resnet101-5d3b4d8f.pth',
+    'resnet152': 'https://download.pytorch.org/models/resnet152-b121ed2d.pth',
+}
+
+model_dir = './pretrained_models'
+
+base_architecture_to_features = {'resnet50': resnet50_features}
 
 class PPNet(nn.Module):
 
@@ -467,7 +466,7 @@ class PPNet(nn.Module):
         the feature input to prototype layer
         '''
         x = self.features(x)
-        #x = self.add_on_layers(x)
+        x = self.add_on_layers(x)
         return x
 
     @staticmethod
@@ -516,13 +515,16 @@ class PPNet(nn.Module):
 
         return distances
 
-    def prototype_distances(self, x):
+    def prototype_distances(self, x,retFeat=False):
         '''
         x is the raw input
         '''
         conv_features = self.conv_features(x)
         distances = self._l2_convolution(conv_features)
-        return distances,conv_features
+        if retFeat:
+            return distances,conv_features
+        else:
+            return distances
 
     def distance_2_similarity(self, distances):
         if self.prototype_activation_function == 'log':
@@ -532,8 +534,13 @@ class PPNet(nn.Module):
         else:
             return self.prototype_activation_function(distances)
 
-    def forward(self, x):
-        distances,features = self.prototype_distances(x)
+    def forward(self, x,retFeat=False):
+        ret = self.prototype_distances(x,retFeat)
+        if retFeat:
+            distances,features = ret
+        else:
+            distances = ret 
+            
         '''
         we cannot refactor the lines below for similarity scores
         because we need to return min_distances
@@ -545,7 +552,13 @@ class PPNet(nn.Module):
         min_distances = min_distances.view(-1, self.num_prototypes)
         prototype_activations = self.distance_2_similarity(min_distances)
         logits = self.last_layer(prototype_activations)
-        return logits, min_distances,distances,features
+
+        retDict = {"pred":logits,"min_distances":min_distances}
+
+        if retFeat:
+            retDict.update({"features":features,"prototype_activations":prototype_activations,"attMaps":distances})
+        
+        return retDict
 
     def push_forward(self, x):
         '''this method is needed for the pushing operation'''
@@ -629,13 +642,11 @@ class PPNet(nn.Module):
 
         self.set_last_layer_incorrect_connection(incorrect_strength=-0.5)
 
-def construct_PPNet(features, pretrained=True, img_size=224,
-                    num_parts=3, num_classes=200,
+def construct_PPNet(base_architecture, pretrained=True, img_size=224,
+                    prototype_shape=(2000, 128, 1, 1), num_classes=200,
                     prototype_activation_function='log',
-                    add_on_layers_type='bottleneck'):
-
-    prototype_shape = (num_classes*num_parts,2048,1,1)
-
+                    add_on_layers_type='regular'):
+    features = base_architecture_to_features[base_architecture](pretrained=pretrained)
     layer_filter_sizes, layer_strides, layer_paddings = features.conv_info()
     proto_layer_rf_info = compute_proto_layer_rf_info_v2(img_size=img_size,
                                                          layer_filter_sizes=layer_filter_sizes,
@@ -651,20 +662,3 @@ def construct_PPNet(features, pretrained=True, img_size=224,
                  prototype_activation_function=prototype_activation_function,
                  add_on_layers_type=add_on_layers_type)
 
-def warm_only(model):
-    for p in model.features.parameters():
-        p.requires_grad = True
-    for p in model.add_on_layers.parameters():
-        p.requires_grad = True
-    model.prototype_vectors.requires_grad = True
-    for p in model.last_layer.parameters():
-        p.requires_grad = False
-    
-def joint(model):
-    for p in model.features.parameters():
-        p.requires_grad = True
-    for p in model.add_on_layers.parameters():
-        p.requires_grad = True
-    model.prototype_vectors.requires_grad = True
-    for p in model.last_layer.parameters():
-        p.requires_grad = True
