@@ -500,10 +500,7 @@ class ProtoTree(nn.Module):
 
         # Generate the output based on the chosen sampling strategy
         if sampling_strategy == ProtoTree.SAMPLING_STRATEGIES[0]:  # Distributed
-            if "final_eval" in kwargs and kwargs["final_eval"]:
-                return out,info,features,similarities,distances
-            else:
-                return out, info
+            return {"pred":out}
         if sampling_strategy == ProtoTree.SAMPLING_STRATEGIES[1]:  # Sample max
             # Get the batch size
             batch_size = xs.size(0)
@@ -689,6 +686,51 @@ class ProtoTree(nn.Module):
             path = [node] + path
         return path
 
+
+def resnet50_features(pretrained=False, **kwargs):
+    """Constructs a ResNet-50 model.
+    Args:
+        pretrained (bool): If True, returns a model pre-trained on ImageNet
+    """
+    model = ResNet_features(Bottleneck, [3, 4, 6, 3], **kwargs)
+    if pretrained:
+        my_dict = model_zoo.load_url(model_urls['resnet50'], model_dir=model_dir)
+        my_dict.pop('fc.weight')
+        my_dict.pop('fc.bias')
+        model.load_state_dict(my_dict, strict=False)
+    return model
+
+def resnet50_features_inat(pretrained=False, **kwargs):
+    """Constructs a ResNet-50 model.
+    Args:
+        pretrained (bool): If True, returns a model pre-trained on Inaturalist2017
+    """
+    model = ResNet_features(Bottleneck, [3, 4, 6, 3], **kwargs)
+    
+    if pretrained:
+        #use BBN pretrained weights of the conventional learning branch (from BBN.iNaturalist2017.res50.180epoch.best_model.pth)
+        #https://openaccess.thecvf.com/content_CVPR_2020/papers/Zhou_BBN_Bilateral-Branch_Network_With_Cumulative_Learning_for_Long-Tailed_Visual_Recognition_CVPR_2020_paper.pdf
+        model_dict = torch.load(os.path.join(os.path.join('features', 'state_dicts'), 'BBN.iNaturalist2017.res50.180epoch.best_model.pth'))
+        # rename last residual block from cb_block to layer4.2
+        new_model = copy.deepcopy(model_dict)
+        for k in model_dict.keys():
+            if k.startswith('module.backbone.cb_block'):
+                splitted = k.split('cb_block')
+                new_model['layer4.2'+splitted[-1]]=model_dict[k]
+                del new_model[k]
+            elif k.startswith('module.backbone.rb_block'):
+                del new_model[k]
+            elif k.startswith('module.backbone.'):
+                splitted = k.split('backbone.')
+                new_model[splitted[-1]]=model_dict[k]
+                del new_model[k]
+            elif k.startswith('module.classifier'):
+                del new_model[k]
+        # print(new_model.keys())
+        model.load_state_dict(new_model, strict=True)
+    return model
+
+
 base_architecture_to_features = {'resnet50': resnet50_features,
                                  'resnet50_inat': resnet50_features_inat}
 
@@ -696,7 +738,7 @@ base_architecture_to_features = {'resnet50': resnet50_features,
     Create network with pretrained features and 1x1 convolutional layer
 
 """
-def get_network(net: argparse.Namespace):
+def get_network(net: argparse.Namespace,num_features):
     # Define a conv net for estimating the probabilities at each decision node
     features = base_architecture_to_features[net](pretrained=True)            
     features_name = str(features).upper()
@@ -710,12 +752,12 @@ def get_network(net: argparse.Namespace):
         raise Exception('other base base_architecture NOT implemented')
     
     add_on_layers = nn.Sequential(
-                    nn.Conv2d(in_channels=first_add_on_layer_in_channels, out_channels=args.num_features, kernel_size=1, bias=False),
+                    nn.Conv2d(in_channels=first_add_on_layer_in_channels, out_channels=num_features, kernel_size=1, bias=False),
                     nn.Sigmoid()
                     ) 
     return features, add_on_layers
 
-def freeze(tree: ProtoTree, epoch: int, params_to_freeze: list, params_to_train: list, args: argparse.Namespace, log: Log):
+def freeze(tree: ProtoTree, epoch: int, params_to_freeze: list, params_to_train: list, args: argparse.Namespace, log: print):
     if args.freeze_epochs>0:
         if epoch == 1:
             log.log_message("\nNetwork frozen")
@@ -959,59 +1001,17 @@ class ResNet_features(nn.Module):
 
 
 
-def resnet50_features(pretrained=False, **kwargs):
-    """Constructs a ResNet-50 model.
-    Args:
-        pretrained (bool): If True, returns a model pre-trained on ImageNet
-    """
-    model = ResNet_features(Bottleneck, [3, 4, 6, 3], **kwargs)
-    if pretrained:
-        my_dict = model_zoo.load_url(model_urls['resnet50'], model_dir=model_dir)
-        my_dict.pop('fc.weight')
-        my_dict.pop('fc.bias')
-        model.load_state_dict(my_dict, strict=False)
-    return model
-
-def resnet50_features_inat(pretrained=False, **kwargs):
-    """Constructs a ResNet-50 model.
-    Args:
-        pretrained (bool): If True, returns a model pre-trained on Inaturalist2017
-    """
-    model = ResNet_features(Bottleneck, [3, 4, 6, 3], **kwargs)
-    
-    if pretrained:
-        #use BBN pretrained weights of the conventional learning branch (from BBN.iNaturalist2017.res50.180epoch.best_model.pth)
-        #https://openaccess.thecvf.com/content_CVPR_2020/papers/Zhou_BBN_Bilateral-Branch_Network_With_Cumulative_Learning_for_Long-Tailed_Visual_Recognition_CVPR_2020_paper.pdf
-        model_dict = torch.load(os.path.join(os.path.join('features', 'state_dicts'), 'BBN.iNaturalist2017.res50.180epoch.best_model.pth'))
-        # rename last residual block from cb_block to layer4.2
-        new_model = copy.deepcopy(model_dict)
-        for k in model_dict.keys():
-            if k.startswith('module.backbone.cb_block'):
-                splitted = k.split('cb_block')
-                new_model['layer4.2'+splitted[-1]]=model_dict[k]
-                del new_model[k]
-            elif k.startswith('module.backbone.rb_block'):
-                del new_model[k]
-            elif k.startswith('module.backbone.'):
-                splitted = k.split('backbone.')
-                new_model[splitted[-1]]=model_dict[k]
-                del new_model[k]
-            elif k.startswith('module.classifier'):
-                del new_model[k]
-        # print(new_model.keys())
-        model.load_state_dict(new_model, strict=True)
-    return model
-
 
 def construct_prototree(feature_mod,num_classes):
-    features_net, add_on_layers = get_network(feature_mod)
+    num_features = 256
+    features_net, add_on_layers = get_network(feature_mod,num_features)
 
     args = argparse.Namespace()
     args.disable_derivative_free_leaf_optim = False
     args.kontschieder_normalization = False
     args.log_probabilities = False 
     args.depth = 9
-    args.num_features = 256
+    args.num_features = num_features
     args.H1,args.W1 = 1,1
     args.kontschieder_train = False 
     args.freeze_epochs = 30 

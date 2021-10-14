@@ -345,18 +345,6 @@ class ResNet_features(nn.Module):
         template = 'resnet{}_features'
         return template.format(self.num_layers() + 1)
 
-def resnet50_features(pretrained=False, **kwargs):
-    """Constructs a ResNet-50 model.
-    Args:
-        pretrained (bool): If True, returns a model pre-trained on ImageNet
-    """
-    model = ResNet_features(Bottleneck, [3, 4, 6, 3], **kwargs)
-    if pretrained:
-        my_dict = model_zoo.load_url(model_urls['resnet50'], model_dir=model_dir)
-        my_dict.pop('fc.weight')
-        my_dict.pop('fc.bias')
-        model.load_state_dict(my_dict, strict=False)
-    return model
 
 
 #########################"" PROTOPNET ############################""
@@ -370,6 +358,20 @@ model_urls = {
 }
 
 model_dir = './pretrained_models'
+
+def resnet50_features(pretrained=False, **kwargs):
+    """Constructs a ResNet-50 model.
+    Args:
+        pretrained (bool): If True, returns a model pre-trained on ImageNet
+    """
+    model = ResNet_features(Bottleneck, [3, 4, 6, 3], **kwargs)
+    if pretrained:
+        my_dict = model_zoo.load_url(model_urls['resnet50'], model_dir=model_dir)
+        my_dict.pop('fc.weight')
+        my_dict.pop('fc.bias')
+        model.load_state_dict(my_dict, strict=False)
+    return model
+
 
 base_architecture_to_features = {'resnet50': resnet50_features}
 

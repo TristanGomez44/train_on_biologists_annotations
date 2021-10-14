@@ -319,27 +319,6 @@ class CNN2D_interbyparts(FirstModel):
         
         return {"pred":pred,"attMaps":att,"features":features}
 
-class CNN2D_prototree(FirstModel):
-
-    def __init__(self,featModelName,classNb,**kwargs):
-
-        super().__init__(featModelName,**kwargs)
-
-        self.mod = prototree.prototree(classNb)
-        
-        self.featMod = self.mod._net
-
-        self.linLay_aux = nn.Linear(2048,200)
-
-        self.linLay_auxDist = nn.Linear(255,200)
-
-    def forward(self,x):
-
-        pred,info,att,features,min_distances = self.mod(x)
-
-        #return {"pred":pred,"attMaps":att,"features":features,"pred_aux":self.linLay_aux(features.mean(dim=-1).mean(dim=-1)),"info":info}
-        return {"pred":pred,"attMaps":att,"features":features,"pred_dist_aux":self.linLay_auxDist(min_distances),"info":info}
-
 ################################ Temporal Model ########################""
 
 class SecondModel(nn.Module):
@@ -412,15 +391,6 @@ class LinearSecondModel(SecondModel):
 
         return retDict
 
-
-class Identity(SecondModel):
-
-    def __init__(self,nbFeat,nbClass):
-        super().__init__(nbFeat, nbClass)
-
-    def forward(self, x):
-        return x
-
 def getResnetFeat(backbone_name, backbone_inplanes):
     if backbone_name in ["resnet50","resnet101","resnet152"]:
         nbFeat = backbone_inplanes * 4 * 2 ** (4 - 1)
@@ -447,78 +417,71 @@ def netBuilder(args,gpu=None):
 
     nbFeat = getResnetFeat(args.first_mod, args.resnet_chan)
 
-    if args.resnet_bilinear:
-        CNNconst = CNN2D_bilinearAttPool
-        kwargs = {"inFeat":nbFeat,"nb_parts":args.resnet_bil_nb_parts,\
-                    "cluster":args.bil_cluster,"cluster_ensemble":args.bil_cluster_ensemble,\
-                    "applySoftmaxOnSim":args.apply_softmax_on_sim,\
-                    "softmCoeff":args.softm_coeff,\
-                    "no_refine":args.bil_cluster_norefine,\
-                    "rand_vec":args.bil_cluster_randvec,\
-                    "update_sco_by_norm_sim":args.bil_clust_update_sco_by_norm_sim,\
-                    "vect_gate":args.bil_clus_vect_gate,\
-                    "vect_ind_to_use":args.bil_clus_vect_ind_to_use,\
-                    "cluster_lay_ind":args.bil_cluster_lay_ind}
+    if not args.prototree and not args.protonet:
+        if args.resnet_bilinear:
+            CNNconst = CNN2D_bilinearAttPool
+            kwargs = {"inFeat":nbFeat,"nb_parts":args.resnet_bil_nb_parts,\
+                        "cluster":args.bil_cluster,"cluster_ensemble":args.bil_cluster_ensemble,\
+                        "applySoftmaxOnSim":args.apply_softmax_on_sim,\
+                        "softmCoeff":args.softm_coeff,\
+                        "no_refine":args.bil_cluster_norefine,\
+                        "rand_vec":args.bil_cluster_randvec,\
+                        "update_sco_by_norm_sim":args.bil_clust_update_sco_by_norm_sim,\
+                        "vect_gate":args.bil_clus_vect_gate,\
+                        "vect_ind_to_use":args.bil_clus_vect_ind_to_use,\
+                        "cluster_lay_ind":args.bil_cluster_lay_ind}
 
-        if not args.bil_cluster_ensemble:
+            if not args.bil_cluster_ensemble:
 
-            if args.bil_cluster_lay_ind != 4:
-                if nbFeat == 2048:
-                    nbFeat = nbFeat//2**(4-args.bil_cluster_lay_ind)
-                elif nbFeat == 512:
-                    nbFeat = nbFeat//2**(4-args.bil_cluster_lay_ind)
+                if args.bil_cluster_lay_ind != 4:
+                    if nbFeat == 2048:
+                        nbFeat = nbFeat//2**(4-args.bil_cluster_lay_ind)
+                    elif nbFeat == 512:
+                        nbFeat = nbFeat//2**(4-args.bil_cluster_lay_ind)
+                    else:
+                        raise ValueError("Unknown feature nb.")
+
+                if args.bil_clus_vect_ind_to_use == "all":
+                    nbFeat *= args.resnet_bil_nb_parts
                 else:
-                    raise ValueError("Unknown feature nb.")
+                    nbFeat *= len(args.bil_clus_vect_ind_to_use.split(","))
 
-            if args.bil_clus_vect_ind_to_use == "all":
-                nbFeat *= args.resnet_bil_nb_parts
-            else:
-                nbFeat *= len(args.bil_clus_vect_ind_to_use.split(","))
-
-    elif args.inter_by_parts:
-        CNNconst = CNN2D_interbyparts
-        kwargs = {"classNb":args.class_nb,"nb_parts":args.resnet_bil_nb_parts}
-    elif args.protonet:
-        CNNconst = protopnet.construct_PPNet
-        kwargs = {"base_architecture":args.first_mod,"num_classes":args.class_nb}
-    elif args.prototree:
-        CNNconst = prototree.construct_prototree
-        kwargs = {"feature_mod":args.first_mod,"num_classes":args.class_nb}
-    else:
-        CNNconst = CNN2D
-        kwargs = {}
-
-    if not args.protonet and not args.prototree:
-        firstModel = CNNconst(args.first_mod,chan=args.resnet_chan, stride=args.resnet_stride,\
-                                strideLay2=args.stride_lay2,strideLay3=args.stride_lay3,\
-                                strideLay4=args.stride_lay4,\
-                                endRelu=args.end_relu,\
-                                **kwargs)
-    else:
-        firstModel = CNNconst(**kwargs)
-
-    ############### Second Model #######################
-
-    if args.second_mod == "linear":
-        if args.inter_by_parts or args.prototree or args.protonet:
-            secondModel = Identity(nbFeat,args.class_nb)
+        elif args.inter_by_parts:
+            CNNconst = CNN2D_interbyparts
+            kwargs = {"classNb":args.class_nb,"nb_parts":args.resnet_bil_nb_parts}
         else:
-            #if args.protonet:
-            #    nbFeat = args.class_nb*args.proto_nb
+            CNNconst = CNN2D
+            kwargs = {}
 
-            secondModel = LinearSecondModel(nbFeat, args.class_nb, args.dropout,bil_cluster_ensemble=args.bil_cluster_ensemble,\
-                                            bias=args.lin_lay_bias,aux_on_masked=args.aux_on_masked,protonet=args.protonet,num_parts=args.resnet_bil_nb_parts)
+        if args.first_mod.find("bagnet") == -1 and args.first_mod.find("hrnet") == -1:
+            firstModel = CNNconst(args.first_mod,chan=args.resnet_chan, stride=args.resnet_stride,\
+                                    strideLay2=args.stride_lay2,strideLay3=args.stride_lay3,\
+                                    strideLay4=args.stride_lay4,\
+                                    endRelu=args.end_relu,\
+                                    **kwargs)
+        else:
+            firstModel = CNNconst(args.first_mod,**kwargs)
 
-    else:
-        raise ValueError("Unknown second model type : ", args.second_mod)
 
-    ############### Whole Model ##########################
+        ############### Second Model #######################
+        if not args.inter_by_parts:
+            if args.second_mod == "linear":
+                secondModel = LinearSecondModel(nbFeat, args.class_nb, args.dropout,bil_cluster_ensemble=args.bil_cluster_ensemble,\
+                                                    bias=args.lin_lay_bias,aux_on_masked=args.aux_on_masked,num_parts=args.resnet_bil_nb_parts)
+            else:
+                raise ValueError("Unknown second model type : ", args.second_mod)
+        else:
+            secondModel = Identity()
 
-    if not args.protonet and not args.prototree:
+        ############### Whole Model ##########################
+
         net = Model(firstModel, secondModel)
     else:
-        net = firstModel
-
+        if args.protonet:
+            net = protopnet.construct_PPNet("resnet50", num_classes=args.class_nb)
+        else:
+            net = prototree.construct_prototree("resnet50",args.class_nb)
+ 
     if args.distributed:
         torch.cuda.set_device(gpu)
         net.cuda(gpu)
