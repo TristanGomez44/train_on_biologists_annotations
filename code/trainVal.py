@@ -1,5 +1,4 @@
 from multiprocessing import Value
-from ssl import ALERT_DESCRIPTION_CERTIFICATE_EXPIRED
 from models import inter_by_parts
 import os
 import sys
@@ -141,13 +140,6 @@ def epochSeqTr(model, optim, log_interval, loader, epoch, args, **kwargs):
         loss = kwargs["lossFunc"](output, target, resDict, data).mean()
         loss.backward()
 
-        #print(model.firstModel.mod.prototype_layer.prototype_vectors.grad.abs().mean().item(),round(model.firstModel.mod.prototype_layer.prototype_vectors.abs().mean().item(),3))
-        #print("leaf",model.firstModel.mod._root.l.l.l.l.l.l.l.l._dist_params.grad.abs().mean().item(),round(model.firstModel.mod._root.l.l.l.l.l.l.l.l._dist_params.abs().mean().item(),3))
-        #print("aux",model.firstModel.linLay_aux.weight.grad.abs().mean().item(),round(model.firstModel.linLay_aux.weight.grad.abs().mean().item(),3))
-        
-        #print("leaf",model.firstModel.mod._root.l.l.l.l._dist_params.grad.abs().mean().item(),round(model.firstModel.mod._root.l.l.l.l._dist_params.abs().mean().item(),3))
-        #print("linlay",model.firstModel.linLay_aux.weight.grad.abs().mean().item(),round(model.firstModel.linLay_aux.weight.abs().mean().item(),3))
-
         if acc_size == args.batch_size:
             for p in model.parameters():
                 if p.grad is not None:
@@ -158,26 +150,7 @@ def epochSeqTr(model, optim, log_interval, loader, epoch, args, **kwargs):
             acc_nb = 0
 
         loss = loss.detach().data.item()
-        '''
-        if args.prototree:
-            tree = model.firstModel.mod
-            #Update leaves with derivate-free algorithm
-            #Make sure the tree is in eval mode
-            model.eval()
-            info = resDict["info"]
-            ys_pred = resDict["pred"]
-            with torch.no_grad():
-                target_eye = eye[target] #shape (batchsize, num_classes) 
-                for leaf in tree.leaves:  
-                    if tree._log_probabilities:
-                        # log version
-                        update = torch.exp(torch.logsumexp(info['pa_tensor'][leaf.index] + leaf.distribution() + torch.log(target_eye) - ys_pred, dim=0))
-                    else:
-                        update = torch.sum((info['pa_tensor'][leaf.index] * leaf.distribution() * target_eye)/ys_pred, dim=0)  
-                    leaf._dist_params -= (_old_dist_params[leaf]/nr_batches)
-                    #leaf._dist_params = F.relu_(leaf._dist_params) #dist_params values can get slightly negative because of floating point issues. therefore, set to zero.
-                    leaf._dist_params += update
-        '''
+
         if args.grad_exp:
             allGrads = updateGradExp(model,allGrads)
 
@@ -260,41 +233,10 @@ class Loss(torch.nn.Module):
 def computeLoss(args, output, target, resDict, data,reduction="mean"):
 
     if not args.master_net:
-        #loss = args.nll_weight * F.cross_entropy(output, target,reduction=reduction)
-        #loss = args.nll_weight * F.nll_loss(output, target,reduction=reduction)
-        loss = F.nll_loss(torch.log(output), target,reduction=reduction)
-        #loss = 0
-        if args.protonet:
+        loss = args.nll_weight * F.cross_entropy(output, target,reduction=reduction)
 
-            min_distances = resDict["dist"]
-            protoShape = resDict["prototype_shape"]
-            prototypeClassID = resDict["prototype_class_identity"]
-
-            max_dist = (protoShape[1]* protoShape[2]* protoShape[3])
-
-            # prototypes_of_correct_class is a tensor of shape batch_size * num_prototypes
-            # calculate cluster cost
-            prototypes_of_correct_class = torch.t(prototypeClassID[:,target]).cuda()
-            inverted_distances, _ = torch.max((max_dist - min_distances) * prototypes_of_correct_class, dim=1)
-            cluster_cost = torch.mean(max_dist - inverted_distances)
-
-            # calculate separation cost
-            prototypes_of_wrong_class = 1 - prototypes_of_correct_class
-            inverted_distances_to_nontarget_prototypes, _ = \
-                torch.max((max_dist - min_distances) * prototypes_of_wrong_class, dim=1)
-            separation_cost = torch.mean(max_dist - inverted_distances_to_nontarget_prototypes)
-
-            # calculate avg cluster cost
-            avg_separation_cost = \
-                torch.sum(min_distances * prototypes_of_wrong_class, dim=1) / torch.sum(prototypes_of_wrong_class, dim=1)
-            avg_separation_cost = torch.mean(avg_separation_cost)
-            
-            #loss += 0.8*cluster_cost-0.08*avg_separation_cost
-            
-        elif args.inter_by_parts:
+        if args.inter_by_parts:
             loss += 0.5*inter_by_parts.shapingLoss(resDict["attMaps"],args.resnet_bil_nb_parts,args)
-        #elif args.prototree:
-        #    loss += args.nll_weight * F.cross_entropy(resDict["pred_dist_aux"], target,reduction=reduction)
 
     else:
         kl = F.kl_div(F.log_softmax(output/args.kl_temp, dim=1),F.softmax(resDict["master_net_pred"]/args.kl_temp, dim=1),reduction="batchmean")
@@ -646,15 +588,19 @@ def preprocessAndLoadParams(init_path,cuda,net,strict):
     params = changeOldNames(params,net)
     params = removeConvDense(params)
 
-    res = net.load_state_dict(params, strict)
+    res = net.load_state_dict(params, False)
 
     # Depending on the pytorch version the load_state_dict() method can return the list of missing and unexpected parameters keys or nothing
     if not res is None:
         missingKeys, unexpectedKeys = res
         if len(missingKeys) > 0:
-            print("missing keys", missingKeys)
+            print("missing keys")
+            for key in missingKeys:
+                print(key)
         if len(unexpectedKeys) > 0:
-            print("unexpected keys", unexpectedKeys)
+            print("unexpected keys")
+            for key in unexpectedKeys:
+                print(key)
 
     return net
 
@@ -1425,7 +1371,7 @@ def main(argv=None):
                     allMask_pp = torch.cat((allMask_pp,mask_pp),dim=0)
                     allMaps = torch.cat((allMaps,map),dim=0)
             elif args.score_map:
-                score_map = score_mod.generate_cam(data)
+                score_map = score_mod.generate_cam(data).detach().cpu()
 
                 if allScore is None:
                     allScore = torch.tensor(score_map)
@@ -1433,8 +1379,10 @@ def main(argv=None):
                     allScore = torch.cat((allScore,torch.tensor(score_map)),dim=0)       
             elif args.noise_tunnel:    
 
-                attr_sq = nt.attribute(data, nt_type='smoothgrad_sq', stdevs=0.02, nt_samples=4,nt_samples_batch_size=4,baselines=data_base, target=targ)
-                attr_var = nt.attribute(data, nt_type='vargrad', stdevs=0.02, nt_samples=4,nt_samples_batch_size=4,baselines=data_base, target=targ)
+                attr_sq = nt.attribute(data, nt_type='smoothgrad_sq', stdevs=0.02, nt_samples=16,nt_samples_batch_size=3,baselines=data_base, target=targ)
+                attr_var = nt.attribute(data, nt_type='vargrad', stdevs=0.02, nt_samples=16,nt_samples_batch_size=3,baselines=data_base, target=targ)
+
+                attr_sq,attr_var = attr_sq.detach().cpu(),attr_var.detach().cpu()
 
                 if allSq is None:
                     allSq,allVar = attr_sq,attr_var
@@ -1462,17 +1410,22 @@ def main(argv=None):
         else:
             np.save("../results/{}/rise_maps_{}_epoch{}_test.npy".format(args.exp_id,args.model_id,bestEpoch),allRise.numpy())
 
-    elif args.attention_metrics:
-     
+    elif args.attention_metrics or args.attention_metrics_add:
+        print("Attention metrics",args.attention_metrics,args.attention_metrics_add,args.attention_metrics or args.attention_metrics_add)
+
         args.val_batch_size = 1
         testLoader,testDataset = load_data.buildTestLoader(args, "test",withSeg=args.with_seg)
 
         bestPath = glob.glob("../models/{}/model{}_best_epoch*".format(args.exp_id, args.model_id))[0]
         bestEpoch = int(os.path.basename(bestPath).split("epoch")[1])
 
-        net = modelBuilder.netBuilder(args,gpu=0)
-        net = preprocessAndLoadParams(bestPath,args.cuda,net,args.strict_init)
-
+        if args.prototree:
+            net = torch.load(glob.glob("../models/{}/model{}_best_epoch*".format(args.exp_id,args.model_id))[0])
+        else:
+            net = modelBuilder.netBuilder(args,gpu=0)
+            net = preprocessAndLoadParams(bestPath,args.cuda,net,args.strict_init)
+        net.eval()
+        
         if args.att_metrics_post_hoc:
             attrFunc,kwargs = getAttMetrMod(net,testDataset,args)
         else:
@@ -1482,9 +1435,13 @@ def main(argv=None):
                 attrFunc = lambda i:(attMaps_dataset[i,0:1]*norm_dataset[i]).unsqueeze(0)
             else:
                 attrFunc = lambda i:(attMaps_dataset[i].float().mean(dim=0,keepdim=True).byte()*norm_dataset[i]).unsqueeze(0)
-            torch.set_grad_enabled(False)
+        torch.set_grad_enabled(False)
 
-        nbImgs = args.attention_metrics
+        if args.attention_metrics:
+            nbImgs = args.attention_metrics
+        else:
+            nbImgs = args.attention_metrics_add 
+        print("nbImgs",nbImgs)
 
         allScoreList = []
         allStatsList = []
@@ -1494,7 +1451,7 @@ def main(argv=None):
         torch.manual_seed(0)
         inds = torch.randint(len(testDataset),size=(nbImgs,))
 
-        blurWeight = torch.ones(120,120)
+        blurWeight = torch.ones(121,121)
         blurWeight = blurWeight/blurWeight.numel()
         blurWeight = blurWeight.unsqueeze(0).unsqueeze(0).expand(3,1,-1,-1)
         blurWeight = blurWeight.cuda() if args.cuda else blurWeight
@@ -1510,37 +1467,31 @@ def main(argv=None):
             targ = targ.cuda() if args.cuda else targ
 
             allData = data.clone().cpu()
-
-            resDic = net(data)
             
-            scores = torch.softmax(resDic["pred"],dim=-1)
+            if not args.prototree:
+                resDic = net(data)
+                scores = torch.softmax(resDic["pred"],dim=-1)
+            else:
+                scores = net(data)[0]
+
             predClassInd = scores.argmax(dim=-1)
             allPreds.append(predClassInd.item())
             allTarg.append(targ.item())
+            
+            if args.attention_metrics_add:
+                origData = data.clone()
+                data = F.conv2d(data,blurWeight,padding=blurWeight.size(-1)//2,groups=blurWeight.size(0))
 
             if args.att_metrics_post_hoc:
                 if args.att_metrics_post_hoc.find("var") == -1 and args.att_metrics_post_hoc.find("smooth") == -1:
                     argList = [data,targ]
                 else:
                     argList = [data]
+                    kwargs["target"] = targ
 
                 attMaps = attrFunc(*argList,**kwargs)
             else:
                 attMaps = attrFunc(i)
-
-                #attMaps = torch.sqrt(torch.pow(resDic["features"],2).sum(dim=1,keepdim=True))
-                #attMaps = (    if i % 500 == 0:    if i % 500 == 0:-attMaps.min())/(attMaps.max()-attMaps.min())
-
-                #if not args.bil_cluster:
-                #    attMaps *= resDic["attMaps"].mean(dim=1,keepdim=True)
-                #else:
-                #    if args.att_metrics_max_brnpa:
-                #        attMaps *= resDic["attMaps"].max(dim=1,keepdim=True)[1]
-                #    elif args.att_metrics_onlyfirst_brnpa:
-                #        attMaps *= resDic["attMaps"][:,0:1]
-                #    else:
-                #        attMaps *= resDic["attMaps"].mean(dim=1,keepdim=True)
-                #attMaps = (attMaps-attMaps.min())/(attMaps.max()-attMaps.min())
 
                 mask = torch.ones_like(attMaps)
 
@@ -1553,7 +1504,9 @@ def main(argv=None):
             totalPxlNb = attMaps.size(2)*attMaps.size(3)
             leftPxlNb = totalPxlNb
 
-            if args.att_metrics_few_steps:
+            if args.prototree or args.protonet:
+                stepNb = 49
+            elif args.att_metrics_few_steps:
                 stepNb = 196 
             else:
                 stepNb = totalPxlNb
@@ -1577,201 +1530,36 @@ def main(argv=None):
                 ratio = data.size(-1)//attMaps.size(-1)
 
                 for i in range(len(x_max)):
-                    data[0,:,y_max[i]*ratio:y_max[i]*ratio+ratio,x_max[i]*ratio:x_max[i]*ratio+ratio] = 0
+                    
+                    if args.attention_metrics_add:
+                        data[0,:,y_max[i]*ratio:y_max[i]*ratio+ratio,x_max[i]*ratio:x_max[i]*ratio+ratio] = origData[0,:,y_max[i]*ratio:y_max[i]*ratio+ratio,x_max[i]*ratio:x_max[i]*ratio+ratio]
+                    else:
+                        data[0,:,y_max[i]*ratio:y_max[i]*ratio+ratio,x_max[i]*ratio:x_max[i]*ratio+ratio] = 0
 
                     attMaps[0,:,y_max[i],x_max[i]] = -1                       
 
                 leftPxlNb -= totalPxlNb//stepNb
-
                 if stepCount % 30 == 0:
                     allAttMaps = torch.cat((allAttMaps,torch.clamp(attMaps,0,attMaps.max().item()).cpu()),dim=0)
                     allData = torch.cat((allData,data.cpu()),dim=0)
                 stepCount += 1
 
-                resDic = net(data)
-
-                score = torch.softmax(resDic["pred"],dim=-1)[:,predClassInd[0]]
+                if not args.prototree:
+                    resDic = net(data)
+                    score = torch.softmax(resDic["pred"],dim=-1)[:,predClassInd[0]]
+                else:
+                    score = net(data)[0][:,predClassInd[0]]
 
                 score_prop_list.append((leftPxlNb,score.item()))
 
-            allPreds.append(score_prop_list)
-            #allStatsList.append(statsList)
-
-            #allAttMaps = (allAttMaps - allAttMaps.min())/(allAttMaps.max() - allAttMaps.min())
-            #torchvision.utils.save_image(allAttMaps,"../vis/{}/attMetrAttMapDel_{}_{}.png".format(args.exp_id,args.model_id,imgInd))
-            #torchvision.utils.save_image(allData,"../vis/{}/attMetrInpDel_{}_{}.png".format(args.exp_id,args.model_id,imgInd))
+            allScoreList.append(score_prop_list)
 
         if args.att_metrics_post_hoc:
             args.model_id = args.model_id + "-"+args.att_metrics_post_hoc
-        #elif args.att_metrics_max_brnpa:
-        #    print("MAX")
-        #    args.model_id = args.model_id + "-max"
-        #elif args.att_metrics_onlyfirst_brnpa:
-        #    print("ONLYFIRST")
-        #    args.model_id = args.model_id + "-onlyfirst"
-
-        #if args.att_metrics_few_steps:
-        #    args.model_id = args.model_id + "-fewsteps"
         
-        np.save("../results/{}/attMetrPreds_{}.npy".format(args.exp_id,args.model_id),np.array(allPreds))
-        np.save("../results/{}/attMetrTarg_{}.npy".format(args.exp_id,args.model_id),np.array(allTarg))
-        #sys.exit(0)
-        #np.save("../results/{}/attMetrStatsDel_{}.npy".format(args.exp_id,args.model_id),np.array(allStatsList,dtype=object))
-        #np.save("../results/{}/attMetrDel_{}.npy".format(args.exp_id,args.model_id),np.array(allScoreList,dtype=object))
-        #np.save("../results/{}/attMetrIndsDel_{}.npy".format(args.exp_id,args.model_id),inds)
-
-    elif args.attention_metrics_add:
-
-        args.val_batch_size = 1
-        testLoader,testDataset = load_data.buildTestLoader(args, "test",withSeg=args.with_seg)
-
-        bestPath = glob.glob("../models/{}/model{}_best_epoch*".format(args.exp_id, args.model_id))[0]
-        bestEpoch = int(os.path.basename(bestPath).split("epoch")[1])
-
-        net = modelBuilder.netBuilder(args,gpu=0)
-        net = preprocessAndLoadParams(bestPath,args.cuda,net,args.strict_init)
-
-        if not args.resnet_bilinear:
-            net = modelBuilder.GradCamMod(net)
-
-            if not args.att_metrics_guided:
-                model_dict = dict(type=args.first_mod, arch=net, layer_name='layer4', input_size=(448, 448))
-                
-                if args.att_metrics_gradcam_pp:
-                    grad_cam = GradCAMpp(model_dict,True)
-                else:
-                    grad_cam = GradCAM(model_dict, True)
-            else:
-                guided_backprop_mod = guided_backprop.GuidedBackprop(net)
-       
-        else:
-            torch.set_grad_enabled(False)
-
-        nbImgs = args.attention_metrics_add
-
-        allScoreList = []
-
-        torch.manual_seed(0)
-        inds = torch.randint(len(testDataset),size=(nbImgs,))
-
-        blurWeight = torch.ones(121,121)
-        blurWeight = blurWeight/blurWeight.numel()
-        blurWeight = blurWeight.unsqueeze(0).unsqueeze(0).expand(3,1,-1,-1)
-        blurWeight = blurWeight.cuda() if args.cuda else blurWeight
-
-        for imgInd,i in enumerate(inds):
-            print(i)
-
-            if imgInd in [2,15,19,26,35,36,55,60,66,73,79,90,91,93]:
-
-                batch = testDataset.__getitem__(i)
-                data,targ = batch[0].unsqueeze(0),torch.tensor(batch[1]).unsqueeze(0)
-
-                data = data.cuda() if args.cuda else data
-                targ = targ.cuda() if args.cuda else targ
-
-                allData = data.clone()
-                origData = data.clone()
-    
-                if not args.resnet_bilinear:
-                    resDic = net.net(data)
-                else:
-                    resDic = net(data)
-
-                data = F.conv2d(data,blurWeight,padding=blurWeight.size(-1)//2,groups=blurWeight.size(0))
-
-                scores = torch.softmax(resDic["pred"],dim=-1)
-                predClassInd = scores.argmax(dim=-1)
-
-                if not args.resnet_bilinear:
-                    if args.att_metrics_guided:
-                        attMaps = guided_backprop_mod.generate_gradients(data,targ).detach().cpu()
-                    else:
-                        attMaps = grad_cam(data,upsample=False)
-                else:
-                    attMaps = torch.sqrt(torch.pow(resDic["features"],2).sum(dim=1,keepdim=True))
-                    attMaps = (attMaps-attMaps.min())/(attMaps.max()-attMaps.min())
-
-                    if not args.bil_cluster:
-                        attMaps *= resDic["attMaps"].mean(dim=1,keepdim=True)
-                    else:
-                        if args.att_metrics_max_brnpa:
-                            attMaps *= resDic["attMaps"].max(dim=1,keepdim=True)[1]
-                        elif args.att_metrics_onlyfirst_brnpa:
-                            attMaps *= resDic["attMaps"][:,0:1]
-                        else:
-                            attMaps *= resDic["attMaps"].mean(dim=1,keepdim=True)
-
-                    attMaps = (attMaps-attMaps.min())/(attMaps.max()-attMaps.min())
-
-                    #attMaps *= resDic["attMaps"].mean(dim=1,keepdim=True)
-                    #attMaps = resDic["attMaps"][:,0:1]
-                    #attMaps = resDic["attMaps"]
-                    #attMaps = torch.nn.functional.adaptive_avg_pool2d(attMaps,output_size=(7,7))
-
-                    mask = torch.ones_like(attMaps)
-
-                allAttMaps = attMaps.clone()
-
-                totalPxlNb = attMaps.size(2)*attMaps.size(3)
-                leftPxlNb = totalPxlNb
-
-                if args.att_metrics_few_steps:
-                    stepNb = 196 
-                else:
-                    stepNb = totalPxlNb
-
-                score_prop_list = []
-
-                stepCount = 0
-                while leftPxlNb > 0:
-
-                    _,ind_max = attMaps[0,0].view(-1).topk(k=totalPxlNb//stepNb)
-                    ind_max = ind_max[:leftPxlNb]
-
-                    x_max,y_max = ind_max % attMaps.shape[3],ind_max // attMaps.shape[3]
-                    
-                    ratio = data.size(-1)//attMaps.size(-1)
-
-                    for i in range(len(x_max)):
-                        data[0,:,y_max[i]*ratio:y_max[i]*ratio+ratio,x_max[i]*ratio:x_max[i]*ratio+ratio] = origData[0,:,y_max[i]*ratio:y_max[i]*ratio+ratio,x_max[i]*ratio:x_max[i]*ratio+ratio]
-                        attMaps[0,:,y_max[i],x_max[i]] = -1   
-                    
-                    leftPxlNb -= totalPxlNb//stepNb
-
-                    if stepCount % 30 == 0:
-                        allAttMaps = torch.cat((allAttMaps,torch.clamp(attMaps,0,attMaps.max())),dim=0)
-                        allData = torch.cat((allData,data),dim=0)
-
-                    if not args.resnet_bilinear:
-                        resDic = net.net(data)
-                    else:
-                        resDic = net(data)
-
-                    score = torch.softmax(resDic["pred"],dim=-1)[:,predClassInd[0]]
-
-                    score_prop_list.append((leftPxlNb,score.item()))
-
-                    stepCount += 1 
-
-                allScoreList.append(score_prop_list)
-
-                torchvision.utils.save_image(allAttMaps,"../vis/{}/attMetrAttMapAdd_{}_{}.png".format(args.exp_id,args.model_id,imgInd))
-                torchvision.utils.save_image(allData,"../vis/{}/attMetrInpAdd_{}_{}.png".format(args.exp_id,args.model_id,imgInd))
-
-        if args.att_metrics_gradcam_pp:
-            args.model_id = args.model_id + "-gradcampp"
-        elif args.att_metrics_max_brnpa:
-            args.model_id = args.model_id + "-max"
-        elif args.att_metrics_onlyfirst_brnpa:
-            args.model_id = args.model_id + "-onlyfirst"
-            
-        if args.att_metrics_few_steps:
-            args.model_id = args.model_id + "-fewsteps"
-
-        np.save("../results/{}/attMetrAdd_{}.npy".format(args.exp_id,args.model_id),allScoreList)
-        np.save("../results/{}/attMetrIndsAdd_{}.npy".format(args.exp_id,args.model_id),inds)
-
+        suff = "Del" if args.attention_metrics else "Add"
+        np.save("../results/{}/attMetr{}_{}.npy".format(args.exp_id,suff,args.model_id),np.array(allScoreList,dtype=object))
+        np.save("../results/{}/attMetrPreds{}_{}.npy".format(args.exp_id,suff,args.model_id),np.array(allPreds,dtype=object))
     else:
         train(0,args,None)
 
@@ -1813,7 +1601,7 @@ def getAttMetrMod(net,testDataset,args):
         if args.cuda:
             data_base = data_base.cuda()
         kwargs = {"nt_type":'smoothgrad_sq' if args.att_metrics_post_hoc == "smoothGrad" else "vargrad", \
-                        "stdevs":0.02, "nt_samples":1,"nt_samples_batch_size":1}
+                        "stdevs":0.02, "nt_samples":3,"nt_samples_batch_size":3}
     elif args.att_metrics_post_hoc == "rise":
         torch.set_grad_enabled(False)
         attrMod = RISE(net)
@@ -1831,7 +1619,7 @@ def loadAttMaps(exp_id,model_id):
         raise ValueError("Wrong path number for",exp_id,model_id)
 
     attMaps,norm = np.load(paths[0],mmap_mode="r"),np.load(paths[0].replace("attMaps","norm"),mmap_mode="r")
-    
+
     return torch.tensor(attMaps),torch.tensor(norm)
 
 def getBestTrial(curr,optuna_trial_nb):
