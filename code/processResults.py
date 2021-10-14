@@ -1,4 +1,5 @@
 
+from scipy.ndimage.interpolation import rotate
 from args import ArgReader
 from args import str2bool
 import os
@@ -1611,17 +1612,21 @@ def cat(all,new):
         all = torch.cat((all,new),dim=0)
     return all
 
-def attMetrics(exp_id):
+def attMetrics(exp_id,add=False):
 
-    delPaths = sorted(glob.glob("../results/{}/attMetrDel_*.npy".format(exp_id)))
+    suff = "Add" if add else "Del"
+
+    delPaths = sorted(glob.glob("../results/{}/attMetr{}_*.npy".format(exp_id,suff)))
 
     resDic = {}
+    resDic_pop = {}
 
     indsToUse,modelToIgn = getIndsToUse(delPaths)
 
+    all_auc_pop = []
     for path in delPaths:
 
-        model_id = os.path.basename(path).split("attMetrDel_")[1].split(".npy")[0]
+        model_id = os.path.basename(path).split("attMetr{}_".format(suff))[1].split(".npy")[0]
         
         if model_id not in modelToIgn:
             delPairs = np.load(path,allow_pickle=True)
@@ -1629,29 +1634,123 @@ def attMetrics(exp_id):
             allAuC = []
 
             for i in range(len(delPairs)):
-                if i in indsToUse:
-                #if i in indsToUseDic[model_id]:
 
-                    delPairs_i = np.array(delPairs[i])
+                delPairs_i = np.array(delPairs[i])
 
+                if add:
+                    delPairs_i[:,0] = 1-delPairs_i[:,0]/delPairs_i[:,0].max()
+                else:
                     delPairs_i[:,0] = (delPairs_i[:,0]-delPairs_i[:,0].min())/(delPairs_i[:,0].max()-delPairs_i[:,0].min())
                     delPairs_i[:,0] = 1-delPairs_i[:,0]
 
-                    plt.figure()
-                    plt.plot(delPairs_i[:,0],delPairs_i[:,1])
-                    plt.savefig("../vis/{}/attMetrDel_{}_{}.png".format(exp_id,model_id,i))
-                    plt.close()
+                auc = np.trapz(delPairs_i[:,1],delPairs_i[:,0])
+                allAuC.append(auc)
+        
+            resDic_pop[model_id] = np.array(allAuC)
+            resDic[model_id] = resDic_pop[model_id].mean()
 
-                    auc = np.trapz(delPairs_i[:,1],delPairs_i[:,0])
-                    allAuC.append(auc)
-            
-            resDic[model_id] = np.array(allAuC).mean()
-
-    print(resDic)
+    suff = suff.lower()
 
     csv = "\n".join(["{},{}".format(key,resDic[key]) for key in resDic])
-    with open("../results/{}/attMetrics_del.csv".format(exp_id),"w") as file:
+    with open("../results/{}/attMetrics_{}.csv".format(exp_id,suff),"w") as file:
         print(csv,file=file)
+
+    csv = "\n".join(["{},{}".format(key,",".join(resDic_pop[key].astype("str"))) for key in resDic_pop])
+    with open("../results/{}/attMetrics_{}_pop.csv".format(exp_id,suff),"w") as file:
+        print(csv,file=file)
+
+def getIndsToUse(paths):
+    
+    modelToIgn = []
+    targs = np.load(paths[0].replace("Add","Targ").replace("Del","Targ"))
+    indsToUseBool = np.array([True for _ in range(len(targs))])
+    indsToUseDic = {}
+    for path in paths:
+        
+        if os.path.basename(path).find("Add") != -1:
+            model_id = os.path.basename(path).split("attMetrAdd_")[1].split(".npy")[0]
+        else:
+            model_id = os.path.basename(path).split("attMetrDel_")[1].split(".npy")[0]
+        
+        model_id_nosuff = model_id.replace("-max","").replace("-onlyfirst","").replace("-fewsteps","")
+
+        predPath = path.replace("Add","Preds").replace("Del","Preds").replace(model_id,model_id_nosuff)
+        if os.path.exists(predPath):
+            preds = np.load(predPath,allow_pickle=True)
+
+            if preds.shape != targs.shape:
+                inds = []
+                for i in range(len(preds)):
+                    if i % 2 == 0:
+                        inds.append(i)
+
+                preds = preds[inds]
+            
+            indsToUseDic[model_id] = np.argwhere(preds==targs)
+            indsToUseBool = indsToUseBool*(preds==targs)
+  
+        else:
+            modelToIgn.append(model_id)
+            print("no predpath",predPath)
+
+    indsToUse =  np.argwhere(indsToUseBool)
+    return indsToUse,modelToIgn 
+
+def getId_to_label():
+    return {"bilRed":"B-CNN",
+            "bilRed_1map":"B-CNN (1 map)",
+            "clus_masterClusRed":"BR-NPA",
+            "noneRed":"AM",
+            "protopnet":"ProtoPNet",
+            "prototree":"ProtoTree",
+            "noneRed-gradcam":"Grad-CAM",
+            "noneRed-rise":"RISE",
+            "noneRed_smallimg-varGrad":"VarGrad",
+            "noneRed_smallimg-smoothGrad":"SmoothGrad",
+            "noneRed_smallimg-guided":"GuidedBP",
+            "interbyparts":"InterByParts"}
+
+def ttest_attMetr(exp_id,add=False):
+
+    id_to_label = getId_to_label()
+
+    suff = "add" if add else "del"
+
+    arr = np.genfromtxt("../results/{}/attMetrics_{}_pop.csv".format(exp_id,suff),dtype=str,delimiter=",")
+
+    arr = best_to_worst(arr)
+
+    model_ids = arr[:,0]
+
+    labels = [id_to_label[model_id] for model_id in model_ids]
+
+    res_mat = arr[:,1:].astype("float")
+
+    rnd_nb = 2 if add else 3
+
+    perfs = [(str(round(mean,rnd_nb)),str(round(std,rnd_nb))) for (mean,std) in zip(res_mat.mean(axis=1),res_mat.std(axis=1))]
+
+    labels_perfs = [label+" "+perf[0]+" +/- "+perf[1] for (label,perf) in zip(labels,perfs)]
+
+    p_val_mat = np.zeros((len(res_mat),len(res_mat)))
+    for i in range(len(res_mat)):
+        for j in range(len(res_mat)):
+            p_val_mat[i,j] = scipy.stats.ttest_ind(res_mat[i],res_mat[j],equal_var=False)[1]
+
+    p_val_mat = (p_val_mat>0.05)
+
+    plt.figure()
+    plt.imshow(p_val_mat,cmap="Greys")
+    plt.yticks(np.arange(len(res_mat)),labels_perfs)
+    plt.xticks(np.arange(len(res_mat)),labels,rotation=45,ha="right")
+    plt.tight_layout()
+    plt.savefig("../vis/{}/ttest_{}_attmetr.png".format(exp_id,suff))
+
+def best_to_worst(arr):
+
+    arr = np.array(sorted(arr,key=lambda x:x[1:].astype("float").mean()))
+
+    return arr
 
 def attMetricsStats(exp_id):
 
@@ -1673,72 +1772,57 @@ def attMetricsStats(exp_id):
             plt.savefig("../vis/{}/attMetrStatsDel_{}_{}.png".format(exp_id,model_id,i))
             plt.close()                 
 
-def attMetricsAdd(exp_id):
+def latex_table(exp_id):
 
-    addPaths = sorted(glob.glob("../results/{}/attMetrAdd_*.npy".format(exp_id)))
+    del_arr = np.genfromtxt("../results/{}/attMetrics_del_pop.csv".format(exp_id),dtype=str,delimiter=",")
+    add_arr = np.genfromtxt("../results/{}/attMetrics_add_pop.csv".format(exp_id),dtype=str,delimiter=",")
 
-    resDic = {}
+    del_arr_f = del_arr[:,1:].astype("float")
+    add_arr_f = add_arr[:,1:].astype("float")
 
-    indsToUse,modelToIgn = getIndsToUse(addPaths)
+    id_to_label = getId_to_label()
 
-    print(indsToUse)
+    #res_dic = {}
+    res_list = []
 
-    for path in addPaths:
+    del_min = del_arr_f.mean(axis=1).min()
+    add_max = add_arr_f.mean(axis=1).max()
 
-        model_id = os.path.basename(path).split("attMetrAdd_")[1].split(".npy")[0]
-        
-        if model_id not in modelToIgn:
-            delPairs = np.load(path)
+    for i in range(len(del_arr)):
+        #res_dic[id_to_label[del_arr[i,0]]] = {"add":,"del":}
+        id = id_to_label[del_arr[i,0]]
+        mean = del_arr_f[i].mean()
+        dele,dele_std = round(mean,3),round(del_arr_f[i].std(),3)
+        is_min = (mean==del_min)
 
-            allAuC = []
+        add_ind = np.argwhere(add_arr[:,0] == del_arr[i,0])[0,0]
 
-            for i in range(len(delPairs)):
+        mean = add_arr_f[add_ind].mean()
+        add,add_std = round(mean,2),round(add_arr_f[add_ind].std(),2)
+        is_max = (mean==add_max)
 
-                if i in indsToUse or len(delPairs) == len(indsToUse):
-                    delPairs[i,:,0] = 1-delPairs[i,:,0]/delPairs[i,:,0].max()
+        res_list.append((id,dele,dele_std,add,add_std,is_min,is_max))
 
-                    plt.figure()
-                    plt.plot(delPairs[i,:,0],delPairs[i,:,1])
-                    plt.savefig("../vis/{}/attMetrAdd_{}_{}.png".format(exp_id,model_id,i))
-                    plt.close()
+    res_list = sorted(res_list,key=lambda x:-x[1])
 
-                    auc = np.trapz(delPairs[i,:,1],delPairs[i,:,0])
-                    allAuC.append(auc)
+    csv = ""
+
+    for i in range(len(res_list)):
+        row = [str(elem) for elem in res_list[i]]
+
+        if row[-2] == "True":
+            csv += row[0]+" & $ \mathbf{"+row[1]+ "\pm" +row[2]+" }$ &"
+        else:
+            csv += "{} & $ {} \pm {} $ &".format(row[0],row[1],row[2])
+
+        if row[-1] == "True":
+            csv += "$\mathbf{"+row[3]+" \pm"+row[4]+" }$ \\\\ \n"
+        else:
+            csv += "$ {} \pm {} $ \\\\ \n".format(row[3],row[4])
             
-            resDic[model_id] = np.array(allAuC).mean()
 
-    print(resDic)
-
-    csv = "\n".join(["{},{}".format(key,resDic[key]) for key in resDic])
-    with open("../results/{}/attMetrics_add.csv".format(exp_id),"w") as file:
-        print(csv,file=file)
-
-def getIndsToUse(paths):
-    
-    modelToIgn = []
-    targs = np.load(paths[0].replace("Add","Targ").replace("Del","Targ"))
-    indsToUseBool = np.array([True for _ in range(len(targs))])
-    indsToUseDic = {}
-    for path in paths:
-        
-        if os.path.basename(path).find("Add") != -1:
-            model_id = os.path.basename(path).split("attMetrAdd_")[1].split(".npy")[0]
-        else:
-            model_id = os.path.basename(path).split("attMetrDel_")[1].split(".npy")[0]
-        
-        model_id_nosuff = model_id.replace("-max","").replace("-onlyfirst","").replace("-fewsteps","")
-
-        predPath = path.replace("Add","Preds").replace("Del","Preds").replace(model_id,model_id_nosuff)
-        if os.path.exists(predPath):
-            preds = np.load(predPath)
-            indsToUseDic[model_id] = np.argwhere(preds==targs)
-            indsToUseBool = indsToUseBool*(preds==targs)
-        else:
-            modelToIgn.append(model_id)
-            print(predPath)
-
-    indsToUse =  np.argwhere(indsToUseBool)
-    return indsToUse,modelToIgn 
+    with open("../results/{}/attMetr_latex_table.csv".format(exp_id),"w") as text:
+        print(csv,file=text)
 
 def main(argv=None):
 
@@ -2012,12 +2096,17 @@ def main(argv=None):
         gradExp_test()
     if args.grad_exp2:
         gradExp2()
-    if args.att_metrics:
-        attMetrics(args.exp_id)
+    if args.att_metrics or args.att_metrics_add:
+        suff = "add" if args.att_metrics_add else "del"
+
+        if not os.path.exists("../results/{}/attMetrics_{}.csv".format(args.exp_id,suff)):
+            attMetrics(args.exp_id,add=args.att_metrics_add)
+        ttest_attMetr(args.exp_id,add=args.att_metrics_add)
+
+        latex_table(args.exp_id)
+
     if args.att_metrics_stats:
         attMetricsStats(args.exp_id)
-    if args.att_metrics_add:
-        attMetricsAdd(args.exp_id)
 
 if __name__ == "__main__":
     main()
