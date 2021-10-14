@@ -44,10 +44,15 @@ def binaryToMetrics(output,target,segmentation,resDict,comp_spars=False):
     if "attMaps" in resDict.keys() and comp_spars:
         segmentation = segmentation.clone()
 
-        spar,spar_n,ios = compAttMapSparsity(resDict["attMaps"].clone(),resDict["features"].clone(),segmentation)
-        metDict["Sparsity"],metDict["Sparsity Normalised"] = spar,spar_n
-        metDict["IoS"] = ios
+        spar = compAttMapSparsity(resDict["attMaps"].clone(),resDict["features"].clone(),segmentation)
+        metDict["Sparsity"] = spar
 
+        if not segmentation is None:
+            spar_n = comptAttMapSparN(spar,segmentation,resDict["attMaps"])
+            ios = compIoS(resDict["attMaps"],segmentation)
+            metDict["IoS"] = ios
+            metDict["Sparsity Normalised"] = spar_n
+        
     return metDict
 
 def compAccuracy(output,target):
@@ -71,11 +76,13 @@ def compAttMapSparsity(attMaps,features=None,segmentation=None):
 
     sparsity = attMaps.mean(dim=(2,3))
 
+    return sparsity.sum().item()
+
+def comptAttMapSparN(sparsity,segmentation,attMaps):
+
     factor = segmentation.size(-1)/attMaps.size(-1)
     sparsity_norm = sparsity/((segmentation>0.5).sum(dim=(2,3)).sum(dim=1,keepdim=True)/factor).float()
-    ios = compIoS(attMaps,segmentation)
-
-    return sparsity.sum().item(),sparsity_norm.sum().item(),ios.sum().item()
+    return sparsity_norm.sum().item()
 
 def compIoS(attMapNorm,segmentation):
 
@@ -95,4 +102,4 @@ def compIoS(attMapNorm,segmentation):
         allIos.append(ios.unsqueeze(0))
 
     finalIos = torch.cat(allIos,dim=0).mean(dim=0)
-    return finalIos
+    return finalIos.sum().item()
