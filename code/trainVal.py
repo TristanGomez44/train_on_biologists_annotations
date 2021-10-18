@@ -24,11 +24,9 @@ import load_data
 import metrics
 import utils
 import update
-from gradcam import GradCAM, GradCAMpp
+from gradcam import GradCAMpp
 from score_map import ScoreCam
 from rise import RISE
-import guided_backprop
-
 
 import time
 
