@@ -11,6 +11,7 @@ import numpy as np
 from skimage.transform import resize
 from skimage import img_as_ubyte
 import matplotlib.pyplot as plt
+from matplotlib import cm 
 plt.switch_backend('agg')
 
 from sklearn.manifold import TSNE
@@ -1718,7 +1719,7 @@ def ttest_attMetr(exp_id,add=False):
 
     arr = np.genfromtxt("../results/{}/attMetrics_{}_pop.csv".format(exp_id,suff),dtype=str,delimiter=",")
 
-    arr = best_to_worst(arr)
+    arr = best_to_worst(arr,dele=not add)
 
     model_ids = arr[:,0]
 
@@ -1737,18 +1738,53 @@ def ttest_attMetr(exp_id,add=False):
         for j in range(len(res_mat)):
             p_val_mat[i,j] = scipy.stats.ttest_ind(res_mat[i],res_mat[j],equal_var=False)[1]
 
-    p_val_mat = (p_val_mat>0.05)
+    p_val_mat = (p_val_mat<0.05)
 
-    plt.figure()
-    plt.imshow(p_val_mat,cmap="Greys")
-    plt.yticks(np.arange(len(res_mat)),labels_perfs)
-    plt.xticks(np.arange(len(res_mat)),labels,rotation=45,ha="right")
+    res_mat_mean = res_mat.mean(axis=1)
+
+    diff_mat = np.abs(res_mat_mean[np.newaxis]-res_mat_mean[:,np.newaxis])
+    
+    diff_mat_norm = (diff_mat-diff_mat.min())/(diff_mat.max()-diff_mat.min())
+
+    cmap = plt.get_cmap('plasma')
+
+    fig = plt.figure()
+
+
+
+    ax = fig.gca()
+
+    ax.spines['top'].set_visible(False)
+    ax.spines['right'].set_visible(False)
+    ax.spines['bottom'].set_visible(False)
+    ax.spines['left'].set_visible(False)
+    ax.get_xaxis().set_ticks([])
+    ax.get_yaxis().set_ticks([])
+
+    plt.imshow(p_val_mat*0,cmap="Greys")
+    for i in range(len(res_mat)):
+        for j in range(len(res_mat)):
+            if i <= j:
+                rad = 0.3 if p_val_mat[i,j] else 0.1
+                circle = plt.Circle((i, j), rad, color=cmap(diff_mat_norm[i,j]))
+                ax.add_patch(circle)
+
+    plt.yticks(np.arange(len(res_mat)),labels)
+    plt.xticks(np.arange(len(res_mat)),["" for _ in range(len(res_mat))])
+    plt.colorbar(cm.ScalarMappable(norm=matplotlib.colors.Normalize(diff_mat.min(),diff_mat.max()),cmap=cmap))
+    for i in range(len(res_mat)):
+        plt.text(i-0.2,i-0.4,labels[i],rotation=45,ha="left")
     plt.tight_layout()
     plt.savefig("../vis/{}/ttest_{}_attmetr.png".format(exp_id,suff))
 
-def best_to_worst(arr):
+def best_to_worst(arr,dele=False):
 
-    arr = np.array(sorted(arr,key=lambda x:x[1:].astype("float").mean()))
+    if dele:
+        key = lambda x:-x[1:].astype("float").mean()
+    else:
+        key = lambda x:x[1:].astype("float").mean()
+
+    arr = np.array(sorted(arr,key=key))
 
     return arr
 
