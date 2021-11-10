@@ -151,7 +151,7 @@ def buildTestLoader(args, mode,shuffle=False,withSeg=False,reprVec=False,gpu=Non
         sampler = torch.utils.data.distributed.DistributedSampler(test_dataset,num_replicas=args.world_size,rank=gpu,shuffle=False)
 
     testLoader = torch.utils.data.DataLoader(dataset=test_dataset, batch_size=args.val_batch_size,
-                                             num_workers=args.num_workers,sampler=sampler,pin_memory=True,drop_last=args.drop_last)
+                                             num_workers=args.num_workers,sampler=sampler,pin_memory=True)
 
     return testLoader,test_dataset
 
