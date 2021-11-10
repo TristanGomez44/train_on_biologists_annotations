@@ -122,7 +122,7 @@ python3 processResults.py -c model_cars10.config --exp_id CARS10 --plot_points_i
 ##################### Vis compt with RISE #################################
 
 python3 processResults.py -c model_cub10.config --exp_id CUB10 --plot_points_image_dataset_grid --image_nb 100 \
-						--model_ids noneRed noneRed noneRed noneRed noneRed noneRed noneRed noneRed bilRed interbyparts protopnet modelprototree clus_masterClusRed \
+		--model_ids noneRed noneRed noneRed noneRed noneRed noneRed noneRed_smallimg noneRed_smallimg bilRed interbyparts protopnet modelprototree clus_masterClusRed \
 						--plot_id comp_rise  \
 						--ind_to_keep 47 29 84 --nrows 1 \
 						--only_norm      False False True  False False False	False False False False False False False \
@@ -137,7 +137,7 @@ python3 processResults.py -c model_cub10.config --exp_id CUB10 --plot_points_ima
 						--direct_ind     True  True  False True  True 	True	True  True  False False False False False
 
 python3 processResults.py -c model_air10.config --exp_id AIR10 --plot_points_image_dataset_grid --image_nb 200 \
-						--model_ids noneRed noneRed noneRed noneRed noneRed noneRed noneRed noneRed bilRed interbyparts protopnet modelprototree clus_mast \
+						--model_ids noneRed noneRed noneRed noneRed noneRed noneRed noneRed_smallimg noneRed_smallimg bilRed interbyparts protopnet modelprototree clus_mast \
 						--plot_id comp_rise_air  \
 						--ind_to_keep 61 78 126 --nrows 1 \
 						--only_norm      False False True  False False False	False False False False False False False \
@@ -152,7 +152,7 @@ python3 processResults.py -c model_air10.config --exp_id AIR10 --plot_points_ima
 						--direct_ind     True  True  False True  True 	True	True  True  False False False False False
 
 python3 processResults.py -c model_cars10.config --exp_id CARS10 --plot_points_image_dataset_grid --image_nb 200 \
-						--model_ids noneRed noneRed noneRed noneRed noneRed noneRed noneRed noneRed bilRed interbyparts protopnet modelprototree clus_mast \
+						--model_ids noneRed noneRed noneRed noneRed noneRed noneRed noneRed_smallimg noneRed_smallimg bilRed interbyparts protopnet modelprototree clus_mast \
 						--plot_id comp_rise_cars  \
 						--ind_to_keep 135 39 84 --nrows 1 \
 						--only_norm      False False True  False False False	False False False False False False False \
