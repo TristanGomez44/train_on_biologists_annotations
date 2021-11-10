@@ -1073,6 +1073,8 @@ def main(argv=None):
     argreader.parser.add_argument('--score_map', type=str2bool, help='To compute score_map instead or gradcam')
     argreader.parser.add_argument('--noise_tunnel', type=str2bool, help='To compute the methods based on noise tunnel instead or gradcam')
 
+    argreader.parser.add_argument('--viz_id', type=str, help='The visualization id.',default="")
+
     argreader.parser.add_argument('--attention_metrics', type=int, help='To compute the DAUC metric')
     argreader.parser.add_argument('--attention_metrics_add', type=int, help='To compute the IAUC metrics')
     argreader.parser.add_argument('--att_metrics_post_hoc', type=str, help='The post-hoc method to use instead of the model ')
@@ -1396,17 +1398,18 @@ def main(argv=None):
                 else:
                     allRise = torch.cat((allRise,rise_map),dim=0)
 
+        suff = "" if args.viz_id == "" else "{}_".format(args.viz_id)
         if not args.rise and not args.score_map and not args.noise_tunnel:
-            np.save("../results/{}/gradcam_{}_epoch{}_test.npy".format(args.exp_id,args.model_id,bestEpoch),allMask.numpy())
-            np.save("../results/{}/gradcam_pp_{}_epoch{}_test.npy".format(args.exp_id,args.model_id,bestEpoch),allMask_pp.numpy())
-            np.save("../results/{}/gradcam_maps_{}_epoch{}_test.npy".format(args.exp_id,args.model_id,bestEpoch),allMaps.numpy())
+            np.save("../results/{}/gradcam_{}_epoch{}_{}test.npy".format(args.exp_id,args.model_id,bestEpoch,suff),allMask.numpy())
+            np.save("../results/{}/gradcam_pp_{}_epoch{}_{}test.npy".format(args.exp_id,args.model_id,bestEpoch,suff),allMask_pp.numpy())
+            np.save("../results/{}/gradcam_maps_{}_epoch{}_{}test.npy".format(args.exp_id,args.model_id,bestEpoch,suff),allMaps.numpy())
         elif args.score_map:
-            np.save("../results/{}/score_maps_{}_epoch{}_test.npy".format(args.exp_id,args.model_id,bestEpoch),allScore.numpy())
+            np.save("../results/{}/score_maps_{}_epoch{}_{}test.npy".format(args.exp_id,args.model_id,bestEpoch,suff),allScore.numpy())
         elif args.noise_tunnel:
-            np.save("../results/{}/smoothgrad_sq_{}_epoch{}_test.npy".format(args.exp_id,args.model_id,bestEpoch),allSq.numpy())
-            np.save("../results/{}/vargrad_{}_epoch{}_test.npy".format(args.exp_id,args.model_id,bestEpoch),allVar.numpy())
+            np.save("../results/{}/smoothgrad_sq_{}_epoch{}_{}test.npy".format(args.exp_id,args.model_id,bestEpoch,suff),allSq.numpy())
+            np.save("../results/{}/vargrad_{}_epoch{}_{}test.npy".format(args.exp_id,args.model_id,bestEpoch,suff),allVar.numpy())
         else:
-            np.save("../results/{}/rise_maps_{}_epoch{}_test.npy".format(args.exp_id,args.model_id,bestEpoch),allRise.numpy())
+            np.save("../results/{}/rise_maps_{}_epoch{}_{}test.npy".format(args.exp_id,args.model_id,bestEpoch,suff),allRise.numpy())
 
     elif args.attention_metrics or args.attention_metrics_add:
         print("Attention metrics",args.attention_metrics,args.attention_metrics_add,args.attention_metrics or args.attention_metrics_add)

@@ -141,7 +141,7 @@ def compRecField(architecture):
 def plotPointsImageDatasetGrid(exp_id,imgNb,epochs,model_ids,reduction_fact_list,inverse_xy,mode,nbClass,\
                                 useDropped_list,forceFeat,fullAttMap,threshold,maps_inds,plotId,luminosity,\
                                 receptive_field,cluster,cluster_attention,pond_by_norm,gradcam,gradcam_maps,gradcam_pp,score_map,varGrad,smoothGradSq,rise,nrows,correctness,\
-                                agregateMultiAtt,plotVecEmb,onlyNorm,class_index,ind_to_keep,interp,direct_ind,no_ref,args):
+                                agregateMultiAtt,plotVecEmb,onlyNorm,class_index,ind_to_keep,interp,direct_ind,no_ref,viz_id,args):
 
     if (correctness == "True" or correctness == "False") and len(model_ids)>1:
         raise ValueError("correctness can only be used with a single model.")
@@ -157,7 +157,6 @@ def plotPointsImageDatasetGrid(exp_id,imgNb,epochs,model_ids,reduction_fact_list
 
     if len(epochs) == 0:
         for j in range(len(model_ids)):
-            print("../models/{}/model{}_best_epoch*".format(exp_id,model_ids[j]))
             paths = glob.glob("../models/{}/model{}_best_epoch*".format(exp_id,model_ids[j]))
             if len(paths) > 1:
                 raise ValueError("There should only be one best weight file.",model_ids[j],"has several.")
@@ -174,37 +173,34 @@ def plotPointsImageDatasetGrid(exp_id,imgNb,epochs,model_ids,reduction_fact_list
                 epochs.append(utils.findLastNumbers(fileName))
 
     pointPaths,pointWeightPaths = [],[]
+    suff = "" if viz_id == "" else "{}_".format(viz_id)
     for j in range(len(model_ids)):
-        if useDropped_list[j]:
-            pointPaths.append("../results/{}/points_dropped_{}_epoch{}_{}.npy".format(exp_id,model_ids[j],epochs[j],mode))
-            pointWeightPaths.append("../results/{}/points_dropped_{}_epoch{}_{}.npy".format(exp_id,model_ids[j],epochs[j],mode))
-        elif gradcam_maps[j]:
-            pointPaths.append("../results/{}/gradcam_maps_{}_epoch{}_{}.npy".format(exp_id,model_ids[j],epochs[j],mode))
+        if gradcam_maps[j]:
+            pointPaths.append("../results/{}/gradcam_maps_{}_epoch{}_{}{}.npy".format(exp_id,model_ids[j],epochs[j],suff,mode))
             pointWeightPaths.append("")
         elif gradcam_pp[j]:
-            pointPaths.append("../results/{}/gradcam_pp_{}_epoch{}_{}.npy".format(exp_id,model_ids[j],epochs[j],mode))
+            pointPaths.append("../results/{}/gradcam_pp_{}_epoch{}_{}{}.npy".format(exp_id,model_ids[j],epochs[j],suff,mode))
             pointWeightPaths.append("")
         elif score_map[j]:
-            pointPaths.append("../results/{}/score_maps_{}_epoch{}_{}.npy".format(exp_id,model_ids[j],epochs[j],mode))
+            pointPaths.append("../results/{}/score_maps_{}_epoch{}_{}{}.npy".format(exp_id,model_ids[j],epochs[j],suff,mode))
             pointWeightPaths.append("")   
         elif varGrad[j]:
-            pointPaths.append("../results/{}/vargrad_{}_epoch{}_{}.npy".format(exp_id,model_ids[j],epochs[j],mode))
+            pointPaths.append("../results/{}/vargrad_{}_epoch{}_{}{}.npy".format(exp_id,model_ids[j],epochs[j],suff,mode))
             pointWeightPaths.append("")   
         elif smoothGradSq[j]:
-            pointPaths.append("../results/{}/smoothgrad_sq_{}_epoch{}_{}.npy".format(exp_id,model_ids[j],epochs[j],mode))
+            pointPaths.append("../results/{}/smoothgrad_sq_{}_epoch{}_{}{}.npy".format(exp_id,model_ids[j],epochs[j],suff,mode))
             pointWeightPaths.append("")              
         elif gradcam[j]:
-            pointPaths.append("../results/{}/gradcam_{}_epoch{}_{}.npy".format(exp_id,model_ids[j],epochs[j],mode))
+            pointPaths.append("../results/{}/gradcam_{}_epoch{}_{}{}.npy".format(exp_id,model_ids[j],epochs[j],suff,mode))
             pointWeightPaths.append("")
         elif rise[j]:
-            pointPaths.append("../results/{}/rise_maps_{}_epoch{}_{}.npy".format(exp_id,model_ids[j],epochs[j],mode))
+            pointPaths.append("../results/{}/rise_maps_{}_epoch{}_{}{}.npy".format(exp_id,model_ids[j],epochs[j],suff,mode))
             pointWeightPaths.append("")
         elif fullAttMap[j]:
             pointPaths.append("../results/{}/attMaps_{}_epoch{}_{}.npy".format(exp_id,model_ids[j],epochs[j],mode))
             pointWeightPaths.append("")
         else:
-            pointPaths.append("../results/{}/points_{}_epoch{}_{}.npy".format(exp_id,model_ids[j],epochs[j],mode))
-            pointWeightPaths.append("../results/{}/pointWeights_{}_epoch{}_{}.npy".format(exp_id,model_ids[j],epochs[j],mode))
+            raise ValueError("Unvalid choice")
 
     if mode == "val":
         imgLoader,testDataset = load_data.buildTestLoader(args,mode,shuffle=False)
@@ -285,6 +281,7 @@ def plotPointsImageDatasetGrid(exp_id,imgNb,epochs,model_ids,reduction_fact_list
                 inds = inds[ind_to_keep]
 
             print("inds",inds)
+
             #In case there is not enough images
             imgNb = min(len(inds),imgNb)
 
@@ -391,9 +388,16 @@ def plotPointsImageDatasetGrid(exp_id,imgNb,epochs,model_ids,reduction_fact_list
                 if gradcam[j] or rise[j]:
                     attMap = (attMap-attMap.min())/(attMap.max()-attMap.min())
 
-                    #if gradcam_maps[j]:
-                        #attMap = (attMap-attMap.min())/(attMap.max()-attMap.min())
-                        #attMap = F.max_pool2d(torch.tensor(attMap).unsqueeze(0),4).numpy()[0]
+                    if gradcam_maps[j] or varGrad[j] or smoothGradSq[j]:
+                        if attMap.shape[0] == 3:
+                            if gradcam_maps[j]:
+                                attMap = np.abs(attMap-0.5)
+                            attMap = attMap.mean(axis=0,keepdims=True)
+
+                            attMap = (attMap-attMap.min())/(attMap.max()-attMap.min())
+
+                        else:
+                            raise ValueError("AttMaps has wrong shape. Model",j,model_ids[j])
 
                 if attMap.shape[0] != 1 and not onlyNorm[j]:
                     if maps_inds[j] == -1:
@@ -1808,7 +1812,7 @@ def attMetricsStats(exp_id):
             plt.savefig("../vis/{}/attMetrStatsDel_{}_{}.png".format(exp_id,model_id,i))
             plt.close()                 
 
-def latex_table(exp_id):
+def latex_table_figure(exp_id):
 
     del_arr = np.genfromtxt("../results/{}/attMetrics_del_pop.csv".format(exp_id),dtype=str,delimiter=",")
     add_arr = np.genfromtxt("../results/{}/attMetrics_add_pop.csv".format(exp_id),dtype=str,delimiter=",")
@@ -1818,7 +1822,6 @@ def latex_table(exp_id):
 
     id_to_label = getId_to_label()
 
-    #res_dic = {}
     res_list = []
 
     del_min = del_arr_f.mean(axis=1).min()
@@ -1856,9 +1859,28 @@ def latex_table(exp_id):
         else:
             csv += "$ {} \pm {} $ \\\\ \n".format(row[3],row[4])
             
-
     with open("../results/{}/attMetr_latex_table.csv".format(exp_id),"w") as text:
         print(csv,file=text)
+
+    plt.figure()
+    plt.errorbar(np.arange(len(res_list)),[row[1] for row in res_list],[row[2] for row in res_list],color="darkblue",fmt='o')
+    plt.bar(np.arange(len(res_list)),[row[1] for row in res_list],0.9,color="lightblue",linewidth=0.5,edgecolor="darkblue")
+    plt.ylabel("DAUC")
+    plt.ylim(bottom=0)
+    plt.xticks(np.arange(len(res_list)),[row[0] for row in res_list],rotation=45,ha="right")
+    plt.tight_layout()
+    plt.savefig("../vis/{}/attMetr_dauc.png".format(exp_id))
+
+    res_list = sorted(res_list,key=lambda x:x[3])
+
+    plt.figure()
+    plt.errorbar(np.arange(len(res_list)),[row[3] for row in res_list],[row[4] for row in res_list],color="darkblue",fmt='o')
+    plt.bar(np.arange(len(res_list)),[row[3] for row in res_list],0.9,color="lightblue",linewidth=0.5,edgecolor="darkblue")
+    plt.ylabel("IAUC")    
+    plt.ylim(bottom=0)
+    plt.xticks(np.arange(len(res_list)),[row[0] for row in res_list],rotation=45,ha="right")
+    plt.tight_layout()
+    plt.savefig("../vis/{}/attMetr_iauc.png".format(exp_id))
 
 def main(argv=None):
 
@@ -1929,6 +1951,8 @@ def main(argv=None):
     argreader.parser.add_argument('--interp',type=str2bool,nargs="*",metavar="BOOL",help='To smoothly interpolate the att map.',default=[])
     argreader.parser.add_argument('--direct_ind',type=str2bool,nargs="*",metavar="BOOL",help='To use direct indices',default=[])
     argreader.parser.add_argument('--no_ref',type=str2bool,nargs="*",metavar="BOOL",help='Set to True for model not refining vectors',default=[])
+
+    argreader.parser.add_argument('--viz_id',type=str,help='The viz ID to plot gradcam like viz',default="")
 
     ######################################## Find failure cases #########################################""
 
@@ -2064,7 +2088,7 @@ def main(argv=None):
                                     args.luminosity,args.receptive_field,args.cluster,args.cluster_attention,args.pond_by_norm,args.gradcam,args.gradcam_maps,args.gradcam_pp,\
                                     args.score_map,args.vargrad,args.smoothgrad_sq,args.rise,\
                                     args.nrows,args.correctness,args.agregate_multi_att,args.plot_vec_emb,args.only_norm,args.class_index,args.ind_to_keep,\
-                                    args.interp,args.direct_ind,args.no_ref,args)
+                                    args.interp,args.direct_ind,args.no_ref,args.viz_id,args)
     if args.plot_prob_maps:
         plotProbMaps(args.image_nb,args,args.norm)
     if args.list_best_pred:
@@ -2139,7 +2163,7 @@ def main(argv=None):
             attMetrics(args.exp_id,add=args.att_metrics_add)
         ttest_attMetr(args.exp_id,add=args.att_metrics_add)
 
-        latex_table(args.exp_id)
+        latex_table_figure(args.exp_id)
 
     if args.att_metrics_stats:
         attMetricsStats(args.exp_id)
