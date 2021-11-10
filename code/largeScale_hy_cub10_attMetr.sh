@@ -30,6 +30,11 @@ case $1 in
                 --stride_lay3 2 --stride_lay4 2  --max_batch_size 130 --always_sched True --drop_last False \
                 --strict_init False --start_mode fine_tune --init_path ../models/CUB10/modelnoneRed_best_epoch34 --epochs 85
     ;;
+  "inter_by_parts_noinit")
+    #Trained on 2 GPUs without distributed.
+    python trainVal.py -c model_cub10.config --model_id interbyparts_noinit   --inter_by_parts True --val_batch_size 30 --max_batch_size_single_pass 22 \
+                --stride_lay3 2 --stride_lay4 2  --max_batch_size 130 --always_sched True 
+    ;;
   "prototree")
     #Trained on 2 GPUs without distributed.
     python trainVal.py -c model_cub10.config --model_id prototree   --prototree True --val_batch_size 75 --max_batch_size_single_pass 35 \
