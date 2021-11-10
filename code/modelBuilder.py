@@ -9,7 +9,6 @@ plt.switch_backend('agg')
 
 from models import resnet
 from models import hrnet
-from models import inception
 from models import efficientnet
 from models import inter_by_parts
 from models import prototree
@@ -38,8 +37,6 @@ def buildFeatModel(featModelName, **kwargs):
         featModel = hrnet.get_cls_net(w=64)
     elif featModelName == "hrnet18":
         featModel = hrnet.get_cls_net(w=18)
-    elif featModelName == "inception":
-        featModel = inception.inception_v3(pretrained=True)
     elif featModelName.find("efficientnet") != -1:
         featModel = getattr(efficientnet,featModelName)()
     else:
@@ -404,8 +401,6 @@ def getResnetFeat(backbone_name, backbone_inplanes):
         nbFeat = 64
     elif backbone_name == "hrnet18":
         nbFeat = 16
-    elif backbone_name == "inception":
-        nbFeat = 2048
     elif backbone_name.find("efficientnet") != -1:
         nbFeat = 1792
     else:
