@@ -1622,7 +1622,7 @@ def attMetrics(exp_id,add=False):
     suff = "Add" if add else "Del"
 
     delPaths = sorted(glob.glob("../results/{}/attMetr{}_*.npy".format(exp_id,suff)))
-
+    print(delPaths)
     resDic = {}
     resDic_pop = {}
 
@@ -1709,6 +1709,8 @@ def getId_to_label():
             "protopnet":"ProtoPNet",
             "prototree":"ProtoTree",
             "noneRed-gradcam":"Grad-CAM",
+            "noneRed-gradcam_pp":"Grad-CAM++",
+            "noneRed-score_map":"Score-CAM",
             "noneRed-rise":"RISE",
             "noneRed_smallimg-varGrad":"VarGrad",
             "noneRed_smallimg-smoothGrad":"SmoothGrad",
@@ -1721,6 +1723,7 @@ def ttest_attMetr(exp_id,add=False):
 
     suff = "add" if add else "del"
 
+    print("../results/{}/attMetrics_{}_pop.csv".format(exp_id,suff))
     arr = np.genfromtxt("../results/{}/attMetrics_{}_pop.csv".format(exp_id,suff),dtype=str,delimiter=",")
 
     arr = best_to_worst(arr,dele=not add)
@@ -1812,7 +1815,7 @@ def attMetricsStats(exp_id):
             plt.savefig("../vis/{}/attMetrStatsDel_{}_{}.png".format(exp_id,model_id,i))
             plt.close()                 
 
-def latex_table_figure(exp_id):
+def latex_table_figure(exp_id,print_std=False):
 
     del_arr = np.genfromtxt("../results/{}/attMetrics_del_pop.csv".format(exp_id),dtype=str,delimiter=",")
     add_arr = np.genfromtxt("../results/{}/attMetrics_add_pop.csv".format(exp_id),dtype=str,delimiter=",")
@@ -1831,7 +1834,8 @@ def latex_table_figure(exp_id):
         #res_dic[id_to_label[del_arr[i,0]]] = {"add":,"del":}
         id = id_to_label[del_arr[i,0]]
         mean = del_arr_f[i].mean()
-        dele,dele_std = round(mean,3),round(del_arr_f[i].std(),3)
+        dele,dele_std = round(mean,4),round(del_arr_f[i].std(),3)
+        dele_full_precision = mean
         is_min = (mean==del_min)
 
         add_ind = np.argwhere(add_arr[:,0] == del_arr[i,0])[0,0]
@@ -1840,25 +1844,39 @@ def latex_table_figure(exp_id):
         add,add_std = round(mean,2),round(add_arr_f[add_ind].std(),2)
         is_max = (mean==add_max)
 
-        res_list.append((id,dele,dele_std,add,add_std,is_min,is_max))
+        res_list.append((id,dele,dele_std,add,add_std,is_min,is_max,dele_full_precision))
 
-    res_list = sorted(res_list,key=lambda x:-x[1])
+    res_list = sorted(res_list,key=lambda x:-x[-1])
+
+    print(res_list)
 
     csv = ""
 
     for i in range(len(res_list)):
         row = [str(elem) for elem in res_list[i]]
 
-        if row[-2] == "True":
-            csv += row[0]+" & $ \mathbf{"+row[1]+ "\pm" +row[2]+" }$ &"
-        else:
-            csv += "{} & $ {} \pm {} $ &".format(row[0],row[1],row[2])
+        if print_std:
+            if row[5] == "True":
+                csv += row[0]+" & $ \mathbf{"+row[1]+ "\pm" +row[2]+" }$ &"
+            else:
+                csv += "{} & $ {} \pm {} $ &".format(row[0],row[1],row[2])
 
-        if row[-1] == "True":
-            csv += "$\mathbf{"+row[3]+" \pm"+row[4]+" }$ \\\\ \n"
+            if row[6] == "True":
+                csv += "$\mathbf{"+row[3]+" \pm"+row[4]+" }$ \\\\ \n"
+            else:
+                csv += "$ {} \pm {} $ \\\\ \n".format(row[3],row[4])
         else:
-            csv += "$ {} \pm {} $ \\\\ \n".format(row[3],row[4])
-            
+            if row[5] == "True":
+                csv += row[0]+" & $ \mathbf{"+row[1]+" }$ &"
+            else:
+                csv += "{} & $ {}$ &".format(row[0],row[1])
+
+            if row[6] == "True":
+                csv += "$\mathbf{"+row[3]+"}$ \\\\ \n"
+            else:
+                csv += "${}$ \\\\ \n".format(row[3])
+
+
     with open("../results/{}/attMetr_latex_table.csv".format(exp_id),"w") as text:
         print(csv,file=text)
 
