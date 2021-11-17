@@ -81,17 +81,7 @@ def epochSeqTr(model, optim, log_interval, loader, epoch, args, **kwargs):
 
     acc_size = 0
     acc_nb = 0
-    '''
-    if args.prototree:
-        nr_batches = float(len(loader))
-        with torch.no_grad():
-            _old_dist_params = dict()
-            for leaf in model.firstModel.mod.leaves:
-                _old_dist_params[leaf] = leaf._dist_params.detach().clone()
-            # Optimize class distributions in leafs
-        eye = torch.eye(model.firstModel.mod._num_classes)
-        eye = eye.cuda() if args.cuda else eye 
-    '''
+
     for batch_idx, batch in enumerate(loader):
         optim.zero_grad()
 
@@ -1436,7 +1426,9 @@ def main(argv=None):
                 attrFunc = lambda i:(attMaps_dataset[i,0:1]*norm_dataset[i]).unsqueeze(0)
             else:
                 attrFunc = lambda i:(attMaps_dataset[i].float().mean(dim=0,keepdim=True).byte()*norm_dataset[i]).unsqueeze(0)
-        torch.set_grad_enabled(False)
+        
+        if args.att_metrics_post_hoc != "gradcam_pp":
+            torch.set_grad_enabled(False)
 
         if args.attention_metrics:
             nbImgs = args.attention_metrics
