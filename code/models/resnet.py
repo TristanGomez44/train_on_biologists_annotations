@@ -37,7 +37,7 @@ def conv1x1(in_planes, out_planes, stride=1,groups=1):
 class BasicBlock(nn.Module):
     expansion = 1
 
-    def __init__(self, inplanes, planes, stride=1, downsample=None, norm_layer=None,dilation=1,groups=1):
+    def __init__(self, inplanes, planes, stride=1, downsample=None, norm_layer=None,dilation=1,groups=1,endRelu=True):
         super(BasicBlock, self).__init__()
         if norm_layer is None:
             norm_layer = nn.BatchNorm2d
