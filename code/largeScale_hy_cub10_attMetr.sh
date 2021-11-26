@@ -35,6 +35,11 @@ case $1 in
     python trainVal.py -c model_cub10.config --model_id interbyparts_noinit   --inter_by_parts True --val_batch_size 30 --max_batch_size_single_pass 22 \
                 --stride_lay3 2 --stride_lay4 2  --max_batch_size 130 --always_sched True 
     ;;
+  "inter_by_parts_noinit_32p")
+    #Trained on 2 GPUs without distributed.
+    python trainVal.py -c model_cub10.config --model_id interbyparts_noinit_32p   --inter_by_parts True --val_batch_size 30 --max_batch_size_single_pass 22 \
+                --stride_lay3 2 --stride_lay4 2  --max_batch_size 130 --always_sched True --resnet_bil_nb_parts 32 --drop_last True
+    ;;
   "prototree")
     #Trained on 2 GPUs without distributed.
     python trainVal.py -c model_cub10.config --model_id prototree   --prototree True --val_batch_size 75 --max_batch_size_single_pass 35 \
