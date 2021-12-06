@@ -226,6 +226,9 @@ def computeLoss(args, output, target, resDict, data,reduction="mean"):
         if args.inter_by_parts:
             loss += 0.5*inter_by_parts.shapingLoss(resDict["attMaps"],args.resnet_bil_nb_parts,args)
 
+        if args.abn:
+            loss += args.nll_weight*F.cross_entropy(resDict["att_outputs"], target,reduction=reduction)
+
     else:
         kl = F.kl_div(F.log_softmax(output/args.kl_temp, dim=1),F.softmax(resDict["master_net_pred"]/args.kl_temp, dim=1),reduction="batchmean")
         ce = F.cross_entropy(output, target)
@@ -848,7 +851,8 @@ def run(args,trial=None):
             else:
                 minBS = 12
         print(minBS,args.distributed)
-        args.batch_size = trial.suggest_int("batch_size", minBS, args.max_batch_size, log=True)
+        #args.batch_size = trial.suggest_int("batch_size", minBS, args.max_batch_size, log=True)
+        args.batch_size = args.max_batch_size_single_pass
         print("Batch size is ",args.batch_size)
         args.dropout = trial.suggest_float("dropout", 0, 0.6,step=0.2)
         args.weight_decay = trial.suggest_float("weight_decay", 1e-6, 1e-3, log=True)
@@ -964,7 +968,7 @@ def train(gpu,args,trial):
                 else:
                     net.module.firstModel.featMod.requires_grad= True
 
-            trainFunc(**kwargsTr)
+            #trainFunc(**kwargsTr)
             if not scheduler is None:
                 scheduler.step()
 

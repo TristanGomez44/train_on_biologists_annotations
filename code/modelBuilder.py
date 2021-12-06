@@ -13,6 +13,7 @@ from models import efficientnet
 from models import inter_by_parts
 from models import prototree
 from models import protopnet
+from models import abn
 import args
 import time 
 import sys 
@@ -412,7 +413,7 @@ def netBuilder(args,gpu=None):
 
     nbFeat = getResnetFeat(args.first_mod, args.resnet_chan)
 
-    if not args.prototree and not args.protonet:
+    if not args.prototree and not args.protonet and not args.abn:
         if args.resnet_bilinear:
             CNNconst = CNN2D_bilinearAttPool
             kwargs = {"inFeat":nbFeat,"nb_parts":args.resnet_bil_nb_parts,\
@@ -474,6 +475,8 @@ def netBuilder(args,gpu=None):
     else:
         if args.protonet:
             net = protopnet.construct_PPNet("resnet50", num_classes=args.class_nb)
+        if args.abn:
+            net = abn.resnet50(fullpretrained=True)
         else:
             net = prototree.construct_prototree("resnet50",args.class_nb)
  
@@ -580,6 +583,6 @@ def addArgs(argreader):
     argreader.parser.add_argument('--att_term_reg', type=args.str2bool, help='To force the student att maps to be centered where the teach maps are centered.')
 
     argreader.parser.add_argument('--end_relu', type=args.str2bool, help='To add a relu at the end of the first block of each layer.')
-
+    argreader.parser.add_argument('--abn', type=args.str2bool, help='To train an attention branch network')
 
     return argreader
