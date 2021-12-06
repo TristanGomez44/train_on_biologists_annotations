@@ -1617,7 +1617,7 @@ def cat(all,new):
         all = torch.cat((all,new),dim=0)
     return all
 
-def attMetrics(exp_id,add=False):
+def attMetrics(exp_id,add=False,ignore_model=False):
 
     suff = "Add" if add else "Del"
 
@@ -1626,7 +1626,10 @@ def attMetrics(exp_id,add=False):
     resDic = {}
     resDic_pop = {}
 
-    indsToUse,modelToIgn = getIndsToUse(delPaths)
+    if ignore_model:
+        _,modelToIgn = getIndsToUse(delPaths)
+    else:
+        modelToIgn = []
 
     all_auc_pop = []
     for path in delPaths:
@@ -1705,6 +1708,7 @@ def getId_to_label():
     return {"bilRed":"B-CNN",
             "bilRed_1map":"B-CNN (1 map)",
             "clus_masterClusRed":"BR-NPA",
+            "clus_mast":"BR-NPA",
             "noneRed":"AM",
             "protopnet":"ProtoPNet",
             "prototree":"ProtoTree",
@@ -2035,8 +2039,8 @@ def main(argv=None):
     ####################################### Attention metrics #################################################
 
     argreader.parser.add_argument('--att_metrics',action="store_true",help='Grad exp plot') 
-    argreader.parser.add_argument('--att_metrics_add',action="store_true",help='Grad exp plot') 
     argreader.parser.add_argument('--att_metrics_stats',action="store_true",help='Grad exp plot') 
+    argreader.parser.add_argument('--not_ignore_model',action="store_true",help='Grad exp plot') 
 
     argreader = load_data.addArgs(argreader)
 
@@ -2174,12 +2178,15 @@ def main(argv=None):
         gradExp_test()
     if args.grad_exp2:
         gradExp2()
-    if args.att_metrics or args.att_metrics_add:
-        suff = "add" if args.att_metrics_add else "del"
-
-        if not os.path.exists("../results/{}/attMetrics_{}.csv".format(args.exp_id,suff)):
-            attMetrics(args.exp_id,add=args.att_metrics_add)
-        ttest_attMetr(args.exp_id,add=args.att_metrics_add)
+    if args.att_metrics:
+        if not os.path.exists("../results/{}/attMetrics_add.csv".format(args.exp_id)):
+            attMetrics(args.exp_id,add=True,ignore_model=not args.not_ignore_model)
+        
+        if not os.path.exists("../results/{}/attMetrics_del.csv".format(args.exp_id)):
+            attMetrics(args.exp_id,add=False,ignore_model=not args.not_ignore_model)
+               
+        ttest_attMetr(args.exp_id,add=True)
+        ttest_attMetr(args.exp_id,add=False)
 
         latex_table_figure(args.exp_id)
 
