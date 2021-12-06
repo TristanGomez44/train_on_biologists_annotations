@@ -319,6 +319,8 @@ def epochImgEval(model, log_interval, loader, epoch, args, metricEarlyStop, mode
 
     '''
 
+    print("../results/{}/model{}_epoch{}_metrics_{}.csv".format(args.exp_id, args.model_id, epoch, mode))
+
     if args.debug or args.benchmark:
         start_time = time.time()
 
@@ -851,8 +853,7 @@ def run(args,trial=None):
             else:
                 minBS = 12
         print(minBS,args.distributed)
-        #args.batch_size = trial.suggest_int("batch_size", minBS, args.max_batch_size, log=True)
-        args.batch_size = args.max_batch_size_single_pass
+        args.batch_size = trial.suggest_int("batch_size", minBS, args.max_batch_size, log=True)
         print("Batch size is ",args.batch_size)
         args.dropout = trial.suggest_float("dropout", 0, 0.6,step=0.2)
         args.weight_decay = trial.suggest_float("weight_decay", 1e-6, 1e-3, log=True)
@@ -968,7 +969,7 @@ def train(gpu,args,trial):
                 else:
                     net.module.firstModel.featMod.requires_grad= True
 
-            #trainFunc(**kwargsTr)
+            trainFunc(**kwargsTr)
             if not scheduler is None:
                 scheduler.step()
 
