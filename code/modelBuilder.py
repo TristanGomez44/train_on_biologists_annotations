@@ -476,7 +476,7 @@ def netBuilder(args,gpu=None):
         if args.protonet:
             net = protopnet.construct_PPNet("resnet50", num_classes=args.class_nb)
         if args.abn:
-            net = abn.resnet50(fullpretrained=True)
+            net = abn.resnet50(fullpretrained=args.abn_pretrained)
         else:
             net = prototree.construct_prototree("resnet50",args.class_nb)
  
@@ -584,5 +584,6 @@ def addArgs(argreader):
 
     argreader.parser.add_argument('--end_relu', type=args.str2bool, help='To add a relu at the end of the first block of each layer.')
     argreader.parser.add_argument('--abn', type=args.str2bool, help='To train an attention branch network')
+    argreader.parser.add_argument('--abn_pretrained', type=args.str2bool, help='To load imagenet pretrained weights for ABN.')
 
     return argreader
