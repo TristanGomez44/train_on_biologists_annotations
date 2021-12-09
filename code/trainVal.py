@@ -1084,6 +1084,7 @@ def main(argv=None):
     argreader.parser.add_argument('--att_metrics_max_brnpa', type=str2bool, help='To agregate br-npa maps with max instead of mean')
     argreader.parser.add_argument('--att_metrics_onlyfirst_brnpa', type=str2bool, help='To agregate br-npa maps with max instead of mean')
     argreader.parser.add_argument('--att_metrics_few_steps', type=str2bool, help='To do as much step for high res than for low res')
+    argreader.parser.add_argument('--att_metr_do_again', type=str2bool, help='To run computation if already done',default=True)
 
     argreader.parser.add_argument('--optuna', type=str2bool, help='To run a hyper-parameter study')
     argreader.parser.add_argument('--optuna_trial_nb', type=int, help='The number of hyper-parameter trial to run.')
@@ -1409,155 +1410,160 @@ def main(argv=None):
     elif args.attention_metrics or args.attention_metrics_add:
         print("Attention metrics",args.attention_metrics,args.attention_metrics_add,args.attention_metrics or args.attention_metrics_add)
 
-        args.val_batch_size = 1
-        testLoader,testDataset = load_data.buildTestLoader(args, "test",withSeg=args.with_seg)
+        path_suff = "Add" if args.attention_metrics_add else "Del"
+        model_id_suff = "-"+args.att_metrics_post_hoc if args.att_metrics_post_hoc else ""
+              
+        if args.att_metr_do_again or not os.path.exists("../results/{}/attMetr{}_{}{}.npy".format(args.exp_id,path_suff,args.model_id,model_id_suff)):
 
-        bestPath = glob.glob("../models/{}/model{}_best_epoch*".format(args.exp_id, args.model_id))[0]
-        bestEpoch = int(os.path.basename(bestPath).split("epoch")[1])
+            args.val_batch_size = 1
+            testLoader,testDataset = load_data.buildTestLoader(args, "test",withSeg=args.with_seg)
 
-        if args.prototree:
-            net = torch.load(glob.glob("../models/{}/model{}_best_epoch*".format(args.exp_id,args.model_id))[0])
-        else:
-            net = modelBuilder.netBuilder(args,gpu=0)
-            net = preprocessAndLoadParams(bestPath,args.cuda,net,args.strict_init)
-        net.eval()
-        
-        if args.att_metrics_post_hoc:
-            attrFunc,kwargs = getAttMetrMod(net,testDataset,args)
-        else:
-            attMaps_dataset,norm_dataset = loadAttMaps(args.exp_id,args.model_id)
+            bestPath = glob.glob("../models/{}/model{}_best_epoch*".format(args.exp_id, args.model_id))[0]
+            bestEpoch = int(os.path.basename(bestPath).split("epoch")[1])
 
-            if not args.resnet_bilinear or (args.resnet_bilinear and args.bil_cluster):
-                attrFunc = lambda i:(attMaps_dataset[i,0:1]*norm_dataset[i]).unsqueeze(0)
+            if args.prototree:
+                net = torch.load(glob.glob("../models/{}/model{}_best_epoch*".format(args.exp_id,args.model_id))[0])
             else:
-                attrFunc = lambda i:(attMaps_dataset[i].float().mean(dim=0,keepdim=True).byte()*norm_dataset[i]).unsqueeze(0)
-        
-        if args.att_metrics_post_hoc != "gradcam_pp":
-            torch.set_grad_enabled(False)
-
-        if args.attention_metrics:
-            nbImgs = args.attention_metrics
-        else:
-            nbImgs = args.attention_metrics_add 
-        print("nbImgs",nbImgs)
-
-        allScoreList = []
-        allStatsList = []
-        allPreds = []
-        allTarg = []
-
-        torch.manual_seed(0)
-        inds = torch.randint(len(testDataset),size=(nbImgs,))
-
-        blurWeight = torch.ones(121,121)
-        blurWeight = blurWeight/blurWeight.numel()
-        blurWeight = blurWeight.unsqueeze(0).unsqueeze(0).expand(3,1,-1,-1)
-        blurWeight = blurWeight.cuda() if args.cuda else blurWeight
-
-        for imgInd,i in enumerate(inds):
-            if imgInd % 20 == 0 :
-                print("Img",i.item(),"(",imgInd,"/",len(inds),")")
-
-            batch = testDataset.__getitem__(i)
-            data,targ = batch[0].unsqueeze(0),torch.tensor(batch[1]).unsqueeze(0)
-
-            data = data.cuda() if args.cuda else data
-            targ = targ.cuda() if args.cuda else targ
-
-            allData = data.clone().cpu()
+                net = modelBuilder.netBuilder(args,gpu=0)
+                net = preprocessAndLoadParams(bestPath,args.cuda,net,args.strict_init)
+            net.eval()
             
-            if not args.prototree:
-                resDic = net(data)
-                scores = torch.softmax(resDic["pred"],dim=-1)
-            else:
-                scores = net(data)[0]
-
-            predClassInd = scores.argmax(dim=-1)
-            allPreds.append(predClassInd.item())
-            allTarg.append(targ.item())
-            
-            if args.attention_metrics_add:
-                origData = data.clone()
-                data = F.conv2d(data,blurWeight,padding=blurWeight.size(-1)//2,groups=blurWeight.size(0))
-
             if args.att_metrics_post_hoc:
-                if args.att_metrics_post_hoc.find("var") == -1 and args.att_metrics_post_hoc.find("smooth") == -1:
-                    argList = [data,targ]
+                attrFunc,kwargs = getAttMetrMod(net,testDataset,args)
+            else:
+                attMaps_dataset,norm_dataset = loadAttMaps(args.exp_id,args.model_id)
+
+                if not args.resnet_bilinear or (args.resnet_bilinear and args.bil_cluster):
+                    attrFunc = lambda i:(attMaps_dataset[i,0:1]*norm_dataset[i]).unsqueeze(0)
                 else:
-                    argList = [data]
-                    kwargs["target"] = targ
+                    attrFunc = lambda i:(attMaps_dataset[i].float().mean(dim=0,keepdim=True).byte()*norm_dataset[i]).unsqueeze(0)
+            
+            if args.att_metrics_post_hoc != "gradcam_pp":
+                torch.set_grad_enabled(False)
 
-                attMaps = attrFunc(*argList,**kwargs)
+            if args.attention_metrics:
+                nbImgs = args.attention_metrics
             else:
-                attMaps = attrFunc(i)
+                nbImgs = args.attention_metrics_add 
+            print("nbImgs",nbImgs)
 
-                mask = torch.ones_like(attMaps)
+            allScoreList = []
+            allStatsList = []
+            allPreds = []
+            allTarg = []
 
-            attMaps = (attMaps-attMaps.min())/(attMaps.max()-attMaps.min())
+            torch.manual_seed(0)
+            inds = torch.randint(len(testDataset),size=(nbImgs,))
 
-            allAttMaps = attMaps.clone().cpu()
-            origAttMaps = attMaps.clone()
-            statsList = []
+            blurWeight = torch.ones(121,121)
+            blurWeight = blurWeight/blurWeight.numel()
+            blurWeight = blurWeight.unsqueeze(0).unsqueeze(0).expand(3,1,-1,-1)
+            blurWeight = blurWeight.cuda() if args.cuda else blurWeight
 
-            totalPxlNb = attMaps.size(2)*attMaps.size(3)
-            leftPxlNb = totalPxlNb
+            for imgInd,i in enumerate(inds):
+                if imgInd % 20 == 0 :
+                    print("Img",i.item(),"(",imgInd,"/",len(inds),")")
 
-            if args.prototree or args.protonet:
-                stepNb = 49
-            elif args.att_metrics_few_steps:
-                stepNb = 196 
-            else:
-                stepNb = totalPxlNb
+                batch = testDataset.__getitem__(i)
+                data,targ = batch[0].unsqueeze(0),torch.tensor(batch[1]).unsqueeze(0)
 
-            score_prop_list = []
+                data = data.cuda() if args.cuda else data
+                targ = targ.cuda() if args.cuda else targ
 
-            ratio = data.size(-1)//attMaps.size(-1)
-            backgrPatch = data[0,:,:ratio,:ratio]
- 
-            stepCount = 0
-            while leftPxlNb > 0:
-
-                attMin,attMean,attMax = attMaps.min().item(),attMaps.mean().item(),attMaps.max().item()
-                statsList.append((attMin,attMean,attMax))
-
-                _,ind_max = (attMaps)[0,0].view(-1).topk(k=totalPxlNb//stepNb)
-                ind_max = ind_max[:leftPxlNb]
-
-                x_max,y_max = ind_max % attMaps.shape[3],ind_max // attMaps.shape[3]
+                allData = data.clone().cpu()
                 
-                ratio = data.size(-1)//attMaps.size(-1)
-
-                for i in range(len(x_max)):
-                    
-                    if args.attention_metrics_add:
-                        data[0,:,y_max[i]*ratio:y_max[i]*ratio+ratio,x_max[i]*ratio:x_max[i]*ratio+ratio] = origData[0,:,y_max[i]*ratio:y_max[i]*ratio+ratio,x_max[i]*ratio:x_max[i]*ratio+ratio]
-                    else:
-                        data[0,:,y_max[i]*ratio:y_max[i]*ratio+ratio,x_max[i]*ratio:x_max[i]*ratio+ratio] = 0
-
-                    attMaps[0,:,y_max[i],x_max[i]] = -1                       
-
-                leftPxlNb -= totalPxlNb//stepNb
-                if stepCount % 30 == 0:
-                    allAttMaps = torch.cat((allAttMaps,torch.clamp(attMaps,0,attMaps.max().item()).cpu()),dim=0)
-                    allData = torch.cat((allData,data.cpu()),dim=0)
-                stepCount += 1
-
                 if not args.prototree:
                     resDic = net(data)
-                    score = torch.softmax(resDic["pred"],dim=-1)[:,predClassInd[0]]
+                    scores = torch.softmax(resDic["pred"],dim=-1)
                 else:
-                    score = net(data)[0][:,predClassInd[0]]
+                    scores = net(data)[0]
 
-                score_prop_list.append((leftPxlNb,score.item()))
+                predClassInd = scores.argmax(dim=-1)
+                allPreds.append(predClassInd.item())
+                allTarg.append(targ.item())
+                
+                if args.attention_metrics_add:
+                    origData = data.clone()
+                    data = F.conv2d(data,blurWeight,padding=blurWeight.size(-1)//2,groups=blurWeight.size(0))
 
-            allScoreList.append(score_prop_list)
+                if args.att_metrics_post_hoc:
+                    if args.att_metrics_post_hoc.find("var") == -1 and args.att_metrics_post_hoc.find("smooth") == -1:
+                        argList = [data,targ]
+                    else:
+                        argList = [data]
+                        kwargs["target"] = targ
 
-        if args.att_metrics_post_hoc:
-            args.model_id = args.model_id + "-"+args.att_metrics_post_hoc
+                    attMaps = attrFunc(*argList,**kwargs)
+                else:
+                    attMaps = attrFunc(i)
+
+                    mask = torch.ones_like(attMaps)
+
+                attMaps = (attMaps-attMaps.min())/(attMaps.max()-attMaps.min())
+
+                allAttMaps = attMaps.clone().cpu()
+                origAttMaps = attMaps.clone()
+                statsList = []
+
+                totalPxlNb = attMaps.size(2)*attMaps.size(3)
+                leftPxlNb = totalPxlNb
+
+                if args.prototree or args.protonet:
+                    stepNb = 49
+                elif args.att_metrics_few_steps:
+                    stepNb = 196 
+                else:
+                    stepNb = totalPxlNb
+
+                score_prop_list = []
+
+                ratio = data.size(-1)//attMaps.size(-1)
+                backgrPatch = data[0,:,:ratio,:ratio]
+    
+                stepCount = 0
+                while leftPxlNb > 0:
+
+                    attMin,attMean,attMax = attMaps.min().item(),attMaps.mean().item(),attMaps.max().item()
+                    statsList.append((attMin,attMean,attMax))
+
+                    _,ind_max = (attMaps)[0,0].view(-1).topk(k=totalPxlNb//stepNb)
+                    ind_max = ind_max[:leftPxlNb]
+
+                    x_max,y_max = ind_max % attMaps.shape[3],ind_max // attMaps.shape[3]
+                    
+                    ratio = data.size(-1)//attMaps.size(-1)
+
+                    for i in range(len(x_max)):
+                        
+                        if args.attention_metrics_add:
+                            data[0,:,y_max[i]*ratio:y_max[i]*ratio+ratio,x_max[i]*ratio:x_max[i]*ratio+ratio] = origData[0,:,y_max[i]*ratio:y_max[i]*ratio+ratio,x_max[i]*ratio:x_max[i]*ratio+ratio]
+                        else:
+                            data[0,:,y_max[i]*ratio:y_max[i]*ratio+ratio,x_max[i]*ratio:x_max[i]*ratio+ratio] = 0
+
+                        attMaps[0,:,y_max[i],x_max[i]] = -1                       
+
+                    leftPxlNb -= totalPxlNb//stepNb
+                    if stepCount % 30 == 0:
+                        allAttMaps = torch.cat((allAttMaps,torch.clamp(attMaps,0,attMaps.max().item()).cpu()),dim=0)
+                        allData = torch.cat((allData,data.cpu()),dim=0)
+                    stepCount += 1
+
+                    if not args.prototree:
+                        resDic = net(data)
+                        score = torch.softmax(resDic["pred"],dim=-1)[:,predClassInd[0]]
+                    else:
+                        score = net(data)[0][:,predClassInd[0]]
+
+                    score_prop_list.append((leftPxlNb,score.item()))
+
+                allScoreList.append(score_prop_list)
+
+            if args.att_metrics_post_hoc:
+                args.model_id = args.model_id + "-"+args.att_metrics_post_hoc
+            
+            np.save("../results/{}/attMetr{}_{}.npy".format(args.exp_id,path_suff,args.model_id),np.array(allScoreList,dtype=object))
+            np.save("../results/{}/attMetrPreds{}_{}.npy".format(args.exp_id,path_suff,args.model_id),np.array(allPreds,dtype=object))
         
-        suff = "Del" if args.attention_metrics else "Add"
-        np.save("../results/{}/attMetr{}_{}.npy".format(args.exp_id,suff,args.model_id),np.array(allScoreList,dtype=object))
-        np.save("../results/{}/attMetrPreds{}_{}.npy".format(args.exp_id,suff,args.model_id),np.array(allPreds,dtype=object))
     else:
         train(0,args,None)
 
@@ -1614,7 +1620,7 @@ def loadAttMaps(exp_id,model_id):
     paths = glob.glob("../results/{}/attMaps_{}_epoch*.npy".format(exp_id,model_id))
 
     if len(paths) >1 or len(paths) == 0:
-        raise ValueError("Wrong path number for",exp_id,model_id)
+        raise ValueError("Wrong path number for exp {} model {}",exp_id,model_id)
 
     attMaps,norm = np.load(paths[0],mmap_mode="r"),np.load(paths[0].replace("attMaps","norm"),mmap_mode="r")
 
