@@ -1617,47 +1617,55 @@ def cat(all,new):
         all = torch.cat((all,new),dim=0)
     return all
 
-def attMetrics(exp_id,add=False,ignore_model=False):
+def attMetrics(exp_id,metric="del",ignore_model=False):
 
-    suff = "Add" if add else "Del"
+    suff = metric
 
-    delPaths = sorted(glob.glob("../results/{}/attMetr{}_*.npy".format(exp_id,suff)))
-    print(delPaths)
+    paths = sorted(glob.glob("../results/{}/attMetr{}_*.npy".format(exp_id,suff)))
+
     resDic = {}
     resDic_pop = {}
 
     if ignore_model:
-        _,modelToIgn = getIndsToUse(delPaths)
+        _,modelToIgn = getIndsToUse(paths,metric)
     else:
         modelToIgn = []
 
-    all_auc_pop = []
-    for path in delPaths:
+    if metric in ["Del","Add"]:
+        for path in paths:
 
-        model_id = os.path.basename(path).split("attMetr{}_".format(suff))[1].split(".npy")[0]
-        
-        if model_id not in modelToIgn:
-            delPairs = np.load(path,allow_pickle=True)
+            model_id = os.path.basename(path).split("attMetr{}_".format(suff))[1].split(".npy")[0]
+            
+            if model_id not in modelToIgn:
+                pairs = np.load(path,allow_pickle=True)
 
-            allAuC = []
+                allAuC = []
 
-            for i in range(len(delPairs)):
+                for i in range(len(pairs)):
 
-                delPairs_i = np.array(delPairs[i])
+                    pairs_i = np.array(pairs[i])
 
-                if add:
-                    delPairs_i[:,0] = 1-delPairs_i[:,0]/delPairs_i[:,0].max()
-                else:
-                    delPairs_i[:,0] = (delPairs_i[:,0]-delPairs_i[:,0].min())/(delPairs_i[:,0].max()-delPairs_i[:,0].min())
-                    delPairs_i[:,0] = 1-delPairs_i[:,0]
+                    if metric == "Add":
+                        pairs_i[:,0] = 1-pairs_i[:,0]/pairs_i[:,0].max()
+                    else:
+                        pairs_i[:,0] = (pairs_i[:,0]-pairs_i[:,0].min())/(pairs_i[:,0].max()-pairs_i[:,0].min())
+                        pairs_i[:,0] = 1-pairs_i[:,0]
 
-                auc = np.trapz(delPairs_i[:,1],delPairs_i[:,0])
-                allAuC.append(auc)
-        
-            resDic_pop[model_id] = np.array(allAuC)
-            resDic[model_id] = resDic_pop[model_id].mean()
+                    auc = np.trapz(pairs_i[:,1],pairs_i[:,0])
+                    allAuC.append(auc)
+            
+                resDic_pop[model_id] = np.array(allAuC)
+                resDic[model_id] = resDic_pop[model_id].mean()
+    else:
+        for path in paths:
 
-    suff = suff.lower()
+            model_id = os.path.basename(path).split("attMetr{}_".format(suff))[1].split(".npy")[0]
+            
+            if model_id not in modelToIgn:
+                sparsity_list = 1/np.load(path,allow_pickle=True)
+
+            resDic_pop[model_id] = np.array(sparsity_list)
+            resDic[model_id] = resDic_pop[model_id].mean() 
 
     csv = "\n".join(["{},{}".format(key,resDic[key]) for key in resDic])
     with open("../results/{}/attMetrics_{}.csv".format(exp_id,suff),"w") as file:
@@ -1667,7 +1675,7 @@ def attMetrics(exp_id,add=False,ignore_model=False):
     with open("../results/{}/attMetrics_{}_pop.csv".format(exp_id,suff),"w") as file:
         print(csv,file=file)
 
-def getIndsToUse(paths):
+def getIndsToUse(paths,metric):
     
     modelToIgn = []
 
@@ -1680,24 +1688,21 @@ def getIndsToUse(paths):
         use_all_inds = True
     else:
         use_all_inds = False 
-        targs = np.load(paths[model_targ_ind])
+        targs = np.load(paths[model_targ_ind],allow_pickle=True)
         
         indsToUseBool = np.array([True for _ in range(len(targs))])
         indsToUseDic = {}
 
     for path in paths:
         
-        if os.path.basename(path).find("Add") != -1:
-            model_id = os.path.basename(path).split("attMetrAdd_")[1].split(".npy")[0]
-        else:
-            model_id = os.path.basename(path).split("attMetrDel_")[1].split(".npy")[0]
+        model_id = os.path.basename(path).split("attMetr{}_".format(metric))[1].split(".npy")[0]
         
         model_id_nosuff = model_id.replace("-max","").replace("-onlyfirst","").replace("-fewsteps","")
 
-        predPath = path.replace("Add","Preds").replace("Del","Preds").replace(model_id,model_id_nosuff)
+        predPath = path.replace(metric,"Preds").replace(model_id,model_id_nosuff)
 
         if not os.path.exists(predPath):
-            predPath = path.replace("Add","PredsAdd").replace("Del","PredsDel").replace(model_id,model_id_nosuff)
+            predPath = path.replace(metric,"PredsAdd").replace(model_id,model_id_nosuff)
 
         if os.path.exists(predPath) and not use_all_inds:
             preds = np.load(predPath,allow_pickle=True)
@@ -1742,16 +1747,16 @@ def getId_to_label():
             "interbyparts":"InterByParts",
             "abn":"ABN"}
 
-def ttest_attMetr(exp_id,add=False):
+def ttest_attMetr(exp_id,metric="del"):
 
     id_to_label = getId_to_label()
 
-    suff = "add" if add else "del"
+    suff = metric
 
     print("../results/{}/attMetrics_{}_pop.csv".format(exp_id,suff))
     arr = np.genfromtxt("../results/{}/attMetrics_{}_pop.csv".format(exp_id,suff),dtype=str,delimiter=",")
 
-    arr = best_to_worst(arr,dele=not add)
+    arr = best_to_worst(arr,ascending=metric in ["Add","Spars"])
 
     model_ids = arr[:,0]
 
@@ -1759,11 +1764,14 @@ def ttest_attMetr(exp_id,add=False):
 
     res_mat = arr[:,1:].astype("float")
 
-    rnd_nb = 2 if add else 3
+    if metric == "add":
+        rnd_nb = 2
+    elif metric == "del":
+        rnd_nb = 3 
+    else:
+        rnd_nb = 1
 
     perfs = [(str(round(mean,rnd_nb)),str(round(std,rnd_nb))) for (mean,std) in zip(res_mat.mean(axis=1),res_mat.std(axis=1))]
-
-    labels_perfs = [label+" "+perf[0]+" +/- "+perf[1] for (label,perf) in zip(labels,perfs)]
 
     p_val_mat = np.zeros((len(res_mat),len(res_mat)))
     for i in range(len(res_mat)):
@@ -1781,8 +1789,6 @@ def ttest_attMetr(exp_id,add=False):
     cmap = plt.get_cmap('plasma')
 
     fig = plt.figure()
-
-
 
     ax = fig.gca()
 
@@ -1809,9 +1815,9 @@ def ttest_attMetr(exp_id,add=False):
     plt.tight_layout()
     plt.savefig("../vis/{}/ttest_{}_attmetr.png".format(exp_id,suff))
 
-def best_to_worst(arr,dele=False):
+def best_to_worst(arr,ascending=True):
 
-    if dele:
+    if not ascending:
         key = lambda x:-x[1:].astype("float").mean()
     else:
         key = lambda x:x[1:].astype("float").mean()
@@ -1840,13 +1846,15 @@ def attMetricsStats(exp_id):
             plt.savefig("../vis/{}/attMetrStatsDel_{}_{}.png".format(exp_id,model_id,i))
             plt.close()                 
 
-def latex_table_figure(exp_id,print_std=False):
+def latex_table_figure(exp_id,print_std=False,full=False):
 
-    del_arr = np.genfromtxt("../results/{}/attMetrics_del_pop.csv".format(exp_id),dtype=str,delimiter=",")
-    add_arr = np.genfromtxt("../results/{}/attMetrics_add_pop.csv".format(exp_id),dtype=str,delimiter=",")
+    del_arr = np.genfromtxt("../results/{}/attMetrics_Del_pop.csv".format(exp_id),dtype=str,delimiter=",")
+    add_arr = np.genfromtxt("../results/{}/attMetrics_Add_pop.csv".format(exp_id),dtype=str,delimiter=",")
+    spars_arr = np.genfromtxt("../results/{}/attMetrics_Spars_pop.csv".format(exp_id),dtype=str,delimiter=",")
 
     del_arr_f = del_arr[:,1:].astype("float")
     add_arr_f = add_arr[:,1:].astype("float")
+    spars_arr_f = spars_arr[:,1:].astype("float")
 
     id_to_label = getId_to_label()
 
@@ -1854,76 +1862,132 @@ def latex_table_figure(exp_id,print_std=False):
 
     del_min = del_arr_f.mean(axis=1).min()
     add_max = add_arr_f.mean(axis=1).max()
+    spars_max = spars_arr_f.mean(axis=1).max()
 
     for i in range(len(del_arr)):
-        #res_dic[id_to_label[del_arr[i,0]]] = {"add":,"del":}
         id = id_to_label[del_arr[i,0]]
         mean = del_arr_f[i].mean()
         dele,dele_std = round(mean,4),round(del_arr_f[i].std(),3)
         dele_full_precision = mean
-        is_min = (mean==del_min)
+        is_best_dele = (mean==del_min)
 
         add_ind = np.argwhere(add_arr[:,0] == del_arr[i,0])[0,0]
-
         mean = add_arr_f[add_ind].mean()
         add,add_std = round(mean,2),round(add_arr_f[add_ind].std(),2)
-        is_max = (mean==add_max)
+        is_best_add = (mean==add_max)
+        
+        spars_ind = np.argwhere(spars_arr[:,0] == del_arr[i,0])[0,0]
+        mean = spars_arr_f[spars_ind].mean()
+        spars,spars_std = round(mean,2),round(spars_arr_f[spars_ind].std(),2)
+        is_best_spars = (mean==spars_max)
 
-        res_list.append((id,dele,dele_std,add,add_std,is_min,is_max,dele_full_precision))
+        res_list.append({"id":id,
+                        "dele":dele,  "dele_std":dele_std,
+                        "add":add,    "add_std":add_std,
+                        "spars":spars,"spars_std":spars_std,
+                        "is_best_dele":is_best_dele,"is_best_add":is_best_add,"is_best_spars":is_best_spars,
+                        "dele_full_precision":dele_full_precision})
 
-    res_list = sorted(res_list,key=lambda x:-x[-1])
+    if full:
+        res_list = addAccuracy(res_list,exp_id)
+        metric_list= ["dele","add","spars"]
+    else:
+        metric_list = ["dele","add"]
 
-    print(res_list)
+    res_list = sorted(res_list,key=lambda x:-x["dele_full_precision"])
 
     csv = ""
 
     for i in range(len(res_list)):
-        row = [str(elem) for elem in res_list[i]]
-
-        if print_std:
-            if row[5] == "True":
-                csv += row[0]+" & $ \mathbf{"+row[1]+ "\pm" +row[2]+" }$ &"
+        row = res_list[i]
+        row = {key:str(row[key]) for key in row}
+        csv += row["id"]
+        
+        if full:
+            if row["is_max_acc"] == "True":
+                print("max acc")
+                csv += "& $\mathbf{"+row["acc"]+" }$"
             else:
-                csv += "{} & $ {} \pm {} $ &".format(row[0],row[1],row[2])
+                csv += "& ${}$".format(row["acc"])
 
-            if row[6] == "True":
-                csv += "$\mathbf{"+row[3]+" \pm"+row[4]+" }$ \\\\ \n"
+        for metric in metric_list:
+            if row["is_best_{}".format(metric)] == "True":
+                csv += "& $ \mathbf{"+row[metric]+" }$"
             else:
-                csv += "$ {} \pm {} $ \\\\ \n".format(row[3],row[4])
-        else:
-            if row[5] == "True":
-                csv += row[0]+" & $ \mathbf{"+row[1]+" }$ &"
-            else:
-                csv += "{} & $ {}$ &".format(row[0],row[1])
-
-            if row[6] == "True":
-                csv += "$\mathbf{"+row[3]+"}$ \\\\ \n"
-            else:
-                csv += "${}$ \\\\ \n".format(row[3])
-
+                csv += "& $"+row[metric]+"$"
+        csv += "\\\\ \n"
 
     with open("../results/{}/attMetr_latex_table.csv".format(exp_id),"w") as text:
         print(csv,file=text)
 
-    plt.figure()
-    plt.errorbar(np.arange(len(res_list)),[row[1] for row in res_list],[row[2] for row in res_list],color="darkblue",fmt='o')
-    plt.bar(np.arange(len(res_list)),[row[1] for row in res_list],0.9,color="lightblue",linewidth=0.5,edgecolor="darkblue")
-    plt.ylabel("DAUC")
-    plt.ylim(bottom=0)
-    plt.xticks(np.arange(len(res_list)),[row[0] for row in res_list],rotation=45,ha="right")
-    plt.tight_layout()
-    plt.savefig("../vis/{}/attMetr_dauc.png".format(exp_id))
+    metric_to_label = {"dele":"DAUC","add":"IAUC","spars":"Sparsity"}
+    for metric in ["dele","add","spars"]:
 
-    res_list = sorted(res_list,key=lambda x:x[3])
+        res_list = sorted(res_list,key=lambda x:x[metric])
 
-    plt.figure()
-    plt.errorbar(np.arange(len(res_list)),[row[3] for row in res_list],[row[4] for row in res_list],color="darkblue",fmt='o')
-    plt.bar(np.arange(len(res_list)),[row[3] for row in res_list],0.9,color="lightblue",linewidth=0.5,edgecolor="darkblue")
-    plt.ylabel("IAUC")    
-    plt.ylim(bottom=0)
-    plt.xticks(np.arange(len(res_list)),[row[0] for row in res_list],rotation=45,ha="right")
-    plt.tight_layout()
-    plt.savefig("../vis/{}/attMetr_iauc.png".format(exp_id))
+        plt.figure()
+        plt.errorbar(np.arange(len(res_list)),[row[metric] for row in res_list],[row[metric+"_std"] for row in res_list],color="darkblue",fmt='o')
+        plt.bar(np.arange(len(res_list)),[row[metric] for row in res_list],0.9,color="lightblue",linewidth=0.5,edgecolor="darkblue")
+        plt.ylabel(metric_to_label[metric])
+        plt.ylim(bottom=0)
+        plt.xticks(np.arange(len(res_list)),[row["id"] for row in res_list],rotation=45,ha="right")
+        plt.tight_layout()
+        plt.savefig("../vis/{}/attMetr_{}.png".format(exp_id,metric_to_label[metric.lower()]))
+
+def reverseLabDic(id_to_label,exp_id):
+
+    label_to_id = {}
+
+    for id in id_to_label:
+        label = id_to_label[id]
+
+        if label == "BR-NPA":
+            if exp_id == "CUB10":
+                id = "clus_masterClusRed"
+            else:
+                id = "clus_mast"
+        elif id.startswith("noneRed"):
+            id = "noneRed"
+
+        label_to_id[label] = id 
+    
+    return label_to_id
+
+def addAccuracy(res_list,exp_id):
+    res_list_with_acc = []
+    id_to_label= getId_to_label()
+
+    label_to_id = reverseLabDic(id_to_label,exp_id)
+
+    for row in res_list:
+
+        model_id = label_to_id[row["id"]]
+
+        print(exp_id,model_id)
+
+        file_path= glob.glob("../results/{}/model{}_epoch*_test.csv".format(exp_id,model_id))[0]
+
+        file = np.genfromtxt(file_path,delimiter="\n",dtype=str)
+
+        last_row = file[-1].split(",")
+
+        accuracy = float(last_row[0])
+
+        row["acc"] = str(round(100*accuracy,1))
+        row["acc_full_precision"] = accuracy
+
+        res_list_with_acc.append(row)
+    
+    bestAcc = max([row["acc_full_precision"] for row in res_list_with_acc])
+
+    res_list_with_acc_and_best = []
+    for row in res_list_with_acc:
+        
+        row["is_max_acc"] = (row["acc_full_precision"]==bestAcc)
+        print(row["acc_full_precision"],bestAcc,row["is_max_acc"])
+        res_list_with_acc_and_best.append(row)
+
+    return res_list_with_acc_and_best
 
 def main(argv=None):
 
@@ -2062,6 +2126,7 @@ def main(argv=None):
     argreader.parser.add_argument('--att_metrics',action="store_true",help='Grad exp plot') 
     argreader.parser.add_argument('--att_metrics_stats',action="store_true",help='Grad exp plot') 
     argreader.parser.add_argument('--not_ignore_model',action="store_true",help='Grad exp plot') 
+    argreader.parser.add_argument('--all_att_metrics',action="store_true",help='Grad exp plot') 
 
     argreader = load_data.addArgs(argreader)
 
@@ -2201,15 +2266,19 @@ def main(argv=None):
         gradExp2()
     if args.att_metrics:
         if not os.path.exists("../results/{}/attMetrics_add.csv".format(args.exp_id)):
-            attMetrics(args.exp_id,add=True,ignore_model=not args.not_ignore_model)
+            attMetrics(args.exp_id,metric="Add",ignore_model=not args.not_ignore_model)
         
         if not os.path.exists("../results/{}/attMetrics_del.csv".format(args.exp_id)):
-            attMetrics(args.exp_id,add=False,ignore_model=not args.not_ignore_model)
+            attMetrics(args.exp_id,metric="Del",ignore_model=not args.not_ignore_model)
                
-        ttest_attMetr(args.exp_id,add=True)
-        ttest_attMetr(args.exp_id,add=False)
+        if not os.path.exists("../results/{}/attMetrics_spars.csv".format(args.exp_id)):
+            attMetrics(args.exp_id,metric="Spars",ignore_model=not args.not_ignore_model)
+         
+        ttest_attMetr(args.exp_id,metric="Add")
+        ttest_attMetr(args.exp_id,metric="Del")
+        ttest_attMetr(args.exp_id,metric="Spars")
 
-        latex_table_figure(args.exp_id)
+        latex_table_figure(args.exp_id,full=args.all_att_metrics)
 
     if args.att_metrics_stats:
         attMetricsStats(args.exp_id)
