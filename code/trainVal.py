@@ -429,7 +429,13 @@ def epochImgEval(model, log_interval, loader, epoch, args, metricEarlyStop, mode
             break
 
     if mode == "test":
-        intermVarDict = update.saveIntermediateVariables(intermVarDict, args.exp_id, args.model_id, epoch, mode)
+
+        if args.att_metrics_post_hoc:
+            suff = "_"+args.att_metrics_post_hoc
+        else:
+            suff = ""
+
+        intermVarDict = update.saveIntermediateVariables(intermVarDict, args.exp_id, args.model_id+suff, epoch, mode)
 
     writeSummaries(metrDict, totalImgNb, epoch, mode, args.model_id, args.exp_id)
 
@@ -1014,7 +1020,7 @@ def train(gpu,args,trial):
                 kwargsTest["model"] = net
                 kwargsTest["epoch"] = bestEpoch
 
-                if not args.grad_exp_test:
+                if not args.grad_exp_test:    
                     with torch.no_grad():
                         testFunc(**kwargsTest)
                 else:
@@ -1487,13 +1493,7 @@ def main(argv=None):
                     data = F.conv2d(data,blurWeight,padding=blurWeight.size(-1)//2,groups=blurWeight.size(0))
 
                 if args.att_metrics_post_hoc:
-                    if args.att_metrics_post_hoc.find("var") == -1 and args.att_metrics_post_hoc.find("smooth") == -1:
-                        argList = [data,targ]
-                    else:
-                        argList = [data]
-                        kwargs["target"] = targ
-
-                    attMaps = attrFunc(*argList,**kwargs)
+                    attMaps = applyPostHoc(attrFunc,data,targ,kwargs,args)
                 else:
                     attMaps = attrFunc(i)
 
@@ -1567,6 +1567,23 @@ def main(argv=None):
     else:
         train(0,args,None)
 
+def applyPostHoc(attrFunc,data,targ,kwargs,args):
+
+    attMaps = []
+    for i in range(len(data)):
+
+        if args.att_metrics_post_hoc.find("var") == -1 and args.att_metrics_post_hoc.find("smooth") == -1:
+            argList = [data[i:i+1],targ[i:i+1]]
+        else:
+            argList = [data[i:i+1]]
+            kwargs["target"] = targ[i:i+1]
+
+        attMap = attrFunc(*argList,**kwargs)
+
+        attMaps.append(attMap)
+    
+    return torch.cat(attMaps,dim=0)
+    
 def getAttMetrMod(net,testDataset,args):
     if args.att_metrics_post_hoc == "gradcam":
         netGradMod = modelBuilder.GradCamMod(net)
