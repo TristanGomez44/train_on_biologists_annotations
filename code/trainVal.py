@@ -1076,8 +1076,9 @@ def main(argv=None):
 
     argreader.parser.add_argument('--viz_id', type=str, help='The visualization id.',default="")
 
-    argreader.parser.add_argument('--attention_metrics', type=int, help='To compute the DAUC metric')
-    argreader.parser.add_argument('--attention_metrics_add', type=int, help='To compute the IAUC metrics')
+    argreader.parser.add_argument('--attention_metrics', type=str, help='The attention metric to compute.')
+    argreader.parser.add_argument('--att_metrics_img_nb', type=int, help='The nb of images on which to compute the att metric.')
+    
     argreader.parser.add_argument('--att_metrics_post_hoc', type=str, help='The post-hoc method to use instead of the model ')
     #argreader.parser.add_argument('--att_metrics_gradcam_pp', type=str2bool, help='To use gradcam++ instead of the model')
     #argreader.parser.add_argument('--att_metrics_guided', type=str2bool, help='To use guided backprop instead of the model')
@@ -1413,10 +1414,9 @@ def main(argv=None):
         else:
             np.save("../results/{}/rise_maps_{}_epoch{}_{}test.npy".format(args.exp_id,args.model_id,bestEpoch,suff),allRise.numpy())
 
-    elif args.attention_metrics or args.attention_metrics_add:
-        print("Attention metrics",args.attention_metrics,args.attention_metrics_add,args.attention_metrics or args.attention_metrics_add)
+    elif args.attention_metrics:
 
-        path_suff = "Add" if args.attention_metrics_add else "Del"
+        path_suff = args.attention_metrics
         model_id_suff = "-"+args.att_metrics_post_hoc if args.att_metrics_post_hoc else ""
               
         if args.att_metr_do_again or not os.path.exists("../results/{}/attMetr{}_{}{}.npy".format(args.exp_id,path_suff,args.model_id,model_id_suff)):
@@ -1447,16 +1447,15 @@ def main(argv=None):
             if args.att_metrics_post_hoc != "gradcam_pp":
                 torch.set_grad_enabled(False)
 
-            if args.attention_metrics:
-                nbImgs = args.attention_metrics
-            else:
-                nbImgs = args.attention_metrics_add 
+            nbImgs = args.att_metrics_img_nb
             print("nbImgs",nbImgs)
 
-            allScoreList = []
-            allStatsList = []
-            allPreds = []
-            allTarg = []
+            if args.attention_metrics != "Spars":
+                allScoreList = []
+                allPreds = []
+                allTarg = []
+            else:
+                allSpars = []
 
             torch.manual_seed(0)
             inds = torch.randint(len(testDataset),size=(nbImgs,))
@@ -1482,13 +1481,15 @@ def main(argv=None):
                     resDic = net(data)
                     scores = torch.softmax(resDic["pred"],dim=-1)
                 else:
+                    resDic = None
                     scores = net(data)[0]
 
-                predClassInd = scores.argmax(dim=-1)
-                allPreds.append(predClassInd.item())
-                allTarg.append(targ.item())
+                if args.attention_metrics in ["Add","Del"]:
+                    predClassInd = scores.argmax(dim=-1)
+                    allPreds.append(predClassInd.item())
+                    allTarg.append(targ.item())
                 
-                if args.attention_metrics_add:
+                if args.attention_metrics=="Add":
                     origData = data.clone()
                     data = F.conv2d(data,blurWeight,padding=blurWeight.size(-1)//2,groups=blurWeight.size(0))
 
@@ -1496,76 +1497,96 @@ def main(argv=None):
                     attMaps = applyPostHoc(attrFunc,data,targ,kwargs,args)
                 else:
                     attMaps = attrFunc(i)
-
                     mask = torch.ones_like(attMaps)
 
                 attMaps = (attMaps-attMaps.min())/(attMaps.max()-attMaps.min())
 
-                allAttMaps = attMaps.clone().cpu()
-                origAttMaps = attMaps.clone()
-                statsList = []
-
-                totalPxlNb = attMaps.size(2)*attMaps.size(3)
-                leftPxlNb = totalPxlNb
-
-                if args.prototree or args.protonet:
-                    stepNb = 49
-                elif args.att_metrics_few_steps:
-                    stepNb = 196 
+                if args.attention_metrics=="Spars":
+                    sparsity= computeSpars(data.size(),attMaps,args,resDic)
+                    allSpars.append(sparsity)
                 else:
-                    stepNb = totalPxlNb
+                    allAttMaps = attMaps.clone().cpu()
+                    statsList = []
 
-                score_prop_list = []
+                    totalPxlNb = attMaps.size(2)*attMaps.size(3)
+                    leftPxlNb = totalPxlNb
 
-                ratio = data.size(-1)//attMaps.size(-1)
-                backgrPatch = data[0,:,:ratio,:ratio]
-    
-                stepCount = 0
-                while leftPxlNb > 0:
+                    if args.prototree or args.protonet:
+                        stepNb = 49
+                    elif args.att_metrics_few_steps:
+                        stepNb = 196 
+                    else:
+                        stepNb = totalPxlNb
 
-                    attMin,attMean,attMax = attMaps.min().item(),attMaps.mean().item(),attMaps.max().item()
-                    statsList.append((attMin,attMean,attMax))
+                    score_prop_list = []
 
-                    _,ind_max = (attMaps)[0,0].view(-1).topk(k=totalPxlNb//stepNb)
-                    ind_max = ind_max[:leftPxlNb]
-
-                    x_max,y_max = ind_max % attMaps.shape[3],ind_max // attMaps.shape[3]
-                    
                     ratio = data.size(-1)//attMaps.size(-1)
 
-                    for i in range(len(x_max)):
+                    stepCount = 0
+                    while leftPxlNb > 0:
+
+                        attMin,attMean,attMax = attMaps.min().item(),attMaps.mean().item(),attMaps.max().item()
+                        statsList.append((attMin,attMean,attMax))
+
+                        _,ind_max = (attMaps)[0,0].view(-1).topk(k=totalPxlNb//stepNb)
+                        ind_max = ind_max[:leftPxlNb]
+
+                        x_max,y_max = ind_max % attMaps.shape[3],ind_max // attMaps.shape[3]
                         
-                        if args.attention_metrics_add:
-                            data[0,:,y_max[i]*ratio:y_max[i]*ratio+ratio,x_max[i]*ratio:x_max[i]*ratio+ratio] = origData[0,:,y_max[i]*ratio:y_max[i]*ratio+ratio,x_max[i]*ratio:x_max[i]*ratio+ratio]
+                        ratio = data.size(-1)//attMaps.size(-1)
+
+                        for i in range(len(x_max)):
+                            
+                            if args.attention_metrics=="Add":
+                                data[0,:,y_max[i]*ratio:y_max[i]*ratio+ratio,x_max[i]*ratio:x_max[i]*ratio+ratio] = origData[0,:,y_max[i]*ratio:y_max[i]*ratio+ratio,x_max[i]*ratio:x_max[i]*ratio+ratio]
+                            elif args.attention_metrics=="Del":
+                                data[0,:,y_max[i]*ratio:y_max[i]*ratio+ratio,x_max[i]*ratio:x_max[i]*ratio+ratio] = 0
+                            else:
+                                raise ValueError("Unkown attention metric",args.attention_metrics)
+
+                            attMaps[0,:,y_max[i],x_max[i]] = -1                       
+
+                        leftPxlNb -= totalPxlNb//stepNb
+                        if stepCount % 30 == 0:
+                            allAttMaps = torch.cat((allAttMaps,torch.clamp(attMaps,0,attMaps.max().item()).cpu()),dim=0)
+                            allData = torch.cat((allData,data.cpu()),dim=0)
+                        stepCount += 1
+
+                        if not args.prototree:
+                            resDic = net(data)
+                            score = torch.softmax(resDic["pred"],dim=-1)[:,predClassInd[0]]
                         else:
-                            data[0,:,y_max[i]*ratio:y_max[i]*ratio+ratio,x_max[i]*ratio:x_max[i]*ratio+ratio] = 0
+                            score = net(data)[0][:,predClassInd[0]]
 
-                        attMaps[0,:,y_max[i],x_max[i]] = -1                       
+                        score_prop_list.append((leftPxlNb,score.item()))
 
-                    leftPxlNb -= totalPxlNb//stepNb
-                    if stepCount % 30 == 0:
-                        allAttMaps = torch.cat((allAttMaps,torch.clamp(attMaps,0,attMaps.max().item()).cpu()),dim=0)
-                        allData = torch.cat((allData,data.cpu()),dim=0)
-                    stepCount += 1
-
-                    if not args.prototree:
-                        resDic = net(data)
-                        score = torch.softmax(resDic["pred"],dim=-1)[:,predClassInd[0]]
-                    else:
-                        score = net(data)[0][:,predClassInd[0]]
-
-                    score_prop_list.append((leftPxlNb,score.item()))
-
-                allScoreList.append(score_prop_list)
+                    allScoreList.append(score_prop_list)
 
             if args.att_metrics_post_hoc:
                 args.model_id = args.model_id + "-"+args.att_metrics_post_hoc
             
-            np.save("../results/{}/attMetr{}_{}.npy".format(args.exp_id,path_suff,args.model_id),np.array(allScoreList,dtype=object))
-            np.save("../results/{}/attMetrPreds{}_{}.npy".format(args.exp_id,path_suff,args.model_id),np.array(allPreds,dtype=object))
-        
+            if args.attention_metrics == "Spars":
+                np.save("../results/{}/attMetrSpars_{}.npy".format(args.exp_id,args.model_id),np.array(allSpars,dtype=object))
+            else:
+                np.save("../results/{}/attMetr{}_{}.npy".format(args.exp_id,path_suff,args.model_id),np.array(allScoreList,dtype=object))
+                np.save("../results/{}/attMetrPreds{}_{}.npy".format(args.exp_id,path_suff,args.model_id),np.array(allPreds,dtype=object))
+    
     else:
         train(0,args,None)
+
+def computeSpars(data_shape,attMaps,args,resDic):
+    if args.att_metrics_post_hoc:
+        features = None 
+    else:
+        features = resDic["features"]
+        if "attMaps" in resDic:
+            attMaps = resDic["attMaps"]
+        else:
+            attMaps = torch.ones(data_shape[0],1,features.size(2),features.size(3)).to(features.device)
+
+    sparsity = metrics.compAttMapSparsity(attMaps,features)
+    sparsity = sparsity/data_shape[0]
+    return sparsity 
 
 def applyPostHoc(attrFunc,data,targ,kwargs,args):
 
@@ -1578,8 +1599,13 @@ def applyPostHoc(attrFunc,data,targ,kwargs,args):
             argList = [data[i:i+1]]
             kwargs["target"] = targ[i:i+1]
 
-        attMap = attrFunc(*argList,**kwargs)
+        attMap = torch.tensor(attrFunc(*argList,**kwargs)).to(data.device)
 
+        if len(attMap.size()) == 2:
+            attMap = attMap.unsqueeze(0).unsqueeze(0)
+        elif len(attMap.size()) == 3:
+            attMap = attMap.unsqueeze(0)
+        
         attMaps.append(attMap)
     
     return torch.cat(attMaps,dim=0)
