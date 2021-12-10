@@ -96,7 +96,7 @@ class FineGrainedDataset(Dataset):
             image = self.transform(image)
 
             if self.withSeg:
-                imageSeg = Image.open(self.image_path[image_id]).convert('RGB')
+                imageSeg = Image.open(self.imageSeg_path[image_id]).convert('RGB')
                 for t in self.transform.transforms:
                     if (not type(t) is transforms.Normalize) and (not type(t) is transforms.ColorJitter):
                         imageSeg = t(imageSeg)
