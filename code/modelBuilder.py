@@ -135,7 +135,6 @@ class CNN2D(FirstModel):
         retDict = {}
 
         if not "attMaps" in featModRetDict.keys():
-            retDict["attMaps"] = spatialWeights
             retDict["features"] = features
         else:
             retDict["attMaps"] = featModRetDict["attMaps"]
