@@ -1670,9 +1670,21 @@ def attMetrics(exp_id,add=False,ignore_model=False):
 def getIndsToUse(paths):
     
     modelToIgn = []
-    targs = np.load(paths[0].replace("Add","Targ").replace("Del","Targ"))
-    indsToUseBool = np.array([True for _ in range(len(targs))])
-    indsToUseDic = {}
+
+    model_targ_ind = 0
+
+    while model_targ_ind < len(paths) and not os.path.exists(paths[model_targ_ind].replace("Add","Targ").replace("Del","Targ")):
+        model_targ_ind += 1
+
+    if model_targ_ind == len(paths):
+        use_all_inds = True
+    else:
+        use_all_inds = False 
+        targs = np.load(paths[model_targ_ind])
+        
+        indsToUseBool = np.array([True for _ in range(len(targs))])
+        indsToUseDic = {}
+
     for path in paths:
         
         if os.path.basename(path).find("Add") != -1:
@@ -1683,7 +1695,11 @@ def getIndsToUse(paths):
         model_id_nosuff = model_id.replace("-max","").replace("-onlyfirst","").replace("-fewsteps","")
 
         predPath = path.replace("Add","Preds").replace("Del","Preds").replace(model_id,model_id_nosuff)
-        if os.path.exists(predPath):
+
+        if not os.path.exists(predPath):
+            predPath = path.replace("Add","PredsAdd").replace("Del","PredsDel").replace(model_id,model_id_nosuff)
+
+        if os.path.exists(predPath) and not use_all_inds:
             preds = np.load(predPath,allow_pickle=True)
 
             if preds.shape != targs.shape:
@@ -1701,7 +1717,11 @@ def getIndsToUse(paths):
             modelToIgn.append(model_id)
             print("no predpath",predPath)
 
-    indsToUse =  np.argwhere(indsToUseBool)
+    if use_all_inds:
+        indsToUse = None
+    else:
+        indsToUse =  np.argwhere(indsToUseBool)
+        
     return indsToUse,modelToIgn 
 
 def getId_to_label():
@@ -1719,7 +1739,8 @@ def getId_to_label():
             "noneRed_smallimg-varGrad":"VarGrad",
             "noneRed_smallimg-smoothGrad":"SmoothGrad",
             "noneRed_smallimg-guided":"GuidedBP",
-            "interbyparts":"InterByParts"}
+            "interbyparts":"InterByParts",
+            "abn":"ABN"}
 
 def ttest_attMetr(exp_id,add=False):
 
