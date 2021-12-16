@@ -102,8 +102,12 @@ class FineGrainedDataset(Dataset):
                         imageSeg = t(imageSeg)
 
                 return image, self.image_label[image_id],imageSeg
+            
+            elif self.root.find("embryo_img_test") != -1:
+                return image, self.image_label[image_id],self.image_path[image_id]
             else:
                 return image, self.image_label[image_id]
+
         else:
 
             imageSalPath = self.image_path[image_id].replace(self.root,self.root+"_sal").replace(".jpg",".png")

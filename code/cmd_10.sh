@@ -16,7 +16,8 @@ python3 processResults.py -c model_cub10.config --exp_id CUB10 --plot_points_ima
 python3 processResults.py -c model_cub10.config --exp_id CUB10 --plot_points_image_dataset_grid --image_nb 12 \
 													--model_ids noneRed none_mast        \
 													--plot_id strides_none \
-													--ind_to_keep 1 3 9 10
+													--ind_to_keep 1 3 9 10 \
+													--interp True True
 
 ################# Other datasets ##############################
 

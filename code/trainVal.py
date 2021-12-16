@@ -237,13 +237,11 @@ def computeLoss(args, output, target, resDict, data,reduction="mean"):
         if args.transfer_att_maps:
             loss += args.att_weights*computeAttDiff(args.att_term_included,args.att_term_reg,resDict["attMaps"],resDict["features"],resDict["master_net_attMaps"],resDict["master_net_features"])
 
-    nbTerms = 1
     for key in resDict.keys():
         if key.find("pred_") != -1:
             loss += args.nll_weight * F.cross_entropy(resDict[key], target)
-            nbTerms += 1
 
-    loss = loss/nbTerms
+    loss = loss
 
     return loss
 
@@ -354,8 +352,13 @@ def epochImgEval(model, log_interval, loader, epoch, args, metricEarlyStop, mode
 
         if args.with_seg:
             seg=batch[2]
+            path_list = None
+        elif args.dataset_test.find("emb") != -1:
+            seg = None
+            path_list = batch[2]
         else:
             seg=None
+            path_list = None
 
         # Puting tensors on cuda
         if args.cuda:
@@ -419,8 +422,8 @@ def epochImgEval(model, log_interval, loader, epoch, args, metricEarlyStop, mode
 
         metrDict = metrics.updateMetrDict(metrDict, metDictSample)
 
-        if mode == "test":
-            writePreds(output, target, epoch, args.exp_id, args.model_id, args.class_nb, batch_idx,mode)
+        if mode == "test" and args.dataset_test.find("emb") != -1:
+            writePreds(output, target, epoch, args.exp_id, args.model_id, args.class_nb, batch_idx,mode,path_list)
 
         validBatch += 1
         totalImgNb += target.size(0)
@@ -460,17 +463,17 @@ def epochImgEval(model, log_interval, loader, epoch, args, metricEarlyStop, mode
 
     return metrDict[metricEarlyStop]
 
-def writePreds(predBatch, targBatch, epoch, exp_id, model_id, class_nb, batch_idx,mode):
+def writePreds(predBatch, targBatch, epoch, exp_id, model_id, class_nb, batch_idx,mode,path_list):
     csvPath = "../results/{}/{}_epoch{}_{}.csv".format(exp_id, model_id, epoch,mode)
 
-    if (batch_idx == 0 and epoch == 1) or not os.path.exists(csvPath):
+    if (batch_idx == 0 and (epoch == 1 or mode == "test")) or not os.path.exists(csvPath):
         with open(csvPath, "w") as text_file:
-            print("targ," + ",".join(np.arange(class_nb).astype(str)), file=text_file)
+            print("file,targ," + ",".join(np.arange(class_nb).astype(str)), file=text_file)
 
     with open(csvPath, "a") as text_file:
         for i in range(len(predBatch)):
-            print(str(targBatch[i].cpu().detach().numpy()) + "," + ",".join(
-                predBatch[i].cpu().detach().numpy().astype(str)), file=text_file)
+            print(path_list[i]+","+str(targBatch[i].cpu().detach().numpy()) + "," + ",".join(
+                predBatch[i][:class_nb].cpu().detach().numpy().astype(str)), file=text_file)
 
 def writeSummaries(metrDict, totalImgNb, epoch, mode, model_id, exp_id):
     ''' Write the metric computed during an evaluation in a csv file
