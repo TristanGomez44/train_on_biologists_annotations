@@ -260,9 +260,7 @@ def plotPointsImageDatasetGrid(exp_id,imgNb,epochs,model_ids,reduction_fact_list
                 startInd = 0
 
                 classes = sorted(map(lambda x:x.split("/")[-2],glob.glob("../data/{}/*/".format(args.dataset_test))))
-                print(classes)
                 for ind in range(class_index):
-                    print(ind,classes[ind])
                     className = classes[ind]
                     startInd += len(glob.glob("../data/{}/{}/*".format(args.dataset_test,className)))
 
@@ -1756,7 +1754,7 @@ def ttest_attMetr(exp_id,metric="del"):
     print("../results/{}/attMetrics_{}_pop.csv".format(exp_id,suff))
     arr = np.genfromtxt("../results/{}/attMetrics_{}_pop.csv".format(exp_id,suff),dtype=str,delimiter=",")
 
-    arr = best_to_worst(arr,ascending=metric in ["Add","Spars"])
+    arr = best_to_worst(arr,ascending=metric in ["Add","Spars","Acc"])
 
     model_ids = arr[:,0]
 
@@ -1846,7 +1844,7 @@ def attMetricsStats(exp_id):
             plt.savefig("../vis/{}/attMetrStatsDel_{}_{}.png".format(exp_id,model_id,i))
             plt.close()                 
 
-def latex_table_figure(exp_id,print_std=False,full=False):
+def latex_table_figure(exp_id,print_std=False,full=False,with_std=False):
 
     del_arr = np.genfromtxt("../results/{}/attMetrics_Del_pop.csv".format(exp_id),dtype=str,delimiter=",")
     add_arr = np.genfromtxt("../results/{}/attMetrics_Add_pop.csv".format(exp_id),dtype=str,delimiter=",")
@@ -1904,17 +1902,11 @@ def latex_table_figure(exp_id,print_std=False,full=False):
         csv += row["id"]
         
         if full:
-            if row["is_max_acc"] == "True":
-                print("max acc")
-                csv += "& $\mathbf{"+row["acc"]+" }$"
-            else:
-                csv += "& ${}$".format(row["acc"])
+            csv += latex_fmt(row["acc"],row["acc_std"],row["is_max_acc"] == "True",with_std=with_std)
 
         for metric in metric_list:
-            if row["is_best_{}".format(metric)] == "True":
-                csv += "& $ \mathbf{"+row[metric]+" }$"
-            else:
-                csv += "& $"+row[metric]+"$"
+            csv += latex_fmt(row[metric],row[metric+"_std"],row["is_best_{}".format(metric)] == "True",with_std=with_std)
+
         csv += "\\\\ \n"
 
     with open("../results/{}/attMetr_latex_table.csv".format(exp_id),"w") as text:
@@ -1933,6 +1925,19 @@ def latex_table_figure(exp_id,print_std=False,full=False):
         plt.xticks(np.arange(len(res_list)),[row["id"] for row in res_list],rotation=45,ha="right")
         plt.tight_layout()
         plt.savefig("../vis/{}/attMetr_{}.png".format(exp_id,metric_to_label[metric.lower()]))
+
+def latex_fmt(mean,std,is_best,with_std=False):
+
+    if with_std:
+        if is_best:
+            return "&$\mathbf{"+str(mean)+"\pm"+str(std)+"}$"
+        else:
+            return "&$"+str(mean)+"\pm"+str(std)+"$"
+    else:
+        if is_best:
+            return "&$\mathbf{"+str(mean)+" }$"
+        else:
+            return "&$"+str(mean)+"$"
 
 def reverseLabDic(id_to_label,exp_id):
 
@@ -1959,21 +1964,25 @@ def addAccuracy(res_list,exp_id):
 
     label_to_id = reverseLabDic(id_to_label,exp_id)
 
+    acc_list = np.genfromtxt("../results/{}/attMetrics_Acc.csv".format(exp_id),delimiter=",",dtype=str)
+    acc_dic = {model_id:{"mean":mean,"std":std} for (model_id,mean,std) in acc_list}
+
     for row in res_list:
 
         model_id = label_to_id[row["id"]]
 
         print(exp_id,model_id)
 
-        file_path= glob.glob("../results/{}/model{}_epoch*_test.csv".format(exp_id,model_id))[0]
+        #file_path= glob.glob("../results/{}/model{}_epoch*_test.csv".format(exp_id,model_id))[0]
+        #file = np.genfromtxt(file_path,delimiter="\n",dtype=str)
+        #last_row = file[-1].split(",")
+        #accuracy = float(last_row[0])
+        
+        accuracy = float(acc_dic[model_id]["mean"])
+        accuracy_std = float(acc_dic[model_id]["std"])
 
-        file = np.genfromtxt(file_path,delimiter="\n",dtype=str)
-
-        last_row = file[-1].split(",")
-
-        accuracy = float(last_row[0])
-
-        row["acc"] = str(round(100*accuracy,1))
+        row["acc"] = str(round(accuracy,1))
+        row["acc_std"] = str(round(accuracy_std,1))
         row["acc_full_precision"] = accuracy
 
         res_list_with_acc.append(row)
@@ -1988,6 +1997,52 @@ def addAccuracy(res_list,exp_id):
         res_list_with_acc_and_best.append(row)
 
     return res_list_with_acc_and_best
+
+def accuracyPerVideo(exp_id,nbClass=16):
+
+    pred_file_paths = glob.glob("../results/{}/*_epoch*_test.csv".format(exp_id))
+    pred_file_paths = list(filter(lambda x:os.path.basename(x).find("model") == -1,pred_file_paths))
+
+    print(pred_file_paths)
+    all_accuracy_list_csv = ""
+    all_accuracy_mean_csv = ""
+
+    for path in pred_file_paths:
+
+        csv = np.genfromtxt(path,delimiter=",",dtype=str)[1:]
+
+        vidNames = list(map(lambda x:os.path.basename(x).split("_")[0],csv[:,0]))
+
+        vid_corr_dic = {}
+        vid_frameNb_dic = {}
+
+        predicted_class = csv[:,2:2+nbClass].astype(float).argmax(axis=1)
+        gt_class = csv[:,1].astype(int)   
+        correct = (predicted_class==gt_class)
+
+        for i in range(len(csv)):
+            if vidNames[i] in vid_corr_dic:
+                vid_corr_dic[vidNames[i]] += 1*correct[i]
+                vid_frameNb_dic[vidNames[i]] += 1
+            else:
+                vid_corr_dic[vidNames[i]] = 1*correct[i]
+                vid_frameNb_dic[vidNames[i]] = 1
+        
+        print(vid_corr_dic)
+        vid_acc_dic = {vid:100*vid_corr_dic[vid]/vid_frameNb_dic[vid] for vid in vid_corr_dic}
+
+        model_id = os.path.basename(path).split("_epoch")[0]
+        
+        acc_list = list(vid_acc_dic.values())
+
+        all_accuracy_list_csv += model_id + ","+",".join(map(str,acc_list))+"\n"
+        all_accuracy_mean_csv += model_id + ","+str(np.mean(acc_list))+","+str(np.std(acc_list))+"\n"
+
+    with open("../results/{}/attMetrics_Acc_pop.csv".format(exp_id),"w") as file:
+        print(all_accuracy_list_csv,file=file)
+
+    with open("../results/{}/attMetrics_Acc.csv".format(exp_id),"w") as file:
+        print(all_accuracy_mean_csv,file=file)
 
 def main(argv=None):
 
@@ -2123,11 +2178,16 @@ def main(argv=None):
 
     ####################################### Attention metrics #################################################
 
-    argreader.parser.add_argument('--att_metrics',action="store_true",help='Grad exp plot') 
-    argreader.parser.add_argument('--att_metrics_stats',action="store_true",help='Grad exp plot') 
-    argreader.parser.add_argument('--not_ignore_model',action="store_true",help='Grad exp plot') 
-    argreader.parser.add_argument('--all_att_metrics',action="store_true",help='Grad exp plot') 
+    argreader.parser.add_argument('--att_metrics',action="store_true") 
+    argreader.parser.add_argument('--att_metrics_stats',action="store_true") 
+    argreader.parser.add_argument('--not_ignore_model',action="store_true") 
+    argreader.parser.add_argument('--all_att_metrics',action="store_true") 
+    argreader.parser.add_argument('--with_std',action="store_true") 
 
+    ###################################### Accuracy per video ############################################""
+
+    argreader.parser.add_argument('--accuracy_per_video',action="store_true") 
+    
     argreader = load_data.addArgs(argreader)
 
     #Reading the comand line arg
@@ -2278,10 +2338,13 @@ def main(argv=None):
         ttest_attMetr(args.exp_id,metric="Del")
         ttest_attMetr(args.exp_id,metric="Spars")
 
-        latex_table_figure(args.exp_id,full=args.all_att_metrics)
+        latex_table_figure(args.exp_id,full=args.all_att_metrics,with_std=args.with_std)
 
     if args.att_metrics_stats:
         attMetricsStats(args.exp_id)
+    if args.accuracy_per_video:
+        accuracyPerVideo(args.exp_id)
+        ttest_attMetr(args.exp_id,metric="Acc")
 
 if __name__ == "__main__":
     main()
