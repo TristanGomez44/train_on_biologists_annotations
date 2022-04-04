@@ -1,4 +1,5 @@
 
+from sndhdr import what
 from scipy.ndimage.interpolation import rotate
 from args import ArgReader
 from args import str2bool
@@ -59,8 +60,8 @@ import formatData
 
 import sqlite3
 
-
 from scipy.signal import savgol_filter
+from scipy.stats import kendalltau
 
 def plotPointsImageDataset(imgNb,redFact,plotDepth,args):
 
@@ -1615,11 +1616,14 @@ def cat(all,new):
         all = torch.cat((all,new),dim=0)
     return all
 
-def attMetrics(exp_id,metric="del",ignore_model=False):
+def attMetrics(exp_id,metric="Del",ignore_model=False):
 
     suff = metric
 
     paths = sorted(glob.glob("../results/{}/attMetr{}_*.npy".format(exp_id,suff)))
+    paths = list(filter(lambda x:os.path.basename(x).find("noise") ==-1,paths))
+    paths = list(filter(lambda x:os.path.basename(x).find("imgBG") ==-1,paths))
+    paths = list(filter(lambda x:os.path.basename(x).find("maskFeat") ==-1,paths))
 
     resDic = {}
     resDic_pop = {}
@@ -1654,6 +1658,26 @@ def attMetrics(exp_id,metric="del",ignore_model=False):
             
                 resDic_pop[model_id] = np.array(allAuC)
                 resDic[model_id] = resDic_pop[model_id].mean()
+    elif metric == "Lift":
+
+        for path in paths:
+
+            model_id = os.path.basename(path).split("attMetr{}_".format(suff))[1].split(".npy")[0]
+            
+            if model_id not in modelToIgn:
+                
+                scores = np.load(path,allow_pickle=True)[:,0] 
+                scores_mask = np.load(path.replace("Lift","LiftMask"),allow_pickle=True)[:,0] 
+                scores_invmask = np.load(path.replace("Lift","LiftInvMask"),allow_pickle=True)[:,0]  
+
+                iic = 100*(scores<scores_mask).mean(keepdims=True)
+                diff = (scores-scores_mask)
+                ad = 100*diff*(diff>0)/scores
+                add = 100*(scores-scores_invmask)/scores
+
+                resDic[model_id] = str(iic.item())+","+str(ad.mean())+","+str(add.mean())
+                resDic_pop[model_id] = {"IIC":iic,"AD":ad,"ADD":add}
+
     else:
         for path in paths:
 
@@ -1669,9 +1693,18 @@ def attMetrics(exp_id,metric="del",ignore_model=False):
     with open("../results/{}/attMetrics_{}.csv".format(exp_id,suff),"w") as file:
         print(csv,file=file)
 
-    csv = "\n".join(["{},{}".format(key,",".join(resDic_pop[key].astype("str"))) for key in resDic_pop])
-    with open("../results/{}/attMetrics_{}_pop.csv".format(exp_id,suff),"w") as file:
-        print(csv,file=file)
+    if metric == "Lift":
+
+        for metric in ["IIC","AD","ADD"]:
+
+            csv = "\n".join(["{},{}".format(key,",".join(resDic_pop[key][metric].astype("str"))) for key in resDic_pop])
+            with open("../results/{}/attMetrics_{}_pop.csv".format(exp_id,metric),"w") as file:
+                print(csv,file=file)
+
+    else:
+        csv = "\n".join(["{},{}".format(key,",".join(resDic_pop[key].astype("str"))) for key in resDic_pop])
+        with open("../results/{}/attMetrics_{}_pop.csv".format(exp_id,suff),"w") as file:
+            print(csv,file=file)
 
 def getIndsToUse(paths,metric):
     
@@ -1727,7 +1760,7 @@ def getIndsToUse(paths,metric):
         
     return indsToUse,modelToIgn 
 
-def getId_to_label():
+def get_id_to_label():
     return {"bilRed":"B-CNN",
             "bilRed_1map":"B-CNN (1 map)",
             "clus_masterClusRed":"BR-NPA",
@@ -1738,6 +1771,7 @@ def getId_to_label():
             "noneRed-gradcam":"Grad-CAM",
             "noneRed-gradcam_pp":"Grad-CAM++",
             "noneRed-score_map":"Score-CAM",
+            "noneRed-ablation_cam":"Ablation-CAM",
             "noneRed-rise":"RISE",
             "noneRed_smallimg-varGrad":"VarGrad",
             "noneRed_smallimg-smoothGrad":"SmoothGrad",
@@ -1745,16 +1779,45 @@ def getId_to_label():
             "interbyparts":"InterByParts",
             "abn":"ABN"}
 
+def get_label_to_id():
+    id_to_label = get_id_to_label()
+    return {id_to_label[id]:id for id in id_to_label}
+
+def get_is_post_hoc():
+    return {"bilRed":False,
+            "bilRed_1map":False,
+            "clus_masterClusRed":False,
+            "clus_mast":False,
+            "noneRed":True,
+            "protopnet":False,
+            "prototree":False,
+            "noneRed-gradcam":True,
+            "noneRed-gradcam_pp":True,
+            "noneRed-score_map":True,
+            "noneRed-ablation_cam":True,
+            "noneRed-rise":True,
+            "noneRed_smallimg-varGrad":True,
+            "noneRed_smallimg-smoothGrad":True,
+            "noneRed_smallimg-guided":True,
+            "interbyparts":False,
+            "abn":False}
+
+
 def ttest_attMetr(exp_id,metric="del"):
 
-    id_to_label = getId_to_label()
+    id_to_label = get_id_to_label()
 
     suff = metric
 
-    print("../results/{}/attMetrics_{}_pop.csv".format(exp_id,suff))
     arr = np.genfromtxt("../results/{}/attMetrics_{}_pop.csv".format(exp_id,suff),dtype=str,delimiter=",")
 
-    arr = best_to_worst(arr,ascending=metric in ["Add","Spars","Acc"])
+    metric_to_max = []
+    what_is_best = get_what_is_best()
+    for metric_ in what_is_best:
+        if what_is_best[metric_] == "max":
+            metric_to_max.append(metric_)
+
+    arr = best_to_worst(arr,ascending=metric in metric_to_max)
 
     model_ids = arr[:,0]
 
@@ -1844,76 +1907,131 @@ def attMetricsStats(exp_id):
             plt.savefig("../vis/{}/attMetrStatsDel_{}_{}.png".format(exp_id,model_id,i))
             plt.close()                 
 
-def latex_table_figure(exp_id,print_std=False,full=False,with_std=False):
+def loadArr(exp_id,metric,best):
+    arr = np.genfromtxt("../results/{}/attMetrics_{}_pop.csv".format(exp_id,metric),dtype=str,delimiter=",") 
+    arr_f = arr[:,1:].astype("float")
+    if best == "max":
+        best = arr_f.mean(axis=1).max()
+    else:
+        best = arr_f.mean(axis=1).min()
+    return arr,arr_f,best
 
-    del_arr = np.genfromtxt("../results/{}/attMetrics_Del_pop.csv".format(exp_id),dtype=str,delimiter=",")
-    add_arr = np.genfromtxt("../results/{}/attMetrics_Add_pop.csv".format(exp_id),dtype=str,delimiter=",")
-    spars_arr = np.genfromtxt("../results/{}/attMetrics_Spars_pop.csv".format(exp_id),dtype=str,delimiter=",")
+def find_perf(i,metric,arr_dic,arr_f_dic,best_dic):
+    ind = np.argwhere(arr_dic[metric][:,0] == arr_dic["Del"][i,0])[0,0]
+    mean = arr_f_dic[metric][ind].mean()
+    mean_rnd,std_rnd = round(mean,2),round(arr_f_dic[metric][ind].std(),2)
+    is_best = (mean==best_dic[metric])
+    return mean_rnd,std_rnd,is_best
 
-    del_arr_f = del_arr[:,1:].astype("float")
-    add_arr_f = add_arr[:,1:].astype("float")
-    spars_arr_f = spars_arr[:,1:].astype("float")
+def processRow(csv,row,with_std,metric_list,full=True,postHoc=False,postHocInd=None,nbPostHoc=None):
+    
+    for metric in metric_list:
 
-    id_to_label = getId_to_label()
+        if metric != "Acc" or not postHoc:
+            csv += latex_fmt(row[metric],row[metric+"_std"],row["is_best_"+metric] == "True",\
+                        with_std=with_std and metric != "IIC",with_start_char=(metric!="Accuracy"))
+        else:
+            if full:
+                if postHocInd > 0:
+                    csv += "&"
+                else:
+                    acc_text = latex_fmt(row["Acc"],row["Acc_std"],row["is_best_Acc"] == "True",with_std=with_std and metric != "IIC",with_start_char=False)
+                    csv += "&\multirow{"+str(nbPostHoc)+"}{*}{$"+acc_text+"$}"
+
+    csv += "\\\\ \n"
+    return csv 
+
+def formatRow(res_list,i):
+    row = res_list[i]
+    row = {key:str(row[key]) for key in row}
+    return row
+
+def get_what_is_best():
+    return {"Del":"min","Add":"max","DelCorr":"max","AddCorr":"max","IIC":"max","AD":"min","ADD":"max","Spars":"max","Time":"min"}
+    
+def latex_table_figure(exp_id,full=False,with_std=False):
+
+    arr_dic = {}
+    arr_f_dic = {}
+    best_dic = {}
+
+    what_is_best = get_what_is_best()
+    metric_to_label = {"Del":"DAUC","Add":"IAUC","Spars":"Sparsity","IIC":"IIC","AD":"AD","ADD":"ADD","DelCorr":"DC","AddCorr":"IC","Time":"Time","Acc":"Accuracy"}
+    metric_list = list(what_is_best.keys())
+
+    for metric in metric_list:
+        arr_dic[metric],arr_f_dic[metric],best_dic[metric] = loadArr(exp_id,metric,best=what_is_best[metric])
+
+    id_to_label = get_id_to_label()
 
     res_list = []
 
-    del_min = del_arr_f.mean(axis=1).min()
-    add_max = add_arr_f.mean(axis=1).max()
-    spars_max = spars_arr_f.mean(axis=1).max()
+    for i in range(len(arr_dic["Del"])):
+       
+        id = id_to_label[arr_dic["Del"][i,0]]
 
-    for i in range(len(del_arr)):
-        id = id_to_label[del_arr[i,0]]
-        mean = del_arr_f[i].mean()
-        dele,dele_std = round(mean,4),round(del_arr_f[i].std(),3)
+        mean = arr_f_dic["Del"][i].mean()
+        dele,dele_std = round(mean,4),round(arr_f_dic["Del"][i].std(),3)
         dele_full_precision = mean
-        is_best_dele = (mean==del_min)
+        is_best_dele = (mean==best_dic["Del"])
 
-        add_ind = np.argwhere(add_arr[:,0] == del_arr[i,0])[0,0]
-        mean = add_arr_f[add_ind].mean()
-        add,add_std = round(mean,2),round(add_arr_f[add_ind].std(),2)
-        is_best_add = (mean==add_max)
-        
-        spars_ind = np.argwhere(spars_arr[:,0] == del_arr[i,0])[0,0]
-        mean = spars_arr_f[spars_ind].mean()
-        spars,spars_std = round(mean,2),round(spars_arr_f[spars_ind].std(),2)
-        is_best_spars = (mean==spars_max)
+        res_dic = {"id":id,"Del_full_precision":dele_full_precision,
+                    "Del":dele,  "Del_std":dele_std,  "is_best_Del":is_best_dele,}
 
-        res_list.append({"id":id,
-                        "dele":dele,  "dele_std":dele_std,
-                        "add":add,    "add_std":add_std,
-                        "spars":spars,"spars_std":spars_std,
-                        "is_best_dele":is_best_dele,"is_best_add":is_best_add,"is_best_spars":is_best_spars,
-                        "dele_full_precision":dele_full_precision})
+        for metric in metric_list:
+            if metric != "Del":
+                mean_rnd,std_rnd,is_best = find_perf(i,metric,arr_dic,arr_f_dic,best_dic)
+                res_dic.update({metric:mean_rnd,metric+"_std":std_rnd,"is_best_"+metric:is_best})
+
+        res_list.append(res_dic)
 
     if full:
         res_list = addAccuracy(res_list,exp_id)
-        metric_list= ["dele","add","spars"]
-    else:
-        metric_list = ["dele","add"]
+        metric_list.insert(8,"Acc")
+        what_is_best["Acc"] = "max"
 
-    res_list = sorted(res_list,key=lambda x:-x["dele_full_precision"])
+    res_list = sorted(res_list,key=lambda x:-x["Del_full_precision"])
 
-    csv = ""
+    csv = "Model&Viz. Method&"+"&".join([metric_to_label[metric] for metric in metric_list])+"\\\\ \n"
 
+    is_post_hoc = get_is_post_hoc()
+    label_to_id = get_label_to_id()
+
+    nbPostHoc = 0
+    #Counting post hoc
     for i in range(len(res_list)):
-        row = res_list[i]
-        row = {key:str(row[key]) for key in row}
-        csv += row["id"]
-        
-        if full:
-            csv += latex_fmt(row["acc"],row["acc_std"],row["is_max_acc"] == "True",with_std=with_std)
+        row = formatRow(res_list,i) 
+        if is_post_hoc[label_to_id[row["id"]]]:
+            nbPostHoc += 1 
 
-        for metric in metric_list:
-            csv += latex_fmt(row[metric],row[metric+"_std"],row["is_best_{}".format(metric)] == "True",with_std=with_std)
+    postHocInd =0
+    #Adding post hoc
+    for i in range(len(res_list)):
+        row = formatRow(res_list,i) 
+        if is_post_hoc[label_to_id[row["id"]]]:
+            if postHocInd == 0:
+                csv += "\multirow{"+str(postHocInd)+"}{*}{CNN}&"  
+            else:
+                csv += "&"
+            csv += row["id"] 
 
-        csv += "\\\\ \n"
+            csv = processRow(csv,row,with_std,metric_list,full=full,postHoc=True,postHocInd=postHocInd,nbPostHoc=nbPostHoc)
+
+            postHocInd += 1 
+
+    csv += "\\hline \n"
+
+    #Adding att models
+    for i in range(len(res_list)):
+        row = formatRow(res_list,i)
+        if not is_post_hoc[label_to_id[row["id"]]]:
+            csv += row["id"]+"&-"   
+            csv = processRow(csv,row,with_std,metric_list)
 
     with open("../results/{}/attMetr_latex_table.csv".format(exp_id),"w") as text:
         print(csv,file=text)
 
-    metric_to_label = {"dele":"DAUC","add":"IAUC","spars":"Sparsity"}
-    for metric in ["dele","add","spars"]:
+    for metric in metric_list:
 
         res_list = sorted(res_list,key=lambda x:x[metric])
 
@@ -1924,20 +2042,25 @@ def latex_table_figure(exp_id,print_std=False,full=False,with_std=False):
         plt.ylim(bottom=0)
         plt.xticks(np.arange(len(res_list)),[row["id"] for row in res_list],rotation=45,ha="right")
         plt.tight_layout()
-        plt.savefig("../vis/{}/attMetr_{}.png".format(exp_id,metric_to_label[metric.lower()]))
+        plt.savefig("../vis/{}/attMetr_{}.png".format(exp_id,metric_to_label[metric]))
 
-def latex_fmt(mean,std,is_best,with_std=False):
+def latex_fmt(mean,std,is_best,with_std=False,with_start_char=True):
 
     if with_std:
         if is_best:
-            return "&$\mathbf{"+str(mean)+"\pm"+str(std)+"}$"
+            metric_value = "\mathbf{"+str(mean)+"\pm"+str(std)+"}"
         else:
-            return "&$"+str(mean)+"\pm"+str(std)+"$"
+            metric_value = ""+str(mean)+"\pm"+str(std)
     else:
         if is_best:
-            return "&$\mathbf{"+str(mean)+" }$"
+            metric_value = "\mathbf{"+str(mean)+" }"
         else:
-            return "&$"+str(mean)+"$"
+            metric_value = ""+str(mean)
+
+    if with_start_char:
+        metric_value = "&$" + metric_value + "$"
+    
+    return metric_value
 
 def reverseLabDic(id_to_label,exp_id):
 
@@ -1960,7 +2083,7 @@ def reverseLabDic(id_to_label,exp_id):
 
 def addAccuracy(res_list,exp_id):
     res_list_with_acc = []
-    id_to_label= getId_to_label()
+    id_to_label= get_id_to_label()
 
     label_to_id = reverseLabDic(id_to_label,exp_id)
 
@@ -1981,19 +2104,19 @@ def addAccuracy(res_list,exp_id):
         accuracy = float(acc_dic[model_id]["mean"])
         accuracy_std = float(acc_dic[model_id]["std"])
 
-        row["acc"] = str(round(accuracy,1))
-        row["acc_std"] = str(round(accuracy_std,1))
-        row["acc_full_precision"] = accuracy
+        row["Acc"] = str(round(accuracy,1))
+        row["Acc_std"] = str(round(accuracy_std,1))
+        row["Acc_full_precision"] = accuracy
 
         res_list_with_acc.append(row)
     
-    bestAcc = max([row["acc_full_precision"] for row in res_list_with_acc])
+    bestAcc = max([row["Acc_full_precision"] for row in res_list_with_acc])
 
     res_list_with_acc_and_best = []
     for row in res_list_with_acc:
         
-        row["is_max_acc"] = (row["acc_full_precision"]==bestAcc)
-        print(row["acc_full_precision"],bestAcc,row["is_max_acc"])
+        row["is_best_Acc"] = (row["Acc_full_precision"]==bestAcc)
+        print(row["Acc_full_precision"],bestAcc,row["is_best_Acc"])
         res_list_with_acc_and_best.append(row)
 
     return res_list_with_acc_and_best
@@ -2028,7 +2151,6 @@ def accuracyPerVideo(exp_id,nbClass=16):
                 vid_corr_dic[vidNames[i]] = 1*correct[i]
                 vid_frameNb_dic[vidNames[i]] = 1
         
-        print(vid_corr_dic)
         vid_acc_dic = {vid:100*vid_corr_dic[vid]/vid_frameNb_dic[vid] for vid in vid_corr_dic}
 
         model_id = os.path.basename(path).split("_epoch")[0]
@@ -2043,6 +2165,217 @@ def accuracyPerVideo(exp_id,nbClass=16):
 
     with open("../results/{}/attMetrics_Acc.csv".format(exp_id),"w") as file:
         print(all_accuracy_mean_csv,file=file)
+
+def reformatAttScoreArray(attScores,pairs):
+
+    k = attScores.shape[1]//pairs.shape[1]
+
+    if k > 1:
+        newAttScores = []
+        for i in range(pairs.shape[0]):
+            scoreList = []
+            attScores_i = attScores[i].astype("float64")
+
+            for j in range(pairs.shape[1]):
+                scores,indices = torch.topk(torch.tensor(attScores_i),k=k)
+                scoreList.append(scores.mean())
+                attScores_i[indices] = -1
+
+            newAttScores.append(scoreList) 
+    else:
+        newAttScores = attScores
+
+    return np.array(newAttScores)
+
+def correlation(points):
+    corrList = []
+    for i in range(len(points)):
+        points_i = points[i]
+        corrList.append(np.corrcoef(points_i,rowvar=False)[0,1])
+    return np.array(corrList)
+
+def attCorrelation(exp_id):
+
+    if not os.path.exists("../vis/{}/correlation/".format(exp_id)):
+        os.makedirs("../vis/{}/correlation/".format(exp_id))
+
+    for metric in ["Del","Add"]:
+        csv_res = []
+        csv_res_pop = []
+        paths = sorted(glob.glob("../results/{}/attMetr{}_*.npy".format(exp_id,metric)))
+        paths = list(filter(lambda x:os.path.basename(x).find("noise") ==-1,paths))
+        paths = list(filter(lambda x:os.path.basename(x).find("imgBG") ==-1,paths))
+        paths = list(filter(lambda x:os.path.basename(x).find("maskFeat") ==-1,paths))
+
+        for path in paths:
+            points = np.load(path,allow_pickle=True).astype("float")
+            
+            path_att_score = path.replace("attMetr{}".format(metric),"attMetrAttScore")
+            if os.path.exists(path_att_score):
+                model_id = os.path.basename(path).split(metric+"_")[1].replace(".npy","")    
+
+                attScores = np.load(path_att_score,allow_pickle=True)
+                oldShape = attScores.shape
+                attScores = reformatAttScoreArray(attScores,points)
+                if oldShape != attScores.shape:
+                    np.save(path_att_score,attScores)
+
+                points[:,:,0] = attScores
+
+                points_diff = points.copy()
+                if metric == "Del":
+                    points_diff[:,:-1,1] = points[:,:-1,1]-points[:,1:,1]
+                else:
+                    points_diff[:,:-1,1] = points[:,1:,1]-points[:,:-1,1]
+                points_diff = points_diff[:,:-1]
+
+                all_corr = correlation(points_diff)
+
+                corr = np.nanmean(all_corr)
+  
+                csv_res += "{},{}\n".format(model_id,corr) 
+                csv_res_pop += "{},".format(model_id)+",".join([str(corr) for corr in all_corr])+"\n"
+
+        with open(f"../results/{exp_id}/attMetrics_{metric}Corr.csv","w") as f:
+            f.writelines(csv_res)
+
+        with open(f"../results/{exp_id}/attMetrics_{metric}Corr_pop.csv","w") as f:
+            f.writelines(csv_res_pop)
+
+def attTime(exp_id):
+    metric = "Time"
+
+    csv_res = []
+    csv_res_pop = []
+    paths = sorted(glob.glob("../results/{}/attMetr{}_*.npy".format(exp_id,metric)))
+    paths = list(filter(lambda x:os.path.basename(x).find("noise") ==-1,paths))
+    paths = list(filter(lambda x:os.path.basename(x).find("imgBG") ==-1,paths))
+    paths = list(filter(lambda x:os.path.basename(x).find("maskFeat") ==-1,paths))
+
+    for path in paths:
+        model_id = os.path.basename(path).split(metric+"_")[1].replace(".npy","")    
+        all_times = np.load(path,allow_pickle=True)
+        time = all_times.mean()
+    
+        csv_res += "{},{}\n".format(model_id,time) 
+        csv_res_pop += "{},".format(model_id)+",".join([str(corr) for corr in all_times])+"\n"
+
+    with open(f"../results/{exp_id}/attMetrics_{metric}.csv","w") as f:
+        f.writelines(csv_res)
+
+    with open(f"../results/{exp_id}/attMetrics_{metric}_pop.csv","w") as f:
+        f.writelines(csv_res_pop)
+
+def loadPerf(exp_id,metric,pop=True):
+
+    if not pop and metric in ["ADD","AD","IIC"]:
+        perfs = np.genfromtxt("../results/{}/attMetrics_Lift.csv".format(exp_id,metric),delimiter=",",dtype=str)
+    
+        if metric == "IIC":
+            perfs = np.concatenate((perfs[:,0:1],perfs[:,1:2]),axis=1)
+        elif metric == "AD":
+            perfs = np.concatenate((perfs[:,0:1],perfs[:,2:3]),axis=1)
+        elif metric == "ADD":
+            perfs = np.concatenate((perfs[:,0:1],perfs[:,3:4]),axis=1)
+    else:
+        perfs = np.genfromtxt("../results/{}/attMetrics_{}_pop.csv".format(exp_id,metric),delimiter=",",dtype=str)
+    
+    return perfs
+
+def bar_viz(exp_id):
+
+    what_is_best = get_what_is_best()
+    metric_list = list(what_is_best.keys())
+    metric_list = list(filter(lambda metric:metric in ["Del","Add","AD","ADD","IIC"],metric_list))
+
+    is_post_hoc = get_is_post_hoc()
+
+    id_to_label = get_id_to_label()
+
+    for metric in metric_list:
+
+        perfs = loadPerf(exp_id,metric)
+
+        perfs_att = []
+        for perf in perfs:
+            if not is_post_hoc[perf[0]]:
+                perfs_att.append(perf)
+        perfs_att = np.array(perfs_att)
+
+        perfs_post = []
+        for perf in perfs:
+            if is_post_hoc[perf[0]]:
+                perfs_post.append(perf)
+        perfs_post = np.array(perfs_post)
+
+        xmin,xmax = perfs[:,1].astype("float").min(),perfs[:,1].astype("float").max()
+
+        fig = plt.figure(figsize=(5,2*len(perfs)))
+
+        for i,model_perf in enumerate(perfs_att):
+            subfig_mod = plt.subplot(len(perfs),1,i+1)
+            fig.gca().axes.get_yaxis().set_visible(False)
+            plt.xticks(fontsize=20)
+            subfig_mod.hist(model_perf[1:].astype("float"),range=(xmin,xmax),color="orange",bins=10,label=id_to_label[model_perf[0]])
+            plt.legend(prop={'size':20})
+
+        for i,model_perf in enumerate(perfs_post):
+            subfig_mod = plt.subplot(len(perfs),1,i+len(perfs_att)+1)
+            fig.gca().axes.get_yaxis().set_visible(False)
+            plt.xticks(fontsize=20)
+            subfig_mod.hist(model_perf[1:].astype("float"),range=(xmin,xmax),color="blue",bins=10,label=id_to_label[model_perf[0]])
+            plt.legend(prop={'size':20})
+
+        plt.tight_layout()
+        plt.savefig("../vis/{}/bar_{}.png".format(exp_id,metric))
+
+def ranking_similarities(exp_id):
+
+    what_is_best = get_what_is_best()
+    metric_list = ["Del","Add","DelCorr","AddCorr","AD","ADD","IIC"] 
+
+    kendall_tau_mat = np.zeros((len(metric_list),len(metric_list)))
+    p_val_mat = np.zeros((len(metric_list),len(metric_list)))
+    model_list = np.genfromtxt("../results/{}/attMetrics_Del.csv".format(exp_id),delimiter=",",dtype=str)[:,0]
+
+    rank_dic = {}
+
+    for metric in metric_list:
+        perfs = loadPerf(exp_id,metric,pop=False)
+        rank = np.argsort(perfs[:,1].astype("float"))
+        rank_dic[metric] = rank 
+    
+    for i in range(len(metric_list)):
+        for j in range(len(metric_list)):
+            kendall_tau_mat[i,j],p_val_mat[i,j] = kendalltau(rank_dic[metric_list[i]],rank_dic[metric_list[j]])
+
+    print(kendall_tau_mat)
+
+    cmap = plt.get_cmap("RdBu_r")
+
+    fig = plt.figure()
+    ax = fig.gca()
+    ax.spines['top'].set_visible(False)
+    ax.spines['right'].set_visible(False)
+    ax.spines['bottom'].set_visible(False)
+    ax.spines['left'].set_visible(False)
+    ax.get_xaxis().set_ticks([])
+    ax.get_yaxis().set_ticks([])
+
+    plt.imshow(kendall_tau_mat*0,cmap="Greys")
+    #plt.imshow(p_val_mat*0)
+    for i in range(len(metric_list)):
+        for j in range(len(metric_list)):
+            if i <= j:
+                rad = 0.3
+                circle = plt.Circle((i, j), rad, color=cmap(kendall_tau_mat[i,j]))
+                ax.add_patch(circle)
+
+    plt.colorbar(cm.ScalarMappable(norm=matplotlib.colors.Normalize(-1,1),cmap=cmap))
+    plt.xticks(range(len(metric_list)),metric_list,rotation=45)
+    plt.yticks(range(len(metric_list)),metric_list)
+    plt.tight_layout()
+    plt.savefig("../vis/{}/kendall_tau.png".format(exp_id))
 
 def main(argv=None):
 
@@ -2325,20 +2658,26 @@ def main(argv=None):
     if args.grad_exp2:
         gradExp2()
     if args.att_metrics:
-        if not os.path.exists("../results/{}/attMetrics_add.csv".format(args.exp_id)):
-            attMetrics(args.exp_id,metric="Add",ignore_model=not args.not_ignore_model)
-        
-        if not os.path.exists("../results/{}/attMetrics_del.csv".format(args.exp_id)):
-            attMetrics(args.exp_id,metric="Del",ignore_model=not args.not_ignore_model)
-               
-        if not os.path.exists("../results/{}/attMetrics_spars.csv".format(args.exp_id)):
-            attMetrics(args.exp_id,metric="Spars",ignore_model=not args.not_ignore_model)
-         
-        ttest_attMetr(args.exp_id,metric="Add")
-        ttest_attMetr(args.exp_id,metric="Del")
-        ttest_attMetr(args.exp_id,metric="Spars")
 
-        latex_table_figure(args.exp_id,full=args.all_att_metrics,with_std=args.with_std)
+        for metric in ["Add","Del","Spars","Lift"]:
+
+            if not os.path.exists("../results/{}/attMetrics_{}.csv".format(args.exp_id,metric)):
+                attMetrics(args.exp_id,metric=metric,ignore_model=not args.not_ignore_model)
+        
+        if not os.path.exists("../results/{}/attMetrics_AddCorr.csv".format(args.exp_id)) or not os.path.exists("../results/{}/attMetrics_DelCorr.csv".format(args.exp_id)):
+            attCorrelation(args.exp_id)
+
+        if not os.path.exists("../results/{}/attMetrics_Time.csv".format(args.exp_id)):
+            attTime(args.exp_id)
+   
+        for metric in ["Add","Del","Spars","IIC","AD","ADD","DelCorr","AddCorr","Time"]:
+            ttest_attMetr(args.exp_id,metric=metric)
+
+        ranking_similarities(args.exp_id)
+
+        #bar_viz(args.exp_id)
+
+        #latex_table_figure(args.exp_id,full=args.all_att_metrics,with_std=args.with_std)
 
     if args.att_metrics_stats:
         attMetricsStats(args.exp_id)

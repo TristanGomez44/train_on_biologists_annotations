@@ -27,6 +27,7 @@ import update
 from gradcam import GradCAMpp
 from score_map import ScoreCam
 from rise import RISE
+from xgradcam import XGradCAM,AblationCAM
 
 import time
 
@@ -1083,18 +1084,12 @@ def main(argv=None):
     argreader.parser.add_argument('--att_metrics_img_nb', type=int, help='The nb of images on which to compute the att metric.')
     
     argreader.parser.add_argument('--att_metrics_post_hoc', type=str, help='The post-hoc method to use instead of the model ')
-    #argreader.parser.add_argument('--att_metrics_gradcam_pp', type=str2bool, help='To use gradcam++ instead of the model')
-    #argreader.parser.add_argument('--att_metrics_guided', type=str2bool, help='To use guided backprop instead of the model')
-    #argreader.parser.add_argument('--att_metrics_norm', type=str2bool, help='To use norm instead of the model')
-    #argreader.parser.add_argument('--att_metrics_rise', type=str2bool, help='To use rise instead of the model')
-    #argreader.parser.add_argument('--att_metrics_score_map', type=str2bool, help='To use score map instead of the model')
-    #argreader.parser.add_argument('--att_metrics_var', type=str2bool, help='To use varGrad instead of the model')
-    #argreader.parser.add_argument('--att_metrics_smooth', type=str2bool, help='To use smoothGrad instead of the model')
-
     argreader.parser.add_argument('--att_metrics_max_brnpa', type=str2bool, help='To agregate br-npa maps with max instead of mean')
     argreader.parser.add_argument('--att_metrics_onlyfirst_brnpa', type=str2bool, help='To agregate br-npa maps with max instead of mean')
     argreader.parser.add_argument('--att_metrics_few_steps', type=str2bool, help='To do as much step for high res than for low res')
     argreader.parser.add_argument('--att_metr_do_again', type=str2bool, help='To run computation if already done',default=True)
+
+    argreader.parser.add_argument('--att_metr_img_bckgr', type=str2bool, help='To replace the image by another image instead of a black patch',default=True)
 
     argreader.parser.add_argument('--optuna', type=str2bool, help='To run a hyper-parameter study')
     argreader.parser.add_argument('--optuna_trial_nb', type=int, help='The number of hyper-parameter trial to run.')
@@ -1420,8 +1415,12 @@ def main(argv=None):
     elif args.attention_metrics:
 
         path_suff = args.attention_metrics
+        path_suff += "-IB" if args.att_metr_img_bckgr else ""
         model_id_suff = "-"+args.att_metrics_post_hoc if args.att_metrics_post_hoc else ""
-              
+
+        if args.att_metr_img_bckgr:
+            print("\tImg bckgr")
+
         if args.att_metr_do_again or not os.path.exists("../results/{}/attMetr{}_{}{}.npy".format(args.exp_id,path_suff,args.model_id,model_id_suff)):
 
             args.val_batch_size = 1
@@ -1453,15 +1452,37 @@ def main(argv=None):
             nbImgs = args.att_metrics_img_nb
             print("nbImgs",nbImgs)
 
-            if args.attention_metrics != "Spars":
+            if args.attention_metrics in ["Del","Add"]:
                 allScoreList = []
                 allPreds = []
                 allTarg = []
+            elif args.attention_metrics == "AttScore":
+                allAttScor = []
+            elif args.attention_metrics == "Time":
+                allTimeList = []
+            elif args.attention_metrics == "Lift":
+                allScoreList = []
+                allScoreMaskList = []
+                allScoreInvMaskList = []
             else:
                 allSpars = []
 
             torch.manual_seed(0)
             inds = torch.randint(len(testDataset),size=(nbImgs,))
+
+            if args.att_metr_img_bckgr:
+                inds_bckgr = torch.randint(len(testDataset),size=(nbImgs,))
+
+                labels = np.array([testDataset[ind][1] for ind in inds])
+                labels_bckgr = np.array([testDataset[ind][1] for ind in inds_bckgr])
+
+                while (labels==labels_bckgr).any():
+                    for i in range(len(inds)):
+                        if inds[i] == inds_bckgr[i]:
+                            inds_bckgr[i] = torch.randint(len(testDataset),size=(1,))[0]
+
+                    inds_bckgr = torch.randint(len(testDataset),size=(nbImgs,))
+                    labels_bckgr = np.array([testDataset[ind][1] for ind in inds_bckgr])
 
             blurWeight = torch.ones(121,121)
             blurWeight = blurWeight/blurWeight.numel()
@@ -1472,42 +1493,65 @@ def main(argv=None):
                 if imgInd % 20 == 0 :
                     print("Img",i.item(),"(",imgInd,"/",len(inds),")")
 
-                batch = testDataset.__getitem__(i)
-                data,targ = batch[0].unsqueeze(0),torch.tensor(batch[1]).unsqueeze(0)
-
-                data = data.cuda() if args.cuda else data
-                targ = targ.cuda() if args.cuda else targ
-
+                data,targ = getBatch(testDataset,i,args)
                 allData = data.clone().cpu()
-                
+
+                if args.att_metr_img_bckgr:
+                    data_bckgr,_ = getBatch(testDataset,inds_bckgr[imgInd],args)
+
+                startTime = time.time()
                 if not args.prototree:
                     resDic = net(data)
                     scores = torch.softmax(resDic["pred"],dim=-1)
                 else:
                     resDic = None
                     scores = net(data)[0]
+                inf_time = time.time() - startTime
 
                 if args.attention_metrics in ["Add","Del"]:
                     predClassInd = scores.argmax(dim=-1)
                     allPreds.append(predClassInd.item())
                     allTarg.append(targ.item())
-                
+
                 if args.attention_metrics=="Add":
                     origData = data.clone()
-                    data = F.conv2d(data,blurWeight,padding=blurWeight.size(-1)//2,groups=blurWeight.size(0))
+                    if args.att_metr_img_bckgr:
+                        data = data_bckgr.clone()
+                    else:
+                        data = F.conv2d(data,blurWeight,padding=blurWeight.size(-1)//2,groups=blurWeight.size(0))
 
                 if args.att_metrics_post_hoc:
+                    startTime = time.time()
                     attMaps = applyPostHoc(attrFunc,data,targ,kwargs,args)
+                    totalTime = inf_time + time.time() - startTime
                 else:
                     attMaps = attrFunc(i)
-                    mask = torch.ones_like(attMaps)
+                    totalTime = inf_time
 
                 attMaps = (attMaps-attMaps.min())/(attMaps.max()-attMaps.min())
 
                 if args.attention_metrics=="Spars":
                     sparsity= computeSpars(data.size(),attMaps,args,resDic)
                     allSpars.append(sparsity)
-                else:
+                elif args.attention_metrics == "AttScore":
+                    allAttScor.append(attMaps.view(-1).sort()[0].detach().cpu().numpy())
+                elif args.attention_metrics == "Time":
+                    allTimeList.append(totalTime)
+                elif args.attention_metrics == "Lift":
+                    predClassInd = scores.argmax(dim=-1)
+                    score = scores[:,predClassInd[0]].cpu().detach().numpy()
+                    allScoreList.append(score)
+                    attMaps_interp = torch.nn.functional.interpolate(attMaps,size=(data.shape[-1]),mode="bicubic",align_corners=False).to(data.device)                    
+                    
+                    data_masked =  maskData(data,attMaps_interp,args,data_bckgr)
+                    score_mask = inference(net,data_masked,predClassInd,args).cpu().detach().numpy()
+                    allScoreMaskList.append(score_mask)
+                    
+                    data_invmasked =  maskData(data,1-attMaps_interp,args,data_bckgr)
+                    score_invmask = inference(net,data_invmasked,predClassInd,args).cpu().detach().numpy()
+                    allScoreInvMaskList.append(score_invmask)
+                
+                elif args.attention_metrics in ["Del","Add"]:
                     allAttMaps = attMaps.clone().cpu()
                     statsList = []
 
@@ -1540,10 +1584,16 @@ def main(argv=None):
 
                         for i in range(len(x_max)):
                             
+                            x1,y1 = x_max[i]*ratio,y_max[i]*ratio,
+                            x2,y2 = x1+ratio,y1+ratio
+
                             if args.attention_metrics=="Add":
-                                data[0,:,y_max[i]*ratio:y_max[i]*ratio+ratio,x_max[i]*ratio:x_max[i]*ratio+ratio] = origData[0,:,y_max[i]*ratio:y_max[i]*ratio+ratio,x_max[i]*ratio:x_max[i]*ratio+ratio]
+                                data[0,:,y1:y2,x1:x2] = origData[0,:,y1:y2,x1:x2]
                             elif args.attention_metrics=="Del":
-                                data[0,:,y_max[i]*ratio:y_max[i]*ratio+ratio,x_max[i]*ratio:x_max[i]*ratio+ratio] = 0
+                                if args.att_metr_img_bckgr:
+                                    data[0,:,y1:y2,x1:x2] = data_bckgr[0,:,y1:y2,x1:x2]
+                                else:
+                                    data[0,:,y1:y2,x1:x2] = 0
                             else:
                                 raise ValueError("Unkown attention metric",args.attention_metrics)
 
@@ -1555,27 +1605,47 @@ def main(argv=None):
                             allData = torch.cat((allData,data.cpu()),dim=0)
                         stepCount += 1
 
-                        if not args.prototree:
-                            resDic = net(data)
-                            score = torch.softmax(resDic["pred"],dim=-1)[:,predClassInd[0]]
-                        else:
-                            score = net(data)[0][:,predClassInd[0]]
+                        score = inference(net,data,predClassInd,args)
 
                         score_prop_list.append((leftPxlNb,score.item()))
 
                     allScoreList.append(score_prop_list)
+                else:
+                    raise ValueError("Unkown attention metric",args.attention_metrics)
 
             if args.att_metrics_post_hoc:
                 args.model_id = args.model_id + "-"+args.att_metrics_post_hoc
             
             if args.attention_metrics == "Spars":
                 np.save("../results/{}/attMetrSpars_{}.npy".format(args.exp_id,args.model_id),np.array(allSpars,dtype=object))
+            elif args.attention_metrics == "AttScore":
+                np.save("../results/{}/attMetrAttScore_{}.npy".format(args.exp_id,args.model_id),np.array(allAttScor,dtype=object))
+            elif args.attention_metrics == "Time":
+                np.save("../results/{}/attMetrTime_{}.npy".format(args.exp_id,args.model_id),np.array(allTimeList,dtype=object))
+            elif args.attention_metrics == "Lift":
+                np.save("../results/{}/attMetrLift_{}.npy".format(args.exp_id,args.model_id),np.array(allScoreList,dtype=object))
+                np.save("../results/{}/attMetrLiftMask_{}.npy".format(args.exp_id,args.model_id),np.array(allScoreMaskList,dtype=object))
+                np.save("../results/{}/attMetrLiftInvMask_{}.npy".format(args.exp_id,args.model_id),np.array(allScoreInvMaskList,dtype=object))
             else:
                 np.save("../results/{}/attMetr{}_{}.npy".format(args.exp_id,path_suff,args.model_id),np.array(allScoreList,dtype=object))
                 np.save("../results/{}/attMetrPreds{}_{}.npy".format(args.exp_id,path_suff,args.model_id),np.array(allPreds,dtype=object))
     
     else:
         train(0,args,None)
+
+def maskData(data,attMaps_interp,args,data_bckgr):
+    if args.att_metr_img_bckgr:
+        data_masked = data*attMaps_interp+data_bckgr*(1-attMaps_interp)
+    else:
+        data_masked = data*attMaps_interp
+    return data_masked 
+
+def getBatch(testDataset,i,args):
+    batch = testDataset.__getitem__(i)
+    data,targ = batch[0].unsqueeze(0),torch.tensor(batch[1]).unsqueeze(0)
+    data = data.cuda() if args.cuda else data
+    targ = targ.cuda() if args.cuda else targ
+    return data,targ 
 
 def computeSpars(data_shape,attMaps,args,resDic):
     if args.att_metrics_post_hoc:
@@ -1590,6 +1660,14 @@ def computeSpars(data_shape,attMaps,args,resDic):
     sparsity = metrics.compAttMapSparsity(attMaps,features)
     sparsity = sparsity/data_shape[0]
     return sparsity 
+
+def inference(net,data,predClassInd,args):
+    if not args.prototree:
+        resDic = net(data)
+        score = torch.softmax(resDic["pred"],dim=-1)[:,predClassInd[0]]
+    else:
+        score = net(data)[0][:,predClassInd[0]]
+    return score
 
 def applyPostHoc(attrFunc,data,targ,kwargs,args):
 
@@ -1629,6 +1707,16 @@ def getAttMetrMod(net,testDataset,args):
         netGradMod = modelBuilder.GradCamMod(net)
         attrMod = captum.attr.GuidedBackprop(netGradMod)
         attrFunc = attrMod.attribute
+        kwargs = {}
+    elif args.att_metrics_post_hoc == "xgradcam":
+        netGradMod = modelBuilder.GradCamMod(net)
+        attrMod = XGradCAM(model=netGradMod,target_layers=netGradMod.layer4,use_cuda=args.cuda)
+        attrFunc = attrMod
+        kwargs = {}
+    elif args.att_metrics_post_hoc == "ablation_cam":
+        netGradMod = modelBuilder.GradCamMod(net)
+        attrMod = AblationCAM(model=netGradMod,target_layers=netGradMod.layer4,use_cuda=args.cuda)
+        attrFunc = attrMod
         kwargs = {}
     elif args.att_metrics_post_hoc == "score_map":
         attrMod = ScoreCam(net)
