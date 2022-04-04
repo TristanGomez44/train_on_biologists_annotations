@@ -1450,7 +1450,7 @@ def main(argv=None):
                 torch.set_grad_enabled(False)
 
             nbImgs = args.att_metrics_img_nb
-            print("nbImgs",nbImgs)
+            print("\tnbImgs",nbImgs)
 
             if args.attention_metrics in ["Del","Add"]:
                 allScoreList = []
@@ -1471,7 +1471,7 @@ def main(argv=None):
             inds = torch.randint(len(testDataset),size=(nbImgs,))
 
             if args.att_metr_img_bckgr:
-                inds_bckgr = torch.randint(len(testDataset),size=(nbImgs,))
+                inds_bckgr = (inds + len(testDataset)//2) % len(testDataset)
 
                 labels = np.array([testDataset[ind][1] for ind in inds])
                 labels_bckgr = np.array([testDataset[ind][1] for ind in inds_bckgr])
