@@ -23,6 +23,10 @@ case $1 in
         python trainVal.py -c model_emb10.config --optuna False --attention_metrics Add --model_id noneRed                               --att_metrics_post_hoc "xgradcam"  --stride_lay3 2 --stride_lay4 2 --att_metrics_few_steps True  --att_metr_do_again False     --att_metr_img_bckgr True 
         python trainVal.py -c model_emb10.config --optuna False --attention_metrics Add --model_id noneRed                               --att_metrics_post_hoc "ablation_cam"  --stride_lay3 2 --stride_lay4 2 --att_metrics_few_steps True  --att_metr_do_again False --att_metr_img_bckgr True
     ;;
+    "big_imgbckgr")
+        python trainVal.py -c model_emb10.config --optuna False --attention_metrics Add --model_id noneRed                               --att_metrics_post_hoc "rise"       --stride_lay3 2 --stride_lay4 2 --att_metr_do_again False                                  --att_metr_img_bckgr True
+        python trainVal.py -c model_emb10.config --optuna False --attention_metrics Add --model_id noneRed                               --att_metrics_post_hoc "ablation_cam"  --stride_lay3 2 --stride_lay4 2 --att_metrics_few_steps True  --att_metr_do_again False --att_metr_img_bckgr True
+    ;;
     "*")
         echo "no such model"
     ;;
