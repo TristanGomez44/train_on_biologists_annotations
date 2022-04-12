@@ -192,6 +192,7 @@ class ResNet(nn.Module):
         retDict["att_outputs"] = ax
         retDict["attMaps"] = self.att
         retDict["features"] = x
+        retDict["x"] = x.mean(dim=-1).mean(dim=-1)
 
         return retDict
         #return ax, rx, [self.att, fe, per]

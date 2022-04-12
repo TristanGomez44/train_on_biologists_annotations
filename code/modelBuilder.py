@@ -314,7 +314,7 @@ class CNN2D_interbyparts(FirstModel):
 
         pred,att,features = self.featMod(x)
         
-        return {"pred":pred,"attMaps":att,"features":features}
+        return {"pred":pred,"attMaps":att,"features":features,"x":features.mean(dim=-1).mean(dim=-1)}
 
 ################################ Temporal Model ########################""
 
