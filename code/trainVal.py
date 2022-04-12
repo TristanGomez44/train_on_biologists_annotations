@@ -1089,7 +1089,8 @@ def main(argv=None):
     argreader.parser.add_argument('--att_metrics_few_steps', type=str2bool, help='To do as much step for high res than for low res')
     argreader.parser.add_argument('--att_metr_do_again', type=str2bool, help='To run computation if already done',default=True)
 
-    argreader.parser.add_argument('--att_metr_img_bckgr', type=str2bool, help='To replace the image by another image instead of a black patch',default=True)
+    argreader.parser.add_argument('--att_metr_img_bckgr', type=str2bool, help='To replace the image by another image instead of a black patch',default=False)
+    argreader.parser.add_argument('--att_metr_save_feat', type=str2bool, help='',default=False)
 
     argreader.parser.add_argument('--optuna', type=str2bool, help='To run a hyper-parameter study')
     argreader.parser.add_argument('--optuna_trial_nb', type=int, help='The number of hyper-parameter trial to run.')
@@ -1456,6 +1457,7 @@ def main(argv=None):
                 allScoreList = []
                 allPreds = []
                 allTarg = []
+                allFeat = []
             elif args.attention_metrics == "AttScore":
                 allAttScor = []
             elif args.attention_metrics == "Time":
@@ -1464,6 +1466,7 @@ def main(argv=None):
                 allScoreList = []
                 allScoreMaskList = []
                 allScoreInvMaskList = []
+                allFeat = []
             else:
                 allSpars = []
 
@@ -1498,6 +1501,8 @@ def main(argv=None):
 
                 if args.att_metr_img_bckgr:
                     data_bckgr,_ = getBatch(testDataset,inds_bckgr[imgInd],args)
+                else:
+                    data_bckgr = None
 
                 startTime = time.time()
                 if not args.prototree:
@@ -1543,14 +1548,22 @@ def main(argv=None):
                     allScoreList.append(score)
                     attMaps_interp = torch.nn.functional.interpolate(attMaps,size=(data.shape[-1]),mode="bicubic",align_corners=False).to(data.device)                    
                     
+                    feat = resDic["x"].detach().cpu()
+
                     data_masked =  maskData(data,attMaps_interp,args,data_bckgr)
-                    score_mask = inference(net,data_masked,predClassInd,args).cpu().detach().numpy()
-                    allScoreMaskList.append(score_mask)
+                    allData = torch.cat((allData,data_masked.cpu()),dim=0)
+                    score_mask,feat_mask = inference(net,data_masked,predClassInd,args)
+                    feat_mask = feat_mask.detach().cpu()
+                    allScoreMaskList.append(score_mask.cpu().detach().numpy())
                     
                     data_invmasked =  maskData(data,1-attMaps_interp,args,data_bckgr)
-                    score_invmask = inference(net,data_invmasked,predClassInd,args).cpu().detach().numpy()
-                    allScoreInvMaskList.append(score_invmask)
-                
+                    allData = torch.cat((allData,data_invmasked.cpu()),dim=0)
+                    score_invmask,feat_invmask = inference(net,data_invmasked,predClassInd,args)
+                    feat_invmask = feat_invmask.detach().cpu()
+                    allScoreInvMaskList.append(score_invmask.cpu().detach().numpy())
+
+                    allFeat.append(torch.cat((feat,feat_mask,feat_invmask),dim=0).unsqueeze(0))
+
                 elif args.attention_metrics in ["Del","Add"]:
                     allAttMaps = attMaps.clone().cpu()
                     statsList = []
@@ -1570,6 +1583,8 @@ def main(argv=None):
                     ratio = data.size(-1)//attMaps.size(-1)
 
                     stepCount = 0
+
+                    allFeatIter = []
                     while leftPxlNb > 0:
 
                         attMin,attMean,attMax = attMaps.min().item(),attMaps.mean().item(),attMaps.max().item()
@@ -1605,9 +1620,13 @@ def main(argv=None):
                             allData = torch.cat((allData,data.cpu()),dim=0)
                         stepCount += 1
 
-                        score = inference(net,data,predClassInd,args)
+                        score,feat = inference(net,data,predClassInd,args)
+
+                        allFeatIter.append(feat.detach().cpu())
 
                         score_prop_list.append((leftPxlNb,score.item()))
+                    
+                    allFeat.append(torch.cat(allFeatIter,dim=0).unsqueeze(0))
 
                     allScoreList.append(score_prop_list)
                 else:
@@ -1623,12 +1642,20 @@ def main(argv=None):
             elif args.attention_metrics == "Time":
                 np.save("../results/{}/attMetrTime_{}.npy".format(args.exp_id,args.model_id),np.array(allTimeList,dtype=object))
             elif args.attention_metrics == "Lift":
-                np.save("../results/{}/attMetrLift_{}.npy".format(args.exp_id,args.model_id),np.array(allScoreList,dtype=object))
-                np.save("../results/{}/attMetrLiftMask_{}.npy".format(args.exp_id,args.model_id),np.array(allScoreMaskList,dtype=object))
-                np.save("../results/{}/attMetrLiftInvMask_{}.npy".format(args.exp_id,args.model_id),np.array(allScoreInvMaskList,dtype=object))
+                suff = path_suff.replace("Lift","")
+                np.save("../results/{}/attMetrLift{}_{}.npy".format(args.exp_id,suff,args.model_id),np.array(allScoreList,dtype=object))
+                np.save("../results/{}/attMetrLiftMask{}_{}.npy".format(args.exp_id,suff,args.model_id),np.array(allScoreMaskList,dtype=object))
+                np.save("../results/{}/attMetrLiftInvMask{}_{}.npy".format(args.exp_id,suff,args.model_id),np.array(allScoreInvMaskList,dtype=object))
             else:
                 np.save("../results/{}/attMetr{}_{}.npy".format(args.exp_id,path_suff,args.model_id),np.array(allScoreList,dtype=object))
                 np.save("../results/{}/attMetrPreds{}_{}.npy".format(args.exp_id,path_suff,args.model_id),np.array(allPreds,dtype=object))
+    
+            if args.attention_metrics in ["Lift","Del","Add"] and args.att_metr_save_feat:
+                allFeat = torch.cat(allFeat,dim=0)
+                np.save("../results/{}/attMetrFeat{}_{}.npy".format(args.exp_id,path_suff,args.model_id),allFeat.numpy())
+    
+            if len(allData) > 1:
+                torchvision.utils.save_image(allData,"../vis/{}/attMetrData{}_{}.png".format(args.exp_id,path_suff,args.model_id))
     
     else:
         train(0,args,None)
@@ -1665,9 +1692,11 @@ def inference(net,data,predClassInd,args):
     if not args.prototree:
         resDic = net(data)
         score = torch.softmax(resDic["pred"],dim=-1)[:,predClassInd[0]]
+        feat = resDic["x"]
     else:
         score = net(data)[0][:,predClassInd[0]]
-    return score
+        feat = None
+    return score,feat
 
 def applyPostHoc(attrFunc,data,targ,kwargs,args):
 
