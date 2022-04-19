@@ -1948,7 +1948,16 @@ def loadArr(exp_id,metric,best,img_bckgr):
 def find_perf(i,metric,arr_dic,arr_f_dic,best_dic):
     ind = np.argwhere(arr_dic[metric][:,0] == arr_dic["Del"][i,0])[0,0]
     mean = arr_f_dic[metric][ind].mean()
-    mean_rnd,std_rnd = round(mean,2),round(arr_f_dic[metric][ind].std(),2)
+
+    if metric in ["Add","DelCorr","AddCorr"]:
+        mean_rnd,std_rnd = round(mean,3),round(arr_f_dic[metric][ind].std(),3)
+    elif metric in ["IIC"]:
+        mean_rnd,std_rnd = round(mean*0.01,3),0
+    elif metric in ["AD","ADD"]:
+        mean_rnd,std_rnd = round(mean*0.01,3),round(arr_f_dic[metric][ind].std()*0.01,3)
+    else:
+        raise ValueError("Unkown metric",metric)
+
     is_best = (mean==best_dic[metric])
     return mean_rnd,std_rnd,is_best
 
@@ -1980,13 +1989,18 @@ def get_what_is_best():
 def get_metric_label():
     return {"Del":"DAUC","Add":"IAUC","Spars":"Sparsity","IIC":"IIC","AD":"AD","ADD":"ADD","DelCorr":"DC","AddCorr":"IC","Time":"Time","Acc":"Accuracy"}
     
-def latex_table_figure(exp_id,full=False,with_std=False,img_bckgr=False):
+def latex_table_figure(exp_id,full=False,with_std=False,img_bckgr=False,suppMet=False):
 
     arr_dic = {}
     arr_f_dic = {}
     best_dic = {}
 
     what_is_best = get_what_is_best()
+
+    if not suppMet:
+        what_is_best.pop("Spars")
+        what_is_best.pop("Time")
+
     metric_to_label = get_metric_label()
     metric_list = list(what_is_best.keys())
 
@@ -2139,10 +2153,8 @@ def addAccuracy(res_list,exp_id):
     bestAcc = max([row["Acc_full_precision"] for row in res_list_with_acc])
 
     res_list_with_acc_and_best = []
-    for row in res_list_with_acc:
-        
+    for row in res_list_with_acc:   
         row["is_best_Acc"] = (row["Acc_full_precision"]==bestAcc)
-        print(row["Acc_full_precision"],bestAcc,row["is_best_Acc"])
         res_list_with_acc_and_best.append(row)
 
     return res_list_with_acc_and_best
@@ -2457,11 +2469,15 @@ def ranking_similarities(exp_id,img_bckgr=False,pop=False):
                 circle = plt.Circle((i, j), rad, color=cmap((kendall_tau_mat[i,j]+1)*0.5))
                 ax.add_patch(circle)
 
-    plt.colorbar(cm.ScalarMappable(norm=matplotlib.colors.Normalize(-1,1),cmap=cmap))
-    plt.xticks(range(len(metric_list)),label_list,rotation=45)
-    plt.yticks(range(len(metric_list)),label_list)
+    fontSize = 17
+    cbar = plt.colorbar(cm.ScalarMappable(norm=matplotlib.colors.Normalize(-1,1),cmap=cmap))
+    cbar.ax.tick_params(labelsize=fontSize)
+    plt.xticks(range(len(metric_list)),label_list,rotation=45,fontsize=fontSize)
+    plt.yticks(range(len(metric_list)),label_list,fontsize=fontSize)
+    #fig, ax = plt.subplots()
     plt.tight_layout()
     suff += "_pop" if pop else ""
+    print("../vis/{}/kendall_tau{}.png".format(exp_id,suff))
     plt.savefig("../vis/{}/kendall_tau{}.png".format(exp_id,suff))
 
 #@numba.njit()
@@ -2534,8 +2550,11 @@ def dimred_metrics(exp_id,pop=False,dimred="umap",img_bckgr=False):
 
     allFeat,colorList = feat_and_color[:,:2],feat_and_color[:,2:]
 
+    fontSize = 15
+    plt.xticks(fontsize=fontSize)
+    plt.yticks(fontsize=fontSize)
     plt.scatter([allFeat[:,0]],[allFeat[:,1]],color=colorList)
-    plt.legend()
+    plt.legend(fontsize=fontSize)
     plt.savefig(f"../vis/{exp_id}/metrics_{dimred}_pop{pop}_imgBckgr{img_bckgr}.png")
     plt.close()
 
@@ -2618,18 +2637,23 @@ def vizRepr(exp_id):
             plt.legend()
             plt.savefig(f"../vis/{exp_id}/attMetrFeat{metric}IB={ib}_noneRed-gradcam_pp.png")
 
-
 def vote_for_best_model(exp_id,metric_list,img_bckgr):
 
     allRankings = []
     for metric in metric_list:
         perfs = loadPerf(exp_id,metric,img_bckgr=img_bckgr,reverse_met_to_min=True,pop=False)
-        ranking = np.argsort(-perfs[:,1].astype("float"))
-        print(metric,ranking,perfs[:,0])
+        argsort = np.argsort(-perfs[:,1].astype("float"))
+        
+        ranking = np.zeros(len(argsort))
+
+        for i in range(len(ranking)):
+            ranking[argsort[i]] = i+1
+
         allRankings.append(ranking)
 
     average_ranking = np.stack(allRankings,0)
     average_ranking = average_ranking.mean(axis=0)
+
     return average_ranking
 
 def find_best_methods(exp_id,img_bckgr):
@@ -2643,7 +2667,7 @@ def find_best_methods(exp_id,img_bckgr):
     rank_list = [ranking_del,ranking_add,ranking_all]
     rank_label = ["Deletion","Addition","Global"]
 
-    label_to_id = get_label_to_id()
+    id_to_label = get_id_to_label()
 
     for i in range(len(rank_list)):
 
@@ -2653,7 +2677,7 @@ def find_best_methods(exp_id,img_bckgr):
         argsort = np.argsort(ranking)
 
         for ind in argsort:
-            print("\t",round(ranking[ind],2),model_list[ind])
+            print("\t",round(ranking[ind],2),id_to_label[model_list[ind]])
 
     print(model_list[np.argmin(ranking_del)],model_list[np.argmin(ranking_add)],model_list[np.argmin(ranking)])
 
