@@ -1518,13 +1518,6 @@ def main(argv=None):
                     allPreds.append(predClassInd.item())
                     allTarg.append(targ.item())
 
-                if args.attention_metrics=="Add":
-                    origData = data.clone()
-                    if args.att_metr_img_bckgr:
-                        data = data_bckgr.clone()
-                    else:
-                        data = F.conv2d(data,blurWeight,padding=blurWeight.size(-1)//2,groups=blurWeight.size(0))
-
                 if args.att_metrics_post_hoc:
                     startTime = time.time()
                     attMaps = applyPostHoc(attrFunc,data,targ,kwargs,args)
@@ -1532,6 +1525,13 @@ def main(argv=None):
                 else:
                     attMaps = attrFunc(i)
                     totalTime = inf_time
+
+                if args.attention_metrics=="Add":
+                    origData = data.clone()
+                    if args.att_metr_img_bckgr:
+                        data = data_bckgr.clone()
+                    else:
+                        data = F.conv2d(data,blurWeight,padding=blurWeight.size(-1)//2,groups=blurWeight.size(0))
 
                 attMaps = (attMaps-attMaps.min())/(attMaps.max()-attMaps.min())
 
