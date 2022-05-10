@@ -2554,7 +2554,7 @@ def dimred_metrics(exp_id,pop=False,dimred="umap",img_bckgr=False):
     plt.xticks(fontsize=fontSize)
     plt.yticks(fontsize=fontSize)
     plt.scatter([allFeat[:,0]],[allFeat[:,1]],color=colorList)
-    plt.legend(fontsize=fontSize)
+    plt.legend(fontsize=fontSize-2)
     plt.savefig(f"../vis/{exp_id}/metrics_{dimred}_pop{pop}_imgBckgr{img_bckgr}.png")
     plt.close()
 
