@@ -1089,7 +1089,8 @@ def main(argv=None):
     argreader.parser.add_argument('--att_metrics_few_steps', type=str2bool, help='To do as much step for high res than for low res')
     argreader.parser.add_argument('--att_metr_do_again', type=str2bool, help='To run computation if already done',default=True)
 
-    argreader.parser.add_argument('--att_metr_img_bckgr', type=str2bool, help='To replace the image by another image instead of a black patch',default=False)
+    argreader.parser.add_argument('--att_metr_bckgr', type=str, help='The pixel replacement method.',default="black")
+        
     argreader.parser.add_argument('--att_metr_save_feat', type=str2bool, help='',default=False)
 
     argreader.parser.add_argument('--optuna', type=str2bool, help='To run a hyper-parameter study')
@@ -1416,16 +1417,16 @@ def main(argv=None):
     elif args.attention_metrics:
 
         path_suff = args.attention_metrics
-        path_suff += "-IB" if args.att_metr_img_bckgr else ""
+        path_suff += "-"+args.att_metr_bckgr if args.att_metr_bckgr != "black" else ""
         model_id_suff = "-"+args.att_metrics_post_hoc if args.att_metrics_post_hoc else ""
-
-        if args.att_metr_img_bckgr:
-            print("\tImg bckgr")
 
         if args.att_metr_do_again or not os.path.exists("../results/{}/attMetr{}_{}{}.npy".format(args.exp_id,path_suff,args.model_id,model_id_suff)):
 
             args.val_batch_size = 1
             testLoader,testDataset = load_data.buildTestLoader(args, "test",withSeg=args.with_seg)
+
+            #Useful to generate gray and white background
+            normalize = torchvision.transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
 
             bestPath = glob.glob("../models/{}/model{}_best_epoch*".format(args.exp_id, args.model_id))[0]
             bestEpoch = int(os.path.basename(bestPath).split("epoch")[1])
@@ -1473,7 +1474,7 @@ def main(argv=None):
             torch.manual_seed(0)
             inds = torch.randint(len(testDataset),size=(nbImgs,))
 
-            if args.att_metr_img_bckgr:
+            if args.att_metr_bckgr=="IB":
                 inds_bckgr = (inds + len(testDataset)//2) % len(testDataset)
 
                 labels = np.array([testDataset[ind][1] for ind in inds])
@@ -1499,11 +1500,6 @@ def main(argv=None):
                 data,targ = getBatch(testDataset,i,args)
                 allData = data.clone().cpu()
 
-                if args.att_metr_img_bckgr:
-                    data_bckgr,_ = getBatch(testDataset,inds_bckgr[imgInd],args)
-                else:
-                    data_bckgr = None
-
                 startTime = time.time()
                 if not args.prototree:
                     resDic = net(data)
@@ -1526,12 +1522,23 @@ def main(argv=None):
                     attMaps = attrFunc(i)
                     totalTime = inf_time
 
+                if args.att_metr_bckgr=="IB":
+                    data_bckgr,_ = getBatch(testDataset,inds_bckgr[imgInd],args)
+                elif args.att_metr_bckgr=="black":
+                    data_bckgr = torch.zeros_like(data)
+                elif args.att_metric_bckgr == "white":
+                    data_bckgr = normalize(torch.ones_like(data))
+                elif args.att_metric_bckgr == "gray":
+                    data_bckgr = normalize(0.5*torch.ones_like(data))
+                elif args.att_metric_bckgr == "blur":
+                    data_bckgr = F.conv2d(data,blurWeight,padding=blurWeight.size(-1)//2,groups=blurWeight.size(0))
+
                 if args.attention_metrics=="Add":
                     origData = data.clone()
-                    if args.att_metr_img_bckgr:
-                        data = data_bckgr.clone()
-                    else:
-                        data = F.conv2d(data,blurWeight,padding=blurWeight.size(-1)//2,groups=blurWeight.size(0))
+                    #if args.att_metr_bckgr=="IB":
+                    data = data_bckgr.clone()
+                    #else:
+                    #    data = F.conv2d(data,blurWeight,padding=blurWeight.size(-1)//2,groups=blurWeight.size(0))
 
                 attMaps = (attMaps-attMaps.min())/(attMaps.max()-attMaps.min())
 
@@ -1550,13 +1557,13 @@ def main(argv=None):
                     
                     feat = resDic["x"].detach().cpu()
 
-                    data_masked =  maskData(data,attMaps_interp,args,data_bckgr)
+                    data_masked = maskData(data,attMaps_interp,args,data_bckgr)
                     allData = torch.cat((allData,data_masked.cpu()),dim=0)
                     score_mask,feat_mask = inference(net,data_masked,predClassInd,args)
                     feat_mask = feat_mask.detach().cpu()
                     allScoreMaskList.append(score_mask.cpu().detach().numpy())
                     
-                    data_invmasked =  maskData(data,1-attMaps_interp,args,data_bckgr)
+                    data_invmasked = maskData(data,1-attMaps_interp,args,data_bckgr)
                     allData = torch.cat((allData,data_invmasked.cpu()),dim=0)
                     score_invmask,feat_invmask = inference(net,data_invmasked,predClassInd,args)
                     feat_invmask = feat_invmask.detach().cpu()
@@ -1605,10 +1612,7 @@ def main(argv=None):
                             if args.attention_metrics=="Add":
                                 data[0,:,y1:y2,x1:x2] = origData[0,:,y1:y2,x1:x2]
                             elif args.attention_metrics=="Del":
-                                if args.att_metr_img_bckgr:
-                                    data[0,:,y1:y2,x1:x2] = data_bckgr[0,:,y1:y2,x1:x2]
-                                else:
-                                    data[0,:,y1:y2,x1:x2] = 0
+                                data[0,:,y1:y2,x1:x2] = data_bckgr[0,:,y1:y2,x1:x2]
                             else:
                                 raise ValueError("Unkown attention metric",args.attention_metrics)
 
@@ -1661,10 +1665,7 @@ def main(argv=None):
         train(0,args,None)
 
 def maskData(data,attMaps_interp,args,data_bckgr):
-    if args.att_metr_img_bckgr:
-        data_masked = data*attMaps_interp+data_bckgr*(1-attMaps_interp)
-    else:
-        data_masked = data*attMaps_interp
+    data_masked = data*attMaps_interp+data_bckgr*(1-attMaps_interp)
     return data_masked 
 
 def getBatch(testDataset,i,args):
