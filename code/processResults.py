@@ -2439,14 +2439,14 @@ def computeKendallTauMat(metric_list,exp_id,pop,img_bckgr,what_is_best):
 def ranking_similarities(exp_id,img_bckgr=False,pop=False):
 
     what_is_best = get_what_is_best()
-    metric_list = ["Del","Add","DelCorr","AddCorr","AD","ADD","IIC"] 
+    metric_list = ["Del","DelCorr","ADD","Add","AddCorr","IIC","AD"] 
 
     suff = "-IB" if img_bckgr else ""
     model_list = np.genfromtxt("../results/{}/attMetrics_Del{}.csv".format(exp_id,suff),delimiter=",",dtype=str)[:,0]
 
     kendall_tau_mat,p_val = computeKendallTauMat(metric_list,exp_id,pop,img_bckgr,what_is_best)
 
-    cmap = plt.get_cmap("RdBu_r")
+    cmap = plt.get_cmap("bwr")
 
     fig = plt.figure()
     ax = fig.gca()
@@ -2497,13 +2497,14 @@ def run_dimred_or_load(path,allFeat,dimred="umap"):
         kwargs = {}
     elif dimred == "tsne":
         dimRedFunc = TSNE
-        kwargs = {"metric":rankDist,"learning_rate":100}
+        kwargs = {"metric":rankDist,"learning_rate":100,"init":"pca"}
     else:
         raise ValueError("Unknown dimred {}".format(dimred))
 
     path = path.replace(".npy","_"+dimred+".npy")
 
     if not os.path.exists(path):
+        np.random.seed(0)
         allFeat = dimRedFunc(n_components=2,**kwargs).fit_transform(allFeat)
         np.save(path,allFeat)
     else:
@@ -2513,10 +2514,14 @@ def run_dimred_or_load(path,allFeat,dimred="umap"):
 
 def dimred_metrics(exp_id,pop=False,dimred="umap",img_bckgr=False):
 
-    metric_list = ["Del","Add","DelCorr","AddCorr","AD","ADD","IIC"] 
-
+    metric_list = ["Del","DelCorr","ADD","Add","AddCorr","AD","IIC"] 
     if pop:
         metric_list.pop(-1)
+
+    cmap = plt.get_cmap("Set1")
+    colorInds = [0,4,5,1,2,3]
+    colors = [cmap(colorInds[i]*1.0/8) for i in range(len(metric_list))]
+    #colors = ["red","blue","green","violet","orange","yellow"]
 
     allPerfs = []
     sample_nb = loadPerf(exp_id,"Del",pop=pop).shape[1]-1
@@ -2533,16 +2538,16 @@ def dimred_metrics(exp_id,pop=False,dimred="umap",img_bckgr=False):
     allPerfs = np.concatenate(allPerfs,axis=0).astype("float")
 
     path = f"../results/{exp_id}/metrics_dimred_pop{pop}_imgBckr{img_bckgr}.npy"
+    print(path)
     allFeat = run_dimred_or_load(path,allPerfs,dimred)  
     
     metric_to_label = get_metric_label()
-    cmap = plt.get_cmap("Set1")
     plt.figure()
     colorList = []
     for i,metric in enumerate(metric_list):
         start,end = i*sample_nb,(i+1)*sample_nb
-        plt.scatter([allFeat[start,0]],[allFeat[start,1]],label=metric_to_label[metric],color=cmap(i*1.0/8))
-        colorList.extend([cmap(i*1.0/8) for _ in range(sample_nb)])
+        plt.scatter([allFeat[start,0]],[allFeat[start,1]],label=metric_to_label[metric],color=colors[i])
+        colorList.extend([colors[i] for _ in range(sample_nb)])
 
     print(allFeat.shape,np.array(colorList).shape)
     feat_and_color = np.concatenate((allFeat,np.array(colorList)),axis=1)
