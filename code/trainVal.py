@@ -1501,12 +1501,8 @@ def main(argv=None):
                 allData = data.clone().cpu()
 
                 startTime = time.time()
-                if not args.prototree:
-                    resDic = net(data)
-                    scores = torch.softmax(resDic["pred"],dim=-1)
-                else:
-                    resDic = None
-                    scores = net(data)[0]
+                resDic = net(data)
+                scores = torch.softmax(resDic["pred"],dim=-1)
                 inf_time = time.time() - startTime
 
                 if args.attention_metrics in ["Add","Del"]:
@@ -1526,12 +1522,14 @@ def main(argv=None):
                     data_bckgr,_ = getBatch(testDataset,inds_bckgr[imgInd],args)
                 elif args.att_metr_bckgr=="black":
                     data_bckgr = torch.zeros_like(data)
-                elif args.att_metric_bckgr == "white":
-                    data_bckgr = normalize(torch.ones_like(data))
-                elif args.att_metric_bckgr == "gray":
-                    data_bckgr = normalize(0.5*torch.ones_like(data))
-                elif args.att_metric_bckgr == "blur":
+                elif args.att_metr_bckgr == "white":
+                    data_bckgr = torch.ones_like(data)
+                elif args.att_metr_bckgr == "gray":
+                    data_bckgr = 0.5*torch.ones_like(data)
+                elif args.att_metr_bckgr == "blur":
                     data_bckgr = F.conv2d(data,blurWeight,padding=blurWeight.size(-1)//2,groups=blurWeight.size(0))
+                else:
+                    raise ValueError("Unkown background method",args.att_metr_bckgr)
 
                 if args.attention_metrics=="Add":
                     origData = data.clone()
@@ -1539,6 +1537,9 @@ def main(argv=None):
                     data = data_bckgr.clone()
                     #else:
                     #    data = F.conv2d(data,blurWeight,padding=blurWeight.size(-1)//2,groups=blurWeight.size(0))
+                    first_sample_feat = net(data)["x"]
+                elif args.attention_metrics == "Del":
+                    first_sample_feat = resDic["x"]
 
                 attMaps = (attMaps-attMaps.min())/(attMaps.max()-attMaps.min())
 
@@ -1591,7 +1592,7 @@ def main(argv=None):
 
                     stepCount = 0
 
-                    allFeatIter = []
+                    allFeatIter = [first_sample_feat]
                     while leftPxlNb > 0:
 
                         attMin,attMean,attMax = attMaps.min().item(),attMaps.mean().item(),attMaps.max().item()
@@ -1630,6 +1631,9 @@ def main(argv=None):
 
                         score_prop_list.append((leftPxlNb,score.item()))
                     
+                    last_sample_feat = net(data)["x"]
+                    allFeatIter.append([last_sample_feat])
+
                     allFeat.append(torch.cat(allFeatIter,dim=0).unsqueeze(0))
 
                     allScoreList.append(score_prop_list)
