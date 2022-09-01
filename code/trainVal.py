@@ -1092,6 +1092,7 @@ def main(argv=None):
     argreader.parser.add_argument('--att_metr_bckgr', type=str, help='The pixel replacement method.',default="black")
         
     argreader.parser.add_argument('--att_metr_save_feat', type=str2bool, help='',default=False)
+    argreader.parser.add_argument('--att_metr_add_first_feat', type=str2bool, help='',default=False)
 
     argreader.parser.add_argument('--optuna', type=str2bool, help='To run a hyper-parameter study')
     argreader.parser.add_argument('--optuna_trial_nb', type=int, help='The number of hyper-parameter trial to run.')
@@ -1592,79 +1593,84 @@ def main(argv=None):
 
                     stepCount = 0
 
-                    allFeatIter = [first_sample_feat]
-                    while leftPxlNb > 0:
+                    allFeatIter = [first_sample_feat.detach().cpu()]
 
-                        attMin,attMean,attMax = attMaps.min().item(),attMaps.mean().item(),attMaps.max().item()
-                        statsList.append((attMin,attMean,attMax))
+                    if not args.att_metr_add_first_feat:
+                        while leftPxlNb > 0:
 
-                        _,ind_max = (attMaps)[0,0].view(-1).topk(k=totalPxlNb//stepNb)
-                        ind_max = ind_max[:leftPxlNb]
+                            attMin,attMean,attMax = attMaps.min().item(),attMaps.mean().item(),attMaps.max().item()
+                            statsList.append((attMin,attMean,attMax))
 
-                        x_max,y_max = ind_max % attMaps.shape[3],ind_max // attMaps.shape[3]
-                        
-                        ratio = data.size(-1)//attMaps.size(-1)
+                            _,ind_max = (attMaps)[0,0].view(-1).topk(k=totalPxlNb//stepNb)
+                            ind_max = ind_max[:leftPxlNb]
 
-                        for i in range(len(x_max)):
+                            x_max,y_max = ind_max % attMaps.shape[3],ind_max // attMaps.shape[3]
                             
-                            x1,y1 = x_max[i]*ratio,y_max[i]*ratio,
-                            x2,y2 = x1+ratio,y1+ratio
+                            ratio = data.size(-1)//attMaps.size(-1)
 
-                            if args.attention_metrics=="Add":
-                                data[0,:,y1:y2,x1:x2] = origData[0,:,y1:y2,x1:x2]
-                            elif args.attention_metrics=="Del":
-                                data[0,:,y1:y2,x1:x2] = data_bckgr[0,:,y1:y2,x1:x2]
-                            else:
-                                raise ValueError("Unkown attention metric",args.attention_metrics)
+                            for i in range(len(x_max)):
+                                
+                                x1,y1 = x_max[i]*ratio,y_max[i]*ratio,
+                                x2,y2 = x1+ratio,y1+ratio
 
-                            attMaps[0,:,y_max[i],x_max[i]] = -1                       
+                                if args.attention_metrics=="Add":
+                                    data[0,:,y1:y2,x1:x2] = origData[0,:,y1:y2,x1:x2]
+                                elif args.attention_metrics=="Del":
+                                    data[0,:,y1:y2,x1:x2] = data_bckgr[0,:,y1:y2,x1:x2]
+                                else:
+                                    raise ValueError("Unkown attention metric",args.attention_metrics)
 
-                        leftPxlNb -= totalPxlNb//stepNb
-                        if stepCount % 30 == 0:
-                            allAttMaps = torch.cat((allAttMaps,torch.clamp(attMaps,0,attMaps.max().item()).cpu()),dim=0)
-                            allData = torch.cat((allData,data.cpu()),dim=0)
-                        stepCount += 1
+                                attMaps[0,:,y_max[i],x_max[i]] = -1                       
 
-                        score,feat = inference(net,data,predClassInd,args)
+                            leftPxlNb -= totalPxlNb//stepNb
+                            if stepCount % 30 == 0:
+                                allAttMaps = torch.cat((allAttMaps,torch.clamp(attMaps,0,attMaps.max().item()).cpu()),dim=0)
+                                allData = torch.cat((allData,data.cpu()),dim=0)
+                            stepCount += 1
 
-                        allFeatIter.append(feat.detach().cpu())
+                            score,feat = inference(net,data,predClassInd,args)
 
-                        score_prop_list.append((leftPxlNb,score.item()))
-                    
-                    last_sample_feat = net(data)["x"]
-                    allFeatIter.append([last_sample_feat])
+                            allFeatIter.append(feat.detach().cpu())
 
+                            score_prop_list.append((leftPxlNb,score.item()))
+    
                     allFeat.append(torch.cat(allFeatIter,dim=0).unsqueeze(0))
-
                     allScoreList.append(score_prop_list)
+
                 else:
                     raise ValueError("Unkown attention metric",args.attention_metrics)
 
             if args.att_metrics_post_hoc:
                 args.model_id = args.model_id + "-"+args.att_metrics_post_hoc
             
-            if args.attention_metrics == "Spars":
-                np.save("../results/{}/attMetrSpars_{}.npy".format(args.exp_id,args.model_id),np.array(allSpars,dtype=object))
-            elif args.attention_metrics == "AttScore":
-                np.save("../results/{}/attMetrAttScore_{}.npy".format(args.exp_id,args.model_id),np.array(allAttScor,dtype=object))
-            elif args.attention_metrics == "Time":
-                np.save("../results/{}/attMetrTime_{}.npy".format(args.exp_id,args.model_id),np.array(allTimeList,dtype=object))
-            elif args.attention_metrics == "Lift":
-                suff = path_suff.replace("Lift","")
-                np.save("../results/{}/attMetrLift{}_{}.npy".format(args.exp_id,suff,args.model_id),np.array(allScoreList,dtype=object))
-                np.save("../results/{}/attMetrLiftMask{}_{}.npy".format(args.exp_id,suff,args.model_id),np.array(allScoreMaskList,dtype=object))
-                np.save("../results/{}/attMetrLiftInvMask{}_{}.npy".format(args.exp_id,suff,args.model_id),np.array(allScoreInvMaskList,dtype=object))
+            if not args.att_metr_add_first_feat:
+                if args.attention_metrics == "Spars":
+                    np.save("../results/{}/attMetrSpars_{}.npy".format(args.exp_id,args.model_id),np.array(allSpars,dtype=object))
+                elif args.attention_metrics == "AttScore":
+                    np.save("../results/{}/attMetrAttScore_{}.npy".format(args.exp_id,args.model_id),np.array(allAttScor,dtype=object))
+                elif args.attention_metrics == "Time":
+                    np.save("../results/{}/attMetrTime_{}.npy".format(args.exp_id,args.model_id),np.array(allTimeList,dtype=object))
+                elif args.attention_metrics == "Lift":
+                    suff = path_suff.replace("Lift","")
+                    np.save("../results/{}/attMetrLift{}_{}.npy".format(args.exp_id,suff,args.model_id),np.array(allScoreList,dtype=object))
+                    np.save("../results/{}/attMetrLiftMask{}_{}.npy".format(args.exp_id,suff,args.model_id),np.array(allScoreMaskList,dtype=object))
+                    np.save("../results/{}/attMetrLiftInvMask{}_{}.npy".format(args.exp_id,suff,args.model_id),np.array(allScoreInvMaskList,dtype=object))
+                else:
+                    np.save("../results/{}/attMetr{}_{}.npy".format(args.exp_id,path_suff,args.model_id),np.array(allScoreList,dtype=object))
+                    np.save("../results/{}/attMetrPreds{}_{}.npy".format(args.exp_id,path_suff,args.model_id),np.array(allPreds,dtype=object))
+        
+                if args.attention_metrics in ["Lift","Del","Add"] and args.att_metr_save_feat:
+                    allFeat = torch.cat(allFeat,dim=0)
+                    np.save("../results/{}/attMetrFeat{}_{}.npy".format(args.exp_id,path_suff,args.model_id),allFeat.numpy())
+        
+                if len(allData) > 1:
+                    torchvision.utils.save_image(allData,"../vis/{}/attMetrData{}_{}.png".format(args.exp_id,path_suff,args.model_id))
             else:
-                np.save("../results/{}/attMetr{}_{}.npy".format(args.exp_id,path_suff,args.model_id),np.array(allScoreList,dtype=object))
-                np.save("../results/{}/attMetrPreds{}_{}.npy".format(args.exp_id,path_suff,args.model_id),np.array(allPreds,dtype=object))
-    
-            if args.attention_metrics in ["Lift","Del","Add"] and args.att_metr_save_feat:
                 allFeat = torch.cat(allFeat,dim=0)
-                np.save("../results/{}/attMetrFeat{}_{}.npy".format(args.exp_id,path_suff,args.model_id),allFeat.numpy())
-    
-            if len(allData) > 1:
-                torchvision.utils.save_image(allData,"../vis/{}/attMetrData{}_{}.png".format(args.exp_id,path_suff,args.model_id))
-    
+                featPath = f"../results/{args.exp_id}/attMetrFeat{path_suff}_{args.model_id}.npy"  
+                allFeat = np.concatenate((allFeat.numpy(),np.load(featPath,mmap_mode="r")),axis=1)
+                np.save(featPath,allFeat)
+
     else:
         train(0,args,None)
 
