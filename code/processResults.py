@@ -18,6 +18,7 @@ plt.switch_backend('agg')
 
 from sklearn.manifold import TSNE
 import sklearn
+from sklearn import svm ,neural_network,tree,ensemble,neighbors,gaussian_process
 import matplotlib
 import matplotlib.cm as cm
 import matplotlib.patches as patches
@@ -2504,11 +2505,19 @@ def run_dimred_or_load(path,allFeat,dimred="umap"):
     path = path.replace(".npy","_"+dimred+".npy")
 
     if not os.path.exists(path):
-        np.random.seed(0)
-        allFeat = dimRedFunc(n_components=2,**kwargs).fit_transform(allFeat)
+        if type(allFeat) is dict:
+            for metric in allFeat:
+                for bckgr in allFeat[metric]:
+                    np.random.seed(0)
+                    allFeat[metric][bckgr] = dimRedFunc(n_components=2,**kwargs).fit_transform(allFeat[metric][bckgr])
+        else:
+            allFeat = dimRedFunc(n_components=2,**kwargs).fit_transform(allFeat)
+
         np.save(path,allFeat)
     else:
-        allFeat = np.load(path)
+        allFeat = np.load(path,allow_pickle=True)
+        if len(allFeat.shape) == 0:
+            allFeat = allFeat.item()
 
     return allFeat 
 
@@ -2538,13 +2547,13 @@ def dimred_metrics(exp_id,pop=False,dimred="umap",img_bckgr=False):
     allPerfs = np.concatenate(allPerfs,axis=0).astype("float")
 
     path = f"../results/{exp_id}/metrics_dimred_pop{pop}_imgBckr{img_bckgr}.npy"
-    print(path)
     allFeat = run_dimred_or_load(path,allPerfs,dimred)  
     
     metric_to_label = get_metric_label()
     plt.figure()
     colorList = []
     for i,metric in enumerate(metric_list):
+
         start,end = i*sample_nb,(i+1)*sample_nb
         plt.scatter([allFeat[start,0]],[allFeat[start,1]],label=metric_to_label[metric],color=colors[i])
         colorList.extend([colors[i] for _ in range(sample_nb)])
@@ -2563,84 +2572,185 @@ def dimred_metrics(exp_id,pop=False,dimred="umap",img_bckgr=False):
     plt.savefig(f"../vis/{exp_id}/metrics_{dimred}_pop{pop}_imgBckgr{img_bckgr}.png")
     plt.close()
 
-def vizRepr(exp_id):
-    allFeat = []
-    for metric in ["Lift","Del","Add"]:
-        for suff in ["-IB",""]:
-            feat = np.load(f"../results/{exp_id}/attMetrFeat{metric}{suff}_noneRed-gradcam_pp.npy",mmap_mode="r")
+def oodRepr(exp_id,quantitative,heavy_computation_models=False):
 
-            if metric in ["Add","Del"]:
-                sample_nb,step_nb = feat.shape[0],feat.shape[1]
+    backgrList = ["-IB","","-white","-gray","-blur"]
+    metricList = ["Lift","Del","Add"]
 
-            allFeat.append(feat.reshape(feat.shape[0]*feat.shape[1],-1))
-    
-    allFeat = np.concatenate(allFeat,axis=0)
-    umap_path = f"../results/{exp_id}/attMetrFeat_noneRed-gradcam_pp.npy"
-    allFeat = run_dimred_or_load(umap_path,allFeat,dimred="umap")
+    os.makedirs(f"../vis/{exp_id}/representation_study/",exist_ok=True)
 
-    lifNb = sample_nb*3
-    deladd_nb = sample_nb*step_nb
+    for model_id in ["noneRed-gradcam_pp"]:
+        allFeat = {}
+        for metric in metricList:
+            allFeat[metric] = {}
+            for backgr in backgrList:
+                featPath = f"../results/{exp_id}/attMetrFeat{metric}{backgr}_{model_id}.npy"
 
-    feat_lift_ib = allFeat[:lifNb] 
-    feat_lift = allFeat[lifNb:lifNb*2] 
-    feat_del_ib = allFeat[lifNb*2:lifNb*2+deladd_nb] 
-    feat_del = allFeat[lifNb*2+deladd_nb:lifNb*2+2*deladd_nb] 
-    feat_add_ib = allFeat[lifNb*2+2*deladd_nb:lifNb*2+3*deladd_nb]
-    feat_add = allFeat[lifNb*2+3*deladd_nb:]
+                if os.path.exists(featPath):
+                    feat = np.load(featPath,mmap_mode="r")
 
-    for shape in [feat_lift_ib.shape,feat_lift.shape,feat_del_ib.shape,feat_del.shape,feat_add_ib.shape,feat_add.shape]:
-        print(shape)
+                    if metric in ["Add","Del"]:
+                        sample_nb,step_nb = feat.shape[0],feat.shape[1]
 
-    for metric in ["Add","Del","Lift"]:
-        
-        for ib in [False,True]:
-            plt.figure()
-            if ib:
-                if metric == "Del":
-                    feat = feat_del_ib 
-                elif metric == "Add":
-                    feat = feat_add_ib 
-                else:
-                    feat = feat_lift_ib
-            else:
-                if metric == "Del":
-                    feat = feat_del 
-                elif metric == "Add":
-                    feat = feat_add
-                else:
-                    feat = feat_lift
-
-            if metric == "Del":
-                step_nb_met = step_nb
-                cmap = plt.get_cmap("plasma")
-                labels = lambda x:"" 
-            elif metric == "Add":
-                step_nb_met = step_nb
-                cmap = lambda x:plt.get_cmap("plasma")(1-x)
-                labels = lambda x:""                 
-            else:
-                step_nb_met = 3
-                cmap = lambda x:[plt.get_cmap("plasma")(0),"red","green"][int(x*step_nb_met)]
-                labels = lambda x:["Original Data","Mask","Inversed mask"][x]
-
-            feat = feat.reshape(sample_nb,step_nb_met,-1)
-
-            range_i = range(feat.shape[1]) if feat.shape[1] == 3 else range(20,feat.shape[1],40)
-            for i in range_i:
-                feat_i = feat[:,i]
-                if i ==0:
-                    plt.scatter(feat_i[:,0],feat_i[:,1],marker="o",color=cmap(i*1.0/feat.shape[1]),alpha=0.5,label=labels(i))
-                else:
-                    plt.scatter(feat_i[:,0],feat_i[:,1],marker="o",color=cmap(i*1.0/feat.shape[1]),alpha=0.5,label=labels(i))
-            plt.xlim(allFeat[:,0].min()-1,allFeat[:,0].max()+1)
-            plt.ylim(allFeat[:,1].min()-1,allFeat[:,1].max()+1)
+                    allFeat[metric][backgr] = feat.reshape(feat.shape[0]*feat.shape[1],-1)
             
-            if metric in ["Add","Del"]:
-                plt.colorbar(cm.ScalarMappable(norm=matplotlib.colors.Normalize(0,1),cmap=plt.get_cmap("plasma")))
-            else:
-                plt.legend()
-            plt.legend()
-            plt.savefig(f"../vis/{exp_id}/attMetrFeat{metric}IB={ib}_noneRed-gradcam_pp.png")
+        umap_path = f"../results/{exp_id}/attMetrFeat_{model_id}.npy"
+        if not quantitative:
+            allFeat = run_dimred_or_load(umap_path,allFeat,dimred="umap")
+
+        #We will train models to separate representations of altered images from representations of regular images
+        constDic = {"SVM":svm.SVC,"DT":tree.DecisionTreeClassifier,\
+                    "KNN":neighbors.KNeighborsClassifier,"GP":gaussian_process.GaussianProcessClassifier}
+
+        if heavy_computation_models:
+            constDic.update({"NN":neural_network.MLPClassifier,"RF":ensemble.RandomForestClassifier})
+
+        kwargsDic = {"NN":{"hidden_layer_sizes":(feat.shape[-1],4,1)},"SVM":{"probability":True},"DT":{},\
+                    "RF":{},"KNN":{},"GP":{}}
+
+        metrDic = {"Del":(step_nb,plt.get_cmap("plasma"),lambda x:""),\
+                   "Add":(step_nb,lambda x:plt.get_cmap("plasma")(1-x),lambda x:""),
+                   "Lift":(3,lambda x:[plt.get_cmap("plasma")(0),"red","green"][int(x*step_nb_met)],lambda x:["Original Data","Mask","Inversed mask"][x])}
+
+        for metric in metricList:
+            print(metric)
+            step_nb_met,cmap,labels = metrDic[metric]
+
+            for bckgr in backgrList:
+                print("\t",bckgr)
+                plt.figure()
+                if bckgr in allFeat[metric]:
+                    feat = allFeat[metric][bckgr].copy()
+                    feat = feat.reshape(sample_nb,step_nb_met,-1)
+
+                    if quantitative:
+                        np.random.shuffle(feat)
+                        train_x = feat[:int(len(feat)*0.5)]
+                        val_x = feat[int(len(feat)*0.5):]
+
+                        labels = np.arange(feat.shape[1])
+                        if metric in ["Lift","Del"]:
+                            labels = 1.0*(labels > 0)
+                        else:
+                            labels = 1.0*(labels < feat.shape[1] - 1)
+
+                        train_y = np.repeat(labels[np.newaxis],len(train_x),0).reshape(-1)
+                        val_y = np.repeat(labels[np.newaxis],len(val_x),0).reshape(-1)
+             
+                        train_x = train_x.reshape(-1,train_x.shape[-1])
+                        val_x = val_x.reshape(-1,val_x.shape[-1])
+           
+                        perfCSVPath = f"../results/{exp_id}/attMetrReprSep{metric}_{model_id}.csv"
+                        if not os.path.exists(perfCSVPath):
+                            with open(perfCSVPath,"w") as file:
+                                print("bckgr,sec_model,train_acc,train_auc,val_acc,val_auc",file=file) 
+
+                        for secModel in constDic.keys():
+        
+                            arr = np.genfromtxt(perfCSVPath,delimiter=",",dtype=str)
+                            
+                            if len(arr.shape) > 1:
+                                inds = np.multiply(arr[:,0]==bckgr,arr[:,1]==secModel)
+                                if len(inds) > 0:
+                                    modelAlreadyTrained = len(np.argwhere(inds)[:,0]) > 0
+                                else:
+                                    modelAlreadyTrained = False 
+                            #No model has been trained already 
+                            #Or this model has not been already 
+                            if len(arr.shape) == 1 or not modelAlreadyTrained: 
+                                print(f"\t\tModel {secModel} being trained")                
+                                model = constDic[secModel](**kwargsDic[secModel])
+                                model.fit(train_x,train_y)
+                                
+                                train_y_score = model.predict_proba(train_x)[:,1]
+                                train_acc = model.score(train_x,train_y)
+                                train_auc = sklearn.metrics.roc_auc_score(train_y,train_y_score)
+                                
+                                val_y_score = model.predict_proba(val_x)[:,1]
+                                val_acc = model.score(val_x,val_y)            
+                                val_auc = sklearn.metrics.roc_auc_score(val_y,val_y_score)
+
+                                with open(perfCSVPath,"a") as file:
+                                    print(f"{bckgr},{secModel},{train_acc},{train_auc},{val_acc},{val_auc}",file=file)
+
+                            else:
+                                print(f"\t\tModel {secModel} already trained.")
+
+                    else:
+                        pts_inds = np.arange(feat.shape[1])
+                        np.random.shuffle(pts_inds)
+
+                        for i in pts_inds:
+                            feat_i = feat[:,i]
+                            plt.scatter(feat_i[:,0],feat_i[:,1],marker="o",color=cmap(i*1.0/feat.shape[1]),alpha=0.5,label=labels(i))
+                        
+                        plt.xlim(feat[:,:,0].min()-1,feat[:,:,0].max()+1)
+                        plt.ylim(feat[:,:,1].min()-1,feat[:,:,1].max()+1)
+                        
+                        if metric in ["Add","Del"]:
+                            plt.colorbar(cm.ScalarMappable(norm=matplotlib.colors.Normalize(0,1),cmap=plt.get_cmap("plasma")))
+                        else:
+                            plt.legend()
+
+                        figPath = f"../vis/{exp_id}/representation_study/attMetrFeat{metric}{bckgr}_{model_id}.png"
+                        plt.savefig(figPath)
+
+def viz_oodRepr(exp_id):
+
+    paths = glob.glob(f"../results/{exp_id}/attMetrReprSep*_*.csv")
+    backgrList = ["-IB","","-white","-gray","-blur"]
+    backgrLabels = {"-IB":"IB","":"Black","-white":"White","-gray":"Gray","-blur":"Blur"}
+
+    for path in paths:
+        metric = path.split("/")[-1].split("ReprSep")[1].split("_")[0]
+        model_id = path.split("/")[-1].split("ReprSep")[1].split("_")[1].replace(".csv","")
+
+        csv = np.genfromtxt(path,delimiter=",",dtype=str)
+        print(path)
+
+        sec_model_list = list(set(csv[1:,1]))
+
+        for i in range(2):
+            sec_model_metric_ind = csv.shape[1]-2+i
+            sec_model_metric = csv[0,sec_model_metric_ind]
+
+            perf_matrix = []
+            for bckgr in backgrList:
+                csv_bckgr = csv[1:][csv[1:,0] == bckgr]
+                #print(csv_sec_model.shape,csv_rows.shape)
+                 
+                row = []
+                for sec_model in sec_model_list:
+                    csv_sec_model = csv_bckgr[(csv_bckgr[:,1] == sec_model)]
+                    csv_sec_model_metric = csv_sec_model[:,sec_model_metric_ind]
+                    if len(csv_sec_model_metric) == 0:
+                        value = 0
+                    else:
+                        value = float(csv_sec_model_metric[0])
+
+                    row.append(value)
+
+                perf_matrix.append(row)
+            
+            perf_matrix = np.array(perf_matrix)
+            print(perf_matrix)
+            plt.figure()
+            cmap_name = "plasma"
+            cmap = plt.get_cmap(cmap_name)
+            plt.imshow(perf_matrix,cmap=cmap_name)
+            backLabelList = [backgrLabels[bckgr] for bckgr in backgrList]
+            plt.yticks(np.arange(len(backgrList)),backLabelList)
+            plt.xticks(np.arange(len(sec_model_list)),sec_model_list)
+            for i in range(len(perf_matrix)):
+                for j in range(len(perf_matrix[i])):
+                    plt.text(j-.1,i,round(perf_matrix[i,j]*100,1))
+
+            plt.colorbar(cm.ScalarMappable(norm=matplotlib.colors.Normalize(0,1),cmap=cmap))
+            plt.tight_layout()
+            plt.savefig(f"../vis/{exp_id}/representation_study/attMetrFeat{metric}_{model_id}_{sec_model_metric}.png")
+            #background en ligne, secModel en colonnes 
+            # metric de fiabilité, model et metric de secModel fixe
+            
 
 def vote_for_best_model(exp_id,metric_list,img_bckgr):
 
@@ -2827,7 +2937,10 @@ def main(argv=None):
     argreader.parser.add_argument('--with_std',action="store_true") 
     argreader.parser.add_argument('--img_bckgr',action="store_true") 
     argreader.parser.add_argument('--pop',action="store_true")   
-    argreader.parser.add_argument('--vis_repr',action="store_true") 
+    argreader.parser.add_argument('--ood_repr',action="store_true") 
+    argreader.parser.add_argument('--quantitative',action="store_true")  
+    argreader.parser.add_argument('--heavy_computation_models',action="store_true")
+    argreader.parser.add_argument('--viz_ood_repr',action="store_true")
     argreader.parser.add_argument('--dimred_metrics',action="store_true") 
     argreader.parser.add_argument('--dimred_func',type=str,default="tsne") 
     argreader.parser.add_argument('--ranking_similarities',action="store_true") 
@@ -2998,8 +3111,10 @@ def main(argv=None):
     if args.accuracy_per_video:
         accuracyPerVideo(args.exp_id)
         ttest_attMetr(args.exp_id,metric="Acc")
-    if args.vis_repr:
-        vizRepr(args.exp_id)
+    if args.ood_repr:
+        oodRepr(args.exp_id,args.quantitative,args.heavy_computation_models)
+    if args.viz_ood_repr:
+        viz_oodRepr(args.exp_id)
     if args.dimred_metrics:
         dimred_metrics(args.exp_id,args.pop,args.dimred_func,args.img_bckgr)
     if args.ranking_similarities:
