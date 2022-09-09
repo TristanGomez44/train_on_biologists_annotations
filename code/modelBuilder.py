@@ -8,15 +8,9 @@ from torch.nn.modules.linear import Identity
 plt.switch_backend('agg')
 
 from models import resnet
-from models import hrnet
-from models import efficientnet
 from models import inter_by_parts
-from models import prototree
-from models import protopnet
 from models import abn
 import args
-import time 
-import sys 
 EPS = 0.000001
 
 import torch.nn.functional as F
@@ -32,14 +26,6 @@ def buildFeatModel(featModelName, **kwargs):
     '''
     if featModelName.find("resnet") != -1:
         featModel = getattr(resnet, featModelName)(**kwargs)
-    elif featModelName == "hrnet44":
-        featModel = hrnet.get_cls_net(w=44)
-    elif featModelName == "hrnet64":
-        featModel = hrnet.get_cls_net(w=64)
-    elif featModelName == "hrnet18":
-        featModel = hrnet.get_cls_net(w=18)
-    elif featModelName.find("efficientnet") != -1:
-        featModel = getattr(efficientnet,featModelName)()
     else:
         raise ValueError("Unknown model type : ", featModelName)
 
@@ -472,13 +458,8 @@ def netBuilder(args,gpu=None):
 
         net = Model(firstModel, secondModel)
     else:
-        if args.protonet:
-            net = protopnet.construct_PPNet("resnet50", num_classes=args.class_nb)
-        if args.abn:
-            net = abn.resnet50(fullpretrained=args.abn_pretrained)
-        else:
-            net = prototree.construct_prototree("resnet50",args.class_nb)
- 
+        net = abn.resnet50(fullpretrained=args.abn_pretrained)
+
     if args.distributed:
         torch.cuda.set_device(gpu)
         net.cuda(gpu)
@@ -561,8 +542,6 @@ def addArgs(argreader):
 
     argreader.parser.add_argument('--inter_by_parts', type=args.str2bool, metavar='BOOL',
                                   help="To train the model from https://github.com/zxhuang1698/interpretability-by-parts/tree/650f1af573075a41f04f2f715f2b2d4bc0363d31")
-    argreader.parser.add_argument('--prototree', type=args.str2bool, metavar='BOOL',
-                                  help="To train the model from https://github.com/M-Nauta/ProtoTree/blob/86b9bfb38a009576c8e073100b92dd2f639c01e3")
 
     argreader.parser.add_argument('--lin_lay_bias', type=args.str2bool, metavar='BOOL',
                                   help="To add a bias to the final layer.")
