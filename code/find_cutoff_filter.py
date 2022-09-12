@@ -49,8 +49,6 @@ def main(argv=None):
         print("Loading avg FFT")
         avg_fft = np.load(avg_fft_path)
 
-    avg_fft = avg_fft[0,0]
-
     print("Finding cutoff frequency")
 
     start=0
@@ -68,14 +66,14 @@ def main(argv=None):
         else:
             end = (start+end)*0.5
         
-        if prec_partial_sum == partial_sum:
+        if (end-start)/end < 0.01:
             cutoff_freq_found = True 
         else:
             prec_partial_sum = partial_sum
     #print(start,partial_sum,np.abs(avg_fft).sum()*0.5)
 
     with open("../results/EMB10/cutoff_filter_freq.csv","w") as file:
-        print(cutoff_freq_found,file=file)
+        print((start+end)/2.0,file=file)
 
 def compute_partial_sum(cutoff_freq,fft):
     cx,cy = fft.shape[1]//2,fft.shape[0]//2
