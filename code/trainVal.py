@@ -43,6 +43,7 @@ import gc
 import torch.multiprocessing as mp
 import torch.distributed as dist
 import torchvision
+import torchvision.transforms as transforms
 from models import protopnet 
 
 import captum
@@ -65,8 +66,6 @@ def epochSeqTr(model, optim, log_interval, loader, epoch, args, **kwargs):
     - epoch (int): the current epoch
     - args (Namespace): the namespace containing all the arguments required for training and building the network
     '''
-
-    start_time = time.time() if args.debug or args.benchmark else None
 
     model.train()
 
@@ -166,10 +165,6 @@ def epochSeqTr(model, optim, log_interval, loader, epoch, args, **kwargs):
         if not args.optuna:
             torch.save(model.state_dict(), "../models/{}/model{}_epoch{}".format(args.exp_id, args.model_id, epoch))
             writeSummaries(metrDict, totalImgNb, epoch, "train", args.model_id, args.exp_id)
-
-        if args.debug or args.benchmark:
-            totalTime = time.time() - start_time
-            update.updateTimeCSV(epoch, "train", args.exp_id, args.model_id, totalTime, batch_idx)
 
 def updateGradExp(model,allGrads,end=False,epoch=None,exp_id=None,model_id=None,grad_exp=None,conv=True):
 
@@ -320,9 +315,6 @@ def epochImgEval(model, log_interval, loader, epoch, args, metricEarlyStop, mode
 
     print("../results/{}/model{}_epoch{}_metrics_{}.csv".format(args.exp_id, args.model_id, epoch, mode))
 
-    if args.debug or args.benchmark:
-        start_time = time.time()
-
     model.eval()
 
     print("Epoch", epoch, " : {}".format(mode))
@@ -396,11 +388,6 @@ def epochImgEval(model, log_interval, loader, epoch, args, metricEarlyStop, mode
             resDict["norm"] = torch.sqrt(torch.pow(resDict["features"],2).sum(dim=1,keepdim=True))
             intermVarDict = update.catIntermediateVariables(resDict, intermVarDict, validBatch)
 
-        # Harware occupation
-        if gpu == 0:
-            update.updateHardWareOccupation(args.debug, args.benchmark, args.cuda, epoch, mode, args.exp_id, args.model_id,
-                                        batch_idx)
-
         # Metrics
         metDictSample = metrics.binaryToMetrics(output, target, seg,resDict,comp_spars=(mode=="test") and args.with_seg)
 
@@ -457,10 +444,6 @@ def epochImgEval(model, log_interval, loader, epoch, args, metricEarlyStop, mode
         batchSize_list = np.array(batchSize_list)[:,np.newaxis]
         latency_list = np.concatenate((latency_list,batchSize_list),axis=1)
         np.savetxt("../results/{}/latency_{}_epoch{}.csv".format(args.exp_id,args.model_id,epoch),latency_list,header="latency,batch_size",delimiter=",")
-
-    if (args.debug or args.benchmark) and gpu == 0:
-        totalTime = time.time() - start_time
-        update.updateTimeCSV(epoch, mode, args.exp_id, args.model_id, totalTime, batch_idx)
 
     return metrDict[metricEarlyStop]
 
@@ -1427,16 +1410,15 @@ def main(argv=None):
             testLoader,testDataset = load_data.buildTestLoader(args, "test",withSeg=args.with_seg)
 
             #Useful to generate gray and white background
-            normalize = torchvision.transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+            mean,std = torch.tensor([0.485, 0.456, 0.406]), torch.tensor([0.229, 0.224, 0.225])
+            denormalize = transforms.Compose([transforms.Normalize(mean=[0.,0.,0.],std=1/std),\
+                                              transforms.Normalize(mean =-mean,std=[1,1,1])])
 
             bestPath = glob.glob("../models/{}/model{}_best_epoch*".format(args.exp_id, args.model_id))[0]
             bestEpoch = int(os.path.basename(bestPath).split("epoch")[1])
 
-            if args.prototree:
-                net = torch.load(glob.glob("../models/{}/model{}_best_epoch*".format(args.exp_id,args.model_id))[0])
-            else:
-                net = modelBuilder.netBuilder(args,gpu=0)
-                net = preprocessAndLoadParams(bestPath,args.cuda,net,args.strict_init)
+            net = modelBuilder.netBuilder(args,gpu=0)
+            net = preprocessAndLoadParams(bestPath,args.cuda,net,args.strict_init)
             net.eval()
             
             if args.att_metrics_post_hoc:
@@ -1489,17 +1471,16 @@ def main(argv=None):
                     inds_bckgr = torch.randint(len(testDataset),size=(nbImgs,))
                     labels_bckgr = np.array([testDataset[ind][1] for ind in inds_bckgr])
 
-            blurWeight = torch.ones(121,121)
-            blurWeight = blurWeight/blurWeight.numel()
-            blurWeight = blurWeight.unsqueeze(0).unsqueeze(0).expand(3,1,-1,-1)
-            blurWeight = blurWeight.cuda() if args.cuda else blurWeight
-
             for imgInd,i in enumerate(inds):
                 if imgInd % 20 == 0 :
                     print("Img",i.item(),"(",imgInd,"/",len(inds),")")
 
                 data,targ = getBatch(testDataset,i,args)
-                allData = data.clone().cpu()
+                if args.dataset_test.find("emb") == -1:
+                    data_unorm = denormalize(data)
+                else:
+                    data_unorm = data
+                allData = data_unorm.clone().cpu()
 
                 startTime = time.time()
                 resDic = net(data)
@@ -1527,17 +1508,49 @@ def main(argv=None):
                     data_bckgr = torch.ones_like(data)
                 elif args.att_metr_bckgr == "gray":
                     data_bckgr = 0.5*torch.ones_like(data)
+                elif args.att_metr_bckgr in ["lowpass","highpass"]:
+
+                    cutoff_freq = np.genfromtxt("../results/EMB10/cutoff_filter_freq.csv")
+
+                    fft = torch.fft.fft2(data[0,0])
+                    fft = np.fft.fftshift(fft.cpu())
+
+                    cx,cy = fft.shape[1]//2,fft.shape[0]//2
+                    rx,ry = int(cutoff_freq*cx*0.5),int(cutoff_freq*cy*0.5)
+
+                    mask = np.ones_like(fft,dtype="float64")
+                    mask[cy-ry:cy+ry,cx-rx:cx+rx] = 0
+
+                    if args.att_metr_bckgr == "highpass":
+                        mask = 1 - mask
+                    
+                    fft[mask.astype("bool")] = 0
+
+                    fft = np.fft.ifftshift(fft)
+                    data_bckgr = torch.fft.ifft2(torch.tensor(fft).to(data.device)).real.unsqueeze(0).unsqueeze(0)
+
+                    data_bckgr = data_bckgr.expand(-1,data.size(1),-1,-1)
+
                 elif args.att_metr_bckgr == "blur":
-                    data_bckgr = F.conv2d(data,blurWeight,padding=blurWeight.size(-1)//2,groups=blurWeight.size(0))
+                    kernel = torch.ones(121,121)
+                    kernel = kernel/kernel.numel()
+                    kernel = kernel.unsqueeze(0).unsqueeze(0).expand(3,1,-1,-1)
+                    kernel = kernel.cuda() if args.cuda else kernel
+                    data_bckgr = F.conv2d(data,kernel,padding=kernel.size(-1)//2,groups=kernel.size(0))            
                 else:
                     raise ValueError("Unkown background method",args.att_metr_bckgr)
 
                 if args.attention_metrics=="Add":
                     origData = data.clone()
+                    origUnormData = data_unorm.clone()
                     #if args.att_metr_bckgr=="IB":
                     data = data_bckgr.clone()
+                    if args.att_metr_bckgr in ["IB","edge","blur","highpass","lowpass"] and args.dataset_test.find("emb") == -1:
+                        data_unorm = denormalize(data_bckgr.clone())
+                    else:
+                        data_unorm = data_bckgr.clone()
                     #else:
-                    #    data = F.conv2d(data,blurWeight,padding=blurWeight.size(-1)//2,groups=blurWeight.size(0))
+                    #    data = F.conv2d(data,kernel,padding=kernel.size(-1)//2,groups=kernel.size(0))
                     first_sample_feat = net(data)["x"]
                 elif args.attention_metrics == "Del":
                     first_sample_feat = resDic["x"]
@@ -1560,13 +1573,15 @@ def main(argv=None):
                     feat = resDic["x"].detach().cpu()
 
                     data_masked = maskData(data,attMaps_interp,args,data_bckgr)
-                    allData = torch.cat((allData,data_masked.cpu()),dim=0)
+                    data_unorm_masked = maskData(data_unorm,attMaps_interp,args,data_bckgr)
+                    allData = torch.cat((allData,data_unorm_masked.cpu()),dim=0)
                     score_mask,feat_mask = inference(net,data_masked,predClassInd,args)
                     feat_mask = feat_mask.detach().cpu()
                     allScoreMaskList.append(score_mask.cpu().detach().numpy())
                     
                     data_invmasked = maskData(data,1-attMaps_interp,args,data_bckgr)
-                    allData = torch.cat((allData,data_invmasked.cpu()),dim=0)
+                    data_unorm_invmasked = maskData(data_unorm,1-attMaps_interp,args,data_bckgr)
+                    allData = torch.cat((allData,data_unorm_invmasked.cpu()),dim=0)
                     score_invmask,feat_invmask = inference(net,data_invmasked,predClassInd,args)
                     feat_invmask = feat_invmask.detach().cpu()
                     allScoreInvMaskList.append(score_invmask.cpu().detach().numpy())
@@ -1615,17 +1630,19 @@ def main(argv=None):
 
                                 if args.attention_metrics=="Add":
                                     data[0,:,y1:y2,x1:x2] = origData[0,:,y1:y2,x1:x2]
+                                    data_unorm[0,:,y1:y2,x1:x2] = origUnormData[0,:,y1:y2,x1:x2]
                                 elif args.attention_metrics=="Del":
                                     data[0,:,y1:y2,x1:x2] = data_bckgr[0,:,y1:y2,x1:x2]
+                                    data_unorm[0,:,y1:y2,x1:x2] = data_bckgr[0,:,y1:y2,x1:x2]
                                 else:
                                     raise ValueError("Unkown attention metric",args.attention_metrics)
 
                                 attMaps[0,:,y_max[i],x_max[i]] = -1                       
 
                             leftPxlNb -= totalPxlNb//stepNb
-                            if stepCount % 30 == 0:
+                            if stepCount % 25 == 0:
                                 allAttMaps = torch.cat((allAttMaps,torch.clamp(attMaps,0,attMaps.max().item()).cpu()),dim=0)
-                                allData = torch.cat((allData,data.cpu()),dim=0)
+                                allData = torch.cat((allData,data_unorm.cpu()),dim=0)
                             stepCount += 1
 
                             score,feat = inference(net,data,predClassInd,args)
@@ -1662,9 +1679,14 @@ def main(argv=None):
                 if args.attention_metrics in ["Lift","Del","Add"] and args.att_metr_save_feat:
                     allFeat = torch.cat(allFeat,dim=0)
                     np.save("../results/{}/attMetrFeat{}_{}.npy".format(args.exp_id,path_suff,args.model_id),allFeat.numpy())
-        
-                if len(allData) > 1:
-                    torchvision.utils.save_image(allData,"../vis/{}/attMetrData{}_{}.png".format(args.exp_id,path_suff,args.model_id))
+
+                allDataPath = "../vis/{}/attMetrData{}_{}.png".format(args.exp_id,path_suff,args.model_id)
+                nrows = 1  if args.attention_metrics == "Lift" else 4
+                #if args.attention_metrics == "Add":
+                #    #Putting the first image last for clarity of visualization
+                #    allData = torch.cat((allData[1:],allData[0:1]),dim=0)
+                #allData = allData[1:]
+                torchvision.utils.save_image(allData,allDataPath,nrow=nrows)
             else:
                 allFeat = torch.cat(allFeat,dim=0)
                 featPath = f"../results/{args.exp_id}/attMetrFeat{path_suff}_{args.model_id}.npy"  
@@ -1673,6 +1695,38 @@ def main(argv=None):
 
     else:
         train(0,args,None)
+
+#From https://kai760.medium.com/how-to-use-torch-fft-to-apply-a-high-pass-filter-to-an-image-61d01c752388
+def roll_n(X, axis, n):
+    f_idx = tuple(slice(None, None, None) 
+            if i != axis else slice(0, n, None) 
+            for i in range(X.dim()))
+    b_idx = tuple(slice(None, None, None) 
+            if i != axis else slice(n, None, None) 
+            for i in range(X.dim()))
+    front = X[f_idx]
+    back = X[b_idx]
+    return torch.cat([back, front], axis)
+    
+def fftshift(X):
+    real, imag = X.chunk(chunks=2, dim=-1)
+    real, imag = real.squeeze(dim=-1), imag.squeeze(dim=-1)    
+    for dim in range(2, len(real.size())):
+        real = roll_n(real, axis=dim,n=int(np.ceil(real.size(dim) / 2)))
+        imag = roll_n(imag, axis=dim,n=int(np.ceil(imag.size(dim) / 2)))
+    real, imag = real.unsqueeze(dim=-1), imag.unsqueeze(dim=-1)
+    X = torch.cat((real,imag),dim=1)
+    return torch.squeeze(X)
+    
+def ifftshift(X):
+    real, imag = X.chunk(chunks=2, dim=-1)
+    real, imag = real.squeeze(dim=-1), imag.squeeze(dim=-1)
+    for dim in range(len(real.size()) - 1, 1, -1):
+        real = roll_n(real, axis=dim,n=int(np.floor(real.size(dim) / 2)))
+        imag = roll_n(imag, axis=dim,n=int(np.floor(imag.size(dim) / 2)))
+    real, imag = real.unsqueeze(dim=-1), imag.unsqueeze(dim=-1)
+    X = torch.cat((real, imag), dim=1)
+    return torch.squeeze(X)
 
 def maskData(data,attMaps_interp,args,data_bckgr):
     data_masked = data*attMaps_interp+data_bckgr*(1-attMaps_interp)
