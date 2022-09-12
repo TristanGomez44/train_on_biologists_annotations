@@ -1,17 +1,11 @@
 from torch.nn import functional as F
-import metrics
-import trainVal
 import numpy as np
-import load_data
 import torch
 import matplotlib.cm as cm
 import matplotlib.pyplot as plt
 plt.switch_backend('agg')
 from sklearn.metrics import roc_auc_score
-import utils
-import sys
 import subprocess
-import psutil
 import os
 
 def get_gpu_memory_map():
@@ -63,32 +57,7 @@ def updateOccupiedGPURamCSV(epoch,mode,exp_id,model_id,batch_idx):
     else:
         with open(csvPath,"a") as text_file:
             print(str(epoch)+","+",".join([occRamDict[device] for device in occRamDict.keys()]),file=text_file)
-def updateOccupiedCPUCSV(epoch,mode,exp_id,model_id,batch_idx):
 
-    cpuOccList = psutil.cpu_percent(percpu=True)
-
-    csvPath = "../results/{}/{}_cpuLoad_{}.csv".format(exp_id,model_id,mode)
-
-    if epoch==1 and batch_idx==0:
-        with open(csvPath,"w") as text_file:
-            print("epoch,"+",".join([str(i) for i in range(len(cpuOccList))]),file=text_file)
-            print(str(epoch)+","+",".join([str(cpuOcc) for cpuOcc in cpuOccList]),file=text_file)
-    else:
-        with open(csvPath,"a") as text_file:
-            print(str(epoch)+","+",".join([str(cpuOcc) for cpuOcc in cpuOccList]),file=text_file)
-def updateOccupiedRamCSV(epoch,mode,exp_id,model_id,batch_idx):
-
-    ramOcc = psutil.virtual_memory()._asdict()["percent"]
-
-    csvPath = "../results/{}/{}_occCPURam_{}.csv".format(exp_id,model_id,mode)
-
-    if epoch==1 and batch_idx==0:
-        with open(csvPath,"w") as text_file:
-            print("epoch,"+","+"percent",file=text_file)
-            print(str(epoch)+","+str(ramOcc),file=text_file)
-    else:
-        with open(csvPath,"a") as text_file:
-            print(str(epoch)+","+str(ramOcc),file=text_file)
 def updateTimeCSV(epoch,mode,exp_id,model_id,totalTime,batch_idx):
 
     csvPath = "../results/{}/{}_time_{}.csv".format(exp_id,model_id,mode)
