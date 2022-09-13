@@ -916,7 +916,7 @@ def dimred_metrics(exp_id,pop=False,dimred="umap",img_bckgr=False):
     plt.close()
 
 def get_sec_model_list():
-    return ["SVM","DT","KNN","NN"]
+    return ["SVM","KNN","DT","NN"]
 
 def get_metric_list():
     return ["Del","Add","Lift"]
@@ -1076,10 +1076,11 @@ def imshow_perf_matrix(perf_matrix,fig_path,xlabels,ylabels):
     plt.close()
 
 def get_backgr_list():
-    return ["-IB","","-white","-gray","-blur"]
+    return ["-IB","","-white","-gray","-blur","-highpass","-lowpass"]
 
 def get_backgr_label_dic():
-    return {"-IB":"IB","":"Black","-white":"White","-gray":"Gray","-blur":"Blur"}
+    return {"-IB":"IB","":"Black","-white":"White","-gray":"Gray","-blur":"Blur",\
+            "-highpass":"High pass","-lowpass":"Low Pass"}
 
 def viz_ood_repr(exp_id):
 
@@ -1178,6 +1179,25 @@ def agr_ood_repr(exp_id):
 
         fig_path = table_path.replace("results","vis").replace(".tex",".png")
         perfMat = np.array(perfMat).astype("float")
+
+        #Reordering rows to show the best bckgr on top
+        allRankings = []
+        for j,sec_model in enumerate(sec_model_list):
+            print(perfMat[:,j].argsort())
+            argsort = np.argsort(-perfMat[:,j].astype("float"))
+        
+            ranking = np.zeros(len(argsort))
+
+            for i in range(len(ranking)):
+                ranking[argsort[i]] = i
+
+            allRankings.append(ranking)
+
+        average_ranking = np.stack(allRankings,0)
+        average_ranking = average_ranking.mean(axis=0)
+
+        perfMat = perfMat[average_ranking.argsort()]
+        backgr_label_list = np.array(backgr_label_list)[average_ranking.argsort()]
         imshow_perf_matrix(perfMat,fig_path,sec_model_list,backgr_label_list)
 
 def vote_for_best_model(exp_id,metric_list,img_bckgr):
