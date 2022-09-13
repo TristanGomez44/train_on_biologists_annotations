@@ -1631,11 +1631,9 @@ def main(argv=None):
                                 if args.attention_metrics=="Add":
                                     data[0,:,y1:y2,x1:x2] = origData[0,:,y1:y2,x1:x2]
                                     data_unorm[0,:,y1:y2,x1:x2] = origUnormData[0,:,y1:y2,x1:x2]
-                                elif args.attention_metrics=="Del":
+                                else:
                                     data[0,:,y1:y2,x1:x2] = data_bckgr[0,:,y1:y2,x1:x2]
                                     data_unorm[0,:,y1:y2,x1:x2] = data_bckgr[0,:,y1:y2,x1:x2]
-                                else:
-                                    raise ValueError("Unkown attention metric",args.attention_metrics)
 
                                 attMaps[0,:,y_max[i],x_max[i]] = -1                       
 
