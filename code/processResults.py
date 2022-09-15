@@ -1,7 +1,7 @@
 
 from genericpath import exists
 from args import ArgReader
-import os
+import os,sys
 import glob
 
 import torch
@@ -847,20 +847,34 @@ def run_dimred_or_load(path,allFeat,dimred="umap"):
 
     path = path.replace(".npy","_"+dimred+".npy")
 
-    if not os.path.exists(path):
+    if os.path.exists(path):
+        allFeat_umap = np.load(path,allow_pickle=True)
+        if len(allFeat_umap.shape) == 0:
+            allFeat_umap = allFeat_umap.item()
+    else:
         if type(allFeat) is dict:
-            for metric in allFeat:
-                for bckgr in allFeat[metric]:
+            allFeat_umap = {}
+        else:
+            allFeat_umap = None
+
+    if type(allFeat) is dict:
+
+        for metric in allFeat:
+            if not metric in allFeat_umap:
+                allFeat_umap[metric] = {}
+
+        for metric in allFeat:
+            for bckgr in allFeat[metric]:
+                if not bckgr in allFeat_umap[metric]:
                     np.random.seed(0)
                     allFeat[metric][bckgr] = dimRedFunc(n_components=2,**kwargs).fit_transform(allFeat[metric][bckgr])
-        else:
-            allFeat = dimRedFunc(n_components=2,**kwargs).fit_transform(allFeat)
-
-        np.save(path,allFeat)
+                else:
+                    allFeat[metric][bckgr] = allFeat_umap[metric][bckgr]
+                    
     else:
-        allFeat = np.load(path,allow_pickle=True)
-        if len(allFeat.shape) == 0:
-            allFeat = allFeat.item()
+        allFeat = dimRedFunc(n_components=2,**kwargs).fit_transform(allFeat) if allFeat_umap is None else allFeat_umap
+
+    np.save(path,allFeat)
 
     return allFeat 
 
@@ -960,7 +974,7 @@ def ood_repr(exp_id,quantitative,metricList=None):
         constDic = {"SVM":svm.SVC,"DT":tree.DecisionTreeClassifier,"KNN":neighbors.KNeighborsClassifier,
                     "NN":neural_network.MLPClassifier}
 
-        kwargsDic = {"NN":{"hidden_layer_sizes":(128,),"batch_size":150 if metric=="Lift" else 2000,
+        kwargsDic = {"NN":{"hidden_layer_sizes":(128,),"batch_size":135 if metric=="Lift" else 2000,
                            "early_stopping":True,"learning_rate":"adaptive"},
                      "SVM":{"probability":True},"DT":{},"KNN":{}}
 
@@ -1018,7 +1032,7 @@ def ood_repr(exp_id,quantitative,metricList=None):
                                 print(f"\t\t\tModel {secModel} being trained")                
                                 model = constDic[secModel](**kwargsDic[secModel])
                                 model.fit(train_x,train_y)
-                                
+
                                 train_y_score = model.predict_proba(train_x)[:,1]
                                 train_acc = model.score(train_x,train_y)
                                 train_auc = sklearn.metrics.roc_auc_score(train_y,train_y_score)
