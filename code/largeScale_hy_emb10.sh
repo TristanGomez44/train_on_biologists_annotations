@@ -11,6 +11,9 @@ case $1 in
   "noneRed")
     python trainVal.py -c model_emb10.config --model_id noneRed                                               --stride_lay3 2 --stride_lay4 2 --max_batch_size 130 --val_batch_size 40 --max_batch_size_single_pass 25 
     ;;
+  "none_mast")
+    python trainVal.py -c model_emb10.config --model_id none_mast                                              --max_batch_size 130 --val_batch_size 120 --master_net True --m_model_id noneRed --max_batch_size_single_pass 30 
+    ;;
   "inter_by_parts")
     python trainVal.py -c model_emb10.config --model_id interbyparts   --inter_by_parts True --val_batch_size 400 --max_batch_size_single_pass 80 \
                 --stride_lay3 2 --stride_lay4 2  --max_batch_size 130 --always_sched True --drop_last False \
