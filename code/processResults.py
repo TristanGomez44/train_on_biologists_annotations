@@ -108,8 +108,9 @@ def load_feature_norm(model_ids,mapPaths,pond_by_norm,only_norm,expl):
             normDict[j] = None
     return normDict
 
-def showSalMaps(exp_id,img_nb,plot_id,nrows,class_index,ind_to_keep,viz_id,args,\
-                    model_ids,expl,maps_inds,pond_by_norm,only_norm,interp,direct_ind):
+def showSalMaps(exp_id,img_nb,plot_id,nrows,class_index,ind_to_keep,viz_id,args,
+                    model_ids,expl,maps_inds,pond_by_norm,only_norm,interp,direct_ind,
+                    sparsity_factor):
 
     gridImage = None
     args.normalize_data = False
@@ -167,6 +168,10 @@ def showSalMaps(exp_id,img_nb,plot_id,nrows,class_index,ind_to_keep,viz_id,args,
                 attMap = norm*attMap if pond_by_norm[j] else norm
             
             attMap = (attMap-attMap.min())/(attMap.max()-attMap.min())
+
+            if sparsity_factor[j] != 1:
+                attMap = torch.pow(torch.from_numpy(attMap),sparsity_factor[j])
+                attMap = (attMap-attMap.min())/(attMap.max()-attMap.min())
 
             if attMap.shape[0] == 1:
                 attMap = cmPlasma(attMap[0])[:,:,:3]
@@ -1082,6 +1087,7 @@ def main(argv=None):
     argreader.parser.add_argument('--pond_by_norm',type=str2bool,nargs="*",metavar="BOOL",help='To also show the norm of pixels along with the attention weights.',default=[])
     argreader.parser.add_argument('--only_norm',type=str2bool,nargs="*",metavar="BOOL",help='To only plot the norm of pixels',default=[])
     argreader.parser.add_argument('--expl',type=str,nargs="*",metavar="BOOL",help='The explanation type',default=[])
+    argreader.parser.add_argument('--sparsity_factor',type=float,nargs="*",metavar="BOOL",help='Set this arg to modify the sparsity of attention maps',default=[])
 
     argreader = load_data.addArgs(argreader)
 
@@ -1113,15 +1119,17 @@ def main(argv=None):
     if args.show_maps:
 
         #Setting default values
-        default_values = {"pond_by_norm":True,"only_norm":False,"interp":False,"direct_ind":False,"maps_inds":-1}
+        default_values = {"pond_by_norm":True,"only_norm":False,"interp":False,"direct_ind":False,"maps_inds":-1,
+                          "sparsity_factor":1}
         for key in default_values:
             param = getattr(args,key)
             if len(param) == 0:
                 param = [default_values[key] for _ in range(len(args.model_ids))]
             setattr(args,key,param)
 
-        showSalMaps(args.exp_id,args.img_nb,args.plot_id,args.nrows,args.class_index,args.ind_to_keep,args.viz_id,args,\
-                    args.model_ids,args.expl,args.maps_inds,args.pond_by_norm,args.only_norm,args.interp,args.direct_ind)
+        showSalMaps(args.exp_id,args.img_nb,args.plot_id,args.nrows,args.class_index,args.ind_to_keep,args.viz_id,args,
+                    args.model_ids,args.expl,args.maps_inds,args.pond_by_norm,args.only_norm,args.interp,args.direct_ind,
+                    args.sparsity_factor)
 
 
 
