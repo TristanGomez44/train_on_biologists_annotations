@@ -1,200 +1,312 @@
-
-from genericpath import exists
 from args import ArgReader
+from args import str2bool
 import os,sys
 import glob
-
 import torch
+import torchvision
 import numpy as np
-
+import pandas as pd 
+from matplotlib.colors import Normalize
 import matplotlib.pyplot as plt
 from matplotlib import cm 
 plt.switch_backend('agg')
-
+import umap
+from PIL import ImageFont,Image,ImageDraw
 from sklearn.manifold import TSNE
 import sklearn
-from sklearn import svm ,neural_network,tree,ensemble,neighbors,gaussian_process
-import matplotlib
-import matplotlib.cm as cm
-
-import load_data
-import scipy
-import torch.nn.functional as F
-
-import umap
+from sklearn import svm ,neural_network,tree,neighbors
 from sklearn.manifold import  TSNE
-
-import scipy.stats
-
-from scipy.signal import savgol_filter
+from skimage.transform import resize
 from scipy.stats import kendalltau
+import load_data
 
-def get_metrics_with_IB():
+def compNorm(featPath):
+
+    features = np.load(featPath,mmap_mode="r+")
+    nbFeat = features.shape[0]
+    splitLen = [100*(i+1) for i in range(nbFeat//100)]
+    features_split = np.split(features,splitLen)
+
+    allNorm = None
+    for feat in features_split:
+        norm = np.sqrt(np.power(feat.astype(float),2).sum(axis=1,keepdims=True))
+        if allNorm is None:
+            allNorm = norm
+        else:
+            allNorm = np.concatenate((allNorm,norm),axis=0)
+        print(feat.shape)
+    return allNorm
+
+def find_saliency_maps(viz_id,model_ids,exp_id,expl):
+    mapPaths = []
+    suff = "" if viz_id == "" else "{}_".format(viz_id)
+    for j in range(len(model_ids)):
+        print(f"../results/{exp_id}/{expl[j]}_{model_ids[j]}_epoch*_{suff}test.npy")
+        paths = glob.glob(f"../results/{exp_id}/{expl[j]}_{model_ids[j]}_epoch*_{suff}test.npy")
+
+        if len(paths) != 1:
+            raise ValueError("Wrong paths number",paths)
+
+        mapPaths.append(paths[0])
+    return mapPaths 
+
+def select_images(args,mapPaths,class_index,ind_to_keep,img_nb):
+    _,testDataset = load_data.buildTestLoader(args,"test",shuffle=False)
+    maxInd = len(glob.glob(os.path.join(args.dataset_test,"*/*.*")))
+
+    #Looking for the image at which the class we want begins
+    if not class_index is None:
+        startInd = 0
+
+        classes = sorted(map(lambda x:x.split("/")[-2],glob.glob("../data/{}/*/".format(args.dataset_test))))
+        for ind in range(class_index):
+            className = classes[ind]
+            startInd += len(glob.glob("../data/{}/{}/*".format(args.dataset_test,className)))
+
+        className = classes[class_index]
+
+        endInd = startInd + len(glob.glob("../data/{}/{}/*".format(args.dataset_test,className)))
+
+    else:
+        startInd = 0
+        endInd = maxInd
+
+    torch.manual_seed(1)
+    inds = torch.randint(startInd,endInd,size=(img_nb,))
+
+    if not ind_to_keep is None:
+        ind_to_keep = np.array(ind_to_keep)-1
+        inds = inds[ind_to_keep]
+
+    print("inds",inds)
+
+    #In case there is not enough images
+    img_nb = min(len(inds),img_nb)
+
+    imgBatch = torch.cat([testDataset[ind][0].unsqueeze(0) for ind in inds],dim=0)
+    return inds,imgBatch 
+
+def load_feature_norm(model_ids,mapPaths,pond_by_norm,only_norm,expl):
+    normDict = {}
+    model_ids = np.array(model_ids)
+    for j in range(len(mapPaths)):
+        if (pond_by_norm[j] or only_norm[j]) and expl[j] == "attMaps":
+
+            #Checking if the norm has already been loaded
+            matchInds = np.argwhere(model_ids[:j]==model_ids[j])
+            if len(matchInds) > 0 and normDict[matchInds[0,0]] is not None:
+                normDict[j] = normDict[matchInds[0,0]]
+            else:
+                if not os.path.exists(mapPaths[j].replace("attMaps","norm")):
+                    normDict[j] = compNorm(mapPaths[j].replace("attMaps","features"))
+                    np.save(mapPaths[j].replace("attMaps","norm"),normDict[j])
+                else:
+                    normDict[j] = np.load(mapPaths[j].replace("attMaps","norm"))
+                if len(normDict[j].shape) == 3:
+                    normDict[j] = normDict[j][:,np.newaxis]
+        else:
+            normDict[j] = None
+    return normDict
+
+def showSalMaps(exp_id,img_nb,plot_id,nrows,class_index,ind_to_keep,viz_id,args,\
+                    model_ids,expl,maps_inds,pond_by_norm,only_norm,interp,direct_ind):
+
+    gridImage = None
+    args.normalize_data = False
+    args.val_batch_size = img_nb
+    fnt = ImageFont.truetype("arial.ttf", 40)
+    cmPlasma = plt.get_cmap('plasma')
+    imgSize = 448
+    ptsImage = torch.zeros((3,imgSize,imgSize))
+
+    mapPaths = find_saliency_maps(viz_id,model_ids,exp_id,expl)
+    inds,imgBatch = select_images(args,mapPaths,class_index,ind_to_keep,img_nb)
+    img_nb = min(len(inds),img_nb)
+    normDict = load_feature_norm(model_ids,mapPaths,pond_by_norm,only_norm,expl)
+
+    for i in range(img_nb):
+
+        if i % 10 == 0:
+            print("i",i)
+
+        img = imgBatch[i:i+1]
+        img = (img-img.min())/(img.max()-img.min())
+
+        if args.print_ind:
+            imgPIL = Image.fromarray((255*img[0].permute(1,2,0).numpy()).astype("uint8"))
+            imgDraw = ImageDraw.Draw(imgPIL)
+            rectW = 180
+            imgDraw.rectangle([(0,0), (rectW, 40)],fill="white")
+            imgDraw.text((0,0), str(i+1)+" ", font=fnt,fill=(0,0,0))
+            img = torch.tensor(np.array(imgPIL)).permute(2,0,1).unsqueeze(0).float()/255
+
+        if gridImage is None:
+            gridImage = img
+        else:
+            gridImage = torch.cat((gridImage,img),dim=0)
+
+        for j in range(len(mapPaths)):
+            
+            all_attMaps = np.load(mapPaths[j],mmap_mode="r")
+            attMap = all_attMaps[i] if direct_ind[j] else all_attMaps[inds[i]]
+
+            if attMap.shape[0] != 1 and maps_inds[j] != -1:
+                attMap = attMap[maps_inds[j]:maps_inds[j]+1]
+
+            if (pond_by_norm[j] or only_norm[j]) and expl[j] == "attMaps":
+                if direct_ind[j]:
+                    norm = normDict[j][i]
+                else:
+                    norm = normDict[j][inds[i]]
+                norm = (norm-norm.min())/(norm.max()-norm.min())
+
+                if norm.shape[1:] != attMap.shape[1:]:
+                    norm = resize(np.transpose(norm,(1,2,0)), (attMap.shape[1],attMap.shape[2]),anti_aliasing=True,mode="constant",order=0)
+                    norm = np.transpose(norm,(2,0,1))
+
+                attMap = norm*attMap if pond_by_norm[j] else norm
+            
+            attMap = (attMap-attMap.min())/(attMap.max()-attMap.min())
+
+            if attMap.shape[0] == 1:
+                attMap = cmPlasma(attMap[0])[:,:,:3]
+            else:
+                attMap = np.transpose(attMap,(1,2,0))
+
+            ptsImageCopy = ptsImage.clone()
+            interpOrder = 1 if interp[j] else 0
+            ptsImageCopy = torch.tensor(resize(attMap, (ptsImageCopy.shape[1],ptsImageCopy.shape[2]),\
+                                            anti_aliasing=True,mode="constant",order=interpOrder))
+            ptsImageCopy = ptsImageCopy.permute(2,0,1).float().unsqueeze(0)
+            
+            img_gray = img.mean(dim=1,keepdim=True)
+            img_gray = (img_gray-img_gray.min())/(img_gray.max()-img_gray.min())
+            ptsImageCopy = 0.8*ptsImageCopy+0.2*img_gray
+            gridImage = torch.cat((gridImage,ptsImageCopy),dim=0)
+
+    outPath = "../vis/{}/{}.png".format(exp_id,plot_id)
+    torchvision.utils.save_image(gridImage, outPath, nrow=(len(model_ids)+1)*nrows)
+    os.system("convert  -resize 20% {} {}".format(outPath,outPath.replace(".png","_small.png")))
+
+def get_metrics_with_bckgr():
     return ["Del","DelCorr","Add","AddCorr","AD","ADD","IIC","Lift"]
 
-def getResPaths(exp_id,metric,img_bckgr):
-    if img_bckgr and metric in get_metrics_with_IB():
-        paths = sorted(glob.glob("../results/{}/attMetr{}-IB_*.npy".format(exp_id,metric)))
-    else:
-        paths = sorted(glob.glob("../results/{}/attMetr{}_*.npy".format(exp_id,metric)))
-        paths = list(filter(lambda x:os.path.basename(x).find("-IB") ==-1,paths))
+def get_bckgr_suff(bckgr):
+    return "-"+bckgr if bckgr != "black" else ""
 
-    paths = removeOldFiles(paths)
+def get_resolution_suff(resolution):
+    return "-res" if resolution else ""
 
-    return paths 
-
-def removeOldFiles(paths):
-    paths = list(filter(lambda x:os.path.basename(x).find("noise") ==-1,paths))
-    paths = list(filter(lambda x:os.path.basename(x).find("imgBG") ==-1,paths))
-    paths = list(filter(lambda x:os.path.basename(x).find("maskFeat") ==-1,paths))
+def filter_background(paths,bckgr):
+    bckgr_list = get_backgr_list()
+    bckgr_suff = get_bckgr_suff(bckgr)
+    for i in range(len(bckgr_list)):
+        if bckgr_list[i] != bckgr_suff:
+            bckgr_suff_i = get_bckgr_suff(bckgr_list[i])
+            paths = list(filter(lambda x:os.path.basename(x).split("-res")[0].find(bckgr_suff_i) ==-1,paths)) 
     return paths
 
+def getResPaths(exp_id,metric,bckgr):
+    if metric in get_metrics_with_bckgr():
+        bckgr_suff = get_bckgr_suff(bckgr)
+        #res_suff = get_resolution_suff(resolution)
+        paths = sorted(glob.glob(f"../results/{exp_id}/attMetr{metric}{bckgr_suff}_*.npy"))
+        #if resolution:
+        #    paths = list(filter(lambda x:os.path.basename(x).find(res_suff) !=-1,paths)) 
+        paths = filter_background(paths,bckgr)
+    else:
+        paths = sorted(glob.glob(f"../results/{exp_id}/attMetr{metric}_*.npy"))
+    return paths 
+
 def getModelId(path,metric,img_bckgr):
-    suff = "-IB" if img_bckgr else ""
-    model_id = os.path.basename(path).split("attMetr{}{}_".format(metric,suff))[1].split(".npy")[0]
+    bckgr_suff = get_bckgr_suff(img_bckgr)
+    #res_suff = get_resolution_suff(resolution)
+    model_id = os.path.basename(path).split("attMetr{}{}_".format(metric,bckgr_suff))[1].split(".npy")[0]
+    #if resolution:
+    #    model_id = model_id.split(res_suff)[0]
     return model_id
 
-def attMetrics(exp_id,metric="Del",ignore_model=False,img_bckgr=False):
+def attMetrics(exp_id,metric,img_bckgr):
 
     suff = metric
-
     paths = getResPaths(exp_id,metric,img_bckgr)
-
     resDic = {}
     resDic_pop = {}
-
-    if ignore_model:
-        _,modelToIgn = getIndsToUse(paths,metric)
-    else:
-        modelToIgn = []
 
     if metric in ["Del","Add"]:
         for path in paths:
 
             model_id = getModelId(path,metric,img_bckgr)
-            
-            if model_id not in modelToIgn:
-                pairs = np.load(path,allow_pickle=True)
+            pairs = np.load(path,allow_pickle=True)
 
-                allAuC = []
+            allAuC = []
 
-                for i in range(len(pairs)):
+            for i in range(len(pairs)):
 
-                    pairs_i = np.array(pairs[i])
+                pairs_i = np.array(pairs[i])
 
-                    if metric == "Add":
-                        pairs_i[:,0] = 1-pairs_i[:,0]/pairs_i[:,0].max()
-                    else:
-                        pairs_i[:,0] = (pairs_i[:,0]-pairs_i[:,0].min())/(pairs_i[:,0].max()-pairs_i[:,0].min())
-                        pairs_i[:,0] = 1-pairs_i[:,0]
+                if metric == "Add":
+                    pairs_i[:,0] = 1-pairs_i[:,0]/pairs_i[:,0].max()
+                else:
+                    pairs_i[:,0] = (pairs_i[:,0]-pairs_i[:,0].min())/(pairs_i[:,0].max()-pairs_i[:,0].min())
+                    pairs_i[:,0] = 1-pairs_i[:,0]
 
-                    auc = np.trapz(pairs_i[:,1],pairs_i[:,0])
-                    allAuC.append(auc)
-            
-                resDic_pop[model_id] = np.array(allAuC)
-                resDic[model_id] = resDic_pop[model_id].mean()
+                auc = np.trapz(pairs_i[:,1],pairs_i[:,0])
+                allAuC.append(auc)
+        
+            resDic_pop[model_id] = np.array(allAuC)
+            resDic[model_id] = resDic_pop[model_id].mean()
     elif metric == "Lift":
 
         for path in paths:
 
             model_id = getModelId(path,metric,img_bckgr)
-            
-            if model_id not in modelToIgn:
-                
-                scores = np.load(path,allow_pickle=True)[:,0] 
-                scores_mask = np.load(path.replace("Lift","LiftMask"),allow_pickle=True)[:,0] 
-                scores_invmask = np.load(path.replace("Lift","LiftInvMask"),allow_pickle=True)[:,0]  
+                            
+            scores = np.load(path,allow_pickle=True)[:,0] 
+            scores_mask = np.load(path.replace("Lift","LiftMask"),allow_pickle=True)[:,0] 
+            scores_invmask = np.load(path.replace("Lift","LiftInvMask"),allow_pickle=True)[:,0]  
 
-                iic = 100*(scores<scores_mask).mean(keepdims=True)
-                diff = (scores-scores_mask)
-                ad = 100*diff*(diff>0)/scores
-                add = 100*(scores-scores_invmask)/scores
+            iic = 100*(scores<scores_mask).mean(keepdims=True)
+            diff = (scores-scores_mask)
+            ad = 100*diff*(diff>0)/scores
+            add = 100*(scores-scores_invmask)/scores
 
-                resDic[model_id] = str(iic.item())+","+str(ad.mean())+","+str(add.mean())
-                resDic_pop[model_id] = {"IIC":iic,"AD":ad,"ADD":add}
-
+            resDic[model_id] = str(iic.item())+","+str(ad.mean())+","+str(add.mean())
+            resDic_pop[model_id] = {"IIC":iic,"AD":ad,"ADD":add}
     else:
         for path in paths:
             
             path = path.replace("-IB","")
-            model_id = getModelId(path,metric,img_bckgr=False)
+            model_id = getModelId(path,metric,img_bckgr)
             
-            if model_id not in modelToIgn:
-                sparsity_list = 1/np.load(path,allow_pickle=True)
+            sparsity_list = 1/np.load(path,allow_pickle=True)
 
             resDic_pop[model_id] = np.array(sparsity_list)
             resDic[model_id] = resDic_pop[model_id].mean() 
 
-    suff += "-IB" if img_bckgr and metric != "Spars" else ""
+
+    bckgr_suff = get_bckgr_suff(img_bckgr) if metric != "Spars" else ""
+    #res_suff = get_resolution_suff(resolution) if metric != "Spars" else ""
+    #suff += bckgr_suff+res_suff
+    suff = bckgr_suff
+
     csv = "\n".join(["{},{}".format(key,resDic[key]) for key in resDic])
-    with open("../results/{}/attMetrics_{}.csv".format(exp_id,suff),"w") as file:
+    with open(f"../results/{exp_id}/attMetrics_{metric}{suff}.csv","w") as file:
         print(csv,file=file)
 
     if metric == "Lift":
-        for metric in ["IIC","AD","ADD"]:
+        for metric in get_lift_submetric():
             csv = "\n".join(["{},{}".format(key,",".join(resDic_pop[key][metric].astype("str"))) for key in resDic_pop])
-            suff = "-IB" if img_bckgr else ""
             with open("../results/{}/attMetrics_{}{}_pop.csv".format(exp_id,metric,suff),"w") as file:
                 print(csv,file=file)
 
     else:
         csv = "\n".join(["{},{}".format(key,",".join(resDic_pop[key].astype("str"))) for key in resDic_pop])
-        with open("../results/{}/attMetrics_{}_pop.csv".format(exp_id,suff),"w") as file:
+        with open("../results/{}/attMetrics_{}_pop.csv".format(exp_id,metric,suff),"w") as file:
             print(csv,file=file)
 
-def getIndsToUse(paths,metric):
-    
-    modelToIgn = []
-
-    model_targ_ind = 0
-
-    while model_targ_ind < len(paths) and not os.path.exists(paths[model_targ_ind].replace("Add","Targ").replace("Del","Targ")):
-        model_targ_ind += 1
-
-    if model_targ_ind == len(paths):
-        use_all_inds = True
-    else:
-        use_all_inds = False 
-        targs = np.load(paths[model_targ_ind],allow_pickle=True)
-        
-        indsToUseBool = np.array([True for _ in range(len(targs))])
-        indsToUseDic = {}
-
-    for path in paths:
-        
-        model_id = os.path.basename(path).split("attMetr{}_".format(metric))[1].split(".npy")[0]
-        
-        model_id_nosuff = model_id.replace("-max","").replace("-onlyfirst","").replace("-fewsteps","")
-
-        predPath = path.replace(metric,"Preds").replace(model_id,model_id_nosuff)
-
-        if not os.path.exists(predPath):
-            predPath = path.replace(metric,"PredsAdd").replace(model_id,model_id_nosuff)
-
-        if os.path.exists(predPath) and not use_all_inds:
-            preds = np.load(predPath,allow_pickle=True)
-
-            if preds.shape != targs.shape:
-                inds = []
-                for i in range(len(preds)):
-                    if i % 2 == 0:
-                        inds.append(i)
-
-                preds = preds[inds]
-            
-            indsToUseDic[model_id] = np.argwhere(preds==targs)
-            indsToUseBool = indsToUseBool*(preds==targs)
-  
-        else:
-            modelToIgn.append(model_id)
-            print("no predpath",predPath)
-
-    if use_all_inds:
-        indsToUse = None
-    else:
-        indsToUse =  np.argwhere(indsToUseBool)
-        
-    return indsToUse,modelToIgn 
+def get_lift_submetric():
+    return ["IIC","AD","ADD"]
 
 def get_id_to_label():
     return {"bilRed":"B-CNN",
@@ -215,290 +327,12 @@ def get_id_to_label():
             "interbyparts":"InterByParts",
             "abn":"ABN"}
 
-def get_label_to_id():
-    id_to_label = get_id_to_label()
-    return {id_to_label[id]:id for id in id_to_label}
-
-def get_is_post_hoc():
-    return {"bilRed":False,
-            "bilRed_1map":False,
-            "clus_masterClusRed":False,
-            "clus_mast":False,
-            "noneRed":True,
-            "protopnet":False,
-            "prototree":False,
-            "noneRed-gradcam":True,
-            "noneRed-gradcam_pp":True,
-            "noneRed-score_map":True,
-            "noneRed-ablation_cam":True,
-            "noneRed-rise":True,
-            "noneRed_smallimg-varGrad":True,
-            "noneRed_smallimg-smoothGrad":True,
-            "noneRed_smallimg-guided":True,
-            "interbyparts":False,
-            "abn":False}
-
-def ttest_attMetr(exp_id,metric="del",img_bckgr=False):
-
-    id_to_label = get_id_to_label()
-
-    suff = metric
-    suff += "-IB" if img_bckgr and metric in get_metrics_with_IB() else ""
-
-    arr = np.genfromtxt("../results/{}/attMetrics_{}_pop.csv".format(exp_id,suff),dtype=str,delimiter=",")
-
-    metric_to_max = []
-    what_is_best = get_what_is_best()
-    for metric_ in what_is_best:
-        if what_is_best[metric_] == "max":
-            metric_to_max.append(metric_)
-
-    arr = best_to_worst(arr,ascending=metric in metric_to_max)
-
-    model_ids = arr[:,0]
-
-    labels = [id_to_label[model_id] for model_id in model_ids]
-
-    res_mat = arr[:,1:].astype("float")
-
-    if metric == "add":
-        rnd_nb = 2
-    elif metric == "del":
-        rnd_nb = 3 
-    else:
-        rnd_nb = 1
-
-    perfs = [(str(round(mean,rnd_nb)),str(round(std,rnd_nb))) for (mean,std) in zip(res_mat.mean(axis=1),res_mat.std(axis=1))]
-
-    p_val_mat = np.zeros((len(res_mat),len(res_mat)))
-    for i in range(len(res_mat)):
-        for j in range(len(res_mat)):
-            p_val_mat[i,j] = scipy.stats.ttest_ind(res_mat[i],res_mat[j],equal_var=False)[1]
-
-    p_val_mat = (p_val_mat<0.05)
-
-    res_mat_mean = res_mat.mean(axis=1)
-
-    diff_mat = np.abs(res_mat_mean[np.newaxis]-res_mat_mean[:,np.newaxis])
-    
-    diff_mat_norm = (diff_mat-diff_mat.min())/(diff_mat.max()-diff_mat.min())
-
-    cmap = plt.get_cmap('plasma')
-
-    fig = plt.figure()
-
-    ax = fig.gca()
-
-    ax.spines['top'].set_visible(False)
-    ax.spines['right'].set_visible(False)
-    ax.spines['bottom'].set_visible(False)
-    ax.spines['left'].set_visible(False)
-    ax.get_xaxis().set_ticks([])
-    ax.get_yaxis().set_ticks([])
-
-    plt.imshow(p_val_mat*0,cmap="Greys")
-    for i in range(len(res_mat)):
-        for j in range(len(res_mat)):
-            if i <= j:
-                rad = 0.3 if p_val_mat[i,j] else 0.1
-                circle = plt.Circle((i, j), rad, color=cmap(diff_mat_norm[i,j]))
-                ax.add_patch(circle)
-
-    plt.yticks(np.arange(len(res_mat)),labels)
-    plt.xticks(np.arange(len(res_mat)),["" for _ in range(len(res_mat))])
-    plt.colorbar(cm.ScalarMappable(norm=matplotlib.colors.Normalize(diff_mat.min(),diff_mat.max()),cmap=cmap))
-    for i in range(len(res_mat)):
-        plt.text(i-0.2,i-0.4,labels[i],rotation=45,ha="left")
-    plt.tight_layout()
-    plt.savefig("../vis/{}/ttest_{}_attmetr.png".format(exp_id,suff))
-
-def best_to_worst(arr,ascending=True):
-
-    if not ascending:
-        key = lambda x:-x[1:].astype("float").mean()
-    else:
-        key = lambda x:x[1:].astype("float").mean()
-
-    arr = np.array(sorted(arr,key=key))
-
-    return arr
-
-def loadArr(exp_id,metric,best,img_bckgr):
-    
-    suff = "-IB" if img_bckgr and metric in get_metrics_with_IB() else ""
-    arr = np.genfromtxt("../results/{}/attMetrics_{}{}_pop.csv".format(exp_id,metric,suff),dtype=str,delimiter=",") 
-    arr_f = arr[:,1:].astype("float")
-    if best == "max":
-        best = arr_f.mean(axis=1).max()
-    else:
-        best = arr_f.mean(axis=1).min()
-    return arr,arr_f,best
-
-def find_perf(i,metric,arr_dic,arr_f_dic,best_dic):
-    ind = np.argwhere(arr_dic[metric][:,0] == arr_dic["Del"][i,0])[0,0]
-    mean = arr_f_dic[metric][ind].mean()
-
-    if metric in ["Add","DelCorr","AddCorr"]:
-        mean_rnd,std_rnd = round(mean,3),round(arr_f_dic[metric][ind].std(),3)
-    elif metric in ["IIC"]:
-        mean_rnd,std_rnd = round(mean*0.01,3),0
-    elif metric in ["AD","ADD"]:
-        mean_rnd,std_rnd = round(mean*0.01,3),round(arr_f_dic[metric][ind].std()*0.01,3)
-    else:
-        raise ValueError("Unkown metric",metric)
-
-    is_best = (mean==best_dic[metric])
-    return mean_rnd,std_rnd,is_best
-
-def processRow(csv,row,with_std,metric_list,full=True,postHoc=False,postHocInd=None,nbPostHoc=None):
-    
-    for metric in metric_list:
-
-        if metric != "Acc" or not postHoc:
-            csv += latex_fmt(row[metric],row[metric+"_std"],row["is_best_"+metric] == "True",\
-                        with_std=with_std and metric != "IIC",with_start_char=(metric!="Accuracy"))
-        else:
-            if full:
-                if postHocInd > 0:
-                    csv += "&"
-                else:
-                    acc_text = latex_fmt(row["Acc"],row["Acc_std"],row["is_best_Acc"] == "True",with_std=with_std and metric != "IIC",with_start_char=False)
-                    csv += "&\multirow{"+str(nbPostHoc)+"}{*}{$"+acc_text+"$}"
-
-    csv += "\\\\ \n"
-    return csv 
-
-def formatRow(res_list,i):
-    row = res_list[i]
-    row = {key:str(row[key]) for key in row}
-    return row
-
 def get_what_is_best():
     return {"Del":"min","Add":"max","DelCorr":"max","AddCorr":"max","IIC":"max","AD":"min","ADD":"max","Spars":"max","Time":"min"}
 
 def get_metric_label():
     return {"Del":"DAUC","Add":"IAUC","Spars":"Sparsity","IIC":"IIC","AD":"AD","ADD":"ADD","DelCorr":"DC","AddCorr":"IC","Time":"Time","Acc":"Accuracy"}
     
-def latex_table_figure(exp_id,full=False,with_std=False,img_bckgr=False,suppMet=False):
-
-    arr_dic = {}
-    arr_f_dic = {}
-    best_dic = {}
-
-    what_is_best = get_what_is_best()
-
-    if not suppMet:
-        what_is_best.pop("Spars")
-        what_is_best.pop("Time")
-
-    metric_to_label = get_metric_label()
-    metric_list = list(what_is_best.keys())
-
-    for metric in metric_list:
-        arr_dic[metric],arr_f_dic[metric],best_dic[metric] = loadArr(exp_id,metric,best=what_is_best[metric],img_bckgr=img_bckgr)
-
-    id_to_label = get_id_to_label()
-
-    res_list = []
-
-    for i in range(len(arr_dic["Del"])):
-       
-        id = id_to_label[arr_dic["Del"][i,0]]
-
-        mean = arr_f_dic["Del"][i].mean()
-        dele,dele_std = round(mean,4),round(arr_f_dic["Del"][i].std(),3)
-        dele_full_precision = mean
-        is_best_dele = (mean==best_dic["Del"])
-
-        res_dic = {"id":id,"Del_full_precision":dele_full_precision,
-                    "Del":dele,  "Del_std":dele_std,  "is_best_Del":is_best_dele,}
-
-        for metric in metric_list:
-            if metric != "Del":
-                mean_rnd,std_rnd,is_best = find_perf(i,metric,arr_dic,arr_f_dic,best_dic)
-                res_dic.update({metric:mean_rnd,metric+"_std":std_rnd,"is_best_"+metric:is_best})
-
-        res_list.append(res_dic)
-
-    if full:
-        res_list = addAccuracy(res_list,exp_id)
-        metric_list.insert(8,"Acc")
-        what_is_best["Acc"] = "max"
-
-    res_list = sorted(res_list,key=lambda x:-x["Del_full_precision"])
-
-    csv = "Model&Viz. Method&"+"&".join([metric_to_label[metric] for metric in metric_list])+"\\\\ \n"
-
-    is_post_hoc = get_is_post_hoc()
-    label_to_id = get_label_to_id()
-
-    nbPostHoc = 0
-    #Counting post hoc
-    for i in range(len(res_list)):
-        row = formatRow(res_list,i) 
-        if is_post_hoc[label_to_id[row["id"]]]:
-            nbPostHoc += 1 
-
-    postHocInd =0
-    #Adding post hoc
-    for i in range(len(res_list)):
-        row = formatRow(res_list,i) 
-        if is_post_hoc[label_to_id[row["id"]]]:
-            if postHocInd == 0:
-                csv += "\multirow{"+str(postHocInd)+"}{*}{CNN}&"  
-            else:
-                csv += "&"
-            csv += row["id"] 
-
-            csv = processRow(csv,row,with_std,metric_list,full=full,postHoc=True,postHocInd=postHocInd,nbPostHoc=nbPostHoc)
-
-            postHocInd += 1 
-
-    csv += "\\hline \n"
-
-    #Adding att models
-    for i in range(len(res_list)):
-        row = formatRow(res_list,i)
-        if not is_post_hoc[label_to_id[row["id"]]]:
-            csv += row["id"]+"&-"   
-            csv = processRow(csv,row,with_std,metric_list)
-
-    suff = "-IB" if img_bckgr else ""
-
-    with open("../results/{}/attMetr_latex_table{}.csv".format(exp_id,suff),"w") as text:
-        print(csv,file=text)
-
-    for metric in metric_list:
-
-        res_list = sorted(res_list,key=lambda x:x[metric])
-
-        plt.figure()
-        plt.errorbar(np.arange(len(res_list)),[row[metric] for row in res_list],[row[metric+"_std"] for row in res_list],color="darkblue",fmt='o')
-        plt.bar(np.arange(len(res_list)),[row[metric] for row in res_list],0.9,color="lightblue",linewidth=0.5,edgecolor="darkblue")
-        plt.ylabel(metric_to_label[metric])
-        plt.ylim(bottom=0)
-        plt.xticks(np.arange(len(res_list)),[row["id"] for row in res_list],rotation=45,ha="right")
-        plt.tight_layout()
-        plt.savefig("../vis/{}/attMetr_{}{}.png".format(exp_id,metric_to_label[metric],suff))
-
-def latex_fmt(mean,std,is_best,with_std=False,with_start_char=True):
-
-    if with_std:
-        if is_best:
-            metric_value = "\mathbf{"+str(mean)+"\pm"+str(std)+"}"
-        else:
-            metric_value = ""+str(mean)+"\pm"+str(std)
-    else:
-        if is_best:
-            metric_value = "\mathbf{"+str(mean)+" }"
-        else:
-            metric_value = ""+str(mean)
-
-    if with_start_char:
-        metric_value = "&$" + metric_value + "$"
-    
-    return metric_value
-
 def reverseLabDic(id_to_label,exp_id):
 
     label_to_id = {}
@@ -517,37 +351,6 @@ def reverseLabDic(id_to_label,exp_id):
         label_to_id[label] = id 
     
     return label_to_id
-
-def addAccuracy(res_list,exp_id):
-    res_list_with_acc = []
-    id_to_label= get_id_to_label()
-
-    label_to_id = reverseLabDic(id_to_label,exp_id)
-
-    acc_list = np.genfromtxt("../results/{}/attMetrics_Acc.csv".format(exp_id),delimiter=",",dtype=str)
-    acc_dic = {model_id:{"mean":mean,"std":std} for (model_id,mean,std) in acc_list}
-
-    for row in res_list:
-
-        model_id = label_to_id[row["id"]]
-        
-        accuracy = float(acc_dic[model_id]["mean"])
-        accuracy_std = float(acc_dic[model_id]["std"])
-
-        row["Acc"] = str(round(accuracy,1))
-        row["Acc_std"] = str(round(accuracy_std,1))
-        row["Acc_full_precision"] = accuracy
-
-        res_list_with_acc.append(row)
-    
-    bestAcc = max([row["Acc_full_precision"] for row in res_list_with_acc])
-
-    res_list_with_acc_and_best = []
-    for row in res_list_with_acc:   
-        row["is_best_Acc"] = (row["Acc_full_precision"]==bestAcc)
-        res_list_with_acc_and_best.append(row)
-
-    return res_list_with_acc_and_best
 
 def reformatAttScoreArray(attScores,pairs):
 
@@ -577,12 +380,12 @@ def correlation(points):
         corrList.append(np.corrcoef(points_i,rowvar=False)[0,1])
     return np.array(corrList)
 
-def attCorrelation(exp_id,img_bckgr=False):
+def attCorrelation(exp_id,img_bckgr):
 
     if not os.path.exists("../vis/{}/correlation/".format(exp_id)):
         os.makedirs("../vis/{}/correlation/".format(exp_id))
 
-    suff = "-IB" if img_bckgr else ""
+    suff = get_bckgr_suff(img_bckgr)
 
     for metric in ["Del","Add"]:
         csv_res = []
@@ -595,7 +398,7 @@ def attCorrelation(exp_id,img_bckgr=False):
             
             path_att_score = path.replace("attMetr{}{}".format(metric,suff),"attMetrAttScore")
             if os.path.exists(path_att_score):
-                model_id = os.path.basename(path).split(metric+suff+"_")[1].replace(".npy","")    
+                model_id = getModelId(path,metric,img_bckgr)   
 
                 attScores = np.load(path_att_score,allow_pickle=True)
                 oldShape = attScores.shape
@@ -619,37 +422,11 @@ def attCorrelation(exp_id,img_bckgr=False):
                 csv_res += "{},{}\n".format(model_id,corr) 
                 csv_res_pop += "{},".format(model_id)+",".join([str(corr) for corr in all_corr])+"\n"
 
-        suff = "-IB" if img_bckgr else ""
-
         with open(f"../results/{exp_id}/attMetrics_{metric}Corr{suff}.csv","w") as f:
             f.writelines(csv_res)
 
         with open(f"../results/{exp_id}/attMetrics_{metric}Corr{suff}_pop.csv","w") as f:
             f.writelines(csv_res_pop)
-
-def attTime(exp_id):
-    metric = "Time"
-
-    csv_res = []
-    csv_res_pop = []
-    paths = sorted(glob.glob("../results/{}/attMetr{}_*.npy".format(exp_id,metric)))
-    paths = list(filter(lambda x:os.path.basename(x).find("noise") ==-1,paths))
-    paths = list(filter(lambda x:os.path.basename(x).find("imgBG") ==-1,paths))
-    paths = list(filter(lambda x:os.path.basename(x).find("maskFeat") ==-1,paths))
-
-    for path in paths:
-        model_id = os.path.basename(path).split(metric+"_")[1].replace(".npy","")    
-        all_times = np.load(path,allow_pickle=True)
-        time = all_times.mean()
-    
-        csv_res += "{},{}\n".format(model_id,time) 
-        csv_res_pop += "{},".format(model_id)+",".join([str(corr) for corr in all_times])+"\n"
-
-    with open(f"../results/{exp_id}/attMetrics_{metric}.csv","w") as f:
-        f.writelines(csv_res)
-
-    with open(f"../results/{exp_id}/attMetrics_{metric}_pop.csv","w") as f:
-        f.writelines(csv_res_pop)
 
 def normalize_metrics(values,metric):
     if metric in ["DelCorr","AddCorr"]:
@@ -688,54 +465,6 @@ def loadPerf(exp_id,metric,pop=True,img_bckgr=False,norm=False,reverse_met_to_mi
         perfs[:,1:]= (-1*perfs[:,1:].astype("float")).astype("str")
 
     return perfs
-
-def bar_viz(exp_id,img_bckgr=False):
-
-    what_is_best = get_what_is_best()
-    metric_list = list(what_is_best.keys())
-    metric_list = list(filter(lambda metric:metric in ["Del","Add","AD","ADD","IIC"],metric_list))
-
-    is_post_hoc = get_is_post_hoc()
-
-    id_to_label = get_id_to_label()
-
-    for metric in metric_list:
-
-        perfs = loadPerf(exp_id,metric,img_bckgr=img_bckgr)
-
-        perfs_att = []
-        for perf in perfs:
-            if not is_post_hoc[perf[0]]:
-                perfs_att.append(perf)
-        perfs_att = np.array(perfs_att)
-
-        perfs_post = []
-        for perf in perfs:
-            if is_post_hoc[perf[0]]:
-                perfs_post.append(perf)
-        perfs_post = np.array(perfs_post)
-
-        xmin,xmax = perfs[:,1].astype("float").min(),perfs[:,1].astype("float").max()
-
-        fig = plt.figure(figsize=(5,2*len(perfs)))
-
-        for i,model_perf in enumerate(perfs_att):
-            subfig_mod = plt.subplot(len(perfs),1,i+1)
-            fig.gca().axes.get_yaxis().set_visible(False)
-            plt.xticks(fontsize=20)
-            subfig_mod.hist(model_perf[1:].astype("float"),range=(xmin,xmax),color="orange",bins=10,label=id_to_label[model_perf[0]])
-            plt.legend(prop={'size':20})
-
-        for i,model_perf in enumerate(perfs_post):
-            subfig_mod = plt.subplot(len(perfs),1,i+len(perfs_att)+1)
-            fig.gca().axes.get_yaxis().set_visible(False)
-            plt.xticks(fontsize=20)
-            subfig_mod.hist(model_perf[1:].astype("float"),range=(xmin,xmax),color="blue",bins=10,label=id_to_label[model_perf[0]])
-            plt.legend(prop={'size':20})
-
-        plt.tight_layout()
-        suff = "-IB" if img_bckgr else ""
-        plt.savefig("../vis/{}/bar_{}{}.png".format(exp_id,metric,suff))
 
 def kendallTauInd(metric_list,exp_id,img_bckgr,k,what_is_best,pop):
     rank_dic = {}
@@ -815,7 +544,7 @@ def ranking_similarities(exp_id,img_bckgr=False,pop=False):
                 ax.add_patch(circle)
 
     fontSize = 17
-    cbar = plt.colorbar(cm.ScalarMappable(norm=matplotlib.colors.Normalize(-1,1),cmap=cmap))
+    cbar = plt.colorbar(cm.ScalarMappable(norm=Normalize(-1,1),cmap=cmap))
     cbar.ax.tick_params(labelsize=fontSize)
     plt.xticks(range(len(metric_list)),label_list,rotation=45,fontsize=fontSize)
     plt.yticks(range(len(metric_list)),label_list,fontsize=fontSize)
@@ -932,8 +661,11 @@ def dimred_metrics(exp_id,pop=False,dimred="umap",img_bckgr=False):
 def get_sec_model_list():
     return ["SVM","KNN","DT","NN"]
 
-def get_metric_list():
-    return ["Del","Add","Lift"]
+def get_metric_list(full=False):
+    if full:
+        return ["Del","Add","Lift","DelCorr","AddCorr"]
+    else:
+        return ["Del","Add","Lift"]
 
 def ood_repr(exp_id,quantitative,metricList=None):
 
@@ -1060,7 +792,7 @@ def ood_repr(exp_id,quantitative,metricList=None):
                         plt.ylim(feat[:,:,1].min()-1,feat[:,:,1].max()+1)
                         
                         if metric in ["Add","Del"]:
-                            plt.colorbar(cm.ScalarMappable(norm=matplotlib.colors.Normalize(0,1),cmap=plt.get_cmap("plasma")))
+                            plt.colorbar(cm.ScalarMappable(norm=Normalize(0,1),cmap=plt.get_cmap("plasma")))
                         else:
                             plt.legend()
 
@@ -1084,7 +816,7 @@ def imshow_perf_matrix(perf_matrix,fig_path,xlabels,ylabels):
             color = "black" if perf_matrix[i,j] > 0.5 else "white"
             plt.text(j-.1,i,round(perf_matrix[i,j],1),color=color)
             
-    plt.colorbar(cm.ScalarMappable(norm=matplotlib.colors.Normalize(0,1),cmap=cmap))
+    plt.colorbar(cm.ScalarMappable(norm=Normalize(0,1),cmap=cmap))
     plt.tight_layout()
     plt.savefig(fig_path)
     plt.close()
@@ -1258,6 +990,52 @@ def find_best_methods(exp_id,img_bckgr):
 
     print(model_list[np.argmin(ranking_del)],model_list[np.argmin(ranking_add)],model_list[np.argmin(ranking)])
 
+def viz_resolution(exp_id,img_bckgr):
+
+    model_id_pref = "noneRed-res"
+    metric_list = get_metric_list(full=True)
+
+    metric_list.remove("Lift")
+    metric_list.extend(["AD","ADD","IIC"])
+
+    bckgr_suff = get_bckgr_suff(img_bckgr)
+    metric_to_label= get_metric_label()
+
+    for metric in metric_list:
+
+        if metric == "IIC":
+            suff = ""
+            csv = pd.read_csv(f"../results/{exp_id}/attMetrics_Lift{bckgr_suff}{suff}.csv",header=None)
+        else:
+            suff = "_pop"
+            csv = pd.read_csv(f"../results/{exp_id}/attMetrics_{metric}{bckgr_suff}{suff}.csv",header=None)
+ 
+        csv = csv.loc[csv[0].str.contains(model_id_pref)]
+        resolution = csv.apply(lambda x:int(x[0].split("-res")[1]),axis=1)
+        csv["resolution"] = resolution
+        csv = csv.sort_values(by="resolution")
+
+        if metric == "IIC":
+            submetrics = np.array(get_lift_submetric())
+            col_ind = np.argwhere(submetrics=="IIC").item()+1
+            plot_metric(csv,col_ind,metric_to_label,"IIC",exp_id) 
+        else:
+            plot_metric(csv,np.arange(len(csv.columns))[1:-1],metric_to_label,metric,exp_id)
+
+def plot_metric(csv,col_inds,metric_to_label,metric,exp_id):
+    
+    plt.figure()
+    if type(col_inds) is np.ndarray:
+        plt.violinplot(np.array(csv[col_inds]).transpose(1,0))
+        plt.xticks(np.arange(len(csv["resolution"]))+1,csv["resolution"].astype("str"))
+    else:
+        plt.plot(list(csv[col_inds]),"*-")
+        plt.xticks(np.arange(len(csv["resolution"])),csv["resolution"].astype("str")) 
+    plt.xlabel("Resolution")
+    plt.ylabel(metric_to_label[metric])        
+    plt.savefig(f"../vis/{exp_id}/resolution_{metric_to_label[metric]}.png")
+    plt.close()
+
 def main(argv=None):
 
     #Getting arguments from config file and command line
@@ -1265,10 +1043,10 @@ def main(argv=None):
     argreader = ArgReader(argv)
 
     argreader.parser.add_argument('--att_metrics',action="store_true") 
-    argreader.parser.add_argument('--not_ignore_model',action="store_true") 
     argreader.parser.add_argument('--all_att_metrics',action="store_true") 
     argreader.parser.add_argument('--with_std',action="store_true") 
-    argreader.parser.add_argument('--img_bckgr',action="store_true") 
+    argreader.parser.add_argument('--img_bckgr',type=str,default="black")
+    argreader.parser.add_argument('--resolution',type=int)
     argreader.parser.add_argument('--pop',action="store_true")   
     argreader.parser.add_argument('--ood_repr',action="store_true") 
     argreader.parser.add_argument('--quantitative',action="store_true")  
@@ -1279,11 +1057,32 @@ def main(argv=None):
     argreader.parser.add_argument('--ranking_similarities',action="store_true") 
     argreader.parser.add_argument('--find_best_methods',action="store_true") 
     argreader.parser.add_argument('--metrics',type=str,nargs="*") 
+    argreader.parser.add_argument('--viz_resolution',action="store_true") 
 
     ###################################### Accuracy per video ############################################""
 
     argreader.parser.add_argument('--accuracy_per_video',action="store_true") 
     
+    ####################################### Show sal maps ##################################
+    argreader.parser.add_argument('--show_maps',action="store_true") 
+    
+    argreader.parser.add_argument('--img_nb',type=int,default=100)
+    argreader.parser.add_argument('--plot_id',type=str,metavar="ID",help='The plot id',default="")
+    argreader.parser.add_argument('--nrows',type=int,metavar="INT",help='The number of rows',default=4)
+    argreader.parser.add_argument('--class_index',type=int,metavar="INT",help='The class index to show')
+    argreader.parser.add_argument('--viz_id',type=str,help='The viz ID to plot gradcam like viz',default="")
+    argreader.parser.add_argument('--print_ind',type=str2bool,metavar="BOOL",help='To print image index',default=False)
+
+    argreader.parser.add_argument('--model_ids',type=str,metavar="IDS",nargs="*",help='The list of model ids.')
+    argreader.parser.add_argument('--maps_inds',type=int,nargs="*",metavar="INT",help='The index of the attention map to use\
+                                     when there is several. If there only one or if there is none, set this to -1',default=[])
+    argreader.parser.add_argument('--ind_to_keep',type=int,nargs="*",metavar="INT",help='The index of the images to keep')
+    argreader.parser.add_argument('--interp',type=str2bool,nargs="*",metavar="BOOL",help='To smoothly interpolate the att map.',default=[])
+    argreader.parser.add_argument('--direct_ind',type=str2bool,nargs="*",metavar="BOOL",help='To use direct indices',default=[])
+    argreader.parser.add_argument('--pond_by_norm',type=str2bool,nargs="*",metavar="BOOL",help='To also show the norm of pixels along with the attention weights.',default=[])
+    argreader.parser.add_argument('--only_norm',type=str2bool,nargs="*",metavar="BOOL",help='To only plot the norm of pixels',default=[])
+    argreader.parser.add_argument('--expl',type=str,nargs="*",metavar="BOOL",help='The explanation type',default=[])
+
     argreader = load_data.addArgs(argreader)
 
     #Reading the comand line arg
@@ -1293,25 +1092,12 @@ def main(argv=None):
     args = argreader.args
 
     if args.att_metrics:
-
-        suff = "-IB" if args.img_bckgr else ""
-
         for metric in ["Add","Del","Spars","Lift"]:
-            attMetrics(args.exp_id,metric=metric,ignore_model=not args.not_ignore_model,img_bckgr=args.img_bckgr)
+            attMetrics(args.exp_id,metric,args.img_bckgr)
         
-        #if not os.path.exists("../results/{}/attMetrics_AddCorr{}.csv".format(args.exp_id,suff)) or not os.path.exists("../results/{}/attMetrics_DelCorr{}.csv".format(args.exp_id,suff)):
         attCorrelation(args.exp_id,img_bckgr=args.img_bckgr)
-
-        #if not os.path.exists("../results/{}/attMetrics_Time.csv".format(args.exp_id)):
-        attTime(args.exp_id)
-   
-        for metric in ["Add","Del","Spars","IIC","AD","ADD","DelCorr","AddCorr","Time"]:
-            ttest_attMetr(args.exp_id,metric=metric,img_bckgr=args.img_bckgr)
-
-        bar_viz(args.exp_id,args.img_bckgr)
-
-        latex_table_figure(args.exp_id,full=args.all_att_metrics,with_std=args.with_std,img_bckgr=args.img_bckgr)
-
+    if args.viz_resolution:
+        viz_resolution(args.exp_id,args.img_bckgr)
     if args.ood_repr:
         ood_repr(args.exp_id,args.quantitative,args.metrics)
     if args.viz_ood_repr:
@@ -1324,6 +1110,20 @@ def main(argv=None):
         ranking_similarities(args.exp_id,img_bckgr=args.img_bckgr,pop=args.pop)
     if args.find_best_methods:
         find_best_methods(args.exp_id,args.img_bckgr)
+    if args.show_maps:
+
+        #Setting default values
+        default_values = {"pond_by_norm":True,"only_norm":False,"interp":False,"direct_ind":False,"maps_inds":-1}
+        for key in default_values:
+            param = getattr(args,key)
+            if len(param) == 0:
+                param = [default_values[key] for _ in range(len(args.model_ids))]
+            setattr(args,key,param)
+
+        showSalMaps(args.exp_id,args.img_nb,args.plot_id,args.nrows,args.class_index,args.ind_to_keep,args.viz_id,args,\
+                    args.model_ids,args.expl,args.maps_inds,args.pond_by_norm,args.only_norm,args.interp,args.direct_ind)
+
+
 
 if __name__ == "__main__":
     main()
