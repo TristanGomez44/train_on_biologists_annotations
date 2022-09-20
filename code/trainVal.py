@@ -122,8 +122,9 @@ def epochSeqTr(model, optim, log_interval, loader, epoch, args, **kwargs):
             with torch.no_grad():
                 mastDict = kwargs["master_net"](data)
                 resDict["master_net_pred"] = mastDict["pred"]
-                resDict["master_net_attMaps"] = mastDict["attMaps"]
                 resDict["master_net_features"] = mastDict["features"]
+                if "attMaps" in mastDict:
+                    resDict["master_net_attMaps"] = mastDict["attMaps"]
 
         loss = kwargs["lossFunc"](output, target, resDict, data).mean()
         loss.backward()
@@ -374,7 +375,8 @@ def epochImgEval(model, log_interval, loader, epoch, args, metricEarlyStop, mode
         if args.master_net:
             mastDict = kwargs["master_net"](data)
             resDict["master_net_pred"] = mastDict["pred"]
-            resDict["master_net_attMaps"] = mastDict["attMaps"]
+            if "attMaps" in mastDict:
+                resDict["master_net_attMaps"] = mastDict["attMaps"]
             resDict["master_net_features"] = mastDict["features"]
 
         # Loss
@@ -845,7 +847,7 @@ def run(args,trial=None):
                 minBS = 4
             else:
                 minBS = 12
-        print(minBS,args.distributed)
+
         args.batch_size = trial.suggest_int("batch_size", minBS, args.max_batch_size, log=True)
         print("Batch size is ",args.batch_size)
         args.dropout = trial.suggest_float("dropout", 0, 0.6,step=0.2)
@@ -1058,6 +1060,7 @@ def main(argv=None):
     argreader.parser.add_argument('--compute_latency', type=str2bool, help='To write in a file the latency at each forward pass.')
     argreader.parser.add_argument('--grad_cam', type=int, help='To compute grad cam instead of training or testing.',nargs="*")
     argreader.parser.add_argument('--rise', type=str2bool, help='To compute rise instead or gradcam')
+    argreader.parser.add_argument('--rise_resolution', type=int, help='',default=7)
     argreader.parser.add_argument('--score_map', type=str2bool, help='To compute score_map instead or gradcam')
     argreader.parser.add_argument('--noise_tunnel', type=str2bool, help='To compute the methods based on noise tunnel instead or gradcam')
 
@@ -1066,6 +1069,9 @@ def main(argv=None):
     argreader.parser.add_argument('--attention_metrics', type=str, help='The attention metric to compute.')
     argreader.parser.add_argument('--att_metrics_img_nb', type=int, help='The nb of images on which to compute the att metric.')
     
+    argreader.parser.add_argument('--att_metrics_map_resolution', type=int, help='The resolution at which to resize the attention map.\
+                                    If this value is None, the map will not be resized.')
+
     argreader.parser.add_argument('--att_metrics_post_hoc', type=str, help='The post-hoc method to use instead of the model ')
     argreader.parser.add_argument('--att_metrics_max_brnpa', type=str2bool, help='To agregate br-npa maps with max instead of mean')
     argreader.parser.add_argument('--att_metrics_onlyfirst_brnpa', type=str2bool, help='To agregate br-npa maps with max instead of mean')
@@ -1327,9 +1333,8 @@ def main(argv=None):
             
             allSq = None 
             allVar = None
-
         else:
-            rise_mod = RISE(net_raw)
+            rise_mod = RISE(net_raw,res=args.rise_resolution)
             allRise = None
 
         if args.grad_cam == [-1]:
@@ -1396,13 +1401,16 @@ def main(argv=None):
             np.save("../results/{}/smoothgrad_sq_{}_epoch{}_{}test.npy".format(args.exp_id,args.model_id,bestEpoch,suff),allSq.numpy())
             np.save("../results/{}/vargrad_{}_epoch{}_{}test.npy".format(args.exp_id,args.model_id,bestEpoch,suff),allVar.numpy())
         else:
-            np.save("../results/{}/rise_maps_{}_epoch{}_{}test.npy".format(args.exp_id,args.model_id,bestEpoch,suff),allRise.numpy())
+            res_str = '' if args.rise_resolution == 7 else str(args.rise_resolution)
+            np.save("../results/{}/rise{}_maps_{}_epoch{}_{}test.npy".format(args.exp_id,res_str,args.model_id,bestEpoch,suff),allRise.numpy())
 
     elif args.attention_metrics:
 
         path_suff = args.attention_metrics
         path_suff += "-"+args.att_metr_bckgr if args.att_metr_bckgr != "black" else ""
+                
         model_id_suff = "-"+args.att_metrics_post_hoc if args.att_metrics_post_hoc else ""
+        model_id_suff = "-res"+str(args.att_metrics_map_resolution) if args.att_metrics_map_resolution else ""
 
         if args.att_metr_do_again or not os.path.exists("../results/{}/attMetr{}_{}{}.npy".format(args.exp_id,path_suff,args.model_id,model_id_suff)):
 
@@ -1435,7 +1443,6 @@ def main(argv=None):
                 torch.set_grad_enabled(False)
 
             nbImgs = args.att_metrics_img_nb
-            print("\tnbImgs",nbImgs)
 
             if args.attention_metrics in ["Del","Add"]:
                 allScoreList = []
@@ -1557,6 +1564,9 @@ def main(argv=None):
 
                 attMaps = (attMaps-attMaps.min())/(attMaps.max()-attMaps.min())
 
+                if args.att_metrics_map_resolution:
+                    attMaps = torch.nn.functional.interpolate(attMaps,size=args.att_metrics_map_resolution,mode="bicubic",align_corners=False).to(data.device)                    
+
                 if args.attention_metrics=="Spars":
                     sparsity= computeSpars(data.size(),attMaps,args,resDic)
                     allSpars.append(sparsity)
@@ -1568,7 +1578,7 @@ def main(argv=None):
                     predClassInd = scores.argmax(dim=-1)
                     score = scores[:,predClassInd[0]].cpu().detach().numpy()
                     allScoreList.append(score)
-                    attMaps_interp = torch.nn.functional.interpolate(attMaps,size=(data.shape[-1]),mode="bicubic",align_corners=False).to(data.device)                    
+                    attMaps_interp = torch.nn.functional.interpolate(attMaps,size=(data.shape[-1]),mode="nearest").to(data.device)                    
                     
                     feat = resDic["x"].detach().cpu()
 
@@ -1598,7 +1608,7 @@ def main(argv=None):
                     if args.prototree or args.protonet:
                         stepNb = 49
                     elif args.att_metrics_few_steps:
-                        stepNb = 196 
+                        stepNb = min(196,attMaps.shape[-2]*attMaps.shape[-1])
                     else:
                         stepNb = totalPxlNb
 
@@ -1619,7 +1629,7 @@ def main(argv=None):
                             _,ind_max = (attMaps)[0,0].view(-1).topk(k=totalPxlNb//stepNb)
                             ind_max = ind_max[:leftPxlNb]
 
-                            x_max,y_max = ind_max % attMaps.shape[3],ind_max // attMaps.shape[3]
+                            x_max,y_max = ind_max % attMaps.shape[3],torch.div(ind_max,attMaps.shape[3],rounding_mode="floor")
                             
                             ratio = data.size(-1)//attMaps.size(-1)
 
@@ -1655,35 +1665,28 @@ def main(argv=None):
                 else:
                     raise ValueError("Unkown attention metric",args.attention_metrics)
 
-            if args.att_metrics_post_hoc:
-                args.model_id = args.model_id + "-"+args.att_metrics_post_hoc
-            
             if not args.att_metr_add_first_feat:
                 if args.attention_metrics == "Spars":
-                    np.save("../results/{}/attMetrSpars_{}.npy".format(args.exp_id,args.model_id),np.array(allSpars,dtype=object))
+                    np.save("../results/{}/attMetrSpars_{}{}.npy".format(args.exp_id,args.model_id,model_id_suff),np.array(allSpars,dtype=object))
                 elif args.attention_metrics == "AttScore":
-                    np.save("../results/{}/attMetrAttScore_{}.npy".format(args.exp_id,args.model_id),np.array(allAttScor,dtype=object))
+                    np.save("../results/{}/attMetrAttScore_{}{}.npy".format(args.exp_id,args.model_id,model_id_suff),np.array(allAttScor,dtype=object))
                 elif args.attention_metrics == "Time":
-                    np.save("../results/{}/attMetrTime_{}.npy".format(args.exp_id,args.model_id),np.array(allTimeList,dtype=object))
+                    np.save("../results/{}/attMetrTime_{}{}.npy".format(args.exp_id,args.model_id,model_id_suff),np.array(allTimeList,dtype=object))
                 elif args.attention_metrics == "Lift":
                     suff = path_suff.replace("Lift","")
-                    np.save("../results/{}/attMetrLift{}_{}.npy".format(args.exp_id,suff,args.model_id),np.array(allScoreList,dtype=object))
-                    np.save("../results/{}/attMetrLiftMask{}_{}.npy".format(args.exp_id,suff,args.model_id),np.array(allScoreMaskList,dtype=object))
-                    np.save("../results/{}/attMetrLiftInvMask{}_{}.npy".format(args.exp_id,suff,args.model_id),np.array(allScoreInvMaskList,dtype=object))
+                    np.save("../results/{}/attMetrLift{}_{}{}.npy".format(args.exp_id,suff,args.model_id,model_id_suff),np.array(allScoreList,dtype=object))
+                    np.save("../results/{}/attMetrLiftMask{}_{}{}.npy".format(args.exp_id,suff,args.model_id,model_id_suff),np.array(allScoreMaskList,dtype=object))
+                    np.save("../results/{}/attMetrLiftInvMask{}_{}{}.npy".format(args.exp_id,suff,args.model_id,model_id_suff),np.array(allScoreInvMaskList,dtype=object))
                 else:
-                    np.save("../results/{}/attMetr{}_{}.npy".format(args.exp_id,path_suff,args.model_id),np.array(allScoreList,dtype=object))
-                    np.save("../results/{}/attMetrPreds{}_{}.npy".format(args.exp_id,path_suff,args.model_id),np.array(allPreds,dtype=object))
+                    np.save("../results/{}/attMetr{}_{}{}.npy".format(args.exp_id,path_suff,args.model_id,model_id_suff),np.array(allScoreList,dtype=object))
+                    np.save("../results/{}/attMetrPreds{}_{}{}.npy".format(args.exp_id,path_suff,args.model_id,model_id_suff),np.array(allPreds,dtype=object))
         
                 if args.attention_metrics in ["Lift","Del","Add"] and args.att_metr_save_feat:
                     allFeat = torch.cat(allFeat,dim=0)
-                    np.save("../results/{}/attMetrFeat{}_{}.npy".format(args.exp_id,path_suff,args.model_id),allFeat.numpy())
+                    np.save("../results/{}/attMetrFeat{}_{}{}.npy".format(args.exp_id,path_suff,args.model_id,model_id_suff),allFeat.numpy())
 
-                allDataPath = "../vis/{}/attMetrData{}_{}.png".format(args.exp_id,path_suff,args.model_id)
+                allDataPath = "../vis/{}/attMetrData{}_{}{}.png".format(args.exp_id,path_suff,args.model_id,model_id_suff)
                 nrows = 1  if args.attention_metrics == "Lift" else 4
-                #if args.attention_metrics == "Add":
-                #    #Putting the first image last for clarity of visualization
-                #    allData = torch.cat((allData[1:],allData[0:1]),dim=0)
-                #allData = allData[1:]
                 torchvision.utils.save_image(allData,allDataPath,nrow=nrows)
             else:
                 allFeat = torch.cat(allFeat,dim=0)
@@ -1772,7 +1775,7 @@ def applyPostHoc(attrFunc,data,targ,kwargs,args):
             argList = [data[i:i+1]]
             kwargs["target"] = targ[i:i+1]
 
-        attMap = torch.tensor(attrFunc(*argList,**kwargs)).to(data.device)
+        attMap = attrFunc(*argList,**kwargs).clone().detach().to(data.device)
 
         if len(attMap.size()) == 2:
             attMap = attMap.unsqueeze(0).unsqueeze(0)
