@@ -1071,6 +1071,8 @@ def main(argv=None):
     
     argreader.parser.add_argument('--att_metrics_map_resolution', type=int, help='The resolution at which to resize the attention map.\
                                     If this value is None, the map will not be resized.')
+    argreader.parser.add_argument('--att_metrics_sparsity_factor', type=float, help='Used to increase (>1) or decrease (<1) the sparsity of the saliency maps.\
+                                    Set to None to not modify the sparsity.')
 
     argreader.parser.add_argument('--att_metrics_post_hoc', type=str, help='The post-hoc method to use instead of the model ')
     argreader.parser.add_argument('--att_metrics_max_brnpa', type=str2bool, help='To agregate br-npa maps with max instead of mean')
@@ -1410,7 +1412,8 @@ def main(argv=None):
         path_suff += "-"+args.att_metr_bckgr if args.att_metr_bckgr != "black" else ""
                 
         model_id_suff = "-"+args.att_metrics_post_hoc if args.att_metrics_post_hoc else ""
-        model_id_suff = "-res"+str(args.att_metrics_map_resolution) if args.att_metrics_map_resolution else ""
+        model_id_suff += "-res"+str(args.att_metrics_map_resolution) if args.att_metrics_map_resolution else ""
+        model_id_suff += "-spar"+str(args.att_metrics_sparsity_factor) if args.att_metrics_sparsity_factor else ""
 
         if args.att_metr_do_again or not os.path.exists("../results/{}/attMetr{}_{}{}.npy".format(args.exp_id,path_suff,args.model_id,model_id_suff)):
 
@@ -1550,14 +1553,11 @@ def main(argv=None):
                 if args.attention_metrics=="Add":
                     origData = data.clone()
                     origUnormData = data_unorm.clone()
-                    #if args.att_metr_bckgr=="IB":
                     data = data_bckgr.clone()
                     if args.att_metr_bckgr in ["IB","edge","blur","highpass","lowpass"] and args.dataset_test.find("emb") == -1:
                         data_unorm = denormalize(data_bckgr.clone())
                     else:
                         data_unorm = data_bckgr.clone()
-                    #else:
-                    #    data = F.conv2d(data,kernel,padding=kernel.size(-1)//2,groups=kernel.size(0))
                     first_sample_feat = net(data)["x"]
                 elif args.attention_metrics == "Del":
                     first_sample_feat = resDic["x"]
@@ -1566,6 +1566,10 @@ def main(argv=None):
 
                 if args.att_metrics_map_resolution:
                     attMaps = torch.nn.functional.interpolate(attMaps,size=args.att_metrics_map_resolution,mode="bicubic",align_corners=False).to(data.device)                    
+
+                if args.att_metrics_sparsity_factor:
+                    attMaps = torch.pow(attMaps,args.att_metrics_sparsity_factor)
+                    attMaps = (attMaps-attMaps.min())/(attMaps.max()-attMaps.min())
 
                 if args.attention_metrics=="Spars":
                     sparsity= computeSpars(data.size(),attMaps,args,resDic)
@@ -1578,7 +1582,8 @@ def main(argv=None):
                     predClassInd = scores.argmax(dim=-1)
                     score = scores[:,predClassInd[0]].cpu().detach().numpy()
                     allScoreList.append(score)
-                    attMaps_interp = torch.nn.functional.interpolate(attMaps,size=(data.shape[-1]),mode="nearest").to(data.device)                    
+                    interp_mode = "nearest" if args.att_metrics_map_resolution else "bicubic"
+                    attMaps_interp = torch.nn.functional.interpolate(attMaps,size=(data.shape[-1]),mode=interp_mode).to(data.device)                    
                     
                     feat = resDic["x"].detach().cpu()
 
