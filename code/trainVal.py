@@ -1567,7 +1567,7 @@ def main(argv=None):
                 if args.att_metrics_map_resolution:
                     attMaps = torch.nn.functional.interpolate(attMaps,size=args.att_metrics_map_resolution,mode="bicubic",align_corners=False).to(data.device)                    
 
-                if args.att_metrics_sparsity_factor:
+                if args.att_metrics_sparsity_factor!= 1:
                     attMaps = torch.pow(attMaps,args.att_metrics_sparsity_factor)
                     attMaps = (attMaps-attMaps.min())/(attMaps.max()-attMaps.min())
 
