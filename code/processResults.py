@@ -213,8 +213,6 @@ def filter_background(paths,bckgr):
                 paths = list(filter(lambda x:os.path.basename(x).split("-res")[0].find(bckgr_suff_i) ==-1,paths)) 
     else:
         paths = list(filter(lambda x:os.path.basename(x).split("-res")[0].find(bckgr_suff) !=-1,paths)) 
-
-    print(len(paths))
     return paths
 
 def getResPaths(exp_id,metric,bckgr):
@@ -228,10 +226,7 @@ def getResPaths(exp_id,metric,bckgr):
 
 def getModelId(path,metric,img_bckgr):
     bckgr_suff = get_bckgr_suff(img_bckgr) if metric != "Spars" else ""
-    #res_suff = get_resolution_suff(resolution)
     model_id = os.path.basename(path).split("attMetr{}{}_".format(metric,bckgr_suff))[1].split(".npy")[0]
-    #if resolution:
-    #    model_id = model_id.split(res_suff)[0]
     return model_id
 
 def attMetrics(exp_id,metric,img_bckgr):
@@ -948,7 +943,6 @@ def viz_ood_repr(exp_id,varying_variable):
 
             
             fig_path = f"../vis/{exp_id}/representation_study/{sec_model_metric}/attMetrFeat{metric}_{model_id}_{sec_model_metric}{filename_suff}.png"
-            print(fig_path)
             valueLabelList = [labels[value] for value in value_list]
             perf_matrix = np.array(perf_matrix)
             imshow_perf_matrix(100*perf_matrix,fig_path,sec_model_list,valueLabelList)
