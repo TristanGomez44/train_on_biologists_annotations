@@ -539,6 +539,8 @@ def addArgs(argreader):
                                   help="The nb of prototypes per class.")
     argreader.parser.add_argument('--protonet_warm', type=int, metavar='BOOL',
                                   help="Warmup epoch number")
+    argreader.parser.add_argument('--prototree', type=args.str2bool, metavar='BOOL',
+                                  help="To train a prototree model")
 
     argreader.parser.add_argument('--inter_by_parts', type=args.str2bool, metavar='BOOL',
                                   help="To train the model from https://github.com/zxhuang1698/interpretability-by-parts/tree/650f1af573075a41f04f2f715f2b2d4bc0363d31")
