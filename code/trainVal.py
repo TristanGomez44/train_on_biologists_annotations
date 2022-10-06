@@ -1567,7 +1567,7 @@ def main(argv=None):
                 if args.att_metrics_map_resolution:
                     attMaps = torch.nn.functional.interpolate(attMaps,size=args.att_metrics_map_resolution,mode="bicubic",align_corners=False).to(data.device)                    
 
-                if args.att_metrics_sparsity_factor!= 1:
+                if args.att_metrics_sparsity_factor and (args.att_metrics_sparsity_factor!= 1):
                     attMaps = torch.pow(attMaps,args.att_metrics_sparsity_factor)
                     attMaps = (attMaps-attMaps.min())/(attMaps.max()-attMaps.min())
 
@@ -1695,7 +1695,7 @@ def main(argv=None):
                 torchvision.utils.save_image(allData,allDataPath,nrow=nrows)
             else:
                 allFeat = torch.cat(allFeat,dim=0)
-                featPath = f"../results/{args.exp_id}/attMetrFeat{path_suff}_{args.model_id}.npy"  
+                featPath = f"../results/{args.exp_id}/attMetrFeat{path_suff}_{args.model_id}{model_id_suff}.npy"  
                 allFeat = np.concatenate((allFeat.numpy(),np.load(featPath,mmap_mode="r")),axis=1)
                 np.save(featPath,allFeat)
 
