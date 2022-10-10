@@ -284,7 +284,7 @@ def plotPointsImageDatasetGrid(exp_id,imgNb,epochs,model_ids,reduction_fact_list
                 ind_to_keep = np.array(ind_to_keep)-1
                 inds = inds[ind_to_keep]
 
-            print("inds",inds)
+            print(plotId,class_index,inds)
 
             #In case there is not enough images
             imgNb = min(len(inds),imgNb)
