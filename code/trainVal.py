@@ -1415,7 +1415,10 @@ def main(argv=None):
         model_id_suff += "-res"+str(args.att_metrics_map_resolution) if args.att_metrics_map_resolution else ""
         model_id_suff += "-spar"+str(args.att_metrics_sparsity_factor) if args.att_metrics_sparsity_factor else ""
 
-        if args.att_metr_do_again or not os.path.exists("../results/{}/attMetr{}_{}{}.npy".format(args.exp_id,path_suff,args.model_id,model_id_suff)):
+        score_path = "../results/{}/attMetr{}_{}{}.npy".format(args.exp_id,path_suff,args.model_id,model_id_suff)
+        feat_path = "../results/{}/attMetrFeat{}_{}{}.npy".format(args.exp_id,path_suff,args.model_id,model_id_suff)
+
+        if args.att_metr_do_again or (not os.path.exists(score_path)) or ((not os.path.exists(feat_path)) and args.att_metr_save_feat):
 
             args.val_batch_size = 1
             testLoader,testDataset = load_data.buildTestLoader(args, "test",withSeg=args.with_seg)
@@ -1669,7 +1672,6 @@ def main(argv=None):
 
                 else:
                     raise ValueError("Unkown attention metric",args.attention_metrics)
-
             if not args.att_metr_add_first_feat:
                 if args.attention_metrics == "Spars":
                     np.save("../results/{}/attMetrSpars_{}{}.npy".format(args.exp_id,args.model_id,model_id_suff),np.array(allSpars,dtype=object))
@@ -1683,12 +1685,12 @@ def main(argv=None):
                     np.save("../results/{}/attMetrLiftMask{}_{}{}.npy".format(args.exp_id,suff,args.model_id,model_id_suff),np.array(allScoreMaskList,dtype=object))
                     np.save("../results/{}/attMetrLiftInvMask{}_{}{}.npy".format(args.exp_id,suff,args.model_id,model_id_suff),np.array(allScoreInvMaskList,dtype=object))
                 else:
-                    np.save("../results/{}/attMetr{}_{}{}.npy".format(args.exp_id,path_suff,args.model_id,model_id_suff),np.array(allScoreList,dtype=object))
+                    np.save(score_path,np.array(allScoreList,dtype=object))
                     np.save("../results/{}/attMetrPreds{}_{}{}.npy".format(args.exp_id,path_suff,args.model_id,model_id_suff),np.array(allPreds,dtype=object))
         
                 if args.attention_metrics in ["Lift","Del","Add"] and args.att_metr_save_feat:
                     allFeat = torch.cat(allFeat,dim=0)
-                    np.save("../results/{}/attMetrFeat{}_{}{}.npy".format(args.exp_id,path_suff,args.model_id,model_id_suff),allFeat.numpy())
+                    np.save(feat_path,allFeat.numpy())
 
                 allDataPath = "../vis/{}/attMetrData{}_{}{}.png".format(args.exp_id,path_suff,args.model_id,model_id_suff)
                 nrows = 1  if args.attention_metrics == "Lift" else 4
