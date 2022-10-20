@@ -26,9 +26,23 @@ def read_fold(path_list):
     img_list = np.stack(img_list)    
     return img_list
 
+def preprocess_attMaps(attMaps,all_maps):
+
+    attMaps = normalize(attMaps)
+    if all_maps and attMaps.shape[1] != 1:
+        attMaps = 255*attMaps.transpose((0,2,3,1))
+    else:    
+        if attMaps.shape[1] != 1:
+            attMaps = attMaps[:,0:1]
+        cmPlasma = plt.get_cmap('plasma')
+        shape = attMaps.shape 
+        attMaps = 255*cmPlasma(attMaps.reshape(-1))[:,:3].reshape((shape[0],shape[2],shape[3],3))
+    return attMaps 
+
 def main(argv=None):
     argreader = ArgReader(argv)
     argreader.parser.add_argument('--img_folder', type=str)
+    argreader.parser.add_argument('--all_maps', action="store_true")
     argreader.getRemainingArgs()
     args = argreader.args
 
@@ -36,14 +50,8 @@ def main(argv=None):
     vidName = get_video_name(args.img_folder)
     attMaps = np.load(f"../results/{args.exp_id}/{vidName}_{args.model_id}_attMaps.npy",mmap_mode="r")
 
-    attMaps = normalize(attMaps)
+    attMaps = preprocess_attMaps(attMaps,args.all_maps)
 
-    if attMaps.shape[1] != 1:
-        attMaps = attMaps[:,0:1]
-
-    cmPlasma = plt.get_cmap('plasma')
-    shape = attMaps.shape 
-    attMaps = 255*cmPlasma(attMaps.reshape(-1))[:,:3].reshape((shape[0],shape[2],shape[3],3))
     bs = args.val_batch_size
 
     img_list = read_fold(path_list)
@@ -64,7 +72,7 @@ def main(argv=None):
     all_img = torch.from_numpy(np.stack(all_img))
 
     fps = 5 if len(all_img) <= 40 else 20
-    torchvision.io.write_video(f"../vis/{args.exp_id}/{vidName}_{args.model_id}_attMaps.mp4",all_img,fps=fps)
+    torchvision.io.write_video(f"../vis/{args.exp_id}/{vidName}_{args.model_id}_allMaps={args.all_maps}_attMaps.mp4",all_img,fps=fps)
     
 if __name__ == "__main__":
     main()
