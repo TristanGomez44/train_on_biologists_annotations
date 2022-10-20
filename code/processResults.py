@@ -1627,8 +1627,11 @@ def getResPaths(exp_id,metric,img_bckgr):
     if img_bckgr and metric in get_metrics_with_IB():
         paths = sorted(glob.glob("../results/{}/attMetr{}-IB_*.npy".format(exp_id,metric)))
     else:
+        print(metric,"../results/{}/attMetr{}_*.npy".format(exp_id,metric))
         paths = sorted(glob.glob("../results/{}/attMetr{}_*.npy".format(exp_id,metric)))
+        print(len(paths))
         paths = list(filter(lambda x:os.path.basename(x).find("-IB") ==-1,paths))
+        print(len(paths))
 
     paths = removeOldFiles(paths)
 
@@ -1895,37 +1898,31 @@ def ttest_attMetr(exp_id,metric="del",img_bckgr=False):
                 circle = plt.Circle((i, j), rad, color=cmap(diff_mat_norm[i,j]))
                 ax.add_patch(circle)
 
-    plt.yticks(np.arange(len(res_mat)),labels)
+    fontsize = 17
+    plt.yticks(np.arange(len(res_mat)),labels,fontsize=fontsize)
     plt.xticks(np.arange(len(res_mat)),["" for _ in range(len(res_mat))])
-    plt.colorbar(cm.ScalarMappable(norm=matplotlib.colors.Normalize(diff_mat.min(),diff_mat.max()),cmap=cmap))
+    
     for i in range(len(res_mat)):
-        plt.text(i-0.2,i-0.4,labels[i],rotation=45,ha="left")
+        plt.text(i-0.2,i-0.4,labels[i],rotation=45,ha="left",fontsize=fontsize)
+    plt.colorbar(cm.ScalarMappable(norm=matplotlib.colors.Normalize(diff_mat.min(),diff_mat.max()),cmap=cmap),location="right",orientation="vertical",pad=0.17,shrink=0.8)
     plt.tight_layout()
     plt.savefig("../vis/{}/ttest_{}_attmetr.png".format(exp_id,suff))
 
 def best_to_worst(arr,ascending=True):
-
     if not ascending:
         key = lambda x:-x[1:].astype("float").mean()
     else:
         key = lambda x:x[1:].astype("float").mean()
-
     arr = np.array(sorted(arr,key=key))
-
     return arr
 
 def attMetricsStats(exp_id):
-
     statsPaths = sorted(glob.glob("../results/{}/attMetrStatsDel_*.npy".format(exp_id)))
 
     for path in statsPaths:
-
         model_id = os.path.basename(path).split("attMetrStatsDel_")[1].split(".npy")[0]
-        
         statsTriplet = np.load(path,allow_pickle=True)
-
         for i in range(len(statsTriplet)):
-        
             plt.figure()
             plt.plot(np.array(statsTriplet[i])[:,0],label=("min"))
             plt.plot(np.array(statsTriplet[i])[:,1],label=("mean"))   
@@ -2078,6 +2075,7 @@ def latex_table_figure(exp_id,full=False,with_std=False,img_bckgr=False,suppMet=
     with open("../results/{}/attMetr_latex_table{}.csv".format(exp_id,suff),"w") as text:
         print(csv,file=text)
 
+    fontsize = 17
     for metric in metric_list:
 
         res_list = sorted(res_list,key=lambda x:x[metric])
@@ -2086,8 +2084,8 @@ def latex_table_figure(exp_id,full=False,with_std=False,img_bckgr=False,suppMet=
         plt.errorbar(np.arange(len(res_list)),[row[metric] for row in res_list],[row[metric+"_std"] for row in res_list],color="darkblue",fmt='o')
         plt.bar(np.arange(len(res_list)),[row[metric] for row in res_list],0.9,color="lightblue",linewidth=0.5,edgecolor="darkblue")
         plt.ylabel(metric_to_label[metric])
-        plt.ylim(bottom=0)
-        plt.xticks(np.arange(len(res_list)),[row["id"] for row in res_list],rotation=45,ha="right")
+        plt.ylim(bottom=0,fontsize=fontsize)
+        plt.xticks(np.arange(len(res_list)),[row["id"] for row in res_list],rotation=45,ha="right",fontsize=fontsize)
         plt.tight_layout()
         plt.savefig("../vis/{}/attMetr_{}{}.png".format(exp_id,metric_to_label[metric],suff))
 
