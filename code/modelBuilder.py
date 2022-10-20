@@ -9,10 +9,7 @@ plt.switch_backend('agg')
 
 from models import resnet
 from models import hrnet
-from models import efficientnet
 from models import inter_by_parts
-from models import prototree
-from models import protopnet
 from models import abn
 import args
 import time 
@@ -484,10 +481,10 @@ def netBuilder(args,gpu=None):
         net.cuda(gpu)
         net = torch.nn.parallel.DistributedDataParallel(net,device_ids=[gpu],find_unused_parameters=True)
     else:
-        if args.cuda:
+        if args.cuda and torch.cuda.is_available():
             net.cuda()
-        if args.multi_gpu:
-            net = DataParallelModel(net)
+            if args.multi_gpu:
+                net = DataParallelModel(net)
 
     return net
 

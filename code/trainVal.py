@@ -572,21 +572,19 @@ def initialize_Net_And_EpochNumber(net, exp_id, model_id, cuda, start_mode, init
         if init_path == "None":
             init_path = sorted(glob.glob("../models/{}/model{}_epoch*".format(exp_id, model_id)), key=utils.findLastNumbers)[-1]
 
-        net = preprocessAndLoadParams(init_path,cuda,net,strict)
+        net = preprocessAndLoadParams(init_path,cuda,net)
 
         startEpoch = utils.findLastNumbers(init_path)+1
 
     return startEpoch
 
-def preprocessAndLoadParams(init_path,cuda,net,strict):
+def preprocessAndLoadParams(init_path,cuda,net):
     print("Init from",init_path)
     params = torch.load(init_path, map_location="cpu" if not cuda else None)
 
     params = addOrRemoveModule(params,net)
     paramCount = len(params.keys())
     params = removeBadSizedParams(params,net)
-    if paramCount != len(params.keys()):
-        strict=False
     params = addFeatModZoom(params,net)
     params = changeOldNames(params,net)
     params = removeConvDense(params)
@@ -1019,7 +1017,7 @@ def train(gpu,args,trial):
 
                 kwargsTest['loader'] = testLoader
 
-                net = preprocessAndLoadParams("../models/{}/model{}_best_epoch{}".format(args.exp_id, args.model_id, bestEpoch),args.cuda,net,args.strict_init)
+                net = preprocessAndLoadParams("../models/{}/model{}_best_epoch{}".format(args.exp_id, args.model_id, bestEpoch),args.cuda,net)
 
                 kwargsTest["model"] = net
                 kwargsTest["epoch"] = bestEpoch
@@ -1311,7 +1309,7 @@ def main(argv=None):
         bestEpoch = int(os.path.basename(bestPath).split("epoch")[1])
 
         net = modelBuilder.netBuilder(args,gpu=0)
-        net_raw = preprocessAndLoadParams(bestPath,args.cuda,net,args.strict_init)
+        net_raw = preprocessAndLoadParams(bestPath,args.cuda,net)
 
         if not args.rise and not args.score_map and not args.noise_tunnel:
             net = modelBuilder.GradCamMod(net_raw)
@@ -1434,7 +1432,7 @@ def main(argv=None):
                 net = torch.load(glob.glob("../models/{}/model{}_best_epoch*".format(args.exp_id,args.model_id))[0])
             else:
                 net = modelBuilder.netBuilder(args,gpu=0)
-                net = preprocessAndLoadParams(bestPath,args.cuda,net,args.strict_init)
+                net = preprocessAndLoadParams(bestPath,args.cuda,net)
             net.eval()
             
             if args.att_metrics_post_hoc:

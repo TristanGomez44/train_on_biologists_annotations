@@ -111,9 +111,12 @@ def buildTrainLoader(args,transf=None,shuffle=True,withSeg=False,reprVec=False,g
     return trainLoader, train_dataset
 
 
+def get_img_size(args):
+    return 448 if args.big_images else 224
+
 def buildTestLoader(args, mode,shuffle=False,withSeg=False,reprVec=False,gpu=None):
     datasetName = getattr(args, "dataset_{}".format(mode))
-    imgSize = 448 if args.big_images else 224
+    imgSize = get_img_size(args)
     test_dataset = fineGrainedDataset.FineGrainedDataset(datasetName, mode,(imgSize,imgSize),\
                                                         withSeg=withSeg,sqResizing=args.sq_resizing,\
                                                         cropRatio=args.crop_ratio,brightness=args.brightness,saturation=args.saturation)
