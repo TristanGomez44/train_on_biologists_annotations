@@ -251,7 +251,6 @@ def plotPointsImageDatasetGrid(exp_id,imgNb,epochs,model_ids,reduction_fact_list
                         indAtt = len(np.load(pointPaths[i],mmap_mode="r"))
 
                         if os.path.exists(pointPaths[i].replace("attMaps","features")):
-                            print(pointPaths[i])
                             indFeat = len(np.load(pointPaths[i].replace("attMaps","features"),mmap_mode="r"))
                         else:
                             indFeat = len(np.load(pointPaths[i].replace("attMaps","norm"),mmap_mode="r"))
@@ -1803,6 +1802,7 @@ def get_id_to_label():
             "noneRed-score_map":"Score-CAM",
             "noneRed-ablation_cam":"Ablation-CAM",
             "noneRed-rise":"RISE",
+            "noneRed_smallimg":"AM-LR",
             "noneRed_smallimg-varGrad":"VarGrad",
             "noneRed_smallimg-smoothGrad":"SmoothGrad",
             "noneRed_smallimg-guided":"GuidedBP",
@@ -1819,6 +1819,7 @@ def get_is_post_hoc():
             "clus_masterClusRed":False,
             "clus_mast":False,
             "noneRed":True,
+            "noneRed_smallimg":False,
             "protopnet":False,
             "prototree":False,
             "noneRed-gradcam":True,
@@ -1839,6 +1840,7 @@ def ttest_attMetr(exp_id,metric="del",img_bckgr=False):
     suff = metric
     suff += "-IB" if img_bckgr and metric in get_metrics_with_IB() else ""
 
+    print("../results/{}/attMetrics_{}_pop.csv".format(exp_id,suff))
     arr = np.genfromtxt("../results/{}/attMetrics_{}_pop.csv".format(exp_id,suff),dtype=str,delimiter=",")
 
     metric_to_max = []
@@ -1867,14 +1869,16 @@ def ttest_attMetr(exp_id,metric="del",img_bckgr=False):
     p_val_mat = np.zeros((len(res_mat),len(res_mat)))
     for i in range(len(res_mat)):
         for j in range(len(res_mat)):
-            p_val_mat[i,j] = scipy.stats.ttest_ind(res_mat[i],res_mat[j],equal_var=False)[1]
+            res_mat_i = res_mat[i][~np.isnan(res_mat[i])]
+            res_mat_j = res_mat[j][~np.isnan(res_mat[j])]
+            p_val_mat[i,j] = scipy.stats.ttest_ind(res_mat_i,res_mat_j,equal_var=False)[1]
 
     p_val_mat = (p_val_mat<0.05)
 
-    res_mat_mean = res_mat.mean(axis=1)
+    res_mat_mean = np.nanmean(res_mat,axis=1)
 
     diff_mat = np.abs(res_mat_mean[np.newaxis]-res_mat_mean[:,np.newaxis])
-    
+
     diff_mat_norm = (diff_mat-diff_mat.min())/(diff_mat.max()-diff_mat.min())
 
     cmap = plt.get_cmap('plasma')
@@ -1904,7 +1908,7 @@ def ttest_attMetr(exp_id,metric="del",img_bckgr=False):
     
     for i in range(len(res_mat)):
         plt.text(i-0.2,i-0.4,labels[i],rotation=45,ha="left",fontsize=fontsize)
-    plt.colorbar(cm.ScalarMappable(norm=matplotlib.colors.Normalize(diff_mat.min(),diff_mat.max()),cmap=cmap),location="right",orientation="vertical",pad=0.17,shrink=0.8)
+    plt.colorbar(cm.ScalarMappable(norm=matplotlib.colors.Normalize(diff_mat.min(),diff_mat.max()),cmap=cmap),orientation="vertical",pad=0.17,shrink=0.8)
     plt.tight_layout()
     plt.savefig("../vis/{}/ttest_{}_attmetr.png".format(exp_id,suff))
 
@@ -1935,6 +1939,10 @@ def loadArr(exp_id,metric,best,img_bckgr):
     
     suff = "-IB" if img_bckgr and metric in get_metrics_with_IB() else ""
     arr = np.genfromtxt("../results/{}/attMetrics_{}{}_pop.csv".format(exp_id,metric,suff),dtype=str,delimiter=",") 
+    
+    if len(arr.shape) == 1:
+        arr = arr[np.newaxis]
+
     arr_f = arr[:,1:].astype("float")
     if best == "max":
         best = arr_f.mean(axis=1).max()
@@ -2245,7 +2253,7 @@ def attCorrelation(exp_id,img_bckgr=False):
         for path in paths:
             points = np.load(path,allow_pickle=True).astype("float")
             
-            path_att_score = path.replace("attMetr{}{}".format(metric,suff),"attMetrAttScore")
+            path_att_score = path.replace("attMetr","attMetrAttScore")
             if os.path.exists(path_att_score):
                 model_id = os.path.basename(path).split(metric+suff+"_")[1].replace(".npy","")    
 
@@ -2270,6 +2278,9 @@ def attCorrelation(exp_id,img_bckgr=False):
   
                 csv_res += "{},{}\n".format(model_id,corr) 
                 csv_res_pop += "{},".format(model_id)+",".join([str(corr) for corr in all_corr])+"\n"
+
+            else:
+                print("Missing att weights",path)
 
         suff = "-IB" if img_bckgr else ""
 
@@ -2337,6 +2348,9 @@ def loadPerf(exp_id,metric,pop=True,img_bckgr=False,norm=False,reverse_met_to_mi
         perfs_norm = normalize_metrics(perfs[:,1:].astype("float"),metric)
         perfs = np.concatenate((perfs[:,0:1],perfs_norm.astype(str)),axis=1)
 
+    if len(perfs.shape) == 1:
+        perfs = perfs[np.newaxis]
+
     if get_what_is_best()[metric] == "min":
         perfs[:,1:]= (-1*perfs[:,1:].astype("float")).astype("str")
 
@@ -2354,6 +2368,7 @@ def bar_viz(exp_id,img_bckgr=False):
 
     for metric in metric_list:
 
+        print(metric)
         perfs = loadPerf(exp_id,metric,img_bckgr=img_bckgr)
 
         perfs_att = []
@@ -2984,7 +2999,7 @@ def main(argv=None):
         #if not os.path.exists("../results/{}/attMetrics_Time.csv".format(args.exp_id)):
         attTime(args.exp_id)
    
-        for metric in ["Add","Del","Spars","IIC","AD","ADD","DelCorr","AddCorr","Time"]:
+        for metric in ["Add","Del","Spars","DelCorr","AddCorr"]:
             ttest_attMetr(args.exp_id,metric=metric,img_bckgr=args.img_bckgr)
 
         bar_viz(args.exp_id,args.img_bckgr)
