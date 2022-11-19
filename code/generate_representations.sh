@@ -1,0 +1,1 @@
+python generate_representations.py -c model_emb10.config --model_id noneRed --stride_lay3 2 --stride_lay4 2 --transf black_patches
