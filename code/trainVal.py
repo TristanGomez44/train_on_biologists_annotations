@@ -8,6 +8,7 @@ import args
 from args import ArgReader
 from args import str2bool
 
+from skimage.transform import resize
 import numpy as np
 import torch
 from torch.nn import functional as F
@@ -28,7 +29,7 @@ from gradcam import GradCAMpp
 from score_map import ScoreCam
 from rise import RISE
 from xgradcam import XGradCAM,AblationCAM
-
+from road import NoisyLinearImputer,LinearInterpImputer
 import time
 
 import configparser
@@ -50,6 +51,7 @@ import captum
 from captum.attr import (IntegratedGradients,NoiseTunnel)
 
 OPTIM_LIST = ["Adam", "AMSGrad", "SGD"]
+
 
 class Bunch(object):
     def __init__(self, adict):
@@ -1109,6 +1111,8 @@ def main(argv=None):
 
     args = argreader.args
 
+    args.cuda = args.cuda and torch.cuda.is_available()
+
     if args.redirect_out:
         sys.stdout = open("python.out", 'w')
 
@@ -1471,19 +1475,8 @@ def main(argv=None):
             inds = torch.randint(len(testDataset),size=(nbImgs,))
 
             if args.att_metr_bckgr=="IB":
-                inds_bckgr = (inds + len(testDataset)//2) % len(testDataset)
-
-                labels = np.array([testDataset[ind][1] for ind in inds])
-                labels_bckgr = np.array([testDataset[ind][1] for ind in inds_bckgr])
-
-                while (labels==labels_bckgr).any():
-                    for i in range(len(inds)):
-                        if inds[i] == inds_bckgr[i]:
-                            inds_bckgr[i] = torch.randint(len(testDataset),size=(1,))[0]
-
-                    inds_bckgr = torch.randint(len(testDataset),size=(nbImgs,))
-                    labels_bckgr = np.array([testDataset[ind][1] for ind in inds_bckgr])
-
+                inds_bckgr = find_other_class_labels(inds,testDataset)
+                    
             for imgInd,i in enumerate(inds):
                 if imgInd % 20 == 0 :
                     print("Img",i.item(),"(",imgInd,"/",len(inds),")")
@@ -1515,8 +1508,14 @@ def main(argv=None):
 
                 if args.att_metr_bckgr=="IB":
                     data_bckgr,_ = getBatch(testDataset,inds_bckgr[imgInd],args)
-                elif args.att_metr_bckgr=="black":
+                elif args.att_metr_bckgr == "black":
                     data_bckgr = torch.zeros_like(data)
+                elif args.att_metr_bckgr == "road":
+                    data_bckgr = torch.zeros_like(data)
+                    imputer = NoisyLinearImputer()
+                elif args.att_metr_bckgr == "linear":
+                    data_bckgr = torch.zeros_like(data)
+                    imputer = LinearInterpImputer()
                 elif args.att_metr_bckgr == "white":
                     data_bckgr = torch.ones_like(data)
                 elif args.att_metr_bckgr == "gray":
@@ -1543,7 +1542,6 @@ def main(argv=None):
                     data_bckgr = torch.fft.ifft2(torch.tensor(fft).to(data.device)).real.unsqueeze(0).unsqueeze(0)
 
                     data_bckgr = data_bckgr.expand(-1,data.size(1),-1,-1)
-
                 elif args.att_metr_bckgr == "blur":
                     kernel = torch.ones(121,121)
                     kernel = kernel/kernel.numel()
@@ -1629,7 +1627,12 @@ def main(argv=None):
                     allFeatIter = [first_sample_feat.detach().cpu()]
 
                     if not args.att_metr_add_first_feat:
+
                         while leftPxlNb > 0:
+
+                            if args.att_metr_bckgr in ["road"]:
+                                mask_shape = (data.shape[0],1,data.shape[2],data.shape[3])
+                                imputer_mask = torch.zeros(mask_shape) if args.attention_metrics=="Add" else torch.ones(mask_shape)
 
                             attMin,attMean,attMax = attMaps.min().item(),attMaps.mean().item(),attMaps.max().item()
                             statsList.append((attMin,attMean,attMax))
@@ -1655,10 +1658,28 @@ def main(argv=None):
 
                                 attMaps[0,:,y_max[i],x_max[i]] = -1                       
 
+                                if args.att_metr_bckgr == "road":
+                                    if args.attention_metrics=="Add":
+                                        imputer_mask[0,0,y1:y2,x1:x2] = 1
+                                    else:
+                                        imputer_mask[0,0,y1:y2,x1:x2] = 0
+
+                            if args.att_metr_bckgr in ["road"]:
+                                data = imputer(data.cpu(),imputer_mask)
+                                data_unorm_imp = imputer(data_unorm.cpu().clone(),imputer_mask)
+                            elif args.att_metr_bckgr == "linear":
+                                data = imputer(data.cpu(),x1,x2-1,y1,y2-1)
+                                data_unorm_imp = imputer(data_unorm.cpu().clone(),x1,x2-1,y1,y2-1)
+                                #print((imputer_mask==0).sum(),(imputer_mask==1).sum())
+                                #print(data_unorm_imp.cpu().clone().mean())
+
                             leftPxlNb -= totalPxlNb//stepNb
                             if stepCount % 25 == 0:
                                 allAttMaps = torch.cat((allAttMaps,torch.clamp(attMaps,0,attMaps.max().item()).cpu()),dim=0)
-                                allData = torch.cat((allData,data_unorm.cpu()),dim=0)
+                                allData = torch.cat((allData,data_unorm.cpu().clone(),data_unorm_imp.cpu().clone()),dim=0)
+                            
+                            data_unorm = data_unorm_imp
+
                             stepCount += 1
 
                             score,feat = inference(net,data,predClassInd,args)
@@ -1703,6 +1724,24 @@ def main(argv=None):
 
     else:
         train(0,args,None)
+
+
+def find_other_class_labels(inds,testDataset):
+
+    inds_bckgr = (inds + len(testDataset)//2) % len(testDataset)
+
+    labels = np.array([testDataset[ind][1] for ind in inds])
+    labels_bckgr = np.array([testDataset[ind][1] for ind in inds_bckgr])
+
+    while (labels==labels_bckgr).any():
+        for i in range(len(inds)):
+            if inds[i] == inds_bckgr[i]:
+                inds_bckgr[i] = torch.randint(len(testDataset),size=(1,))[0]
+
+        inds_bckgr = torch.randint(len(testDataset),size=(len(inds),))
+        labels_bckgr = np.array([testDataset[ind][1] for ind in inds_bckgr])
+
+    return inds_bckgr
 
 #From https://kai760.medium.com/how-to-use-torch-fft-to-apply-a-high-pass-filter-to-an-image-61d01c752388
 def roll_n(X, axis, n):
