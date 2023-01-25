@@ -32,10 +32,10 @@ def main(argv=None):
 
     for fold_ind in range(1,fold_nb+1):
         for data_set in ["train","val","test"]:
-            os.makedirs(f"../data/crohn_{data_set}_{fold_ind}/",exist_ok=True)
+            os.makedirs(f"../data/crohn_{fold_ind}_{data_set}/",exist_ok=True)
 
             for class_name in classes:
-                os.makedirs(f"../data/crohn_{data_set}_{fold_ind}/{class_name}/",exist_ok=True)
+                os.makedirs(f"../data/crohn_{fold_ind}_{data_set}/{class_name}/",exist_ok=True)
 
     splits = np.arange(fold_nb)
 
@@ -55,7 +55,7 @@ def main(argv=None):
             else:
                 data_set = "test"
 
-            destination = f"../data/crohn_{data_set}_{fold_ind}/{class_name}/{frame_name}"
+            destination = f"../data/crohn_{fold_ind}_{data_set}/{class_name}/{frame_name}"
 
             shutil.copy(source,destination)
 
