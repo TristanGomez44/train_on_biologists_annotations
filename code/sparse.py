@@ -24,11 +24,10 @@ def sp_conv_forward(self, x: torch.Tensor):
     return x
 
 def sp_adavgpool_forward(self, x: torch.Tensor):
+    nb_elem = x.shape[2]*x.shape[3]
     x = super(type(self), self).forward(x)
-    mask = _get_active_ex_or_ii(H=x.shape[2], returning_active_ex=True)    # (BCHW) *= (B1HW), mask the output of conv
-    print(x.shape,mask.shape,_cur_active.shape)
-    sys.exit(0)
-    x *= mask
+    nb_activated_elem = _cur_active.sum()
+    #x *= nb_elem/nb_activated_elem
     return x
 
 def sp_bn_forward(self, x: torch.Tensor):
@@ -52,7 +51,7 @@ class SparseMaxPooling(nn.MaxPool2d):
     forward = sp_conv_forward   # hack: override the forward function; see `sp_conv_forward` above for more details
 
 
-class SparseAdaptiveAvgPooling(nn.AvgPool2d):
+class SparseAdaptiveAvgPooling(nn.AdaptiveAvgPool2d):
     forward = sp_adavgpool_forward   # hack: override the forward function; see `sp_conv_forward` above for more details
 
 
@@ -188,7 +187,6 @@ class SparseEncoder(nn.Module):
             m: nn.MaxPool2d
             oup = SparseMaxPooling(m.kernel_size, stride=m.stride, padding=m.padding, dilation=m.dilation, return_indices=m.return_indices, ceil_mode=m.ceil_mode)
         elif isinstance(m, nn.AdaptiveAvgPool2d):
-            print("avg pool")
             m: nn.AdaptiveAvgPool2d
             oup = SparseAdaptiveAvgPooling(m.output_size)  
         elif isinstance(m, (nn.BatchNorm2d, nn.SyncBatchNorm)):

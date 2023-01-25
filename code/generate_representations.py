@@ -26,16 +26,12 @@ def apply_transf(data,transf,data_bckgr,sparse_conv=False,downsample_ratio=None)
         else:
             nb_patches = PATCH_NB
 
-        if sparse_conv:
-            min_size = 1
-            max_size = min_size +1
+        if transf.find("size") != -1:
+            min_size = int(transf.split("size")[1].split("_")[0])
+            max_size = min_size + 1
         else:
-            if transf.find("size") != -1:
-                min_size = int(transf.split("size")[1].split("_")[0])
-                max_size = min_size + 1
-            else:
-                min_size = MIN_PATCH_SIZE 
-                max_size = MAX_PATCH_SIZE
+            min_size = MIN_PATCH_SIZE 
+            max_size = MAX_PATCH_SIZE
 
         xmax,ymax = data.shape[2],data.shape[3]
         if sparse_conv:
@@ -102,7 +98,7 @@ def main(argv=None):
     
     if args.sparse:
         imgSize = load_data.get_img_size(args)
-        downsample_ratio = modelBuilder.getResnetDownSampleRatio(args.first_mod)
+        downsample_ratio = modelBuilder.getResnetDownSampleRatio(args.first_mod,args)
         fea_nb = modelBuilder.getResnetFeat(args.first_mod, args.resnet_chan)
         net = sparse.SparseEncoder(net, imgSize, downsample_ratio, fea_nb)
         net.secondModel = net.sp_cnn.secondModel
@@ -146,12 +142,12 @@ def main(argv=None):
 
             resDic = net(data_transf)
 
-            featList.append(resDic["x"])
-            attMapList.append(torch.abs(resDic["features"]).sum(dim=1,keepdim=True))
+            featList.append(resDic["feat_pooled"])
+            attMapList.append(torch.abs(resDic["feat"]).sum(dim=1,keepdim=True))
             imgList.append(data_transf)
 
             if args.class_map:
-                feat = resDic["features"]
+                feat = resDic["feat"]
                 shape = feat.shape
                 feat = feat.view(shape[0],shape[1],-1)
                 feat = feat.permute(0,2,1)

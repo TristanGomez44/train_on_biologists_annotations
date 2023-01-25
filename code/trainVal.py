@@ -233,9 +233,6 @@ def computeLoss(args, output, target, resDict, data,reduction="mean"):
         ce = F.cross_entropy(output, target)
         loss = args.nll_weight*(kl*args.kl_interp*args.kl_temp*args.kl_temp+ce*(1-args.kl_interp))
 
-        if args.transfer_att_maps:
-            loss += args.att_weights*computeAttDiff(args.att_term_included,args.att_term_reg,resDict["attMaps"],resDict["features"],resDict["master_net_attMaps"],resDict["master_net_features"])
-
     for key in resDict.keys():
         if key.find("pred_") != -1:
             loss += args.nll_weight * F.cross_entropy(resDict[key], target)
@@ -389,7 +386,7 @@ def epochImgEval(model, log_interval, loader, epoch, args, metricEarlyStop, mode
 
         # Other variables produced by the net
         if mode == "test":
-            resDict["norm"] = torch.sqrt(torch.pow(resDict["features"],2).sum(dim=1,keepdim=True))
+            resDict["norm"] = torch.sqrt(torch.pow(resDict["feat"],2).sum(dim=1,keepdim=True))
             intermVarDict = update.catIntermediateVariables(resDict, intermVarDict, validBatch)
 
         # Metrics
@@ -871,9 +868,6 @@ def run(args,trial=None):
         if args.master_net:
             args.kl_temp = trial.suggest_float("kl_temp", 1, 21, step=5)
             args.kl_interp = trial.suggest_float("kl_interp", 0.1, 1, step=0.1)
-
-            if args.transfer_att_maps:
-                args.att_weights = trial.suggest_float("att_weights",0.001,0.5,log=True)
 
         if args.opt_att_maps_nb:
             args.resnet_bil_nb_parts = trial.suggest_int("resnet_bil_nb_parts", 3, 64, log=True)
@@ -1561,7 +1555,7 @@ def main(argv=None):
                         data_unorm = data_bckgr.clone()
                     first_sample_feat = net(data)["x"]
                 elif args.attention_metrics == "Del":
-                    first_sample_feat = resDic["x"]
+                    first_sample_feat = resDic["feat_pooled"]
 
                 attMaps = (attMaps-attMaps.min())/(attMaps.max()-attMaps.min())
 
@@ -1586,7 +1580,7 @@ def main(argv=None):
                     interp_mode = "nearest" if args.att_metrics_map_resolution else "bicubic"
                     attMaps_interp = torch.nn.functional.interpolate(attMaps,size=(data.shape[-1]),mode=interp_mode).to(data.device)                    
                     
-                    feat = resDic["x"].detach().cpu()
+                    feat = resDic["feat_pooled"].detach().cpu()
 
                     data_masked = maskData(data,attMaps_interp,args,data_bckgr)
                     data_unorm_masked = maskData(data_unorm,attMaps_interp,args,data_bckgr)
@@ -1790,7 +1784,7 @@ def computeSpars(data_shape,attMaps,args,resDic):
     if args.att_metrics_post_hoc:
         features = None 
     else:
-        features = resDic["features"]
+        features = resDic["feat"]
         if "attMaps" in resDic:
             attMaps = resDic["attMaps"]
         else:
@@ -1804,7 +1798,7 @@ def inference(net,data,predClassInd,args):
     if not args.prototree:
         resDic = net(data)
         score = torch.softmax(resDic["pred"],dim=-1)[:,predClassInd[0]]
-        feat = resDic["x"]
+        feat = resDic["feat"]
     else:
         score = net(data)[0][:,predClassInd[0]]
         feat = None

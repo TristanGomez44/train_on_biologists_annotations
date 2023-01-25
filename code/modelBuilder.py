@@ -107,26 +107,17 @@ class CNN2D(FirstModel):
     def __init__(self, featModelName,**kwargs):
         super().__init__(featModelName,**kwargs)
 
+        self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
+
     def forward(self, x):
 
         # N x C x H x L
         self.batchSize = x.size(0)
 
         # N x C x H x L
-        featModRetDict = self.featMod(x)
+        retDict = self.featMod(x)
 
-        features = featModRetDict["x"]
-
-        spatialWeights = torch.pow(features, 2).sum(dim=1, keepdim=True)
-        retDict = {}
-
-        if not "attMaps" in featModRetDict.keys():
-            retDict["features"] = features
-        else:
-            retDict["attMaps"] = featModRetDict["attMaps"]
-            retDict["features"] = featModRetDict["features"]
-
-        retDict["x"] = features.mean(dim=-1).mean(dim=-1)
+        retDict["feat_pooled"] = self.avgpool(retDict["feat"]).squeeze(-1).squeeze(-1)
 
         return retDict
 
@@ -188,61 +179,31 @@ def representativeVectors(x,nbVec,applySoftMax=False,softmCoeff=1,no_refine=Fals
 
 class CNN2D_bilinearAttPool(FirstModel):
 
-    def __init__(self, featModelName,
-                 inFeat=512,nb_parts=3,\
-                 cluster=False,cluster_ensemble=False,applySoftmaxOnSim=False,\
-                 softmCoeff=1,no_refine=False,rand_vec=False,update_sco_by_norm_sim=False,\
-                 vect_gate=False,vect_ind_to_use="all",cluster_lay_ind=4,\
-                 **kwargs):
+    def __init__(self, featModelName,inFeat=512,nb_parts=3,cluster=False,no_refine=False,rand_vec=False,**kwargs):
 
         super().__init__(featModelName,**kwargs)
         self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
 
-        if not cluster:
-            self.attention = buildImageAttention(inFeat,nb_parts+1)
-        else:
-            self.attention = None
-
         self.nb_parts = nb_parts
         self.cluster = cluster
+
         if not cluster:
+            self.attention = buildImageAttention(inFeat,nb_parts+1)
             self.attention_activation = torch.relu
         else:
+            self.attention = None
             self.attention_activation = None
-            self.cluster_ensemble = cluster_ensemble
-            self.applySoftmaxOnSim = applySoftmaxOnSim
             self.no_refine = no_refine
             self.rand_vec = rand_vec
-            self.update_sco_by_norm_sim = update_sco_by_norm_sim
-
-        self.softmSched_interpCoeff = 0
-        self.softmCoeff = softmCoeff
-
-        self.vect_gate = vect_gate
-        if self.vect_gate:
-            self.vect_gate_proto = torch.nn.Parameter(torch.zeros(nb_parts,inFeat),requires_grad=True)
-            stdv = 1. / math.sqrt(self.vect_gate_proto.size(1))
-            self.vect_gate_proto.data.uniform_(0, 2*stdv)
-
-        self.vect_ind_to_use = vect_ind_to_use
-        self.cluster_lay_ind = cluster_lay_ind
 
     def forward(self, x):
         # N x C x H x L
         self.batchSize = x.size(0)
         # N x C x H x L
-        output = self.featMod(x)
+        retDict = self.featMod(x)
 
-        if (not self.cluster) or (self.cluster_lay_ind == 4):
-            features = output["x"]
-        else:
-            features = output["layerFeat"][self.cluster_lay_ind]
-
-        retDict = {}
-
-        #features[:,:,:,:3] = 0
-        #features[:,:,:,-3:] = 0
-
+        features = retDict["feat"]
+  
         if not self.cluster:
             spatialWeights = self.attention_activation(self.attention(features))
             features_weig = (spatialWeights[:,:self.nb_parts].unsqueeze(2)*features.unsqueeze(1)).reshape(features.size(0),features.size(1)*(spatialWeights.size(1)-1),features.size(2),features.size(3))
@@ -253,38 +214,11 @@ class CNN2D_bilinearAttPool(FirstModel):
             vecList,simList = representativeVectors(features,self.nb_parts,self.applySoftmaxOnSim,self.softmCoeff,\
                                                     self.no_refine,self.rand_vec,self.update_sco_by_norm_sim,self.vect_ind_to_use)
 
-            if not self.cluster_ensemble:
-                if self.vect_gate:
-                    features_agr = torch.cat(vecList,dim=0)
-
-                    if self.vect_ind_to_use == "all":
-                        features_agr = features_agr.unsqueeze(1).reshape(features_agr.size(0)//self.nb_parts,self.nb_parts,features_agr.size(1))
-                    else:
-                        effectivePartNb = len(self.vect_ind_to_use.split(","))
-                        features_agr = features_agr.unsqueeze(1).reshape(features_agr.size(0)//effectivePartNb,effectivePartNb,features_agr.size(1))
-
-                    # (N 1 3 512) x (1 3 1 512) -> (N 3 3 1)
-                    sim = (features_agr.unsqueeze(1) * self.vect_gate_proto.unsqueeze(0).unsqueeze(2)).sum(dim=-1,keepdim=True)
-
-                    featNorm = torch.sqrt(torch.pow(features_agr,2).sum(dim=-1,keepdim=True))
-                    vect_gate_proto_norm = torch.sqrt(torch.pow(self.vect_gate_proto,2).sum(dim=-1,keepdim=True))
-
-                    sim = sim/(featNorm.unsqueeze(2) * vect_gate_proto_norm.unsqueeze(0).unsqueeze(1))
-
-                    # (N 1 3 512) x (N 3 3 1) -> (N 3 3 512) -> (N 3 512)
-                    features_agr = (features_agr.unsqueeze(1) * torch.softmax(sim,dim=-2)).sum(dim=-2)
-                    features_agr = features_agr.reshape(features_agr.size(0),-1)
-                else:
-                    features_agr = torch.cat(vecList,dim=-1)
-
-            else:
-                features_agr = vecList
-
+            features_agr = torch.cat(vecList,dim=-1)
             spatialWeights = torch.cat(simList,dim=1)
 
-        retDict["x"] = features_agr
+        retDict["feat_pooled"] = features_agr
         retDict["attMaps"] = spatialWeights
-        retDict["features"] = features
 
         return retDict
 
@@ -295,12 +229,13 @@ class CNN2D_interbyparts(FirstModel):
         super().__init__(featModelName,**kwargs)
 
         self.featMod = inter_by_parts.ResNet50(classNb,nb_parts)
+        self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
 
     def forward(self,x):
 
         pred,att,features = self.featMod(x)
         
-        return {"pred":pred,"attMaps":att,"features":features,"x":features.mean(dim=-1).mean(dim=-1)}
+        return {"pred":pred,"attMaps":att,"feat":features,"feat_pooled":self.avgpool(features)}
 
 ################################ Temporal Model ########################""
 
@@ -315,63 +250,18 @@ class SecondModel(nn.Module):
 
 class LinearSecondModel(SecondModel):
 
-    def __init__(self, nbFeat, nbClass, dropout,bil_cluster_ensemble=False,\
-                        bias=True,aux_on_masked=False,protonet=False,num_parts=None):
+    def __init__(self, nbFeat, nbClass, dropout,bias=True):
 
         super().__init__(nbFeat, nbClass)
         self.dropout = nn.Dropout(p=dropout)
 
-        self.linLay = nn.Linear(self.nbFeat, self.nbClass,bias=bias and not protonet)
+        self.linLay = nn.Linear(self.nbFeat, self.nbClass,bias=bias)
 
-        if protonet:
-            self.linLay.requires_grad = False
-            self.linLay.weight.data[:,:] = 0.5
-            for classInd in range(nbFeat//num_parts):
-                self.linLay.weight.data[classInd,classInd*num_parts:(classInd+1)*num_parts] = 1
-
-        self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
-        self.bil_cluster_ensemble = bil_cluster_ensemble
-
-        self.aux_on_masked = aux_on_masked
-        if self.aux_on_masked:
-            self.lin01 = nn.Linear(int(nbFeat*2/3),nbClass)
-            self.lin12 = nn.Linear(int(nbFeat*2/3),nbClass)
-            self.lin0 = nn.Linear(nbFeat//3,nbClass)
-            self.lin1 = nn.Linear(nbFeat//3,nbClass)
-            self.lin2 = nn.Linear(nbFeat//3,nbClass)
-
-    def forward(self, visResDict):
-
-        if not self.bil_cluster_ensemble:
-            x = visResDict["x"]
-
-            if len(x.size()) == 4:
-                x = self.avgpool(x).squeeze(-1).squeeze(-1)
-
-            x = self.dropout(x)
-
-            pred = self.linLay(x)
-
-            retDict = {"pred": pred}
-
-            if self.aux_on_masked:
-                retDict["pred_01"] = self.lin01(x[:,:int(self.nbFeat*2/3)].detach())
-                retDict["pred_12"] = self.lin12(x[:,int(self.nbFeat*1/3):].detach())
-                retDict["pred_0"] = self.lin0(x[:,:int(self.nbFeat*1/3)].detach())
-                retDict["pred_1"] = self.lin1(x[:,int(self.nbFeat*1/3):int(self.nbFeat*2/3)].detach())
-                retDict["pred_2"] = self.lin2(x[:,int(self.nbFeat*2/3):].detach())
-
-        else:
-            predList = []
-
-            for featVec in visResDict["x"]:
-                predList.append(self.linLay(featVec).unsqueeze(0))
-
-            x = torch.cat(predList,dim=0).mean(dim=0)
-
-            retDict = {"pred": x}
-            retDict.update({"predBilClusEns{}".format(i):predList[i][0] for i in range(len(predList))})
-
+    def forward(self, retDict):
+        x = retDict["feat_pooled"]
+        x = self.dropout(x)
+        pred = self.linLay(x)
+        retDict["pred"]=pred
         return retDict
 
 def getResnetFeat(backbone_name, backbone_inplanes):
@@ -393,10 +283,15 @@ def getResnetFeat(backbone_name, backbone_inplanes):
         raise ValueError("Unkown backbone : {}".format(backbone_name))
     return nbFeat
 
-def getResnetDownSampleRatio(backbone_name):
+def getResnetDownSampleRatio(backbone_name,args):
     if backbone_name.find("resnet") != -1:
-        return 32
-   
+        ratio = 32
+        for stride in [args.stride_lay2,args.stride_lay3,args.stride_lay4]:
+            if stride == 1:
+                ratio /= 2
+
+        return int(ratio)
+
     raise ValueError("Unkown backbone",backbone_name)
 
 def netBuilder(args,gpu=None):
@@ -408,31 +303,12 @@ def netBuilder(args,gpu=None):
         if args.resnet_bilinear:
             CNNconst = CNN2D_bilinearAttPool
             kwargs = {"inFeat":nbFeat,"nb_parts":args.resnet_bil_nb_parts,\
-                        "cluster":args.bil_cluster,"cluster_ensemble":args.bil_cluster_ensemble,\
-                        "applySoftmaxOnSim":args.apply_softmax_on_sim,\
-                        "softmCoeff":args.softm_coeff,\
+                        "cluster":args.bil_cluster,
                         "no_refine":args.bil_cluster_norefine,\
-                        "rand_vec":args.bil_cluster_randvec,\
-                        "update_sco_by_norm_sim":args.bil_clust_update_sco_by_norm_sim,\
-                        "vect_gate":args.bil_clus_vect_gate,\
-                        "vect_ind_to_use":args.bil_clus_vect_ind_to_use,\
-                        "cluster_lay_ind":args.bil_cluster_lay_ind}
+                        "rand_vec":args.bil_cluster_randvec}
 
-            if not args.bil_cluster_ensemble:
-
-                if args.bil_cluster_lay_ind != 4:
-                    if nbFeat == 2048:
-                        nbFeat = nbFeat//2**(4-args.bil_cluster_lay_ind)
-                    elif nbFeat == 512:
-                        nbFeat = nbFeat//2**(4-args.bil_cluster_lay_ind)
-                    else:
-                        raise ValueError("Unknown feature nb.")
-
-                if args.bil_clus_vect_ind_to_use == "all":
-                    nbFeat *= args.resnet_bil_nb_parts
-                else:
-                    nbFeat *= len(args.bil_clus_vect_ind_to_use.split(","))
-
+            nbFeat *= args.resnet_bil_nb_parts
+ 
         elif args.inter_by_parts:
             CNNconst = CNN2D_interbyparts
             kwargs = {"classNb":args.class_nb,"nb_parts":args.resnet_bil_nb_parts}
@@ -453,8 +329,7 @@ def netBuilder(args,gpu=None):
         ############### Second Model #######################
         if not args.inter_by_parts:
             if args.second_mod == "linear":
-                secondModel = LinearSecondModel(nbFeat, args.class_nb, args.dropout,bil_cluster_ensemble=args.bil_cluster_ensemble,\
-                                                    bias=args.lin_lay_bias,aux_on_masked=args.aux_on_masked,num_parts=args.resnet_bil_nb_parts)
+                secondModel = LinearSecondModel(nbFeat, args.class_nb, args.dropout,args.lin_lay_bias)
             else:
                 raise ValueError("Unknown second model type : ", args.second_mod)
         else:

@@ -26,10 +26,8 @@ case $1 in
         python generate_representations.py -c model_emb10.config --model_id none_mast --transf img_blur_size60_nb10
     ;;
     "spars_test")
-        python generate_representations.py -c model_emb10.config --model_id none_mast --transf black_patches_nb10 --spars --class_map
-    ;;
-    "spars_test2")
-        python generate_representations.py -c model_emb10.config --model_id none_mast --transf black_patches_nb120 --spars 
+        python generate_representations.py -c model_emb10.config --model_id none_mast --transf black_patches_size4_nb10 --spars
+        python generate_representations.py -c model_emb10.config --model_id none_mast --transf black_patches_size4_nb120 --spars 
     ;;
     "none_mast_classmap")
         python generate_representations.py -c model_emb10.config --model_id none_mast --class_map --transf black_patches_size60

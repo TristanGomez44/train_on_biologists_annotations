@@ -157,8 +157,6 @@ class ResNet(nn.Module):
         self.layer3 = self._make_layer(block, chan[2], layers[2], stride=strideLay3, norm_layer=norm_layer,dilation=dilation[1])
         self.layer4 = self._make_layer(block, chan[3], layers[3], stride=strideLay4, norm_layer=norm_layer,dilation=dilation[2])
 
-        self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
-
         for m in self.modules():
             if isinstance(m, nn.Conv2d):
                 nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')
@@ -211,10 +209,7 @@ class ResNet(nn.Module):
         x3 = self.layer3(x2)
         x4 = self.layer4(x3)
 
-        retDict["x"] = x4
-        retDict["layerFeat"] = {1:x1,2:x2,3:x3,4:x4}
-
-        return retDict
+        return {"feat":x4}
 
 def removeTopLayer(params):
     params.pop("fc.weight")
