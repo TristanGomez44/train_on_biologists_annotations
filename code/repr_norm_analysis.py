@@ -44,7 +44,7 @@ def main(argv=None):
     plt.hist(norm1,label=args.transf1,alpha=0.5)
     plt.hist(norm2,label=args.transf2,alpha=0.5)
     plt.legend()
-    plt.savefig(f"../vis/EMB10/{args.transf1}_vs_{args.transf2}_repre_distr_{model_ids}.png")
+    plt.savefig(f"../vis/EMB10/repr_attMap/{args.transf1}_vs_{args.transf2}_repre_distr_{model_ids}.png")
     plt.close()
 
     stat,pvalue = scipy.stats.ttest_ind(norm1,norm2,equal_var=False)
