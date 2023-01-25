@@ -66,14 +66,18 @@ class DataPartitioner(object):
     def use(self, partition):
         return Partition(self.data, self.partitions[partition])
 
-def buildTrainLoader(args,transf=None,shuffle=True,withSeg=False,reprVec=False,gpu=None):
-
+def get_img_size(args):
     if args.very_big_images:
         imgSize = 1792
     elif args.big_images:
         imgSize = 448
     else:
         imgSize = 224
+    return imgSize
+
+def buildTrainLoader(args,transf=None,shuffle=True,withSeg=False,reprVec=False,gpu=None):
+
+    imgSize = get_img_size(args)
 
     train_dataset = fineGrainedDataset.FineGrainedDataset(args.dataset_train, "train",(imgSize,imgSize),\
                                             withSeg=withSeg,sqResizing=args.sq_resizing,\
@@ -113,7 +117,7 @@ def buildTrainLoader(args,transf=None,shuffle=True,withSeg=False,reprVec=False,g
 
 def buildTestLoader(args, mode,shuffle=False,withSeg=False,reprVec=False,gpu=None):
     datasetName = getattr(args, "dataset_{}".format(mode))
-    imgSize = 448 if args.big_images else 224
+    imgSize = get_img_size(args)
     test_dataset = fineGrainedDataset.FineGrainedDataset(datasetName, mode,(imgSize,imgSize),\
                                                         withSeg=withSeg,sqResizing=args.sq_resizing,\
                                                         cropRatio=args.crop_ratio,brightness=args.brightness,saturation=args.saturation)

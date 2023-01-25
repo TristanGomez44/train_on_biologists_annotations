@@ -393,6 +393,12 @@ def getResnetFeat(backbone_name, backbone_inplanes):
         raise ValueError("Unkown backbone : {}".format(backbone_name))
     return nbFeat
 
+def getResnetDownSampleRatio(backbone_name):
+    if backbone_name.find("resnet") != -1:
+        return 32
+   
+    raise ValueError("Unkown backbone",backbone_name)
+
 def netBuilder(args,gpu=None):
     ############### Visual Model #######################
 
@@ -467,8 +473,8 @@ def netBuilder(args,gpu=None):
     else:
         if args.cuda:
             net.cuda()
-        if args.multi_gpu:
-            net = DataParallelModel(net)
+            if args.multi_gpu:
+                net = DataParallelModel(net)
 
     return net
 
