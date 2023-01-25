@@ -10,7 +10,7 @@ from matplotlib.colors import Normalize
 import matplotlib.pyplot as plt
 from matplotlib import cm 
 plt.switch_backend('agg')
-import umap
+import umap.umap_ as umap
 from PIL import ImageFont,Image,ImageDraw
 from sklearn.manifold import TSNE
 import sklearn
@@ -34,7 +34,6 @@ def compNorm(featPath):
             allNorm = norm
         else:
             allNorm = np.concatenate((allNorm,norm),axis=0)
-        print(feat.shape)
     return allNorm
 
 def find_saliency_maps(viz_id,model_ids,exp_id,expl):
@@ -563,10 +562,8 @@ def rankDist(x,y):
 
     return -np.log(0.5*(tau+1))
 
-def run_dimred_or_load(path,allFeat,dimred="umap"):
-    #if dimred == "pca":
-    #    dimRedFunc = PCA
-    #    kwargs = {}
+def run_dimred_or_load(path,allFeat,dimred="umap",n_components=2):
+
     if dimred == "umap":
         dimRedFunc = umap.UMAP
         kwargs = {}
@@ -590,18 +587,23 @@ def run_dimred_or_load(path,allFeat,dimred="umap"):
 
     if type(allFeat) is dict:
 
-        for metric in allFeat:
-            if not metric in allFeat_umap:
-                allFeat_umap[metric] = {}
+        #for metric in allFeat:
+        #    if not metric in allFeat_umap:
+        #        allFeat_umap[metric] = {}
 
-        for metric in allFeat:
-            for bckgr in allFeat[metric]:
-                if not bckgr in allFeat_umap[metric]:
-                    np.random.seed(0)
-                    allFeat[metric][bckgr] = dimRedFunc(n_components=2,**kwargs).fit_transform(allFeat[metric][bckgr])
-                else:
-                    allFeat[metric][bckgr] = allFeat_umap[metric][bckgr]
-                    
+        for i,param in enumerate(allFeat):
+            if i % 10 == 0:
+                print(param,i,"/",len(allFeat))
+            if not param in allFeat_umap:
+                np.random.seed(0)
+                feat = allFeat[param]
+                feat_shape = feat.shape
+                feat = feat.reshape(feat_shape[0]*feat_shape[1],-1)
+                feat = dimRedFunc(n_components=n_components,**kwargs).fit_transform(feat)
+                allFeat[param] = feat.reshape(feat_shape[0],feat_shape[1],n_components)
+            else:
+                allFeat[param] = allFeat_umap[param]
+                
     else:
         allFeat = dimRedFunc(n_components=2,**kwargs).fit_transform(allFeat) if allFeat_umap is None else allFeat_umap
 
@@ -629,9 +631,9 @@ def dimred_metrics(exp_id,pop=False,dimred="umap",img_bckgr=False):
                 allPerfs.append(perfs)
         else:
             perfs = loadPerf(exp_id,metric,pop=False,img_bckgr=img_bckgr,norm=True,reverse_met_to_min=True)
-            allPerfs.append(perfs[np.newaxis,:,1])
+            allPerfs.append(perfs[:,1])
 
-    allPerfs = np.concatenate(allPerfs,axis=0).astype("float")
+    allPerfs = np.stack(allPerfs).astype("float")
 
     path = f"../results/{exp_id}/metrics_dimred_pop{pop}_imgBckr{img_bckgr}.npy"
     allFeat = run_dimred_or_load(path,allPerfs,dimred)  
@@ -660,7 +662,8 @@ def dimred_metrics(exp_id,pop=False,dimred="umap",img_bckgr=False):
     plt.close()
 
 def get_sec_model_list():
-    return ["SVM","KNN","DT","NN"]
+    #return ["SVM","KNN","DT","NN"]
+    return ["SVM"]
 
 def get_metric_list(full=False):
     if full:
@@ -702,168 +705,261 @@ def get_paths_and_info(varying_variable,exp_id,file_paths,value_list=None):
 
     if varying_variable == "background":
         label = "bckgr"
-        filename_suff = ""
         file_paths = list(filter(lambda x:x.find(spar_suff) == -1,file_paths))
         file_paths = list(filter(lambda x:x.find(res_suff) == -1,file_paths))
     elif varying_variable == "sparsity":
         label = varying_variable
-        filename_suff = "_"+varying_variable
         file_paths = list(filter(lambda x:x.find(spar_suff) != -1,file_paths))
     else:
         label = varying_variable
-        filename_suff = "_"+varying_variable
         file_paths = list(filter(lambda x:x.find(res_suff) != -1,file_paths))
-    return label,filename_suff,value_list,file_paths
+    return label,value_list,file_paths
 
-def ood_repr(exp_id,quantitative,varying_variable,metric_list=None,value_list=None):
+def get_default_bckgr():
+    return ""
 
-    file_paths = glob.glob(f"../results/{exp_id}/attMetrFeat*_*.npy")
+def get_default_res_dic():
+    return {"bilRed":14,
+            "bilRed_1map":14,
+            "clus_masterClusRed":56,
+            "clus_mast":56,
+            "noneRed":14,
+            "protopnet":7,
+            "prototree":7,
+            "noneRed-gradcam":14,
+            "noneRed-gradcam_pp":14,
+            "noneRed-score_map":14,
+            "noneRed-ablation_cam":14,
+            "noneRed-rise":7,
+            "noneRed_smallimg-varGrad":448,
+            "noneRed_smallimg-smoothGrad":448,
+            "noneRed_smallimg-guided":448,
+            "interbyparts":28,
+            "abn":14}
+    
+def get_default_spars():
+    return 1
 
-    label,filename_suff,value_list,file_paths = get_paths_and_info(varying_variable,exp_id,file_paths,value_list)
+def separability_analysis(feat,exp_id,param_str,sec_model_name_list,constDic,kwargsDic):
 
-    if metric_list is None:
-        metric_list = get_metric_list()
+    np.random.seed(0) 
+    np.random.shuffle(feat)
+    train_x = feat[:int(len(feat)*0.5)]
+    val_x = feat[int(len(feat)*0.5):]
+
+    param_dic = param_to_dic(param_str)
+    metric = param_dic["metric"]
+
+    labels = np.arange(feat.shape[1])
+    if metric in ["Lift","Del"]:
+        labels = 1.0*(labels > 0)
+    else:
+        labels = 1.0*(labels < feat.shape[1] - 1)
+
+    train_y = np.repeat(labels[np.newaxis],len(train_x),0).reshape(-1)
+    val_y = np.repeat(labels[np.newaxis],len(val_x),0).reshape(-1)
+
+    train_x = train_x.reshape(-1,train_x.shape[-1])
+    val_x = val_x.reshape(-1,val_x.shape[-1])
+
+    perfCSVPath = f"../results/{exp_id}/attMetrReprSep.csv"
+    if not os.path.exists(perfCSVPath):
+        with open(perfCSVPath,"w") as file:
+            print(f"param_str,sec_model,train_acc,train_auc,val_acc,val_auc",file=file) 
+
+    for secModel in sec_model_name_list:
+
+        arr = np.genfromtxt(perfCSVPath,delimiter=",",dtype=str)
+        
+        if len(arr.shape) > 1:
+            inds = np.multiply(arr[:,0]==param_str,arr[:,1]==secModel)
+            if len(inds) > 0:
+                modelAlreadyTrained = len(np.argwhere(inds)[:,0]) > 0
+            else:
+                modelAlreadyTrained = False 
+        else:
+            modelAlreadyTrained = False
+
+        if not modelAlreadyTrained: 
+            np.random.seed(0)              
+            model = constDic[secModel](**kwargsDic[secModel])
+            model.fit(train_x,train_y)
+
+            train_y_score = model.predict_proba(train_x)[:,1]
+            train_acc = model.score(train_x,train_y)
+            train_auc = sklearn.metrics.roc_auc_score(train_y,train_y_score)
+            
+            val_y_score = model.predict_proba(val_x)[:,1]
+            val_acc = model.score(val_x,val_y)            
+            val_auc = sklearn.metrics.roc_auc_score(val_y,val_y_score)
+
+            with open(perfCSVPath,"a") as file:
+                print(f"{param_str},{secModel},{train_acc},{train_auc},{val_acc},{val_auc}",file=file)
+
+        else:
+            print(f"\t\t\tModel {secModel} already trained.")
+                        
+def dimred(feat,metric,exp_id,param_str):
+
+    if metric == "Del":
+        cmap = plt.get_cmap("plasma")
+        labels = lambda x:""
+    elif metric == "Add":
+        cmap = lambda x:plt.get_cmap("plasma")(1-x)
+        labels = lambda x:""
+    elif metric == "Lift":
+        color_list = [plt.get_cmap("plasma")(0),"red","green"]
+        cmap = lambda x:color_list[int(x*len(color_list))]
+        label_list = ["Original Data","Mask","Inversed mask"]
+        labels = lambda x:label_list[x]
+    else:
+        raise ValueError("Unkown metric")
+
+    plt.figure()
+    pts_inds = np.arange(feat.shape[1])
+    np.random.shuffle(pts_inds)
+
+    for i in pts_inds:
+        feat_i = feat[:,i]
+        plt.scatter(feat_i[:,0],feat_i[:,1],marker="o",color=cmap(i*1.0/feat.shape[1]),alpha=0.5,label=labels(i))
+    
+    plt.xlim(feat[:,:,0].min()-1,feat[:,:,0].max()+1)
+    plt.ylim(feat[:,:,1].min()-1,feat[:,:,1].max()+1)
+    
+    if metric in ["Add","Del"]:
+        plt.colorbar(cm.ScalarMappable(norm=Normalize(0,1),cmap=plt.get_cmap("plasma")))
+    else:
+        plt.legend()
+
+    figPath = f"../vis/{exp_id}/representation_study/attMetrFeatDimRed_{param_str}.png"
+
+    plt.savefig(figPath)
+    plt.close()
+
+def path_to_model_id(filename):
+    return "_".join(filename.split("/")[-1].split("_")[1:]).replace(".npy","").split("-res")[0].split("-spar")[0]
+
+def get_bckgr(filename,bckgr_list):
+    for bckgr in bckgr_list:
+        if bckgr in filename and bckgr != "":
+            return bckgr 
+    return get_default_bckgr()
+
+def get_first_number(string):
+    first_number = ""
+    is_nb=True
+    car_ind = 0
+    while is_nb:
+        car = string[car_ind]
+        if car.isnumeric():
+            first_number += car 
+        else:
+            is_nb = False
+        car_ind += 1
+
+    return float(first_number)
+
+def get_spars_fact(filename):
+    if "-spar" in filename:
+        return get_first_number(filename.split("-spar")[1])
+    else:
+        return get_default_spars()
+
+def get_resolution(filename,model_id,def_res_dic):
+    if "-res" in filename:
+        return get_first_number(filename.split("-res")[1])
+    else:
+        return def_res_dic[model_id]
+
+def get_metric(filename,metric_list):
+    for metric in metric_list:
+        if metric in filename:
+            return metric 
+    
+    raise ValueError("Unkown metric:",filename)
+
+def get_arg_name_to_ind_dic():
+    return {"metric":0,"model_id":1,"bckgr":2,"spars_fact":3,"resolution":4}
+
+def get_arg_ind_to_name_dic():
+    name_to_ind = get_arg_name_to_ind_dic()
+    ind_to_name = {}
+    for name in name_to_ind:
+        ind = name_to_ind[name]
+        ind_to_name[ind] = name 
+    return ind_to_name
+
+def arg_to_list(**kwargs):
+    arg_list = ["" for _ in range(len(kwargs))]
+    name_to_ind = get_arg_name_to_ind_dic()
+    for arg_name in kwargs:
+        arg_ind = name_to_ind[arg_name]
+        arg_list[arg_ind] = str(kwargs[arg_name])
+
+    return arg_list
+
+def param_to_dic(param_str):
+    param_list = param_str.split("_")
+    ind_to_name = get_arg_ind_to_name_dic()
+    param_dic = {}
+    for i,param_value in enumerate(param_list):
+        param_dic[ind_to_name[i]] = param_value
+    return param_dic 
+
+def ood_repr(exp_id,quantitative):
+
+    feat_paths = glob.glob(f"../results/{exp_id}/attMetrFeat*_*.npy")
+    feat_paths = list(filter(lambda x:os.path.basename(x).find("umap") == -1,feat_paths))
 
     os.makedirs(f"../vis/{exp_id}/representation_study/",exist_ok=True)
 
-    path_to_model_id = lambda x:"_".join(x.split("/")[-1].split("_")[1:]).replace(".npy","").split("-res")[0].split("-spar")[0]
-    model_ids = set(list(map(path_to_model_id,file_paths)))
-    model_ids = list(filter(lambda x:x.find("umap") == -1,model_ids))
+    bckgr_list = get_backgr_list()
+    def_res_dic = get_default_res_dic()
 
-    for model_id in model_ids:
-        print(model_id)
-        sample_nb_dic = {}
-        step_nb_dic = {}
-        allFeat = {}
-        for metric in metric_list:
-            allFeat[metric] = {}
-            sample_nb_dic[metric] = {}
-            step_nb_dic[metric] = {}
-            for value in value_list:
-                featPath = make_feature_path(varying_variable,exp_id,metric,value,model_id)
-                if os.path.exists(featPath):
-                    feat = np.load(featPath,mmap_mode="r")
-                    sample_nb_dic[metric][value],step_nb_dic[metric][value] = feat.shape[0],feat.shape[1]
-                    allFeat[metric][value] = feat.reshape(feat.shape[0]*feat.shape[1],-1)
+    metric_list = get_metric_list()
 
-        umap_path = f"../results/{exp_id}/attMetrFeat_{model_id}{filename_suff}.npy"
-        if not quantitative:
-            allFeat = run_dimred_or_load(umap_path,allFeat,dimred="umap")
+    allFeat = {}
+    for feat_path in feat_paths:
+        filename = os.path.basename(feat_path)
 
-        sec_model_name_list = get_sec_model_list()
+        model_id = path_to_model_id(filename)
+        metric = get_metric(filename,metric_list)
+        bckgr = get_bckgr(filename,bckgr_list)
+        spars_fact = get_spars_fact(filename)
+        resolution = get_resolution(filename,model_id,def_res_dic)
+        param_list = arg_to_list(model_id=model_id,metric=metric,bckgr=bckgr,spars_fact=spars_fact,resolution=resolution)
+        param_str = " ".join(param_list)
 
-        #We will train models to separate representations of altered images from representations of regular images
-        constDic = {"SVM":svm.SVC,"DT":tree.DecisionTreeClassifier,"KNN":neighbors.KNeighborsClassifier,
-                    "NN":neural_network.MLPClassifier}
-
-        kwargsDic = {"NN":{"hidden_layer_sizes":(128,),"batch_size":135 if metric=="Lift" else 2000,
-                           "early_stopping":True,"learning_rate":"adaptive"},
-                     "SVM":{"probability":True},"DT":{},"KNN":{}}
-
-        metrDic = {"Del":(plt.get_cmap("plasma"),lambda x:""),\
-                   "Add":(lambda x:plt.get_cmap("plasma")(1-x),lambda x:""),
-                   "Lift":(lambda x:[plt.get_cmap("plasma")(0),"red","green"][int(x*step_nb_dic["Lift"][value_list[0]])],lambda x:["Original Data","Mask","Inversed mask"][x])}
-
-        for metric in metric_list:
-            print("\t",metric)
-            cmap,labels = metrDic[metric]
-
-            for value in value_list:
-                print("\t\t",value)
-
-                step_nb_met,sample_nb = step_nb_dic[metric][value],sample_nb_dic[metric][value]
-
-                if value in allFeat[metric]:
-                    feat = allFeat[metric][value].copy()
-                    feat = feat.reshape(sample_nb,step_nb_met,-1)
-
-                    if quantitative:
-                        np.random.seed(0) 
-                        np.random.shuffle(feat)
-                        train_x = feat[:int(len(feat)*0.5)]
-                        val_x = feat[int(len(feat)*0.5):]
-
-                        labels = np.arange(feat.shape[1])
-                        if metric in ["Lift","Del"]:
-                            labels = 1.0*(labels > 0)
-                        else:
-                            labels = 1.0*(labels < feat.shape[1] - 1)
-
-                        train_y = np.repeat(labels[np.newaxis],len(train_x),0).reshape(-1)
-                        val_y = np.repeat(labels[np.newaxis],len(val_x),0).reshape(-1)
+        try:
+            feat = np.load(feat_path,mmap_mode="r")
+            allFeat[param_str] = feat
+            #print(feat_path,"sucessfuly loaded")
+        except ValueError as e:
+            print("Incomplete file",feat_path,e)
              
-                        train_x = train_x.reshape(-1,train_x.shape[-1])
-                        val_x = val_x.reshape(-1,val_x.shape[-1])
-           
-                        perfCSVPath = f"../results/{exp_id}/attMetrReprSep{metric}_{model_id}{filename_suff}.csv"
-                        if not os.path.exists(perfCSVPath):
-                            with open(perfCSVPath,"w") as file:
-                                print(f"{label},sec_model,train_acc,train_auc,val_acc,val_auc",file=file) 
+    umap_path = f"../results/{exp_id}/attMetrFeat_{model_id}.npy"
+    if not quantitative:
+        allFeat = run_dimred_or_load(umap_path,allFeat,dimred="umap")
 
-                        for secModel in sec_model_name_list:
+    sec_model_name_list = get_sec_model_list()
+
+    #For quantitative
+    constDic = {"SVM":svm.SVC,"DT":tree.DecisionTreeClassifier,"KNN":neighbors.KNeighborsClassifier,
+                "NN":neural_network.MLPClassifier}
+    kwargsDic = {"NN":{"hidden_layer_sizes":(128,),"batch_size":135 if metric=="Lift" else 2000,
+                        "early_stopping":True,"learning_rate":"adaptive"},
+                    "SVM":{"probability":True},"DT":{},"KNN":{}}
+
+    for param_str in allFeat:
         
-                            arr = np.genfromtxt(perfCSVPath,delimiter=",",dtype=str)
-                            
-                            if len(arr.shape) > 1:
-                                inds = np.multiply(arr[:,0]==value,arr[:,1]==secModel)
-                                if len(inds) > 0:
-                                    modelAlreadyTrained = len(np.argwhere(inds)[:,0]) > 0
-                                else:
-                                    modelAlreadyTrained = False 
-                            #No model has been trained already 
-                            #Or this model has not been already 
-                            if len(arr.shape) == 1 or not modelAlreadyTrained: 
-                                print(f"\t\t\tModel {secModel} being trained")  
-                                np.random.seed(0)              
-                                model = constDic[secModel](**kwargsDic[secModel])
-                                model.fit(train_x,train_y)
+        print(param_str)
 
-                                if model_id == "noneRed-gradcam_pp" and metric == "Del" and \
-                                    ((value == "-res14" and varying_variable =="resolution") or \
-                                    (value == "-spar1.0" and varying_variable =="sparsity") or \
-                                    (value == "" and varying_variable =="background")):
+        feat = allFeat[param_str].copy()
 
-                                    np.save(f"../results/EMB10/train_x_{varying_variable}.npy",train_x)
-                                    np.save(f"../results/EMB10/train_y_{varying_variable}.npy",train_y)
-                                    np.save(f"../results/EMB10/val_x_{varying_variable}.npy",val_x)
-                                    np.save(f"../results/EMB10/val_y_{varying_variable}.npy",val_y) 
-                                    np.save(f"../results/EMB10/model_{varying_variable}.npy",model)                                 
-
-                                train_y_score = model.predict_proba(train_x)[:,1]
-                                train_acc = model.score(train_x,train_y)
-                                train_auc = sklearn.metrics.roc_auc_score(train_y,train_y_score)
-                                
-                                val_y_score = model.predict_proba(val_x)[:,1]
-                                val_acc = model.score(val_x,val_y)            
-                                val_auc = sklearn.metrics.roc_auc_score(val_y,val_y_score)
-
-                                with open(perfCSVPath,"a") as file:
-                                    print(f"{value},{secModel},{train_acc},{train_auc},{val_acc},{val_auc}",file=file)
-
-                            else:
-                                print(f"\t\t\tModel {secModel} already trained.")
-
-                    else:
-                        plt.figure()
-                        pts_inds = np.arange(feat.shape[1])
-                        np.random.shuffle(pts_inds)
-
-                        for i in pts_inds:
-                            feat_i = feat[:,i]
-                            plt.scatter(feat_i[:,0],feat_i[:,1],marker="o",color=cmap(i*1.0/feat.shape[1]),alpha=0.5,label=labels(i))
-                        
-                        plt.xlim(feat[:,:,0].min()-1,feat[:,:,0].max()+1)
-                        plt.ylim(feat[:,:,1].min()-1,feat[:,:,1].max()+1)
-                        
-                        if metric in ["Add","Del"]:
-                            plt.colorbar(cm.ScalarMappable(norm=Normalize(0,1),cmap=plt.get_cmap("plasma")))
-                        else:
-                            plt.legend()
-
-                        figPath = f"../vis/{exp_id}/representation_study/attMetrFeatDimRed{metric}{value}_{model_id}{filename_suff}.png"
-
-                        plt.savefig(figPath)
-                        plt.close()
+        if quantitative:
+            separability_analysis(feat,exp_id,param_str,sec_model_name_list,constDic,kwargsDic)
+        else:
+            dimred(feat,metric,exp_id,param_str)
 
 def repr_path_to_model_id(path):
     return "_".join(path.split("/")[-1].split("ReprSep")[1].split("_")[1:]).replace(".csv","")
@@ -897,55 +993,90 @@ def get_backgr_label_dic():
     return {"-IB":"IB","":"Black","-white":"White","-gray":"Gray","-blur":"Blur",\
             "-highpass":"High pass","-lowpass":"Low Pass"}
 
-def viz_ood_repr(exp_id,varying_variable):
+def get_param_type_dic():
+    return {"metric":"str","model_id":"str","bckgr":"str","spars_fact":"float","resolution":"float"}
 
-    paths = glob.glob(f"../results/{exp_id}/attMetrReprSep*_*.csv")
-    _,filename_suff,value_list,paths = get_paths_and_info(varying_variable,exp_id,paths)
+def get_clean_labels(varying_param,param_values):
+    if varying_param == "bckgr":
+        bckgr_lab_dic = get_backgr_label_dic()
+        param_values = [bckgr_lab_dic[value] for value in param_values]
+    return param_values 
 
-    if varying_variable == "background":
-        labels = get_backgr_label_dic()
-    elif varying_variable == "sparsity":
-        labels = {spar:float(spar.replace("-spar","")) for spar in value_list}
-    else:
-        labels = {res:float(res.replace("-res","")) for res in value_list}
+def viz_ood_repr(exp_id,var_values,target,sec_model):
 
-    os.makedirs(f"../vis/{exp_id}/representation_study/val_auc/",exist_ok=True)
-    os.makedirs(f"../vis/{exp_id}/representation_study/val_acc/",exist_ok=True)
-
-    for path in paths:
-        metric = path.split("/")[-1].split("ReprSep")[1].split("_")[0]
-        model_id = repr_path_to_model_id(path)
-
-        csv = np.genfromtxt(path,delimiter=",",dtype=str)
-
-        sec_model_list = get_sec_model_list()
+    csv = np.genfromtxt(f"../results/{exp_id}/attMetrReprSep.csv",delimiter=",",dtype=str)
+    header = csv[0]
     
-        for i in range(2):
-            sec_model_metric_ind = csv.shape[1]-2+i
-            sec_model_metric = csv[0,sec_model_metric_ind]
+    var_values_split = var_values.split(";")
 
-            perf_matrix = []
-            for value in value_list:
-                csv_value = csv[1:][csv[1:,0] == value]
-    
-                row = []
-                for sec_model in sec_model_list:
-                    csv_sec_model = csv_value[(csv_value[:,1] == sec_model)]
-                    csv_sec_model_metric = csv_sec_model[:,sec_model_metric_ind]
-                    if len(csv_sec_model_metric) == 0:
-                        value = 0
-                    else:
-                        value = float(csv_sec_model_metric[0])
+    var_values_dic = {name_value.split(":")[0]:name_value.split(":")[1] for name_value in var_values_split}
 
-                    row.append(value)
+    is_fixed_dic = {name:var_values_dic[name] !="all" for name in var_values_dic}
 
-                perf_matrix.append(row)
+    name_list,is_fixed_list = zip(*((name,is_fixed_dic[name]) for name in is_fixed_dic))
+    name_list,is_fixed_list = np.array(name_list),np.array(is_fixed_list)
 
-            
-            fig_path = f"../vis/{exp_id}/representation_study/{sec_model_metric}/attMetrFeat{metric}_{model_id}_{sec_model_metric}{filename_suff}.png"
-            valueLabelList = [labels[value] for value in value_list]
-            perf_matrix = np.array(perf_matrix)
-            imshow_perf_matrix(100*perf_matrix,fig_path,sec_model_list,valueLabelList)
+    if (~is_fixed_list).sum() != 2:
+        raise ValueError("Choose two variables that vary")
+
+    varying_param1,varying_param2 = name_list[~is_fixed_list]
+
+    all_param_str = csv[1:,0]
+    all_param_list = [row.split(" ") for row in all_param_str]
+    all_param_list = np.array(all_param_list,dtype=str)
+
+    param_ind_dic = get_arg_name_to_ind_dic()
+
+    #Finding rows with desired fixed parameter values
+    global_bin_mask = None
+    for var in var_values_dic:
+        if is_fixed_dic[var]:
+            ind = param_ind_dic[var]
+            bin_mask = all_param_list[:,ind] == var_values_dic[var]
+            global_bin_mask = bin_mask if global_bin_mask is None else global_bin_mask*bin_mask
+
+    #Finding value list for param1 and param2
+    param_type_dic = get_param_type_dic()
+    param_values_list = []
+    for varying_param in [varying_param1,varying_param2]:
+        ind = param_ind_dic[varying_param]
+        param_values = all_param_list[:,ind].astype(param_type_dic[varying_param])
+        print(varying_param,param_type_dic[varying_param])
+        param_values = sorted(list(set(param_values)))
+        param_values_list.append(param_values)
+    param1_values,param2_values = param_values_list
+
+    #Filing the matrix
+    csv = csv[1:]
+    mat_values = np.zeros((len(param1_values),len(param2_values)))
+    param_1_ind,param_2_ind = param_ind_dic[varying_param1],param_ind_dic[varying_param2]
+    param_1_type,param_2_type = param_type_dic[varying_param1],param_type_dic[varying_param2]
+    target_ind = np.argwhere(header==target)[0][0]
+    for i,param1_value in enumerate(param1_values):
+        mask1 = (all_param_list[:,param_1_ind].astype(param_1_type)== param1_value)
+
+        for j,param2_value in enumerate(param2_values):
+            mask2 = (all_param_list[:,param_2_ind].astype(param_2_type)== param2_value)
+
+            rows = csv[global_bin_mask * mask1 * mask2]
+
+            if len(rows) > 1:
+                print("Warning: multiple rows matching",varying_param1,":",param1_value,"and",varying_param2,":",param2_value)
+                
+            if len(rows) == 0:
+                mat_values[i,j] = np.nan
+            else:
+                row = rows[0]
+                mat_values[i,j] = row[target_ind]
+
+    var_values = var_values.replace(";","_").replace(":","-")
+    fig_path = f"../vis/{exp_id}/representation_study/{target}/attMetrFeat_{var_values}.png"
+
+    param1_values = get_clean_labels(varying_param1,param1_values)
+    param2_values = get_clean_labels(varying_param2,param2_values)
+    imshow_perf_matrix(100*mat_values,fig_path,param2_values,param1_values)
+
+    sys.exit(0)
 
 def agr_ood_repr(exp_id):
 
@@ -1127,6 +1258,9 @@ def main(argv=None):
     argreader.parser.add_argument('--quantitative',action="store_true") 
     argreader.parser.add_argument('--varying_variable',type=str) 
     argreader.parser.add_argument('--viz_ood_repr',action="store_true")
+    argreader.parser.add_argument('--var_values',type=str)
+    argreader.parser.add_argument('--target',type=str,default="val_auc")
+    argreader.parser.add_argument('--sec_model',type=str,default="SVM")
     argreader.parser.add_argument('--agr_ood_repr',action="store_true")
     argreader.parser.add_argument('--dimred_metrics',action="store_true") 
     argreader.parser.add_argument('--dimred_func',type=str,default="tsne") 
@@ -1177,9 +1311,9 @@ def main(argv=None):
     if args.viz_resolution:
         viz_resolution(args.exp_id,args.img_bckgr)
     if args.ood_repr:
-        ood_repr(args.exp_id,args.quantitative,args.varying_variable,args.metrics,args.value_list)
+        ood_repr(args.exp_id,args.quantitative)
     if args.viz_ood_repr:
-        viz_ood_repr(args.exp_id,args.varying_variable)
+        viz_ood_repr(args.exp_id,args.var_values,args.target,args.sec_model)
     if args.agr_ood_repr:
         agr_ood_repr(args.exp_id)
     if args.dimred_metrics:
