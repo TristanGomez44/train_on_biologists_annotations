@@ -128,11 +128,12 @@ class CNN2D(FirstModel):
 
         features = featModRetDict["x"]
 
-        spatialWeights = torch.pow(features, 2).sum(dim=1, keepdim=True)
+        spatialWeights = torch.abs(features).sum(dim=1, keepdim=True)
         retDict = {}
 
         if not "attMaps" in featModRetDict.keys():
             retDict["features"] = features
+            retDict["attMaps"] = spatialWeights
         else:
             retDict["attMaps"] = featModRetDict["attMaps"]
             retDict["features"] = featModRetDict["features"]
