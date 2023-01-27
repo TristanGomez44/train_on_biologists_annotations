@@ -22,6 +22,7 @@ plt.switch_backend('agg')
 import modelBuilder
 import load_data
 import metrics
+from att_metrics import att_metr_data_aug
 import utils
 import update
 from gradcam import GradCAMpp
@@ -43,6 +44,7 @@ import gc
 import torch.multiprocessing as mp
 import torch.distributed as dist
 import torchvision
+
 from models import protopnet 
 
 import captum
@@ -53,6 +55,7 @@ OPTIM_LIST = ["Adam", "AMSGrad", "SGD"]
 class Bunch(object):
     def __init__(self, adict):
         self.__dict__.update(adict)
+
 
 def epochSeqTr(model, optim, log_interval, loader, epoch, args, **kwargs):
     ''' Train a model during one epoch
@@ -105,18 +108,15 @@ def epochSeqTr(model, optim, log_interval, loader, epoch, args, **kwargs):
             acc_size += data.size(0)
         acc_nb += 1
 
-        if args.with_seg:
-            seg = batch[2]
-        else:
-            seg = None
-
         if args.cuda:
             data, target = data.cuda(non_blocking=True), target.cuda(non_blocking=True)
 
-            if args.with_seg:
-                seg = seg.cuda(non_blocking=True)
+        if args.att_metr_mask and epoch >= args.att_metr_mask_start_epoch:
+            data_masked = att_metr_data_aug.apply_att_metr_masks(model,data)
+            resDict = model(data_masked)
+        else:
+            resDict = model(data)
 
-        resDict = model(data)
         output = resDict["pred"]
 
         if args.master_net:
@@ -140,14 +140,11 @@ def epochSeqTr(model, optim, log_interval, loader, epoch, args, **kwargs):
 
         loss = loss.detach().data.item()
 
-        if args.grad_exp:
-            allGrads = updateGradExp(model,allGrads)
-
         optim.step()
 
         # Metrics
         with torch.no_grad():
-            metDictSample = metrics.binaryToMetrics(output, target, seg,resDict)
+            metDictSample = metrics.binaryToMetrics(output, target,resDict)
         metDictSample["Loss"] = loss
         metrDict = metrics.updateMetrDict(metrDict, metDictSample)
 
@@ -156,9 +153,6 @@ def epochSeqTr(model, optim, log_interval, loader, epoch, args, **kwargs):
 
         if validBatch > 3 and args.debug:
             break
-
-    if args.grad_exp and gpu == 0:
-        updateGradExp(model,allGrads,True,epoch,args.exp_id,args.model_id,args.grad_exp)
 
     # If the training set is empty (which we might want to just evaluate the model), then allOut and allGT will still be None
     if validBatch > 0 and gpu==0:
@@ -171,43 +165,11 @@ def epochSeqTr(model, optim, log_interval, loader, epoch, args, **kwargs):
             totalTime = time.time() - start_time
             update.updateTimeCSV(epoch, "train", args.exp_id, args.model_id, totalTime, batch_idx)
 
-def updateGradExp(model,allGrads,end=False,epoch=None,exp_id=None,model_id=None,grad_exp=None,conv=True):
+def compute_masks(attMaps):
 
-    if not end:
-        if conv:
-            newGrads = model.firstModel.featMod.layer4[-1].conv1.weight.grad.data
-            norm_conv1 = torch.sqrt(torch.pow(newGrads.view(-1),2).sum()).unsqueeze(0)
+    torch.rand(size=(len(attMaps))) > 0.5
 
-            newGrads = model.firstModel.featMod.layer4[-1].conv2.weight.grad.data
-            norm_conv2 = torch.sqrt(torch.pow(newGrads.view(-1),2).sum()).unsqueeze(0)
-
-            newGrads = model.firstModel.featMod.layer4[-1].conv3.weight.grad.data
-            norm_conv3 = torch.sqrt(torch.pow(newGrads.view(-1),2).sum()).unsqueeze(0)
-
-            if allGrads is None:
-                allGrads = {"conv1":norm_conv1,"conv2":norm_conv2,"conv3":norm_conv3}
-            else:
-                allGrads["conv1"] = torch.cat((allGrads["conv1"],norm_conv1),dim=0)
-                allGrads["conv2"] = torch.cat((allGrads["conv2"],norm_conv2),dim=0)
-                allGrads["conv3"] = torch.cat((allGrads["conv3"],norm_conv3),dim=0)
-
-        else:
-            newGrads = model.secondModel.linLay.weight.grad.data.unsqueeze(0)
-
-            if allGrads is None:
-                allGrads = newGrads
-            else:
-                allGrads = torch.cat((allGrads,newGrads),dim=0)
-
-        return allGrads
-
-    else:
-        if conv:
-            torch.save(allGrads["conv1"].float(),"../results/{}/{}_allGradsConv1_{}HypParams_epoch{}.th".format(exp_id,model_id,grad_exp,epoch))
-            torch.save(allGrads["conv2"].float(),"../results/{}/{}_allGradsConv2_{}HypParams_epoch{}.th".format(exp_id,model_id,grad_exp,epoch))
-            torch.save(allGrads["conv3"].float(),"../results/{}/{}_allGradsConv3_{}HypParams_epoch{}.th".format(exp_id,model_id,grad_exp,epoch))
-        else:
-            torch.save(allGrads.float(),"../results/{}/{}_allGrads_{}HypParams_epoch{}.th".format(exp_id,model_id,grad_exp,epoch))
+    chosen_metric = torch.randint(0,)
 
 class Loss(torch.nn.Module):
 
@@ -235,9 +197,6 @@ def computeLoss(args, output, target, resDict, data,reduction="mean"):
         ce = F.cross_entropy(output, target)
         loss = args.nll_weight*(kl*args.kl_interp*args.kl_temp*args.kl_temp+ce*(1-args.kl_interp))
 
-        if args.transfer_att_maps:
-            loss += args.att_weights*computeAttDiff(args.att_term_included,args.att_term_reg,resDict["attMaps"],resDict["features"],resDict["master_net_attMaps"],resDict["master_net_features"])
-
     for key in resDict.keys():
         if key.find("pred_") != -1:
             loss += args.nll_weight * F.cross_entropy(resDict[key], target)
@@ -245,65 +204,6 @@ def computeLoss(args, output, target, resDict, data,reduction="mean"):
     loss = loss
 
     return loss
-
-def computeAttDiff(att_term_included,att_term_reg,studMaps,studFeat,teachMaps,teachFeat,attPow=2):
-
-    studNorm = torch.sqrt(torch.pow(studFeat,2).sum(dim=1,keepdim=True))
-    teachNorm = torch.sqrt(torch.pow(teachFeat,2).sum(dim=1,keepdim=True))
-
-    if att_term_included:
-        studMaps = normMap(studMaps,minMax=True)*normMap(studNorm)
-        teachMaps = normMap(teachMaps,minMax=True)*normMap(teachNorm)
-
-        kerSize = studMaps.size(-1)//teachMaps.size(-1)
-        studMaps = F.max_pool2d(studMaps,kernel_size=kerSize,stride=kerSize)
-        term = torch.pow(torch.abs(teachMaps-studMaps),attPow)
-        term *= (1-teachMaps)
-        term = term.sum(dim=(2,3)).mean()
-
-    elif att_term_reg:
-        studMaps = normMap(studMaps,minMax=True)*normMap(studNorm,minMax=True)
-        teachMaps = normMap(teachMaps,minMax=True)*normMap(teachNorm,minMax=True)
-
-        teachX,teachY = softCoord(teachMaps)
-        ratio = studMaps.size(-1)//teachMaps.size(-1)
-        teachX,teachY = teachX*ratio,teachY*ratio
-        studX,studY = softCoord(studMaps)
-
-        term = torch.sqrt(torch.pow(studX-teachX,2)+torch.pow(studY-teachY,2)).mean()
-
-    else:
-        studMaps = normMap(studMaps,minMax=True)*normMap(studNorm)
-        teachMaps = normMap(teachMaps,minMax=True)*normMap(teachNorm)
-
-        teachMaps = F.interpolate(teachMaps,size=(studMaps.size(-2),studMaps.size(-1)),mode='bilinear',align_corners=True)
-        term = torch.pow(torch.pow(torch.abs(teachMaps-studMaps),attPow).sum(dim=(2,3)),1.0/attPow).mean()
-
-    return term
-
-def softCoord(maps):
-
-    x = torch.arange(maps.size(3)).unsqueeze(0).expand(maps.size(2),-1).to(maps.device)
-    y = torch.arange(maps.size(2)).unsqueeze(1).expand(-1,maps.size(3)).to(maps.device)
-
-    valX = (x.unsqueeze(0).unsqueeze(0)*maps).sum(dim=(2,3))
-    valX /= maps.sum(dim=(2,3))
-
-    valY = (y.unsqueeze(0).unsqueeze(0)*maps).sum(dim=(2,3))
-    valY /= maps.sum(dim=(2,3))
-
-    return valX,valY
-
-def normMap(map,minMax=False):
-    if not minMax:
-        max = map.max(dim=-1,keepdim=True)[0].max(dim=-2,keepdim=True)[0].max(dim=-3,keepdim=True)[0]
-        map = map/max
-    else:
-        max = map.max(dim=-1,keepdim=True)[0].max(dim=-2,keepdim=True)[0].max(dim=-3,keepdim=True)[0]
-        min = map.min(dim=-1,keepdim=True)[0].min(dim=-2,keepdim=True)[0].min(dim=-3,keepdim=True)[0]
-        map = (map-min)/(max-min)
-
-    return map
 
 def epochImgEval(model, log_interval, loader, epoch, args, metricEarlyStop, mode="val",**kwargs):
     ''' Train a model during one epoch
@@ -351,22 +251,14 @@ def epochImgEval(model, log_interval, loader, epoch, args, metricEarlyStop, mode
         if (batch_idx % log_interval == 0):
             print("\t", batch_idx * len(data), "/", len(loader.dataset))
 
-        if args.with_seg:
-            seg=batch[2]
-            path_list = None
-        elif args.dataset_test.find("emb") != -1:
-            seg = None
+        if args.dataset_test.find("emb") != -1:
             path_list = batch[2]
         else:
-            seg=None
             path_list = None
 
         # Puting tensors on cuda
         if args.cuda:
             data, target = data.cuda(non_blocking=True), target.cuda(non_blocking=True)
-
-            if args.with_seg:
-                seg = seg.cuda(non_blocking=True)
 
         # Computing predictions
         if compute_latency:
@@ -402,7 +294,7 @@ def epochImgEval(model, log_interval, loader, epoch, args, metricEarlyStop, mode
                                         batch_idx)
 
         # Metrics
-        metDictSample = metrics.binaryToMetrics(output, target, seg,resDict,comp_spars=(mode=="test") and args.with_seg)
+        metDictSample = metrics.binaryToMetrics(output, target,resDict,comp_spars=(mode=="test"))
 
         if mode=="test" and args.grad_exp_test:
             loss.backward()
@@ -775,9 +667,6 @@ def addLossTermArgs(argreader):
     argreader.parser.add_argument('--center_loss_weight', type=float, metavar='FLOAT',
                                   help='The weight of the center loss term in the loss function when using bilinear model.')
 
-    argreader.parser.add_argument('--supervised_segm_weight', type=float, metavar='FLOAT',
-                                  help='The weight of the supervised segmentation term.')
-
     return argreader
 
 def initMasterNet(args,gpu=None):
@@ -1101,6 +990,9 @@ def main(argv=None):
     argreader.parser.add_argument('--grad_exp_test', type=str2bool, help='To store the gradients of the feature matrix during test.')
     argreader.parser.add_argument('--trial_id', type=int, help='The trial ID. Useful for grad exp during test')
 
+    argreader.parser.add_argument('--att_metr_mask', type=str2bool, help='To apply the masking of attention metrics during training.')
+    argreader.parser.add_argument('--att_metr_mask_start_epoch', type=int, help='The epoch at which to start applying the masking.')
+
     argreader = addInitArgs(argreader)
     argreader = addOptimArgs(argreader)
     argreader = addValArgs(argreader)
@@ -1200,105 +1092,6 @@ def main(argv=None):
         args.distributed=False
 
         train(0,args,None)
-
-    elif args.grad_exp:
-
-        if len(glob.glob("../results/{}/{}_allGrads_{}HypParams_epoch*.th".format(args.exp_id,args.model_id,args.grad_exp))) < args.epochs:
-
-            con = sqlite3.connect("../results/{}/{}_hypSearch.db".format(args.exp_id,args.model_id))
-            curr = con.cursor()
-
-            if args.grad_exp == "best":
-                print("Grad exp : Best run")
-                trialId = getBestTrial(curr,args.optuna_trial_nb)
-            elif args.grad_exp == "worst":
-                print("Grad exp : worst run")
-                trialId = getWorstTrial(curr,args.optuna_trial_nb)
-            else:
-                print("Grad exp : median run")
-                trialId = getMedianTrial(curr,args.optuna_trial_nb)
-
-            curr.execute('SELECT param_name,param_value from trial_params WHERE trial_id == {}'.format(trialId))
-            query_res = curr.fetchall()
-
-            paramDict = {key:value for key,value in query_res}
-
-            args.lr,args.batch_size = paramDict["lr"],int(paramDict["batch_size"])
-            args.optim = OPTIM_LIST[int(paramDict["optim"])]
-
-            if "dropout" in paramDict:
-                args.dropout = paramDict["dropout"]
-                args.weight_decay = paramDict["weight_decay"]
-
-                if args.optim == "SGD":
-                    args.momentum = paramDict["momentum"]
-                    args.use_scheduler = (paramDict["use_scheduler"]==1.0)
-
-            if args.opt_data_aug:
-                args.brightness = paramDict["brightness"]
-                args.saturation = paramDict["saturation"]
-                args.crop_ratio = paramDict["crop_ratio"]
-
-            args.run_test = False
-            args.distributed = False
-            args.optuna = False
-            train(0,args,None)
-        else:
-            print("Already done")
-    elif args.grad_exp_test:
-
-        args.distributed = False
-
-        con = sqlite3.connect("../results/{}/{}_hypSearch.db".format(args.exp_id,args.model_id))
-        curr = con.cursor()
-        trialIds,values = getTrialList(curr,args.optuna_trial_nb)
-        valDic = {id:val for id,val in zip(trialIds,values)}
-
-        bestOfAllPaths = glob.glob("../models/{}/model{}_best_epoch*".format(args.exp_id,args.model_id))
-        if len(bestOfAllPaths) >1:
-            raise ValueError("Too many best path ({}) : {}".format(len(bestOfAllPaths),bestOfAllPaths))
-        elif len(bestOfAllPaths) == 1:
-            bestOfAllPath = bestOfAllPaths[0]
-            copyfile(bestOfAllPath, bestOfAllPath.replace("best","bestOfAll"))
-            os.remove(bestOfAllPath)
-        else:
-            if len(glob.glob("../models/{}/model{}_bestOfAll_epoch*".format(args.exp_id,args.model_id))) == 0:
-                raise ValueError("No best of bestOfAll weight file.")
-
-        bestPaths = glob.glob("../models/{}/model{}_trial*_best*".format(args.exp_id,args.model_id))
-        bestPaths = sorted(bestPaths,key=lambda x:int(os.path.basename(x).split("trial")[1].split("_")[0]))
-        bestPaths = bestPaths[:args.optuna_trial_nb]
-
-        snrPath = "../results/{}/snr_{}.csv".format(args.exp_id,args.model_id)
-        if not os.path.exists(snrPath):
-            with open(snrPath,"w") as text_file:
-                print("trial_id,snr,accuracy",file=text_file)
-
-        snr_csv = np.genfromtxt(snrPath,delimiter=",",dtype=str)
-        if len(snr_csv.shape) == 1:
-            snr_csv = snr_csv[np.newaxis]
-            trial_ids_done = []
-        else:
-            trial_ids_done = snr_csv[1:,0]
-
-        for path in bestPaths:
-            trialId = int(os.path.basename(path).split("trial")[1].split("_")[0])+1
-            args.trial_id = trialId
-
-            print("Trial id",trialId,"Accuracy :",valDic[trialId],"Path",path)
-
-            exists=False
-            for doneTrial in trial_ids_done:
-                if str(trialId) == doneTrial:
-                    exists=True
-            args.only_test = True
-            if not exists:
-                copyfile(path, path.replace("trial{}_best".format(trialId-1),"best"))
-                train(0,args,None)
-
-                os.remove(path.replace("trial{}_best".format(trialId-1),"best"))
-
-        copyfile(bestOfAllPath.replace("best","bestOfAll"),bestOfAllPath)
 
     elif args.grad_cam:
 

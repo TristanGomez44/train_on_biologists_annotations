@@ -23,7 +23,7 @@ def updateMetrDict(metrDict,metrDictSample):
 
     return metrDict
 
-def binaryToMetrics(output,target,segmentation,resDict,comp_spars=False):
+def binaryToMetrics(output,target,resDict,comp_spars=False):
     ''' Computes metrics over a batch of targets and predictions
 
     Args:
@@ -45,12 +45,6 @@ def binaryToMetrics(output,target,segmentation,resDict,comp_spars=False):
         spar = compAttMapSparsity(resDict["attMaps"].clone(),resDict["features"].clone())
         metDict["Sparsity"] = spar
 
-        if not segmentation is None:
-            segmentation = segmentation.clone()
-            spar_n = comptAttMapSparN(spar,segmentation,resDict["attMaps"])
-            ios = compIoS(resDict["attMaps"],segmentation)
-            metDict["IoS"] = ios
-            metDict["Sparsity Normalised"] = spar_n
     else:
         norm = torch.sqrt(torch.pow(resDict["features"],2).sum(dim=1,keepdim=True))
         spar = compSparsity(norm)
