@@ -2,6 +2,7 @@
 Created: Oct 11,2019 - Yuchong Gu
 Revised: Oct 11,2019 - Yuchong Gu
 """
+from ast import Lambda
 import os
 import pdb
 from PIL import Image
@@ -26,26 +27,16 @@ class FineGrainedDataset(Dataset):
         __len__(self):                  returns the length of dataset
     """
 
-    def __init__(self, root, phase,resize,withSeg,sqResizing,\
-                        cropRatio,brightness,saturation,withSaliency=False,\
-                        randomSalCrop=False,apply_random_crop=True):
+    def __init__(self, root, phase,resize,sqResizing,\
+                        cropRatio,brightness,saturation,add_patches=False,patch_res=14):
 
         self.image_path = {}
-        self.withSeg = withSeg
-        if self.withSeg:
-            self.imageSeg_path = {}
-        else:
-            self.imageSeg_path = None
         self.image_label = {}
         self.root = "../data/"+root
         self.phase = phase
         self.resize = resize
         self.image_id = []
         self.num_classes = 200
-
-        self.withSaliency = withSaliency
-        self.randomSalCrop = randomSalCrop
-        self.apply_random_crop = apply_random_crop
 
         classes = [d.name for d in os.scandir(self.root) if d.is_dir()]
 
@@ -74,81 +65,26 @@ class FineGrainedDataset(Dataset):
                         self.image_label[id] = class_index
                         self.image_id.append(id)
 
-                        if self.withSeg:
-                            directory_seg = self.root.replace("train","seg").replace("test","seg")
-                            segPath = "../data/{}/{}/{}".format(directory_seg,target_class,fname.replace(".jpg",".png"))
-                            self.imageSeg_path[id] = segPath
-
                         id += 1
 
         # transform
         self.transform = get_transform(self.resize, self.phase,colorDataset=self.root.find("emb") == -1,\
                                         sqResizing=sqResizing,cropRatio=cropRatio,brightness=brightness,\
-                                        saturation=saturation,salCrop=self.withSaliency)
+                                        saturation=saturation,add_patches=add_patches,patch_res=patch_res)
 
     def __getitem__(self, item):
         # get image id
         image_id = self.image_id[item]
         image = Image.open(self.image_path[image_id]).convert('RGB')  # (C, H, W)
 
-        if not self.withSaliency:
-            # image
-            image = self.transform(image)
+        # image
+        image = self.transform(image)
 
-            if self.withSeg:
-                imageSeg = Image.open(self.imageSeg_path[image_id]).convert('RGB')
-                for t in self.transform.transforms:
-                    if (not type(t) is transforms.Normalize) and (not type(t) is transforms.ColorJitter):
-                        imageSeg = t(imageSeg)
-
-                return image, self.image_label[image_id],imageSeg
-            
-            elif self.root.find("embryo_img_test") != -1:
-                return image, self.image_label[image_id],self.image_path[image_id]
-            else:
-                return image, self.image_label[image_id]
-
+        if self.root.find("embryo_img_test") != -1:
+            return image, self.image_label[image_id],self.image_path[image_id]
         else:
-
-            imageSalPath = self.image_path[image_id].replace(self.root,self.root+"_sal").replace(".jpg",".png")
-            imageSal = Image.open(imageSalPath).convert('RGB')
-
-            for t in self.transform.transforms:
-
-                if type(t) is transforms.Resize:
-                    image = t(image)
-                    imageSal = t(imageSal)
-                else:
-                    if (not type(t) is transforms.RandomCrop):
-                        image = t(image)
-                    else:
-
-                        if self.randomSalCrop:
-                            imageSal = np.array(imageSal).mean(axis=2)
-                            imageSal = imageSal/imageSal.sum(axis=(0,1),keepdims=True)
-
-                            center = torch.multinomial(torch.tensor(imageSal.reshape(-1)), 1, replacement=True)
-                            x,y = center%imageSal.shape[1],center//imageSal.shape[1]
-                        else:
-
-                            imageSal = np.array(imageSal)[:,:,0]
-                            imageSal = imageSal/imageSal.sum(axis=(0,1),keepdims=True)
-
-                            x = int((np.arange(imageSal.shape[1])[np.newaxis]*imageSal).sum())
-                            y = int((np.arange(imageSal.shape[0])[:,np.newaxis]*imageSal).sum())
-
-                        x1,x2 = (x-imageSal.shape[1]//8),(x+imageSal.shape[1]//8)
-                        y1,y2 = (y-imageSal.shape[0]//8),(y+imageSal.shape[0]//8)
-
-                        x1,x2 = np.clip(x1,0,3*imageSal.shape[1]//4),np.clip(x2,imageSal.shape[1]//4,imageSal.shape[1])
-                        y1,y2 = np.clip(y1,0,3*imageSal.shape[1]//4),np.clip(y2,imageSal.shape[1]//4,imageSal.shape[1])
-
-                        image = Image.fromarray(np.array(image)[y1:y2,x1:x2]).convert("RGB")
-
-                        if self.apply_random_crop:
-                            image = t(image)
-
             return image, self.image_label[image_id]
+
     def __len__(self):
         return len(self.image_id)
 
@@ -165,9 +101,8 @@ def has_file_allowed_extension(filename, extensions):
     """
     return filename.lower().endswith(extensions)
 
-
 def get_transform(resize, phase='train',colorDataset=True,sqResizing=True,\
-                    cropRatio=0.875,brightness=0.126,saturation=0.5,salCrop=False):
+                    cropRatio=0.875,brightness=0.126,saturation=0.5,add_patches=False,patch_res=14):
 
     if sqResizing:
         kwargs={"size":(int(resize[0] / cropRatio), int(resize[1] / cropRatio))}
@@ -176,7 +111,7 @@ def get_transform(resize, phase='train',colorDataset=True,sqResizing=True,\
 
     if phase == 'train':
         transf = [transforms.Resize(**kwargs),
-                    transforms.RandomCrop((resize[0]//4,resize[1]//4) if salCrop else resize),
+                    transforms.RandomCrop(resize),
                     transforms.RandomHorizontalFlip(0.5)]
 
         if colorDataset:
@@ -189,6 +124,33 @@ def get_transform(resize, phase='train',colorDataset=True,sqResizing=True,\
 
     if colorDataset:
         transf.extend([transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])])
+
+    if phase == "train" and add_patches:
+        def add_patches(img):
+
+            cent_x,cent_y = torch.randint(0,patch_res,size=(2,))
+            var_x,var_y = torch.rand(size=(2,))+1
+
+            x = torch.arange(patch_res).unsqueeze(0)
+            y = torch.arange(patch_res).unsqueeze(1)
+
+            mask = torch.exp(-((x-cent_x)**2)/var_x-((y-cent_y)**2)/var_y)
+            mask = (mask - mask.min())/(mask.max() - mask.min())
+            mask = mask.unsqueeze(0).unsqueeze(0)
+
+            if torch.rand(size=(1,)) > 0.5:
+                mask = (mask > 0.5)*1.0
+                mask = torch.nn.functional.interpolate(mask,img.shape[1:],mode="bicubic",align_corners=False).clamp(min=0, max=1)[0]
+            else:
+                k = torch.randint(0,patch_res*patch_res,size=(1,)).item()
+                values,_ = torch.topk(mask.view(-1),k,0,sorted=True)
+                print(values)
+                mask = (mask > values[-1]) * 1.0
+                mask = torch.nn.functional.interpolate(mask,img.shape[1:],mode="nearest")[0]
+
+            return mask
+
+        transf.append(transforms.Lambda(add_patches))
 
     transf = transforms.Compose(transf)
 

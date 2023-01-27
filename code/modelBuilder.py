@@ -404,6 +404,18 @@ def getResnetFeat(backbone_name, backbone_inplanes):
         raise ValueError("Unkown backbone : {}".format(backbone_name))
     return nbFeat
 
+def getResnetDownSampleRatio(args):
+    backbone_name = args.first_mod
+    if backbone_name.find("resnet") != -1:
+        ratio = 32
+        for stride in [args.stride_lay2,args.stride_lay3,args.stride_lay4]:
+            if stride == 1:
+                ratio /= 2
+
+        return int(ratio)
+
+    raise ValueError("Unkown backbone",backbone_name)
+
 def netBuilder(args,gpu=None):
     ############### Visual Model #######################
 

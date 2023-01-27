@@ -911,10 +911,10 @@ def train(gpu,args,trial):
         args.trial_id = trial.number
 
     if not args.only_test:
-        trainLoader,_ = load_data.buildTrainLoader(args,withSeg=args.with_seg,reprVec=args.repr_vec,gpu=gpu)
+        trainLoader,_ = load_data.buildTrainLoader(args,gpu=gpu)
     else:
         trainLoader = None
-    valLoader,_ = load_data.buildTestLoader(args,"val",withSeg=args.with_seg,reprVec=args.repr_vec,gpu=gpu)
+    valLoader,_ = load_data.buildTestLoader(args,"val",gpu=gpu)
 
     # Building the net
     net = modelBuilder.netBuilder(args,gpu=gpu)
@@ -1013,7 +1013,7 @@ def train(gpu,args,trial):
                 kwargsTest = kwargsVal
                 kwargsTest["mode"] = "test"
 
-                testLoader,_ = load_data.buildTestLoader(args, "test",withSeg=args.with_seg,reprVec=args.repr_vec,shuffle=args.shuffle_test_set)
+                testLoader,_ = load_data.buildTestLoader(args, "test",shuffle=args.shuffle_test_set)
 
                 kwargsTest['loader'] = testLoader
 
@@ -1303,7 +1303,7 @@ def main(argv=None):
     elif args.grad_cam:
 
         args.val_batch_size = 1
-        testLoader,testDataset = load_data.buildTestLoader(args, "test",withSeg=args.with_seg)
+        testLoader,testDataset = load_data.buildTestLoader(args, "test")
 
         bestPath = glob.glob("../models/{}/model{}_best_epoch*".format(args.exp_id, args.model_id))[0]
         bestEpoch = int(os.path.basename(bestPath).split("epoch")[1])
@@ -1423,7 +1423,7 @@ def main(argv=None):
         if args.att_metr_do_again or not os.path.exists("../results/{}/attMetr{}_{}{}.npy".format(args.exp_id,path_suff,args.model_id,model_id_suff)):
 
             args.val_batch_size = 1
-            testLoader,testDataset = load_data.buildTestLoader(args, "test",withSeg=args.with_seg)
+            testLoader,testDataset = load_data.buildTestLoader(args, "test")
 
             bestPath = glob.glob("../models/{}/model{}_best_epoch*".format(args.exp_id, args.model_id))[0]
             bestEpoch = int(os.path.basename(bestPath).split("epoch")[1])
