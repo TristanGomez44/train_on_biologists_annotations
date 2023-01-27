@@ -144,7 +144,6 @@ def get_transform(resize, phase='train',colorDataset=True,sqResizing=True,\
             else:
                 k = torch.randint(0,patch_res*patch_res,size=(1,)).item()
                 values,_ = torch.topk(mask.view(-1),k,0,sorted=True)
-                print(values)
                 mask = (mask > values[-1]) * 1.0
                 mask = torch.nn.functional.interpolate(mask,img.shape[1:],mode="nearest")[0]
 
