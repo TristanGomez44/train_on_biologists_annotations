@@ -28,7 +28,6 @@ case $1 in
     ;;
   "5_mast")
     python trainVal.py -c model_crohn5.config --model_id clus_mast  --master_net True --m_model_id clus 
-<<<<<<< HEAD
     ;;
   "1_big")
     python trainVal.py -c model_crohn1.config --model_id clus_big  --stride_lay3 2 --stride_lay4 2 --big_images True
@@ -63,9 +62,27 @@ case $1 in
   "2_big_mast_bp")
     python trainVal.py -c model_crohn2.config --model_id clus_big_mast_bp  --big_images True  --master_net True --m_model_id clus_big  --add_patches True
     ;;  
-=======
-    ;;   
->>>>>>> 8a6e73e32697543cd94fcd38783ad150d9af22dc
+  "1_noneRed")
+    python trainVal.py -c model_crohn1.config --model_id noneRed   --resnet_bilinear False  --stride_lay3 2 --stride_lay4 2  --big_images True
+    ;;
+  "2_noneRed")
+    python trainVal.py -c model_crohn2.config --model_id noneRed   --resnet_bilinear False  --stride_lay3 2 --stride_lay4 2  --big_images True
+    ;;  
+  "3_noneRed")
+    python trainVal.py -c model_crohn3.config --model_id noneRed   --resnet_bilinear False  --stride_lay3 2 --stride_lay4 2  --big_images True
+    ;; 
+  "4_noneRed")
+    python trainVal.py -c model_crohn4.config --model_id noneRed   --resnet_bilinear False  --stride_lay3 2 --stride_lay4 2  --big_images True
+    ;; 
+  "5_noneRed")
+    python trainVal.py -c model_crohn5.config --model_id noneRed   --resnet_bilinear False  --stride_lay3 2 --stride_lay4 2  --big_images True
+    ;; 
+  "2_noneRed_attMetrMask")
+    python trainVal.py -c model_crohn2.config --model_id 2_noneRed_attMetrMask   --resnet_bilinear False --big_images True  --stride_lay3 2 --stride_lay4 2  --att_metr_mask True --att_metr_mask_start_epoch 0
+    ;; 
+  "2_noneRed_attMetrMask_easyStart")
+    python trainVal.py -c model_crohn2.config --model_id 2_noneRed_attMetrMask_easyStart --resnet_bilinear False  --big_images True  --stride_lay3 2 --stride_lay4 2 --att_metr_mask True --att_metr_mask_start_epoch 10
+    ;;  
   "*")
     echo "no such model"
     ;;
