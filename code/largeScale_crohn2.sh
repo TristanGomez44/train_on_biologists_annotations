@@ -28,6 +28,7 @@ case $1 in
     ;;
   "5_mast")
     python trainVal.py -c model_crohn5.config --model_id clus_mast  --master_net True --m_model_id clus 
+<<<<<<< HEAD
     ;;
   "1_big")
     python trainVal.py -c model_crohn1.config --model_id clus_big  --stride_lay3 2 --stride_lay4 2 --big_images True
@@ -62,6 +63,9 @@ case $1 in
   "2_big_mast_bp")
     python trainVal.py -c model_crohn2.config --model_id clus_big_mast_bp  --big_images True  --master_net True --m_model_id clus_big  --add_patches True
     ;;  
+=======
+    ;;   
+>>>>>>> 8a6e73e32697543cd94fcd38783ad150d9af22dc
   "*")
     echo "no such model"
     ;;
