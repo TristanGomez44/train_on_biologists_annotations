@@ -77,6 +77,21 @@ case $1 in
   "5_noneRed")
     python trainVal.py -c model_crohn5.config --model_id noneRed   --resnet_bilinear False  --stride_lay3 2 --stride_lay4 2  --big_images True
     ;; 
+ "1_none_mast")
+    python trainVal.py -c model_crohn1.config --model_id none_mast   --resnet_bilinear False    --big_images True --master_net True --m_model_id noneRed   
+    ;;
+  "2_none_mast")
+    python trainVal.py -c model_crohn2.config --model_id none_mast   --resnet_bilinear False    --big_images True --master_net True --m_model_id noneRed 
+    ;;  
+  "3_none_mast")
+    python trainVal.py -c model_crohn3.config --model_id none_mast   --resnet_bilinear False    --big_images True --master_net True --m_model_id noneRed
+    ;; 
+  "4_none_mast")
+    python trainVal.py -c model_crohn4.config --model_id none_mast   --resnet_bilinear False    --big_images True --master_net True --m_model_id noneRed
+    ;; 
+  "5_none_mast")
+    python trainVal.py -c model_crohn5.config --model_id none_mast   --resnet_bilinear False    --big_images True --master_net True --m_model_id noneRed
+    ;; 
   "2_noneRed_attMetrMask")
     python trainVal.py -c model_crohn2.config --model_id 2_noneRed_attMetrMask   --resnet_bilinear False --big_images True  --stride_lay3 2 --stride_lay4 2  --att_metr_mask True --att_metr_mask_start_epoch 0
     ;; 
