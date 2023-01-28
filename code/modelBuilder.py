@@ -127,7 +127,7 @@ def buildImageAttention(inFeat,outChan=1):
     attention.append(resnet.conv1x1(inFeat, outChan))
     return nn.Sequential(*attention)
 
-def representativeVectors(x,nbVec,applySoftMax=False,softmCoeff=1,no_refine=False,randVec=False,update_sco_by_norm_sim=False,vectIndToUse="all"):
+def representativeVectors(x,nbVec,no_refine=False,randVec=False):
 
     xOrigShape = x.size()
 
@@ -147,10 +147,7 @@ def representativeVectors(x,nbVec,applySoftMax=False,softmCoeff=1,no_refine=Fals
         raw_reprVec = x[torch.arange(x.size(0)).unsqueeze(1),ind]
         sim = (x*raw_reprVec).sum(dim=-1)/(norm*raw_reprVec_norm)
 
-        if applySoftMax:
-            simNorm = torch.softmax(softmCoeff*sim,dim=1)
-        else:
-            simNorm = sim/sim.sum(dim=1,keepdim=True)
+        simNorm = sim/sim.sum(dim=1,keepdim=True)
 
         reprVec = (x*simNorm.unsqueeze(-1)).sum(dim=1)
 
@@ -162,20 +159,13 @@ def representativeVectors(x,nbVec,applySoftMax=False,softmCoeff=1,no_refine=Fals
         if randVec:
             raw_reprVec_score = torch.rand(norm.size()).to(norm.device)
         else:
-            if update_sco_by_norm_sim:
-                raw_reprVec_score = (1-simNorm)*raw_reprVec_score
-            else:
-                raw_reprVec_score = (1-sim)*raw_reprVec_score
+            raw_reprVec_score = (1-sim)*raw_reprVec_score
 
         simReshaped = simNorm.reshape(sim.size(0),1,xOrigShape[2],xOrigShape[3])
 
         simList.append(simReshaped)
 
-    if vectIndToUse == "all":
-        return repreVecList,simList
-    else:
-        vectIndToUse = [int(ind) for ind in vectIndToUse.split(",")]
-        return [repreVecList[ind] for ind in vectIndToUse],[simList[ind] for ind in vectIndToUse]
+    return repreVecList,simList
 
 class CNN2D_bilinearAttPool(FirstModel):
 
@@ -211,8 +201,7 @@ class CNN2D_bilinearAttPool(FirstModel):
             features_agr = features_agr.view(features.size(0), -1)
         else:
 
-            vecList,simList = representativeVectors(features,self.nb_parts,self.applySoftmaxOnSim,self.softmCoeff,\
-                                                    self.no_refine,self.rand_vec,self.update_sco_by_norm_sim,self.vect_ind_to_use)
+            vecList,simList = representativeVectors(features,self.nb_parts,self.no_refine,self.rand_vec)
 
             features_agr = torch.cat(vecList,dim=-1)
             spatialWeights = torch.cat(simList,dim=1)
@@ -283,7 +272,8 @@ def getResnetFeat(backbone_name, backbone_inplanes):
         raise ValueError("Unkown backbone : {}".format(backbone_name))
     return nbFeat
 
-def getResnetDownSampleRatio(backbone_name,args):
+def getResnetDownSampleRatio(args):
+    backbone_name = args.first_mod
     if backbone_name.find("resnet") != -1:
         ratio = 32
         for stride in [args.stride_lay2,args.stride_lay3,args.stride_lay4]:
@@ -346,7 +336,7 @@ def netBuilder(args,gpu=None):
         net.cuda(gpu)
         net = torch.nn.parallel.DistributedDataParallel(net,device_ids=[gpu],find_unused_parameters=True)
     else:
-        if args.cuda:
+        if args.cuda and torch.cuda.is_available():
             net.cuda()
             if args.multi_gpu:
                 net = DataParallelModel(net)

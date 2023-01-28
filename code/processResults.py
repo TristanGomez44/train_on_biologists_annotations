@@ -397,7 +397,7 @@ def attCorrelation(exp_id,img_bckgr):
         for path in paths:
             points = np.load(path,allow_pickle=True).astype("float")
             
-            path_att_score = path.replace("attMetr{}{}".format(metric,suff),"attMetrAttScore")
+            path_att_score = path.replace("attMetr","attMetrAttScore")
             if os.path.exists(path_att_score):
                 model_id = getModelId(path,metric,img_bckgr)   
 
@@ -461,6 +461,9 @@ def loadPerf(exp_id,metric,pop=True,img_bckgr=False,norm=False,reverse_met_to_mi
     if norm:
         perfs_norm = normalize_metrics(perfs[:,1:].astype("float"),metric)
         perfs = np.concatenate((perfs[:,0:1],perfs_norm.astype(str)),axis=1)
+
+    if len(perfs.shape) == 1:
+        perfs = perfs[np.newaxis]
 
     if get_what_is_best()[metric] == "min":
         perfs[:,1:]= (-1*perfs[:,1:].astype("float")).astype("str")

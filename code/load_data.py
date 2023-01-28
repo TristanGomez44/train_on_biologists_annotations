@@ -1,20 +1,7 @@
-import sys
-import glob
-import os
-
 import numpy as np
 import torch
-from torchvision import transforms
-import torchvision
-
-from PIL import Image
-
-import time
 import args
-
 from random import Random
-import scipy.io
-import imageDatasetWithSeg
 import fineGrainedDataset
 from torch.utils.data.sampler import Sampler
 
@@ -75,15 +62,14 @@ def get_img_size(args):
         imgSize = 224
     return imgSize
 
-def buildTrainLoader(args,transf=None,shuffle=True,withSeg=False,reprVec=False,gpu=None):
+def buildTrainLoader(args,shuffle=True,gpu=None):
 
     imgSize = get_img_size(args)
 
     train_dataset = fineGrainedDataset.FineGrainedDataset(args.dataset_train, "train",(imgSize,imgSize),\
-                                            withSeg=withSeg,sqResizing=args.sq_resizing,\
+                                            sqResizing=args.sq_resizing,\
                                             cropRatio=args.crop_ratio,brightness=args.brightness,\
-                                            saturation=args.saturation,withSaliency=args.saliency_crop,\
-                                            randomSalCrop=args.random_sal_crop,apply_random_crop=args.apply_random_crop)
+                                            saturation=args.saturation,add_patches=args.add_patches,patch_res=args.patch_res)
 
     totalLength = len(train_dataset)
 
@@ -115,12 +101,16 @@ def buildTrainLoader(args,transf=None,shuffle=True,withSeg=False,reprVec=False,g
     return trainLoader, train_dataset
 
 
-def buildTestLoader(args, mode,shuffle=False,withSeg=False,reprVec=False,gpu=None):
+def get_img_size(args):
+    return 448 if args.big_images else 224
+
+def buildTestLoader(args, mode,shuffle=False,gpu=None):
     datasetName = getattr(args, "dataset_{}".format(mode))
     imgSize = get_img_size(args)
     test_dataset = fineGrainedDataset.FineGrainedDataset(datasetName, mode,(imgSize,imgSize),\
-                                                        withSeg=withSeg,sqResizing=args.sq_resizing,\
-                                                        cropRatio=args.crop_ratio,brightness=args.brightness,saturation=args.saturation)
+                                                        sqResizing=args.sq_resizing,\
+                                                        cropRatio=args.crop_ratio,brightness=args.brightness,\
+                                                        saturation=args.saturation)
 
     if mode == "val" and args.dataset_train == args.dataset_val:
         np.random.seed(1)
@@ -230,13 +220,10 @@ def addArgs(argreader):
     argreader.parser.add_argument('--saturation', type=float, metavar='S',
                                   help='The saturation intensity for data augmentation.')
 
-    argreader.parser.add_argument('--saliency_crop', type=args.str2bool, metavar='S',
-                                  help='To crop image using saliency.')
+    argreader.parser.add_argument('--add_patches', type=args.str2bool, metavar='S',
+                                  help='To add black patches during data augmentation.')
 
-    argreader.parser.add_argument('--random_sal_crop', type=args.str2bool, metavar='S',
-                                  help='To do random saliency cropping.')
-
-    argreader.parser.add_argument('--apply_random_crop', type=args.str2bool, metavar='S',
-                                  help='To apply random crop after saliency crop.')
+    argreader.parser.add_argument('--patch_res', type=int, metavar='S',
+                                  help='The resolution of the black patch mask')
 
     return argreader
