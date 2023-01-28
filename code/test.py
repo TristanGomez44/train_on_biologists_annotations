@@ -1,4 +1,4 @@
-import glob
+import glob,sys
 import numpy as np
 
 import subprocess
@@ -22,10 +22,10 @@ def main():
         val_target = 0.40
 
         sucess = np.abs(train_acc - train_target) < 0.05
-        sucess = sucess * np.abs(val_acc - val_target) < 0.05
+        sucess = sucess * (np.abs(val_acc - val_target) < 0.05)
 
         print(f"Train perf: {train_acc} (target={train_target}). Val perf: {val_acc} (target={val_target})")
-    
+
     else:
         print(f"Script excecution failed: {result.stdout}")
         sucess=False

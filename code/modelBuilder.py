@@ -310,7 +310,6 @@ def netBuilder(args,gpu=None):
             firstModel = CNNconst(args.first_mod,chan=args.resnet_chan, stride=args.resnet_stride,\
                                     strideLay2=args.stride_lay2,strideLay3=args.stride_lay3,\
                                     strideLay4=args.stride_lay4,\
-                                    endRelu=args.end_relu,\
                                     **kwargs)
         else:
             firstModel = CNNconst(args.first_mod,**kwargs)
@@ -331,15 +330,10 @@ def netBuilder(args,gpu=None):
     else:
         net = abn.resnet50(fullpretrained=args.abn_pretrained)
 
-    if args.distributed:
-        torch.cuda.set_device(gpu)
-        net.cuda(gpu)
-        net = torch.nn.parallel.DistributedDataParallel(net,device_ids=[gpu],find_unused_parameters=True)
-    else:
-        if args.cuda and torch.cuda.is_available():
-            net.cuda()
-            if args.multi_gpu:
-                net = DataParallelModel(net)
+    if args.cuda and torch.cuda.is_available():
+        net.cuda()
+        if args.multi_gpu:
+            net = DataParallelModel(net)
 
     return net
 
@@ -372,37 +366,11 @@ def addArgs(argreader):
 
     argreader.parser.add_argument('--bil_cluster', type=args.str2bool, metavar='BOOL',
                                   help="To have a cluster bilinear")
-    argreader.parser.add_argument('--bil_cluster_ensemble', type=args.str2bool, metavar='BOOL',
-                                  help="To classify each of the feature vector obtained and then aggregates those decision.")
-    argreader.parser.add_argument('--apply_softmax_on_sim', type=args.str2bool, metavar='BOOL',
-                                  help="Apply softmax on similarity computed during clustering.")
-    argreader.parser.add_argument('--softm_coeff', type=float, metavar='BOOL',
-                                  help="The softmax temperature. The higher it is, the sharper weights will be.")
-    argreader.parser.add_argument('--bil_clust_unnorm', type=args.str2bool, metavar='BOOL',
-                                  help="To mulitply similarity by norm to make weights superior to 1.")
-    argreader.parser.add_argument('--bil_clus_vect_gate', type=args.str2bool, metavar='BOOL',
-                                  help="To add a gate that reorder the vectors.")
-
-    argreader.parser.add_argument('--bil_clus_vect_ind_to_use',type=str, metavar='BOOL',
-                                  help="Specify this list to only use some of the vectors collected. Eg : --bil_clus_vect_ind_to_use 1,2")
-
-    argreader.parser.add_argument('--bil_clust_update_sco_by_norm_sim', type=args.str2bool, metavar='BOOL',
-                                  help="To update score using normalised similarity.")
-
-    argreader.parser.add_argument('--bil_cluster_ensemble_gate', type=args.str2bool, metavar='BOOL',
-                                  help="To add a gate network at the end of the cluster ensemble network.")
-    argreader.parser.add_argument('--bil_cluster_ensemble_gate_drop', type=args.str2bool, metavar='BOOL',
-                                  help="To drop the feature vector with the most important weight.")
-    argreader.parser.add_argument('--bil_cluster_ensemble_gate_randdrop', type=args.str2bool, metavar='BOOL',
-                                  help="To randomly drop one feature vector.")
 
     argreader.parser.add_argument('--bil_cluster_norefine', type=args.str2bool, metavar='BOOL',
                                   help="To not refine feature vectors by using similar vectors.")
     argreader.parser.add_argument('--bil_cluster_randvec', type=args.str2bool, metavar='BOOL',
                                   help="To select random vectors as initial estimation instead of vectors with high norms.")
-
-    argreader.parser.add_argument('--bil_cluster_lay_ind', type=int, metavar='BOOL',
-                                  help="The layer at which to group pixels.")
 
     argreader.parser.add_argument('--protonet', type=args.str2bool, metavar='BOOL',
                                   help="To train a protonet model")
@@ -426,12 +394,6 @@ def addArgs(argreader):
     argreader.parser.add_argument('--m_model_id', type=str, help='The model id of the master network')
     argreader.parser.add_argument('--kl_interp', type=float, help='If set to 0, will use regular target, if set to 1, will only use master net target')
     argreader.parser.add_argument('--kl_temp', type=float, help='KL temperature.')
-
-    argreader.parser.add_argument('--transfer_att_maps', type=args.str2bool, help='To also transfer attention maps during distillation.')
-    argreader.parser.add_argument('--att_weights', type=float, help='Attention map transfer weight.')
-    argreader.parser.add_argument('--att_pow', type=int, help='The power at which to compute the difference between the maps.')
-    argreader.parser.add_argument('--att_term_included', type=args.str2bool, help='To force the studen att maps to be included in the teach att maps.')
-    argreader.parser.add_argument('--att_term_reg', type=args.str2bool, help='To force the student att maps to be centered where the teach maps are centered.')
 
     argreader.parser.add_argument('--end_relu', type=args.str2bool, help='To add a relu at the end of the first block of each layer.')
     argreader.parser.add_argument('--abn', type=args.str2bool, help='To train an attention branch network')

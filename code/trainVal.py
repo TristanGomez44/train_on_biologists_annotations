@@ -1,25 +1,26 @@
-from multiprocessing import Value
-from models import inter_by_parts
 import os
 import sys
 import glob
+import time
+import configparser
+from shutil import copyfile
+import gc
+
+import numpy as np
+import torch
+from torch.nn import functional as F
+import matplotlib.pyplot as plt
+plt.switch_backend('agg')
+import optuna
+import sqlite3
+import torchvision
+import torchvision.transforms as transforms
+import captum
+from captum.attr import (IntegratedGradients,NoiseTunnel)
 
 import args
 from args import ArgReader
 from args import str2bool
-
-from skimage.transform import resize
-import numpy as np
-import torch
-from torch.nn import functional as F
-
-torch.backends.cudnn.benchmark = True
-torch.backends.cudnn.enabled = True
-
-import matplotlib.pyplot as plt
-
-plt.switch_backend('agg')
-
 import modelBuilder
 import load_data
 import metrics
@@ -31,45 +32,71 @@ from score_map import ScoreCam
 from rise import RISE
 from xgradcam import XGradCAM,AblationCAM
 from road import NoisyLinearImputer,LinearInterpImputer
-import time
+from models import inter_by_parts,protopnet
 
-import configparser
+def remove_excess_examples(data,target,accumulated_size,batch_size):
+    if accumulated_size + data.size(0) > batch_size:
 
-import optuna
-import sqlite3
+        if batch_size-accumulated_size < 2*torch.cuda.device_count():
+            data = data[:2*torch.cuda.device_count()]
+            target = target[:2*torch.cuda.device_count()]
+        else:
+            data = data[:batch_size-accumulated_size]
+            target = target[:batch_size-accumulated_size]
+        accumulated_size = batch_size
+    else:
+        accumulated_size += data.size(0)
 
-from shutil import copyfile
+    return data,target,accumulated_size
 
-import gc
+def master_net_inference(data,kwargs,resDict):
+    with torch.no_grad():
+        mastDict = kwargs["master_net"](data)
+        resDict["master_net_pred"] = mastDict["pred"]
+        resDict["master_net_features"] = mastDict["features"]
+        if "attMaps" in mastDict:
+            resDict["master_net_attMaps"] = mastDict["attMaps"]
+    return resDict
 
-import torch.multiprocessing as mp
-import torch.distributed as dist
-import torchvision
-import torchvision.transforms as transforms
-from models import protopnet 
+def optim_step(model,optim,acc_nb):
+    #Scale gradients (required when using gradient accumulation)
+    for p in model.parameters():
+        if p.grad is not None:
+            p.grad /= acc_nb
+    optim.step()
+    optim.zero_grad()
+    accumulated_size = 0
+    acc_nb = 0
 
-import captum
-from captum.attr import (IntegratedGradients,NoiseTunnel)
+    return model,optim,accumulated_size,acc_nb
 
-OPTIM_LIST = ["Adam", "AMSGrad", "SGD"]
+class Loss(torch.nn.Module):
 
+    def __init__(self,args,reduction="mean"):
+        super(Loss, self).__init__()
+        self.args = args
+        self.reduction = reduction
 
-class Bunch(object):
-    def __init__(self, adict):
-        self.__dict__.update(adict)
+    def forward(self,output,target,resDict):
+        return computeLoss(self.args,output, target, resDict,reduction=self.reduction).unsqueeze(0)
 
+def computeLoss(args, output, target, resDict,reduction="mean"):
 
-def epochSeqTr(model, optim, log_interval, loader, epoch, args, **kwargs):
-    ''' Train a model during one epoch
+    if args.master_net and ("master_net_pred" in resDict):
+        kl = F.kl_div(F.log_softmax(output/args.kl_temp, dim=1),F.softmax(resDict["master_net_pred"]/args.kl_temp, dim=1),reduction="batchmean")
+        ce = F.cross_entropy(output, target)
+        loss = args.nll_weight*(kl*args.kl_interp*args.kl_temp*args.kl_temp+ce*(1-args.kl_interp))
+    else:
+        loss = args.nll_weight * F.cross_entropy(output, target,reduction=reduction)
+        print(loss,args.nll_weight,output.mean(), target.float().mean(),reduction)
+        if args.inter_by_parts:
+            loss += 0.5*inter_by_parts.shapingLoss(resDict["attMaps"],args.resnet_bil_nb_parts,args)
+        if args.abn:
+            loss += args.nll_weight*F.cross_entropy(resDict["att_outputs"], target,reduction=reduction)
 
-    Args:
-    - model (torch.nn.Module): the model to be trained
-    - optim (torch.optim): the optimiser
-    - log_interval (int): the number of epochs to wait before printing a log
-    - loader (load_data.TrainLoader): the train data loader
-    - epoch (int): the current epoch
-    - args (Namespace): the namespace containing all the arguments required for training and building the network
-    '''
+    return loss
+
+def epochSeqTr(model, optim, loader, epoch, args, **kwargs):
 
     model.train()
 
@@ -78,74 +105,51 @@ def epochSeqTr(model, optim, log_interval, loader, epoch, args, **kwargs):
     metrDict = None
     validBatch = 0
     totalImgNb = 0
-    gpu = kwargs["gpu"]
 
-    if args.grad_exp:
-        allGrads = None
-
-    acc_size = 0
+    accumulated_size = 0
     acc_nb = 0
 
     for batch_idx, batch in enumerate(loader):
         optim.zero_grad()
 
-        if batch_idx % log_interval == 0:
+        if batch_idx % args.log_interval == 0:
             processedImgNb = batch_idx * len(batch[0])
             print("\t", processedImgNb, "/", len(loader.dataset))
 
         data, target = batch[0], batch[1]
 
-        if acc_size + data.size(0) > args.batch_size:
+        data_shape_bef = data.shape        
+        #Removing excess samples (if training is done by accumulating gradients)
+        data,target,accumulated_size = remove_excess_examples(data,target,accumulated_size,args.batch_size)
 
-            if args.batch_size-acc_size < 2*torch.cuda.device_count():
-                data = data[:2*torch.cuda.device_count()]
-                target = target[:2*torch.cuda.device_count()]
-            else:
-                data = data[:args.batch_size-acc_size]
-                target = target[:args.batch_size-acc_size]
-            acc_size = args.batch_size
-        else:
-            acc_size += data.size(0)
         acc_nb += 1
 
         if args.cuda:
             data, target = data.cuda(non_blocking=True), target.cuda(non_blocking=True)
 
+        resDict = {}
+
+        if args.master_net:
+            resDict = master_net_inference(data,kwargs,resDict)
+
         if args.att_metr_mask and epoch >= args.att_metr_mask_start_epoch:
-            data_masked = att_metr_data_aug.apply_att_metr_masks(model,data)
-            resDict = model(data_masked)
-        else:
-            resDict = model(data)
+            data = att_metr_data_aug.apply_att_metr_masks(model,data)
+        
+        resDict_model = model(data)
+        resDict.update(resDict_model)
 
         output = resDict["pred"]
 
-        if args.master_net:
-            with torch.no_grad():
-                mastDict = kwargs["master_net"](data)
-                resDict["master_net_pred"] = mastDict["pred"]
-                resDict["master_net_features"] = mastDict["features"]
-                if "attMaps" in mastDict:
-                    resDict["master_net_attMaps"] = mastDict["attMaps"]
-
-        loss = kwargs["lossFunc"](output, target, resDict, data).mean()
+        loss = kwargs["lossFunc"](output, target, resDict).mean()
         loss.backward()
 
-        if acc_size == args.batch_size:
-            for p in model.parameters():
-                if p.grad is not None:
-                    p.grad /= acc_nb
-            optim.step()
-            optim.zero_grad()
-            acc_size = 0
-            acc_nb = 0
+        if accumulated_size == args.batch_size:
+            model,optim,accumulated_size,acc_nb = optim_step(model,optim,acc_nb)
 
         loss = loss.detach().data.item()
 
-        optim.step()
-
         # Metrics
-        with torch.no_grad():
-            metDictSample = metrics.binaryToMetrics(output, target,resDict)
+        metDictSample = metrics.binaryToMetrics(output, target,resDict)
         metDictSample["Loss"] = loss
         metrDict = metrics.updateMetrDict(metrDict, metDictSample)
 
@@ -155,71 +159,11 @@ def epochSeqTr(model, optim, log_interval, loader, epoch, args, **kwargs):
         if validBatch > 3 and args.debug:
             break
 
-    # If the training set is empty (which we might want to just evaluate the model), then allOut and allGT will still be None
-    if validBatch > 0 and gpu==0:
+    if not args.optuna:
+        torch.save(model.state_dict(), "../models/{}/model{}_epoch{}".format(args.exp_id, args.model_id, epoch))
+        writeSummaries(metrDict, totalImgNb, epoch, "train", args.model_id, args.exp_id)
 
-        if not args.optuna:
-            torch.save(model.state_dict(), "../models/{}/model{}_epoch{}".format(args.exp_id, args.model_id, epoch))
-            writeSummaries(metrDict, totalImgNb, epoch, "train", args.model_id, args.exp_id)
-
-        if args.debug or args.benchmark:
-            totalTime = time.time() - start_time
-            update.updateTimeCSV(epoch, "train", args.exp_id, args.model_id, totalTime, batch_idx)
-
-def compute_masks(attMaps):
-
-    torch.rand(size=(len(attMaps))) > 0.5
-
-    chosen_metric = torch.randint(0,)
-
-class Loss(torch.nn.Module):
-
-    def __init__(self,args,reduction="mean"):
-        super(Loss, self).__init__()
-        self.args = args
-        self.reduction = reduction
-
-    def forward(self,output,target,resDict,data):
-        return computeLoss(self.args,output, target, resDict, data,reduction=self.reduction).unsqueeze(0)
-
-def computeLoss(args, output, target, resDict, data,reduction="mean"):
-
-    if not args.master_net:
-        loss = args.nll_weight * F.cross_entropy(output, target,reduction=reduction)
-
-        if args.inter_by_parts:
-            loss += 0.5*inter_by_parts.shapingLoss(resDict["attMaps"],args.resnet_bil_nb_parts,args)
-
-        if args.abn:
-            loss += args.nll_weight*F.cross_entropy(resDict["att_outputs"], target,reduction=reduction)
-
-    else:
-        kl = F.kl_div(F.log_softmax(output/args.kl_temp, dim=1),F.softmax(resDict["master_net_pred"]/args.kl_temp, dim=1),reduction="batchmean")
-        ce = F.cross_entropy(output, target)
-        loss = args.nll_weight*(kl*args.kl_interp*args.kl_temp*args.kl_temp+ce*(1-args.kl_interp))
-
-    for key in resDict.keys():
-        if key.find("pred_") != -1:
-            loss += args.nll_weight * F.cross_entropy(resDict[key], target)
-
-    loss = loss
-
-    return loss
-
-def epochImgEval(model, log_interval, loader, epoch, args, metricEarlyStop, mode="val",**kwargs):
-    ''' Train a model during one epoch
-
-    Args:
-    - model (torch.nn.Module): the model to be trained
-    - optim (torch.optim): the optimiser
-    - log_interval (int): the number of epochs to wait before printing a log
-    - loader (load_data.TrainLoader): the train data loader
-    - epoch (int): the current epoch
-    - args (Namespace): the namespace containing all the arguments required for training and building the network
-
-    '''
-
-    print("../results/{}/model{}_epoch{}_metrics_{}.csv".format(args.exp_id, args.model_id, epoch, mode))
+def epochImgEval(model, loader, epoch, args, mode="val",**kwargs):
 
     model.eval()
 
@@ -230,51 +174,20 @@ def epochImgEval(model, log_interval, loader, epoch, args, metricEarlyStop, mode
     validBatch = 0
     totalImgNb = 0
     intermVarDict = {"fullAttMap": None, "fullFeatMapSeq": None, "fullNormSeq":None}
-    gpu = kwargs["gpu"]
-
-    compute_latency = args.compute_latency and mode == "test"
-
-    if mode=="test" and args.grad_exp_test:
-        allGrads = None
-
-    if compute_latency:
-        latency_list=[]
-        batchSize_list = []
-    else:
-        latency_list,batchSize_list =None,None
 
     for batch_idx, batch in enumerate(loader):
         data, target = batch[:2]
 
-        if (batch_idx % log_interval == 0):
+        if (batch_idx % args.log_interval == 0):
             print("\t", batch_idx * len(data), "/", len(loader.dataset))
 
-        if args.dataset_test.find("emb") != -1:
-            path_list = batch[2]
-        else:
-            path_list = None
-
         # Puting tensors on cuda
-        if args.cuda:
-            data, target = data.cuda(non_blocking=True), target.cuda(non_blocking=True)
+        if args.cuda: data, target = data.cuda(non_blocking=True), target.cuda(non_blocking=True)
 
         # Computing predictions
-        if compute_latency:
-            lat_start_time = time.time()
-            resDict = model(data)
-            latency_list.append(time.time()-lat_start_time)
-            batchSize_list.append(data.size(0))
-        else:
-            resDict = model(data)
+        resDict = model(data)
 
         output = resDict["pred"]
-
-        if args.master_net:
-            mastDict = kwargs["master_net"](data)
-            resDict["master_net_pred"] = mastDict["pred"]
-            if "attMaps" in mastDict:
-                resDict["master_net_attMaps"] = mastDict["attMaps"]
-            resDict["master_net_features"] = mastDict["features"]
 
         # Loss
         if not (mode=="test" and args.grad_exp_test):
@@ -290,27 +203,9 @@ def epochImgEval(model, log_interval, loader, epoch, args, metricEarlyStop, mode
         # Metrics
         metDictSample = metrics.binaryToMetrics(output, target,resDict,comp_spars=(mode=="test"))
 
-        if mode=="test" and args.grad_exp_test:
-            loss.backward()
-
-            newGrads = model.secondModel.linLay.weight.grad.data.float().cpu().unsqueeze(0)
-
-            if allGrads is None:
-                allGrads = newGrads
-            else:
-                allGrads = torch.cat((allGrads,newGrads),dim=0)
-
-            model.zero_grad()
-
-        if (mode=="test" and args.grad_exp_test):
-            metDictSample["Loss"] = loss.detach().data.item()
-        else:
-            metDictSample["Loss"] = loss
+        metDictSample["Loss"] = loss
 
         metrDict = metrics.updateMetrDict(metrDict, metDictSample)
-
-        if mode == "test" and args.dataset_test.find("emb") != -1:
-            writePreds(output, target, epoch, args.exp_id, args.model_id, args.class_nb, batch_idx,mode,path_list)
 
         validBatch += 1
         totalImgNb += target.size(0)
@@ -319,62 +214,14 @@ def epochImgEval(model, log_interval, loader, epoch, args, metricEarlyStop, mode
             break
 
     if mode == "test":
-
-        if args.att_metrics_post_hoc:
-            suff = "_"+args.att_metrics_post_hoc
-        else:
-            suff = ""
-
         intermVarDict = update.saveIntermediateVariables(intermVarDict, args.exp_id, args.model_id+suff, epoch, mode)
 
     writeSummaries(metrDict, totalImgNb, epoch, mode, args.model_id, args.exp_id)
 
-    if mode == "test" and args.grad_exp_test and gpu == 0:
-        allGrads = allGrads.view(allGrads.size(0),-1)
-        mean = allGrads.mean(dim=0)
-        std = allGrads.std(dim=0)
-        var = std*std
-        snr = (mean/var).mean(dim=0)
-        with open("../results/{}/snr_{}.csv".format(args.exp_id,args.model_id),"a") as text_file:
-            print("{},{},{}".format(args.trial_id,snr,metrDict["Accuracy"]),file=text_file)
-
-    if compute_latency and gpu == 0:
-        latency_list = np.array(latency_list)[:,np.newaxis]
-        batchSize_list = np.array(batchSize_list)[:,np.newaxis]
-        latency_list = np.concatenate((latency_list,batchSize_list),axis=1)
-        np.savetxt("../results/{}/latency_{}_epoch{}.csv".format(args.exp_id,args.model_id,epoch),latency_list,header="latency,batch_size",delimiter=",")
-
-    return metrDict[metricEarlyStop]
-
-def writePreds(predBatch, targBatch, epoch, exp_id, model_id, class_nb, batch_idx,mode,path_list):
-    csvPath = "../results/{}/{}_epoch{}_{}.csv".format(exp_id, model_id, epoch,mode)
-
-    if (batch_idx == 0 and (epoch == 1 or mode == "test")) or not os.path.exists(csvPath):
-        with open(csvPath, "w") as text_file:
-            print("file,targ," + ",".join(np.arange(class_nb).astype(str)), file=text_file)
-
-    with open(csvPath, "a") as text_file:
-        for i in range(len(predBatch)):
-            print(path_list[i]+","+str(targBatch[i].cpu().detach().numpy()) + "," + ",".join(
-                predBatch[i][:class_nb].cpu().detach().numpy().astype(str)), file=text_file)
+    return metrDict["Accuracy"]
 
 def writeSummaries(metrDict, totalImgNb, epoch, mode, model_id, exp_id):
-    ''' Write the metric computed during an evaluation in a csv file
-
-    Args:
-    - metrDict (dict): the dictionary containing the value of metrics (not divided by the number of batch)
-    - totalImgNb (int): the total number of images during the epoch
-    - mode (str): either 'train', 'val' or 'test' to indicate if the epoch was a training epoch or a validation epoch
-    - model_id (str): the id of the model
-    - exp_id (str): the experience id
-    - nbVideos (int): During validation the metrics are computed over whole videos and not batches, therefore the number of videos should be indicated \
-        with this argument during validation
-
-    Returns:
-    - metricDict (dict): a dictionnary containing the metrics value
-
-    '''
-
+ 
     for metric in metrDict.keys():
         metrDict[metric] /= totalImgNb
 
@@ -386,14 +233,7 @@ def writeSummaries(metrDict, totalImgNb, epoch, mode, model_id, exp_id):
 
     return metrDict
 
-def getOptim_and_Scheduler(optimStr, lr,momentum,weightDecay,useScheduler,maxEpoch,lastEpoch,net):
-    '''Return the apropriate constructor and keyword dictionnary for the choosen optimiser
-    Args:
-        optimStr (str): the name of the optimiser. Can be \'AMSGrad\', \'SGD\' or \'Adam\'.
-        momentum (float): the momentum coefficient. Will be ignored if the choosen optimiser does require momentum
-    Returns:
-        the constructor of the choosen optimiser and the apropriate keyword dictionnary
-    '''
+def getOptim_and_Scheduler(optimStr, lr,momentum,weightDecay,useScheduler,lastEpoch,net):
 
     if optimStr != "AMSGrad":
         optimConst = getattr(torch.optim, optimStr)
@@ -420,21 +260,7 @@ def getOptim_and_Scheduler(optimStr, lr,momentum,weightDecay,useScheduler,maxEpo
 
     return optim, scheduler
 
-def initialize_Net_And_EpochNumber(net, exp_id, model_id, cuda, start_mode, init_path, strict):
-    '''Initialize a network
-
-    If init is None, the network will be left unmodified. Its initial parameters will be saved.
-
-    Args:
-        net (CNN): the net to be initialised
-        exp_id (string): the name of the experience
-        model_id (int): the id of the network
-        cuda (bool): whether to use cuda or not
-        start_mode (str): a string indicating the start mode. Can be \'scratch\' or \'fine_tune\'.
-        init_path (str): the path to the weight file to use to initialise. Ignored is start_mode is \'scratch\'.
-
-    Returns: the start epoch number
-    '''
+def initialize_Net_And_EpochNumber(net, exp_id, model_id, cuda, start_mode, init_path):
 
     if start_mode == "auto":
         if len(glob.glob("../models/{}/model{}_epoch*".format(exp_id, model_id))) > 0:
@@ -465,9 +291,7 @@ def preprocessAndLoadParams(init_path,cuda,net):
     params = torch.load(init_path, map_location="cpu" if not cuda else None)
 
     params = addOrRemoveModule(params,net)
-    paramCount = len(params.keys())
     params = removeBadSizedParams(params,net)
-    params = addFeatModZoom(params,net)
     params = changeOldNames(params,net)
     params = removeConvDense(params)
 
@@ -488,9 +312,7 @@ def preprocessAndLoadParams(init_path,cuda,net):
     return net
 
 def removeConvDense(params):
-
     keyToRemove = []
-
     for key in params:
         if key.find("featMod.fc") != -1:
             keyToRemove.append(key)
@@ -517,27 +339,8 @@ def addOrRemoveModule(params,net):
                 keyFormat = '.'.join(keyFormat[1:])
             else:
                 keyFormat = '.'.join(keyFormat)
-            # keyFormat = key.replace("module.", "") if key.find("module.") == 0 else key
             paramsFormated[keyFormat] = params[key]
         params = paramsFormated
-    return params
-
-def addFeatModZoom(params,net):
-
-    shouldAddFeatModZoom = False
-    for key in net.state_dict().keys():
-        if key.find("featMod_zoom") != -1:
-            shouldAddFeatModZoom = True
-
-    if shouldAddFeatModZoom:
-        #Adding keys in case model was created before the zoom feature was implemented
-        keyValsToAdd = {}
-        for key in params.keys():
-            if key.find(".featMod.") != -1:
-                keyToAdd = key.replace(".featMod.",".featMod_zoom.")
-                valToAdd = params[key]
-            keyValsToAdd.update({keyToAdd:valToAdd})
-        params.update(keyValsToAdd)
     return params
 
 def removeBadSizedParams(params,net):
@@ -632,41 +435,22 @@ def addValArgs(argreader):
     argreader.parser.add_argument('--run_test', type=args.str2bool, metavar='NB',
                                   help='Evaluate the model on the test set')
 
-
-
     return argreader
 
 
 def addLossTermArgs(argreader):
     argreader.parser.add_argument('--nll_weight', type=float, metavar='FLOAT',
                                   help='The weight of the negative log-likelihood term in the loss function.')
-    argreader.parser.add_argument('--aux_mod_nll_weight', type=float, metavar='FLOAT',
-                                  help='The weight of the negative log-likelihood term in the loss function for the aux model (when using pointnet).')
-    argreader.parser.add_argument('--zoom_nll_weight', type=float, metavar='FLOAT',
-                                  help='The weight of the negative log-likelihood term in the loss function for the zoom model (when using a model that generates points).')
-    argreader.parser.add_argument('--bil_backgr_weight', type=float, metavar='FLOAT',
-                                  help='The weight of the background term when using bilinear model.')
-    argreader.parser.add_argument('--bil_backgr_thres', type=float, metavar='FLOAT',
-                                  help='The threshold between 0 and 1 for the background term when using bilinear model.')
-
-    argreader.parser.add_argument('--crop_nll_weight', type=float, metavar='FLOAT',
-                                  help='The weight of the negative log-likelihood term in the loss function for the crop term.')
-    argreader.parser.add_argument('--drop_nll_weight', type=float, metavar='FLOAT',
-                                  help='The weight of the negative log-likelihood term in the loss function for the drop term.')
-
-    argreader.parser.add_argument('--center_loss_weight', type=float, metavar='FLOAT',
-                                  help='The weight of the center loss term in the loss function when using bilinear model.')
 
     return argreader
 
-def initMasterNet(args,gpu=None):
+def initMasterNet(args):
     config = configparser.ConfigParser()
 
     config.read("../models/{}/{}.ini".format(args.exp_id,args.m_model_id))
-    args_master = Bunch(config["default"])
+    args_master = utils.Bunch(config["default"])
 
     args_master.multi_gpu = args.multi_gpu
-    args_master.distributed = args.distributed
 
     argDic = args.__dict__
     mastDic = args_master.__dict__
@@ -689,7 +473,7 @@ def initMasterNet(args,gpu=None):
         if not arg in mastDic:
             mastDic[arg] = argDic[arg]
 
-    master_net = modelBuilder.netBuilder(args_master,gpu=gpu)
+    master_net = modelBuilder.netBuilder(args_master)
 
     best_paths = glob.glob("../models/{}/model{}_best_epoch*".format(args.exp_id,args.m_model_id))
 
@@ -727,18 +511,12 @@ def run(args,trial=None):
 
     if not trial is None:
         args.lr = trial.suggest_float("lr", 1e-4, 1e-2, log=True)
-        args.optim = trial.suggest_categorical("optim", OPTIM_LIST)
+        args.optim = trial.suggest_categorical("optim", ["Adam", "AMSGrad", "SGD"])
 
-        if args.distributed:
-            if args.max_batch_size <= 12//torch.cuda.device_count():
-                minBS = 1
-            else:
-                minBS = 12//torch.cuda.device_count()
+        if args.max_batch_size <= 12:
+            minBS = 4
         else:
-            if args.max_batch_size <= 12:
-                minBS = 4
-            else:
-                minBS = 12
+            minBS = 12
 
         args.batch_size = trial.suggest_int("batch_size", minBS, args.max_batch_size, log=True)
         print("Batch size is ",args.batch_size)
@@ -765,68 +543,51 @@ def run(args,trial=None):
         if args.opt_att_maps_nb:
             args.resnet_bil_nb_parts = trial.suggest_int("resnet_bil_nb_parts", 3, 64, log=True)
 
-    if not args.distributed:
-        args.world_size = 1
-        value = train(0,args,trial)
-        return value
-    else:
-        if args.distributed:
-            args.world_size = torch.cuda.device_count()
-            os.environ['MASTER_ADDR'] = 'localhost'              #
-            os.environ['MASTER_PORT'] = '8889'
-            mp.spawn(train, nprocs=args.world_size, args=(args,trial))
-            value = np.genfromtxt("../results/{}/{}_{}_valRet.csv".format(args.exp_id,args.model_id,trial.number))
-            return value
-
-def train(gpu,args,trial):
-
-    if args.distributed:
-        dist.init_process_group(backend='nccl',init_method='env://',world_size=args.world_size,rank=gpu)
+    args.world_size = 1
+    value = train(args,trial)
+    return value
+   
+def train(args,trial):
 
     if not trial is None:
         args.trial_id = trial.number
 
     if not args.only_test:
-        trainLoader,_ = load_data.buildTrainLoader(args,gpu=gpu)
+        trainLoader,_ = load_data.buildTrainLoader(args)
     else:
         trainLoader = None
-    valLoader,_ = load_data.buildTestLoader(args,"val",gpu=gpu)
+    valLoader,_ = load_data.buildTestLoader(args,"val")
 
     # Building the net
-    net = modelBuilder.netBuilder(args,gpu=gpu)
+    net = modelBuilder.netBuilder(args)
 
     trainFunc = epochSeqTr
     valFunc = epochImgEval
 
-    kwargsTr = {'log_interval': args.log_interval, 'loader': trainLoader, 'args': args,"gpu":gpu}
+    kwargsTr = {'loader': trainLoader, 'args': args}
     kwargsVal = kwargsTr.copy()
 
     kwargsVal['loader'] = valLoader
-    kwargsVal["metricEarlyStop"] = args.metric_early_stop
 
     startEpoch = initialize_Net_And_EpochNumber(net, args.exp_id, args.model_id, args.cuda, args.start_mode,
-                                                args.init_path, args.strict_init)
+                                                args.init_path)
 
-    kwargsTr["optim"],scheduler = getOptim_and_Scheduler(args.optim, args.lr,args.momentum,args.weight_decay,args.use_scheduler,args.epochs,startEpoch,net)
+    kwargsTr["optim"],scheduler = getOptim_and_Scheduler(args.optim, args.lr,args.momentum,args.weight_decay,args.use_scheduler,startEpoch,net)
 
     epoch = startEpoch
     bestEpoch, worseEpochNb = getBestEpochInd_and_WorseEpochNb(args.start_mode, args.exp_id, args.model_id, epoch)
 
-    if args.maximise_val_metric:
-        bestMetricVal = -np.inf
-        isBetter = lambda x, y: x > y
-    else:
-        bestMetricVal = np.inf
-        isBetter = lambda x, y: x < y
+    bestMetricVal = -np.inf
+    isBetter = lambda x, y: x > y
 
     if args.master_net:
-        kwargsTr["master_net"] = initMasterNet(args,gpu=gpu)
+        kwargsTr["master_net"] = initMasterNet(args)
         kwargsVal["master_net"] = kwargsTr["master_net"]
 
     lossFunc = Loss(args,reduction="mean")
 
     if args.multi_gpu:
-        lossFunc = torch.nn.DataParallel(lossFunc,device_ids=[gpu])
+        lossFunc = torch.nn.DataParallel(lossFunc)
 
     kwargsTr["lossFunc"],kwargsVal["lossFunc"] = lossFunc,lossFunc
 
@@ -860,11 +621,11 @@ def train(gpu,args,trial):
             if not (args.no_val or args.grad_exp):
                 with torch.no_grad():
                     metricVal = valFunc(**kwargsVal)
-                if gpu == 0:
-                    bestEpoch, bestMetricVal, worseEpochNb = update.updateBestModel(metricVal, bestMetricVal, args.exp_id,
-                                                                                args.model_id, bestEpoch, epoch, net,
-                                                                                isBetter, worseEpochNb)
-                if trial is not None and gpu==0:
+
+                bestEpoch, bestMetricVal, worseEpochNb = update.updateBestModel(metricVal, bestMetricVal, args.exp_id,
+                                                                            args.model_id, bestEpoch, epoch, net,
+                                                                            isBetter, worseEpochNb)
+                if trial is not None:
                     trial.report(metricVal, epoch)
 
             epoch += 1
@@ -889,7 +650,7 @@ def train(gpu,args,trial):
                 kwargsTest = kwargsVal
                 kwargsTest["mode"] = "test"
 
-                testLoader,_ = load_data.buildTestLoader(args, "test",shuffle=args.shuffle_test_set)
+                testLoader,_ = load_data.buildTestLoader(args, "test")
 
                 kwargsTest['loader'] = testLoader
 
@@ -908,12 +669,12 @@ def train(gpu,args,trial):
                     print("{},{}".format(args.model_id,bestEpoch),file=text_file)
 
     else:
-        if gpu == 0:
-            oldPath = "../models/{}/model{}_best_epoch{}".format(args.exp_id,args.model_id, bestEpoch)
-            os.rename(oldPath, oldPath.replace("best_epoch","trial{}_best_epoch".format(trial.number)))
 
-            with open("../results/{}/{}_{}_valRet.csv".format(args.exp_id,args.model_id,trial.number),"w") as text:
-                print(metricVal,file=text)
+        oldPath = "../models/{}/model{}_best_epoch{}".format(args.exp_id,args.model_id, bestEpoch)
+        os.rename(oldPath, oldPath.replace("best_epoch","trial{}_best_epoch".format(trial.number)))
+
+        with open("../results/{}/{}_{}_valRet.csv".format(args.exp_id,args.model_id,trial.number),"w") as text:
+            print(metricVal,file=text)
 
         return metricVal
 
@@ -1073,10 +834,6 @@ def main(argv=None):
         curr.execute('SELECT param_name,param_value from trial_params WHERE trial_id == {}'.format(bestTrialId))
         query_res = curr.fetchall()
 
-        bestParamDict = {key:value for key,value in query_res}
-
-        #args.lr,args.batch_size = bestParamDict["lr"],int(bestParamDict["batch_size"])
-        #args.optim = OPTIM_LIST[int(bestParamDict["optim"])]
         args.only_test = True
 
         print("bestTrialId-1",bestTrialId-1)
@@ -1085,10 +842,7 @@ def main(argv=None):
 
         copyfile(bestPath, bestPath.replace("_trial{}".format(bestTrialId-1),""))
 
-
-        args.distributed=False
-
-        train(0,args,None)
+        train(args,None)
 
     elif args.grad_cam:
 
@@ -1098,7 +852,7 @@ def main(argv=None):
         bestPath = glob.glob("../models/{}/model{}_best_epoch*".format(args.exp_id, args.model_id))[0]
         bestEpoch = int(os.path.basename(bestPath).split("epoch")[1])
 
-        net = modelBuilder.netBuilder(args,gpu=0)
+        net = modelBuilder.netBuilder(args)
         net_raw = preprocessAndLoadParams(bestPath,args.cuda,net)
 
         if not args.rise and not args.score_map and not args.noise_tunnel:
@@ -1226,7 +980,7 @@ def main(argv=None):
             bestPath = glob.glob("../models/{}/model{}_best_epoch*".format(args.exp_id, args.model_id))[0]
             bestEpoch = int(os.path.basename(bestPath).split("epoch")[1])
 
-            net = modelBuilder.netBuilder(args,gpu=0)
+            net = modelBuilder.netBuilder(args)
             net = preprocessAndLoadParams(bestPath,args.cuda,net,args.strict_init)
             net.eval()
             
@@ -1379,15 +1133,15 @@ def main(argv=None):
                     
                     feat = resDic["feat_pooled"].detach().cpu()
 
-                    data_masked = maskData(data,attMaps_interp,args,data_bckgr)
-                    data_unorm_masked = maskData(data_unorm,attMaps_interp,args,data_bckgr)
+                    data_masked = maskData(data,attMaps_interp,data_bckgr)
+                    data_unorm_masked = maskData(data_unorm,attMaps_interp,data_bckgr)
                     allData = torch.cat((allData,data_unorm_masked.cpu()),dim=0)
                     score_mask,feat_mask = inference(net,data_masked,predClassInd,args)
                     feat_mask = feat_mask.detach().cpu()
                     allScoreMaskList.append(score_mask.cpu().detach().numpy())
                     
-                    data_invmasked = maskData(data,1-attMaps_interp,args,data_bckgr)
-                    data_unorm_invmasked = maskData(data_unorm,1-attMaps_interp,args,data_bckgr)
+                    data_invmasked = maskData(data,1-attMaps_interp,data_bckgr)
+                    data_unorm_invmasked = maskData(data_unorm,1-attMaps_interp,data_bckgr)
                     allData = torch.cat((allData,data_unorm_invmasked.cpu()),dim=0)
                     score_invmask,feat_invmask = inference(net,data_invmasked,predClassInd,args)
                     feat_invmask = feat_invmask.detach().cpu()
@@ -1514,7 +1268,7 @@ def main(argv=None):
                 np.save(featPath,allFeat)
 
     else:
-        train(0,args,None)
+        train(args,None)
 
 
 def find_other_class_labels(inds,testDataset):
@@ -1566,7 +1320,7 @@ def ifftshift(X):
     X = torch.cat((real, imag), dim=1)
     return torch.squeeze(X)
 
-def maskData(data,attMaps_interp,args,data_bckgr):
+def maskData(data,attMaps_interp,data_bckgr):
     data_masked = data*attMaps_interp+data_bckgr*(1-attMaps_interp)
     return data_masked 
 

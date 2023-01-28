@@ -5,54 +5,6 @@ from random import Random
 import fineGrainedDataset
 from torch.utils.data.sampler import Sampler
 
-class RandomSampler(Sampler):
-
-    def __init__(self, data_source,seed):
-        self.data_source = data_source
-        np.random.seed(1)
-        torch.manual_seed(1)
-
-        self.randPerm = torch.randperm(len(self.data_source))
-        self.iterObj = iter(self.randPerm.tolist())
-
-    def __iter__(self):
-        return self.iterObj
-
-    def __len__(self):
-        return self.num_samples
-
-class Partition(object):
-
-    def __init__(self, data, index):
-        self.data = data
-        self.index = index
-
-    def __len__(self):
-        return len(self.index)
-
-    def __getitem__(self, index):
-        data_idx = self.index[index]
-        return self.data[data_idx]
-
-class DataPartitioner(object):
-
-    def __init__(self, data, sizes=[0.7, 0.2, 0.1], seed=1234):
-        self.data = data
-        self.partitions = []
-        rng = Random()
-        rng.seed(seed)
-        data_len = len(data)
-        indexes = [x for x in range(0, data_len)]
-        rng.shuffle(indexes)
-
-        for frac in sizes:
-            part_len = int(frac * data_len)
-            self.partitions.append(indexes[0:part_len])
-            indexes = indexes[part_len:]
-
-    def use(self, partition):
-        return Partition(self.data, self.partitions[partition])
-
 def get_img_size(args):
     if args.very_big_images:
         imgSize = 1792
@@ -62,7 +14,7 @@ def get_img_size(args):
         imgSize = 224
     return imgSize
 
-def buildTrainLoader(args,shuffle=True,gpu=None):
+def buildTrainLoader(args,shuffle=True):
 
     imgSize = get_img_size(args)
 
@@ -89,22 +41,14 @@ def buildTrainLoader(args,shuffle=True,gpu=None):
     bsz = args.batch_size
     bsz = bsz if bsz < args.max_batch_size_single_pass else args.max_batch_size_single_pass
 
-    if args.distributed:
-        train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset,num_replicas=args.world_size,rank=gpu,shuffle=shuffle)
-        kwargs = {"sampler": train_sampler}
-    else:
-        kwargs = {"shuffle": shuffle}
+    kwargs = {"shuffle": shuffle}
 
     trainLoader = torch.utils.data.DataLoader(dataset=train_dataset, batch_size=bsz,
                                               pin_memory=True, num_workers=args.num_workers,drop_last=args.drop_last, **kwargs)
 
     return trainLoader, train_dataset
 
-
-def get_img_size(args):
-    return 448 if args.big_images else 224
-
-def buildTestLoader(args, mode,shuffle=False,gpu=None):
+def buildTestLoader(args, mode):
     datasetName = getattr(args, "dataset_{}".format(mode))
     imgSize = get_img_size(args)
     test_dataset = fineGrainedDataset.FineGrainedDataset(datasetName, mode,(imgSize,imgSize),\
@@ -132,20 +76,11 @@ def buildTestLoader(args, mode,shuffle=False,gpu=None):
         if args.cuda:
             torch.cuda.manual_seed(args.seed)
 
-    if shuffle:
-        sampler = RandomSampler(test_dataset,args.seed)
-    else:
-        sampler=None
-
     if args.val_batch_size == -1:
         args.val_batch_size = int(args.max_batch_size*3.5)
 
-
-    if args.distributed and (not gpu is None):
-        sampler = torch.utils.data.distributed.DistributedSampler(test_dataset,num_replicas=args.world_size,rank=gpu,shuffle=False)
-
     testLoader = torch.utils.data.DataLoader(dataset=test_dataset, batch_size=args.val_batch_size,
-                                             num_workers=args.num_workers,sampler=sampler,pin_memory=True)
+                                             num_workers=args.num_workers,pin_memory=True)
 
     return testLoader,test_dataset
 

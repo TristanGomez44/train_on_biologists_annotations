@@ -94,10 +94,6 @@ class ArgReader():
                             help='To run computations on the gpu')
         self.parser.add_argument('--multi_gpu', type=str2bool, metavar='S',
                             help='If cuda is true, run the computation with multiple gpu')
-        self.parser.add_argument('--distributed', type=str2bool, metavar='S',
-                            help='To run the script in distributed mode.')
-        self.parser.add_argument('--distrib_size', type=int, metavar='S',
-                            help='The number of machines used for the mode "distribution".')
         self.parser.add_argument('--debug', type=str2bool,metavar='BOOL',
                             help="To run only a few batch of training and a few batch of validation")
         self.parser.add_argument('--benchmark', type=str2bool,metavar='BOOL',

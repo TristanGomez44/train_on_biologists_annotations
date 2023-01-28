@@ -1,7 +1,7 @@
-import numpy as np
-import xml.etree.ElementTree as ET
-import os
-import subprocess
+class Bunch(object):
+    def __init__(self, adict):
+        self.__dict__.update(adict)
+
 
 def findNumbers(x):
     '''Extracts the numbers of a string and returns them as an integer'''

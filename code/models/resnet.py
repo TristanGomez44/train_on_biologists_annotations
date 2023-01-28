@@ -37,7 +37,7 @@ def conv1x1(in_planes, out_planes, stride=1,groups=1):
 class BasicBlock(nn.Module):
     expansion = 1
 
-    def __init__(self, inplanes, planes, stride=1, downsample=None, norm_layer=None,dilation=1,groups=1,endRelu=True):
+    def __init__(self, inplanes, planes, stride=1, downsample=None, norm_layer=None,dilation=1,groups=1):
         super(BasicBlock, self).__init__()
         if norm_layer is None:
             norm_layer = nn.BatchNorm2d
@@ -55,10 +55,7 @@ class BasicBlock(nn.Module):
 
     def forward(self, inp):
 
-        if type(inp) is dict:
-            x = inp["00"]
-        else:
-            x = inp
+        x = inp
 
         identity = x
         out = self.conv1(x)
@@ -79,7 +76,7 @@ class BasicBlock(nn.Module):
 class Bottleneck(nn.Module):
     expansion = 4
 
-    def __init__(self, inplanes, planes, stride=1, downsample=None, norm_layer=None,dilation=1,endRelu=True):
+    def __init__(self, inplanes, planes, stride=1, downsample=None, norm_layer=None,dilation=1):
         super(Bottleneck, self).__init__()
 
         if norm_layer is None:
@@ -95,13 +92,9 @@ class Bottleneck(nn.Module):
         self.downsample = downsample
         self.stride = stride
 
-        self.endRelu = endRelu
-
     def forward(self, x):
 
         identity = x
-
-        inChan = x.size(1)
 
         out = self.conv1(x)
         out = self.bn1(out)
@@ -120,15 +113,12 @@ class Bottleneck(nn.Module):
         else:
             out += identity
 
-        if self.endRelu:
-            out = self.relu(out)
-
         return out
 
 class ResNet(nn.Module):
 
-    def __init__(self, block, layers, num_classes=1000, zero_init_residual=False, norm_layer=None,stride=2,\
-                    strideLay2=2,strideLay3=2,strideLay4=2,chan=64,inChan=3,dilation=1,endRelu=True):
+    def __init__(self, block, layers, zero_init_residual=False, norm_layer=None,stride=2,\
+                    strideLay2=2,strideLay3=2,strideLay4=2,chan=64,inChan=3,dilation=1):
 
         super(ResNet, self).__init__()
         if norm_layer is None:
@@ -149,7 +139,6 @@ class ResNet(nn.Module):
         elif len(dilation) != 3:
             raise ValueError("dilation must be a list of 3 int or an int.")
 
-        self.endRelu = endRelu
 
         #All layers are built but they will not necessarily be used
         self.layer1 = self._make_layer(block, chan[0], layers[0], stride=1,norm_layer=norm_layer,dilation=1)
@@ -187,7 +176,7 @@ class ResNet(nn.Module):
 
         layers = []
 
-        layers.append(block(self.inplanes, planes, stride, downsample, norm_layer,endRelu=self.endRelu))
+        layers.append(block(self.inplanes, planes, stride, downsample, norm_layer))
 
         self.inplanes = planes * block.expansion
 
@@ -198,7 +187,6 @@ class ResNet(nn.Module):
 
     def forward(self,xInp):
 
-        retDict = {}
         x = self.conv1(xInp)
         x = self.bn1(x)
         x = self.relu(x)
@@ -247,7 +235,7 @@ def resnet34(pretrained=True, **kwargs):
         model.load_state_dict(params,strict=False)
     return model
 
-def resnet50(pretrained=True, strict=True,**kwargs):
+def resnet50(pretrained=True,**kwargs):
     """Constructs a ResNet-50 model.
     Args:
         pretrained (bool): If True, returns a model pre-trained on ImageNet
