@@ -39,7 +39,7 @@ class GradCamMod(torch.nn.Module):
         self.features = net.firstModel.featMod
 
     def forward(self,x):
-        feat = self.net.firstModel.featMod(x)["x"]
+        feat = self.net.firstModel.featMod(x)["feat"]
 
         x = torch.nn.functional.adaptive_avg_pool2d(feat,(1,1))
         x = x.view(x.size(0),-1)

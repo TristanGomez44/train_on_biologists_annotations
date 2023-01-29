@@ -1,0 +1,1 @@
+python compute_explanations.py -c model_cub10.config --model_id noneRed  --grad_cam 4816 4835 753  --exp_id CUB10   --stride_lay3 2 --stride_lay4 2 
