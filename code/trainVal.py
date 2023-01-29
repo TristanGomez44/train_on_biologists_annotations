@@ -88,7 +88,6 @@ def computeLoss(args, output, target, resDict,reduction="mean"):
         loss = args.nll_weight*(kl*args.kl_interp*args.kl_temp*args.kl_temp+ce*(1-args.kl_interp))
     else:
         loss = args.nll_weight * F.cross_entropy(output, target,reduction=reduction)
-        print(loss,args.nll_weight,output.mean(), target.float().mean(),reduction)
         if args.inter_by_parts:
             loss += 0.5*inter_by_parts.shapingLoss(resDict["attMaps"],args.resnet_bil_nb_parts,args)
         if args.abn:
@@ -118,7 +117,6 @@ def epochSeqTr(model, optim, loader, epoch, args, **kwargs):
 
         data, target = batch[0], batch[1]
 
-        data_shape_bef = data.shape        
         #Removing excess samples (if training is done by accumulating gradients)
         data,target,accumulated_size = remove_excess_examples(data,target,accumulated_size,args.batch_size)
 
