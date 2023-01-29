@@ -112,7 +112,9 @@ class Bottleneck(nn.Module):
             out += identityDown
         else:
             out += identity
-
+        
+        out = self.relu(out)
+        
         return out
 
 class ResNet(nn.Module):
