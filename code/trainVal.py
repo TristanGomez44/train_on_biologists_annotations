@@ -21,7 +21,7 @@ from args import str2bool
 import modelBuilder
 import load_data
 import metrics
-from att_metrics import att_metr_data_aug
+import att_metr_data_aug
 import utils
 import update
 from models import inter_by_parts,protopnet
@@ -200,7 +200,7 @@ def epochImgEval(model, loader, epoch, args, mode="val",**kwargs):
             break
 
     if mode == "test":
-        intermVarDict = update.saveIntermediateVariables(intermVarDict, args.exp_id, args.model_id+suff, epoch, mode)
+        intermVarDict = update.saveIntermediateVariables(intermVarDict, args.exp_id, args.model_id, epoch, mode)
 
     writeSummaries(metrDict, totalImgNb, epoch, mode, args.model_id, args.exp_id)
 
@@ -237,19 +237,17 @@ def getOptim_and_Scheduler(optimStr, lr,momentum,weightDecay,useScheduler,lastEp
 
     if useScheduler:
         scheduler = torch.optim.lr_scheduler.StepLR(optim, step_size=2, gamma=0.9)
-        print("Sched",scheduler.get_last_lr())
-        for _ in range(lastEpoch):
+        for _ in range(lastEpoch-1):
             scheduler.step()
-        print("Sched",scheduler.get_last_lr())
     else:
         scheduler = None
 
     return optim, scheduler
 
-def initialize_Net_And_EpochNumber(net, exp_id, model_id, cuda, start_mode, init_path):
+def initialize_Net_And_EpochNumber(net, exp_id, model_id, cuda, start_mode, init_path,optuna):
 
     if start_mode == "auto":
-        if (not args.optuna) and len(glob.glob("../models/{}/model{}_epoch*".format(exp_id, model_id))) > 0:
+        if (not optuna) and len(glob.glob("../models/{}/model{}_epoch*".format(exp_id, model_id))) > 0:
             start_mode = "fine_tune"
         else:
             start_mode = "scratch"
@@ -520,7 +518,7 @@ def train(args,trial):
     kwargsVal['loader'] = valLoader
 
     startEpoch = initialize_Net_And_EpochNumber(net, args.exp_id, args.model_id, args.cuda, args.start_mode,
-                                                args.init_path)
+                                                args.init_path,args.optuna)
 
     kwargsTr["optim"],scheduler = getOptim_and_Scheduler(args.optim, args.lr,args.momentum,args.weight_decay,args.use_scheduler,startEpoch,net)
 

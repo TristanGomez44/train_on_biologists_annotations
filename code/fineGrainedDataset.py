@@ -5,6 +5,7 @@ Revised: Oct 11,2019 - Yuchong Gu
 from ast import Lambda
 import os
 import pdb
+from unittest.mock import patch
 from PIL import Image
 from torch.utils.data import Dataset
 import torchvision.transforms as transforms
@@ -101,6 +102,29 @@ def has_file_allowed_extension(filename, extensions):
     """
     return filename.lower().endswith(extensions)
 
+def add_patches_func(img,patch_res):
+
+    cent_x,cent_y = torch.randint(0,patch_res,size=(2,))
+    var_x,var_y = torch.rand(size=(2,))+1
+
+    x = torch.arange(patch_res).unsqueeze(0)
+    y = torch.arange(patch_res).unsqueeze(1)
+
+    mask = torch.exp(-((x-cent_x)**2)/var_x-((y-cent_y)**2)/var_y)
+    mask = (mask - mask.min())/(mask.max() - mask.min())
+    mask = mask.unsqueeze(0).unsqueeze(0)
+
+    if torch.rand(size=(1,)) > 0.5:
+        mask = (mask > 0.5)*1.0
+        mask = torch.nn.functional.interpolate(mask,img.shape[1:],mode="bicubic",align_corners=False).clamp(min=0, max=1)[0]
+    else:
+        k = torch.randint(0,patch_res*patch_res,size=(1,)).item()
+        values,_ = torch.topk(mask.view(-1),k,0,sorted=True)
+        mask = (mask > values[-1]) * 1.0
+        mask = torch.nn.functional.interpolate(mask,img.shape[1:],mode="nearest")[0]
+
+    return mask
+
 def get_transform(resize, phase='train',colorDataset=True,sqResizing=True,\
                     cropRatio=0.875,brightness=0.126,saturation=0.5,add_patches=False,patch_res=14):
 
@@ -126,30 +150,8 @@ def get_transform(resize, phase='train',colorDataset=True,sqResizing=True,\
         transf.extend([transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])])
 
     if phase == "train" and add_patches:
-        def add_patches(img):
 
-            cent_x,cent_y = torch.randint(0,patch_res,size=(2,))
-            var_x,var_y = torch.rand(size=(2,))+1
-
-            x = torch.arange(patch_res).unsqueeze(0)
-            y = torch.arange(patch_res).unsqueeze(1)
-
-            mask = torch.exp(-((x-cent_x)**2)/var_x-((y-cent_y)**2)/var_y)
-            mask = (mask - mask.min())/(mask.max() - mask.min())
-            mask = mask.unsqueeze(0).unsqueeze(0)
-
-            if torch.rand(size=(1,)) > 0.5:
-                mask = (mask > 0.5)*1.0
-                mask = torch.nn.functional.interpolate(mask,img.shape[1:],mode="bicubic",align_corners=False).clamp(min=0, max=1)[0]
-            else:
-                k = torch.randint(0,patch_res*patch_res,size=(1,)).item()
-                values,_ = torch.topk(mask.view(-1),k,0,sorted=True)
-                mask = (mask > values[-1]) * 1.0
-                mask = torch.nn.functional.interpolate(mask,img.shape[1:],mode="nearest")[0]
-
-            return mask
-
-        transf.append(transforms.Lambda(add_patches))
+        transf.append(transforms.Lambda(lambda x:add_patches_func(x,patch_res)))
 
     transf = transforms.Compose(transf)
 

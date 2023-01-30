@@ -95,6 +95,9 @@ case $1 in
   "2_noneRed_attMetrMask")
     python trainVal.py -c model_crohn2.config --model_id 2_noneRed_attMetrMask   --resnet_bilinear False --big_images True  --stride_lay3 2 --stride_lay4 2  --att_metr_mask True --att_metr_mask_start_epoch 0
     ;; 
+  "2_noneRed_attMetrMask_test")
+    python trainVal.py -c model_crohn2.config --model_id 2_noneRed_attMetrMask_test   --resnet_bilinear False --big_images True  --stride_lay3 2 --stride_lay4 2  --att_metr_mask True --att_metr_mask_start_epoch 0 --start_mode scratch
+    ;; 
   "2_noneRed_attMetrMask_easyStart")
     python trainVal.py -c model_crohn2.config --model_id 2_noneRed_attMetrMask_easyStart --resnet_bilinear False  --big_images True  --stride_lay3 2 --stride_lay4 2 --att_metr_mask True --att_metr_mask_start_epoch 10
     ;;  

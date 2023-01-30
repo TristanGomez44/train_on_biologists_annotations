@@ -6,7 +6,8 @@ import matplotlib.pyplot as plt
 plt.switch_backend('agg')
 from sklearn.metrics import roc_auc_score
 import subprocess
-import os
+import os,glob 
+import utils
 
 def updateBestModel(metricVal,bestMetricVal,exp_id,model_id,bestEpoch,epoch,net,isBetter,worseEpochNb):
 
