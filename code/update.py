@@ -8,21 +8,6 @@ from sklearn.metrics import roc_auc_score
 import subprocess
 import os
 
-def get_gpu_memory_map():
-    """Get the current gpu usage.
-
-    Returns
-    -------
-    usage: dict
-        Keys are device ids as integers.
-        Values are memory usage as integers in MB.
-    """
-    result = subprocess.check_output(['nvidia-smi', '--query-gpu=memory.used','--format=csv,nounits,noheader'], encoding='utf-8')
-    # Convert lines into a dictionary
-    gpu_memory = [x for x in result.strip().split('\n')]
-    gpu_memory_map = dict(zip(range(len(gpu_memory)), gpu_memory))
-    return gpu_memory_map
-
 def updateBestModel(metricVal,bestMetricVal,exp_id,model_id,bestEpoch,epoch,net,isBetter,worseEpochNb):
 
     if isBetter(metricVal,bestMetricVal):
@@ -44,6 +29,7 @@ def updateHardWareOccupation(debug,benchmark,cuda,epoch,mode,exp_id,model_id,bat
             updateOccupiedGPURamCSV(epoch,mode,exp_id,model_id,batch_idx)
         updateOccupiedRamCSV(epoch,mode,exp_id,model_id,batch_idx)
         updateOccupiedCPUCSV(epoch,mode,exp_id,model_id,batch_idx)
+
 def updateOccupiedGPURamCSV(epoch,mode,exp_id,model_id,batch_idx):
 
     occRamDict = get_gpu_memory_map()
@@ -69,6 +55,18 @@ def updateTimeCSV(epoch,mode,exp_id,model_id,totalTime,batch_idx):
     else:
         with open(csvPath,"a") as text_file:
             print(str(epoch)+","+str(totalTime),file=text_file)
+
+def updateSeedAndNote(args):
+    if args.start_mode == "auto" and (not args.optuna) and len(
+            glob.glob("../models/{}/model{}_epoch*".format(args.exp_id, args.model_id))) > 0:
+        args.seed += 1
+        init_path = args.init_path
+        if init_path == "None" and args.strict_init:
+            init_path = sorted(glob.glob("../models/{}/model{}_epoch*".format(args.exp_id, args.model_id)),
+                               key=utils.findLastNumbers)[-1]
+        startEpoch = utils.findLastNumbers(init_path)
+        args.note += ";s{} at {}".format(args.seed, startEpoch)
+    return args
 
 def catIntermediateVariables(visualDict,intermVarDict,nbVideos):
 
@@ -98,8 +96,24 @@ def catMap(visualDict,fullMap,key="attMaps"):
             fullMap = torch.cat((fullMap,(map.cpu()*255).byte()),dim=0)
 
     return fullMap
+
 def saveMap(fullMap,exp_id,model_id,epoch,mode,key="attMaps"):
     if not fullMap is None:
         np.save("../results/{}/{}_{}_epoch{}_{}.npy".format(exp_id,key,model_id,epoch,mode),fullMap.numpy())
         fullMap = None
     return fullMap
+
+def get_gpu_memory_map():
+    """Get the current gpu usage.
+
+    Returns
+    -------
+    usage: dict
+        Keys are device ids as integers.
+        Values are memory usage as integers in MB.
+    """
+    result = subprocess.check_output(['nvidia-smi', '--query-gpu=memory.used','--format=csv,nounits,noheader'], encoding='utf-8')
+    # Convert lines into a dictionary
+    gpu_memory = [x for x in result.strip().split('\n')]
+    gpu_memory_map = dict(zip(range(len(gpu_memory)), gpu_memory))
+    return gpu_memory_map

@@ -5,6 +5,7 @@ import time
 import configparser
 from shutil import copyfile
 import gc
+import subprocess
 
 import numpy as np
 import torch
@@ -65,9 +66,8 @@ class Loss(torch.nn.Module):
 
     def __init__(self,args,reduction="mean"):
         super(Loss, self).__init__()
-        self.args = args
         self.reduction = reduction
-
+        self.args= args
     def forward(self,output,target,resDict):
         return computeLoss(self.args,output, target, resDict,reduction=self.reduction).unsqueeze(0)
 
@@ -179,7 +179,7 @@ def epochImgEval(model, loader, epoch, args, mode="val",**kwargs):
         output = resDict["pred"]
 
         # Loss
-        loss = kwargs["lossFunc"](output, target, resDict, data).mean()
+        loss = kwargs["lossFunc"](output, target, resDict).mean()
 
         # Other variables produced by the net
         if mode == "test":
@@ -249,7 +249,7 @@ def getOptim_and_Scheduler(optimStr, lr,momentum,weightDecay,useScheduler,lastEp
 def initialize_Net_And_EpochNumber(net, exp_id, model_id, cuda, start_mode, init_path):
 
     if start_mode == "auto":
-        if len(glob.glob("../models/{}/model{}_epoch*".format(exp_id, model_id))) > 0:
+        if (not args.optuna) and len(glob.glob("../models/{}/model{}_epoch*".format(exp_id, model_id))) > 0:
             start_mode = "fine_tune"
         else:
             start_mode = "scratch"
@@ -442,55 +442,65 @@ def initMasterNet(args):
 
     return master_net
 
-def run(args,trial=None):
+def run(args,trial):
 
-    np.random.seed(args.seed)
-    torch.manual_seed(args.seed)
-    if args.cuda:
-        torch.cuda.manual_seed(args.seed)
+    args.lr = trial.suggest_float("lr", 1e-4, 1e-2, log=True)
+    args.optim = trial.suggest_categorical("optim", ["Adam", "AMSGrad", "SGD"])
 
-    if not trial is None:
-        args.lr = trial.suggest_float("lr", 1e-4, 1e-2, log=True)
-        args.optim = trial.suggest_categorical("optim", ["Adam", "AMSGrad", "SGD"])
+    if args.max_batch_size <= 12:
+        minBS = 4
+    else:
+        minBS = 12
 
-        if args.max_batch_size <= 12:
-            minBS = 4
-        else:
-            minBS = 12
+    args.batch_size = trial.suggest_int("batch_size", minBS, args.max_batch_size, log=True)
+    args.dropout = trial.suggest_float("dropout", 0, 0.6,step=0.2)
+    args.weight_decay = trial.suggest_float("weight_decay", 1e-6, 1e-3, log=True)
 
-        args.batch_size = trial.suggest_int("batch_size", minBS, args.max_batch_size, log=True)
-        print("Batch size is ",args.batch_size)
-        args.dropout = trial.suggest_float("dropout", 0, 0.6,step=0.2)
-        args.weight_decay = trial.suggest_float("weight_decay", 1e-6, 1e-3, log=True)
+    if args.optim == "SGD":
+        args.momentum = trial.suggest_float("momentum", 0., 0.9,step=0.1)
+        if not args.always_sched:
+            args.use_scheduler = trial.suggest_categorical("use_scheduler",[True,False])
 
-        if args.optim == "SGD":
-            args.momentum = trial.suggest_float("momentum", 0., 0.9,step=0.1)
-            if not args.always_sched:
-                args.use_scheduler = trial.suggest_categorical("use_scheduler",[True,False])
-    
-        if args.always_sched:
-            args.use_scheduler = True
+    if args.always_sched:
+        args.use_scheduler = True
 
-        if args.opt_data_aug:
-            args.brightness = trial.suggest_float("brightness", 0, 0.5, step=0.05)
-            args.saturation = trial.suggest_float("saturation", 0, 0.9, step=0.1)
-            args.crop_ratio = trial.suggest_float("crop_ratio", 0.8, 1, step=0.05)
+    if args.opt_data_aug:
+        args.brightness = trial.suggest_float("brightness", 0, 0.5, step=0.05)
+        args.saturation = trial.suggest_float("saturation", 0, 0.9, step=0.1)
+        args.crop_ratio = trial.suggest_float("crop_ratio", 0.8, 1, step=0.05)
 
-        if args.master_net:
-            args.kl_temp = trial.suggest_float("kl_temp", 1, 21, step=5)
-            args.kl_interp = trial.suggest_float("kl_interp", 0.1, 1, step=0.1)
+    if args.master_net:
+        args.kl_temp = trial.suggest_float("kl_temp", 1, 21, step=5)
+        args.kl_interp = trial.suggest_float("kl_interp", 0.1, 1, step=0.1)
 
-        if args.opt_att_maps_nb:
-            args.resnet_bil_nb_parts = trial.suggest_int("resnet_bil_nb_parts", 3, 64, log=True)
+    if args.opt_att_maps_nb:
+        args.resnet_bil_nb_parts = trial.suggest_int("resnet_bil_nb_parts", 3, 64, log=True)
 
-    args.world_size = 1
     value = train(args,trial)
     return value
-   
+
+def save_git_status(args):
+
+    path_start = f"../models/{args.exp_id}/model{args.model_id}"
+
+    if hasattr(args,"trial_id") and args.trial_id is not None:
+        path_start += "_"+str(args.trial_id)
+
+    cmd_list = ["git status","git diff","git rev-parse --short HEAD"]
+    labels = ["status","diff","commit"]
+
+    for labels,cmd in zip(labels,cmd_list):
+        path = path_start + "_git_"+labels+".txt"
+        output = subprocess.check_output(cmd.split(" "),text=True)
+        with open(path,"w") as file:
+            print(output,file=file)
+
 def train(args,trial):
 
     if not trial is None:
         args.trial_id = trial.number
+
+    save_git_status(args)
 
     if not args.only_test:
         trainLoader,_ = load_data.buildTrainLoader(args)
@@ -569,39 +579,27 @@ def train(args,trial):
             epoch += 1
 
     if trial is None:
-        if args.run_test or args.only_test:
+        if args.run_test:
 
-            if os.path.exists("../results/{}/test_done.txt".format(args.exp_id)):
-                test_done = np.genfromtxt("../results/{}/test_done.txt".format(args.exp_id),delimiter=",",dtype=str)
+            testFunc = valFunc
 
-                if len(test_done.shape) == 1:
-                    test_done = test_done[np.newaxis]
-            else:
-                test_done = None
+            kwargsTest = kwargsVal
+            kwargsTest["mode"] = "test"
 
-            alreadyDone = (test_done==np.array([args.model_id,str(bestEpoch)])).any()
+            testLoader,_ = load_data.buildTestLoader(args, "test")
 
-            if (test_done is None) or (alreadyDone and args.do_test_again) or (not alreadyDone):
+            kwargsTest['loader'] = testLoader
 
-                testFunc = valFunc
+            net = preprocessAndLoadParams("../models/{}/model{}_best_epoch{}".format(args.exp_id, args.model_id, bestEpoch),args.cuda,net)
 
-                kwargsTest = kwargsVal
-                kwargsTest["mode"] = "test"
+            kwargsTest["model"] = net
+            kwargsTest["epoch"] = bestEpoch
 
-                testLoader,_ = load_data.buildTestLoader(args, "test")
+            with torch.no_grad():
+                testFunc(**kwargsTest)
 
-                kwargsTest['loader'] = testLoader
-
-                net = preprocessAndLoadParams("../models/{}/model{}_best_epoch{}".format(args.exp_id, args.model_id, bestEpoch),args.cuda,net)
-
-                kwargsTest["model"] = net
-                kwargsTest["epoch"] = bestEpoch
-
-                with torch.no_grad():
-                    testFunc(**kwargsTest)
-
-                with open("../results/{}/test_done.txt".format(args.exp_id),"a") as text_file:
-                    print("{},{}".format(args.model_id,bestEpoch),file=text_file)
+            with open("../results/{}/test_done.txt".format(args.exp_id),"a") as text_file:
+                print("{},{}".format(args.model_id,bestEpoch),file=text_file)
 
     else:
 
@@ -612,18 +610,6 @@ def train(args,trial):
             print(metricVal,file=text)
 
         return metricVal
-
-def updateSeedAndNote(args):
-    if args.start_mode == "auto" and len(
-            glob.glob("../models/{}/model{}_epoch*".format(args.exp_id, args.model_id))) > 0:
-        args.seed += 1
-        init_path = args.init_path
-        if init_path == "None" and args.strict_init:
-            init_path = sorted(glob.glob("../models/{}/model{}_epoch*".format(args.exp_id, args.model_id)),
-                               key=utils.findLastNumbers)[-1]
-        startEpoch = utils.findLastNumbers(init_path)
-        args.note += ";s{} at {}".format(args.seed, startEpoch)
-    return args
 
 def main(argv=None):
     # Getting arguments from config file and command line
@@ -673,13 +659,19 @@ def main(argv=None):
     if not os.path.exists("../models/{}".format(args.exp_id)):
         os.makedirs("../models/{}".format(args.exp_id))
 
-    args = updateSeedAndNote(args)
+    args = update.updateSeedAndNote(args)
+
     # Update the config args
     argreader.args = args
     # Write the arguments in a config file so the experiment can be re-run
 
     argreader.writeConfigFile("../models/{}/{}.ini".format(args.exp_id, args.model_id))
     print("Model :", args.model_id, "Experience :", args.exp_id)
+
+    np.random.seed(args.seed)
+    torch.manual_seed(args.seed)
+    if args.cuda:
+        torch.cuda.manual_seed(args.seed)
 
     if args.optuna:
         def objective(trial):
