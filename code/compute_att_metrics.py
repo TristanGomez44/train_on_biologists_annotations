@@ -22,6 +22,9 @@ import metrics
 import utils
 from road import NoisyLinearImputer,LinearInterpImputer
 from trainVal import addInitArgs,preprocessAndLoadParams
+from post_hoc_expl.gradcam import GradCAMpp
+from post_hoc_expl.scorecam import ScoreCam
+from post_hoc_expl.xgradcam import AblationCAM,XGradCAM
 
 def find_other_class_labels(inds,testDataset):
 
@@ -156,7 +159,7 @@ def getAttMetrMod(net,testDataset,args):
         attrMod = AblationCAM(model=netGradMod,target_layers=netGradMod.layer4,use_cuda=args.cuda)
         attrFunc = attrMod
         kwargs = {}
-    elif args.att_metrics_post_hoc == "score_map":
+    elif args.att_metrics_post_hoc == "score_cam":
         attrMod = ScoreCam(net)
         attrFunc = attrMod.generate_cam
         kwargs = {}
@@ -198,10 +201,16 @@ def loadAttMaps(exp_id,model_id):
 
     return torch.tensor(attMaps),torch.tensor(norm)
 
+def init_att_maps_arg(argreader):
+    argreader.parser.add_argument('--att_metrics_post_hoc', type=str, help='The post-hoc method to use instead of the model ')
+    return argreader
+
 def main(argv=None):
     # Getting arguments from config file and command line
     # Building the arg reader
     argreader = ArgReader(argv)
+
+    argreader = init_att_maps_arg(argreader)
 
     argreader.parser.add_argument('--attention_metrics', type=str, help='The attention metric to compute.')
     argreader.parser.add_argument('--att_metrics_img_nb', type=int, help='The nb of images on which to compute the att metric.')
@@ -211,7 +220,6 @@ def main(argv=None):
     argreader.parser.add_argument('--att_metrics_sparsity_factor', type=float, help='Used to increase (>1) or decrease (<1) the sparsity of the saliency maps.\
                                     Set to None to not modify the sparsity.')
 
-    argreader.parser.add_argument('--att_metrics_post_hoc', type=str, help='The post-hoc method to use instead of the model ')
     argreader.parser.add_argument('--att_metrics_max_brnpa', type=str2bool, help='To agregate br-npa maps with max instead of mean')
     argreader.parser.add_argument('--att_metrics_onlyfirst_brnpa', type=str2bool, help='To agregate br-npa maps with max instead of mean')
     argreader.parser.add_argument('--att_metrics_few_steps', type=str2bool, help='To do as much step for high res than for low res')
