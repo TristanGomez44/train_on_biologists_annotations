@@ -7,7 +7,7 @@ import torch
 from args import ArgReader
 import modelBuilder
 import load_data
-from compute_att_metrics import getAttMetrMod,applyPostHoc,init_att_maps_arg
+from compute_att_metrics import getAttMetrMod,applyPostHoc,init_post_hoc_arg
 from trainVal import addInitArgs,preprocessAndLoadParams
 
 def main(argv=None):
@@ -15,7 +15,7 @@ def main(argv=None):
     # Building the arg reader
     argreader = ArgReader(argv)
 
-    argreader = init_att_maps_arg(argreader)
+    argreader = init_post_hoc_arg(argreader)
     argreader.parser.add_argument('--viz_id', type=str, help='The visualization id.',default="")
     argreader.parser.add_argument('--inds', type=int, help='The indexes of the images to use for computing att maps.',nargs="*")
     argreader = modelBuilder.addArgs(argreader)
