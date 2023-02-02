@@ -2,25 +2,23 @@ import os
 import glob
 
 import numpy as np
+from numpy.random import Generator, PCG64
 import torch
 import matplotlib.pyplot as plt
 plt.switch_backend('agg')
 from saliency_maps_metrics.multi_step_metrics import Deletion, Insertion
 from saliency_maps_metrics.single_step_metrics import IIC_AD, ADD
-from saliency_maps_metrics.multi_step_metrics import compute_auc_metric
 from captum.attr import (IntegratedGradients,NoiseTunnel,LayerGradCam,GuidedBackprop)
 
-import args
 from args import ArgReader
 from args import str2bool
 import modelBuilder
 import load_data
-import metrics
 from trainVal import addInitArgs,preprocessAndLoadParams
 from post_hoc_expl.gradcam import GradCAMpp
 from post_hoc_expl.scorecam import ScoreCam
 from post_hoc_expl.xgradcam import AblationCAM,XGradCAM
-from rise import RISE
+from post_hoc_expl.rise import RISE
 
 from utils import normalize_tensor
 
@@ -30,58 +28,46 @@ const_dic = {"Deletion":Deletion,"Insertion":Insertion,"IIC_AD":IIC_AD,"ADD":ADD
 def get_metric_dics():
     return is_multi_step_dic,const_dic
 
-def find_other_class_labels(inds,testDataset):
-
-    inds_bckgr = (inds + len(testDataset)//2) % len(testDataset)
-
-    labels = np.array([testDataset[ind][1] for ind in inds])
-    labels_bckgr = np.array([testDataset[ind][1] for ind in inds_bckgr])
-
-    while (labels==labels_bckgr).any():
-        for i in range(len(inds)):
-            if inds[i] == inds_bckgr[i]:
-                inds_bckgr[i] = torch.randint(len(testDataset),size=(1,))[0]
-
-        inds_bckgr = torch.randint(len(testDataset),size=(len(inds),))
-        labels_bckgr = np.array([testDataset[ind][1] for ind in inds_bckgr])
-
-    return inds_bckgr
-
-#From https://kai760.medium.com/how-to-use-torch-fft-to-apply-a-high-pass-filter-to-an-image-61d01c752388
-def roll_n(X, axis, n):
-    f_idx = tuple(slice(None, None, None) 
-            if i != axis else slice(0, n, None) 
-            for i in range(X.dim()))
-    b_idx = tuple(slice(None, None, None) 
-            if i != axis else slice(n, None, None) 
-            for i in range(X.dim()))
-    front = X[f_idx]
-    back = X[b_idx]
-    return torch.cat([back, front], axis)
+def find_class_first_image_inds(testDataset):
+    class_first_image_inds = [0]
+    labels = [0]
+    for i in range(len(testDataset)):
+        label = testDataset.image_label[i]
+        if label not in labels:
+            labels.append(label)
+            class_first_image_inds.append(i)
     
-def fftshift(X):
-    real, imag = X.chunk(chunks=2, dim=-1)
-    real, imag = real.squeeze(dim=-1), imag.squeeze(dim=-1)    
-    for dim in range(2, len(real.size())):
-        real = roll_n(real, axis=dim,n=int(np.ceil(real.size(dim) / 2)))
-        imag = roll_n(imag, axis=dim,n=int(np.ceil(imag.size(dim) / 2)))
-    real, imag = real.unsqueeze(dim=-1), imag.unsqueeze(dim=-1)
-    X = torch.cat((real,imag),dim=1)
-    return torch.squeeze(X)
-    
-def ifftshift(X):
-    real, imag = X.chunk(chunks=2, dim=-1)
-    real, imag = real.squeeze(dim=-1), imag.squeeze(dim=-1)
-    for dim in range(len(real.size()) - 1, 1, -1):
-        real = roll_n(real, axis=dim,n=int(np.floor(real.size(dim) / 2)))
-        imag = roll_n(imag, axis=dim,n=int(np.floor(imag.size(dim) / 2)))
-    real, imag = real.unsqueeze(dim=-1), imag.unsqueeze(dim=-1)
-    X = torch.cat((real, imag), dim=1)
-    return torch.squeeze(X)
+    return class_first_image_inds
 
-def maskData(data,attMaps_interp,data_bckgr):
-    data_masked = data*attMaps_interp+data_bckgr*(1-attMaps_interp)
-    return data_masked 
+def sample_img_inds(testDataset,nb_per_class):
+
+    class_first_image_inds = find_class_first_image_inds(testDataset)
+
+    nb_classes_to_be_sampled = len(class_first_image_inds)
+
+    rng = Generator(PCG64())
+    all_chosen_inds = []
+    for label in range(nb_classes_to_be_sampled):
+
+        startInd = class_first_image_inds[label]
+        endInd = class_first_image_inds[label+1] if label+1<len(class_first_image_inds) else len(testDataset)
+        candidate_inds = np.arange(startInd,endInd)
+
+        if len(candidate_inds) < nb_per_class:
+            raise ValueError(f"Number of image to be sampled per class is too high for class {label} which has only {len(candidate_inds)} images.")
+        
+        chosen_inds = rng.choice(candidate_inds, size=(nb_per_class,),replace=False)
+        all_chosen_inds.append(chosen_inds)
+    
+    all_chosen_inds = np.concatenate(all_chosen_inds,axis=0)
+
+    return all_chosen_inds 
+
+def get_other_img_inds(inds):
+    other_img_inds = np.zeros_like(inds)
+    shift = (np.arange(len(inds)) + len(inds)//2) % len(inds)
+    other_img_inds = inds[shift]
+    return other_img_inds
 
 def getBatch(testDataset,inds,args):
     data_list = []
@@ -105,37 +91,12 @@ def getExplanations(inds,data,predClassInds,attrFunc,kwargs,args):
     explanations = []
     for i,data_i,predClassInd in zip(inds,data,predClassInds):
         if args.att_metrics_post_hoc:
-            print(data_i.shape,data.shape)
             explanation = applyPostHoc(attrFunc,data_i.unsqueeze(0),predClassInd,kwargs,args)
         else:
             explanation = attrFunc(i)
         explanations.append(explanation)
     explanations = torch.cat(explanations,dim=0)
     return explanations 
-
-def computeSpars(data_shape,attMaps,args,resDic):
-    if args.att_metrics_post_hoc:
-        features = None 
-    else:
-        features = resDic["feat"]
-        if "attMaps" in resDic:
-            attMaps = resDic["attMaps"]
-        else:
-            attMaps = torch.ones(data_shape[0],1,features.size(2),features.size(3)).to(features.device)
-
-    sparsity = metrics.compAttMapSparsity(attMaps,features)
-    sparsity = sparsity/data_shape[0]
-    return sparsity 
-
-def inference(net,data,predClassInd,args):
-    if not args.prototree:
-        resDic = net(data)
-        score = torch.softmax(resDic["pred"],dim=-1)[:,predClassInd[0]]
-        feat = resDic["feat_pooled"]
-    else:
-        score = net(data)[0][:,predClassInd[0]]
-        feat = None
-    return score,feat
 
 def applyPostHoc(attrFunc,data,targ,kwargs,args):
 
@@ -243,22 +204,9 @@ def main(argv=None):
     argreader = ArgReader(argv)
 
     argreader.parser.add_argument('--attention_metric', type=str, help='The attention metric to compute.')
-    argreader.parser.add_argument('--att_metrics_img_nb', type=int, help='The nb of images on which to compute the att metric.')
-    
-    argreader.parser.add_argument('--att_metrics_map_resolution', type=int, help='The resolution at which to resize the attention map.\
-                                    If this value is None, the map will not be resized.')
-    argreader.parser.add_argument('--att_metrics_sparsity_factor', type=float, help='Used to increase (>1) or decrease (<1) the sparsity of the saliency maps.\
-                                    Set to None to not modify the sparsity.')
-
-    argreader.parser.add_argument('--att_metrics_max_brnpa', type=str2bool, help='To agregate br-npa maps with max instead of mean')
-    argreader.parser.add_argument('--att_metrics_onlyfirst_brnpa', type=str2bool, help='To agregate br-npa maps with max instead of mean')
-    argreader.parser.add_argument('--att_metrics_few_steps', type=str2bool, help='To do as much step for high res than for low res')
-    argreader.parser.add_argument('--att_metr_do_again', type=str2bool, help='To run computation if already done',default=True)
-
+    argreader.parser.add_argument('--img_nb_per_class', type=int, help='The nb of images on which to compute the att metric.')    
+    argreader.parser.add_argument('--do_again', type=str2bool, help='To run computation if already done',default=True)
     argreader.parser.add_argument('--data_replace_method', type=str, help='The pixel replacement method.',default="black")
-        
-    argreader.parser.add_argument('--att_metr_save_feat', type=str2bool, help='',default=False)
-    argreader.parser.add_argument('--att_metr_add_first_feat', type=str2bool, help='',default=False)
 
     argreader = addInitArgs(argreader)
     argreader = init_post_hoc_arg(argreader)
@@ -270,55 +218,66 @@ def main(argv=None):
 
     args = argreader.args
   
-    result_file_path = f"../results/{args.exp_id}/{args.attention_metric}_{args.model_id}.npy"
+    args.val_batch_size = 1
+    _,testDataset = load_data.buildTestLoader(args, "test")
 
-    if args.att_metr_do_again or (not os.path.exists(result_file_path)):
+    bestPath = glob.glob(f"../models/{args.exp_id}/model{args.model_id}_best_epoch*")[0]
 
-        args.val_batch_size = 1
-        _,testDataset = load_data.buildTestLoader(args, "test")
+    net = modelBuilder.netBuilder(args)
+    net = preprocessAndLoadParams(bestPath,args.cuda,net)
+    net.eval()
+    net_lambda = lambda x:torch.softmax(net(x)["pred"],dim=-1)
+    
+    if args.att_metrics_post_hoc:
+        attrFunc,kwargs = getAttMetrMod(net,testDataset,args)
+    else:
+        salMaps_dataset = loadSalMaps(args.exp_id,args.model_id)
+        attrFunc = lambda i:(salMaps_dataset[i,0:1]).unsqueeze(0)
+        kwargs = None
 
-        bestPath = glob.glob(f"../models/{args.exp_id}/model{args.model_id}_best_epoch*")[0]
+    if args.att_metrics_post_hoc != "gradcam_pp":
+        torch.set_grad_enabled(False)
 
-        net = modelBuilder.netBuilder(args)
-        net = preprocessAndLoadParams(bestPath,args.cuda,net)
-        net.eval()
-        net_lambda = lambda x:torch.softmax(net(x)["pred"],dim=-1)
-        
-        if args.att_metrics_post_hoc:
-            attrFunc,kwargs = getAttMetrMod(net,testDataset,args)
-        else:
-            salMaps_dataset = loadSalMaps(args.exp_id,args.model_id)
-            attrFunc = lambda i:(salMaps_dataset[i,0:1]).unsqueeze(0)
-            kwargs = None
+    np.random.seed(0)
+    inds = sample_img_inds(testDataset,args.img_nb_per_class)
 
-        if args.att_metrics_post_hoc != "gradcam_pp":
-            torch.set_grad_enabled(False)
+    data,_ = getBatch(testDataset,inds,args)
+    
+    if args.data_replace_method == "otherimage":
+        other_img_inds = get_other_img_inds(inds)
+        other_data,_ = getBatch(testDataset,other_img_inds,args)
+    else:
+        other_img_inds = None
 
-        nbImgs = args.att_metrics_img_nb
-        torch.manual_seed(0)
-        inds = torch.randint(len(testDataset),size=(nbImgs,))
+    predClassInds = net_lambda(data).argmax(dim=-1)
+    explanations = getExplanations(inds,data,predClassInds,attrFunc,kwargs,args)
+    is_multi_step_dic,const_dic = get_metric_dics()
 
-        data,_ = getBatch(testDataset,inds,args)
+    if args.data_replace_method is None or args.data_replace_method == "otherimage":
+        metric_constr_arg_list = []
+    else:
+        metric_constr_arg_list = [args.data_replace_method]
 
-        predClassInds = net_lambda(data).argmax(dim=-1)
-        
-        explanations = getExplanations(inds,data,predClassInds,attrFunc,kwargs,args)
+    metric = const_dic[args.attention_metric](*metric_constr_arg_list)
+    data_replace_method = metric.data_replace_method if args.data_replace_method is None else args.data_replace_method
+    
+    result_file_path = f"../results/{args.exp_id}/{args.attention_metric}-{data_replace_method}_{args.model_id}.npy"
+    
+    if args.debug:
+        data = data[:2]
+        if other_data is not None:
+            other_data = other_data[:2]
 
-        is_multi_step_dic,const_dic = get_metric_dics()
+    metric_args = [net_lambda,data,explanations,predClassInds]
+    if args.data_replace_method == "otherimage":
+        metric_args.append(other_data)
 
-        if args.data_replace_method is None:
-            arg_list = []
-        else:
-            arg_list = [args.data_replace_method]
-
-        if is_multi_step_dic[args.attention_metric]:
-            metric = const_dic[args.attention_metric](*arg_list)
-            scores,saliency_scores = metric.compute_scores(net_lambda,data,explanations,predClassInds)
+    if args.do_again or not os.path.exists(result_file_path):
+        if is_multi_step_dic[args.attention_metric]:  
+            scores,saliency_scores = metric.compute_scores(*metric_args)
             saved_dic = {"prediction_scores":scores,"saliency_scores":saliency_scores}
-
         else:
-            metric = const_dic[args.attention_metric](*arg_list)
-            scores,scores_masked = metric.compute_scores(net_lambda,data,explanations,predClassInds)
+            scores,scores_masked = metric.compute_scores(*metric_args)
             saved_dic = {"prediction_scores":scores,"prediction_scores_with_mask":scores_masked}
         
         np.save(result_file_path,saved_dic)

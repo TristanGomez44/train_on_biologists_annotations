@@ -1,1 +1,7 @@
-python compute_scores_for_saliency_metrics.py -c model_cub10.config --attention_metric Insertion --model_id noneRed                               --att_metrics_post_hoc "gradcam"    --stride_lay3 2 --stride_lay4 2 --max_batch_size 130 --att_metrics_few_steps True  --att_metrics_img_nb 2 --att_metr_do_again True
+#python compute_scores_for_saliency_metrics.py -c model_cub10.config --attention_metric Insertion --model_id noneRed                               --att_metrics_post_hoc "gradcam"    --stride_lay3 2 --stride_lay4 2 --max_batch_size 130   --img_nb_per_class 2 --do_again True
+
+#python compute_scores_for_saliency_metrics.py -c model_cub10.config --attention_metric Insertion --model_id noneRed                               --att_metrics_post_hoc "gradcam"    --stride_lay3 2 --stride_lay4 2 --max_batch_size 130   --img_nb_per_class 1 --do_again True --data_replace_method otherimage --debug True
+
+#python compute_scores_for_saliency_metrics.py -c model_cub10.config --attention_metric IIC_AD --model_id noneRed                               --att_metrics_post_hoc "gradcam"    --stride_lay3 2 --stride_lay4 2 --max_batch_size 130   --img_nb_per_class 1 --do_again True --data_replace_method otherimage
+
+python compute_scores_for_saliency_metrics.py -c model_cub10.config --attention_metric ADD --model_id noneRed                               --att_metrics_post_hoc "gradcam"    --stride_lay3 2 --stride_lay4 2 --max_batch_size 130   --img_nb_per_class 1 --do_again True --data_replace_method otherimage
