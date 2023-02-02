@@ -27,20 +27,26 @@ def apply_att_metr_masks(model,data):
         metric_ind = torch.randint(0,len(metric_list),size=(1,)).item()
         metric_name = metric_list[metric_ind]
         if is_multi_step[metric_name]:
-            metric = metric_dic[metric_name](data.shape,expl.shape)
+            metric = metric_dic[metric_name]()
 
-            data_to_replace_with_i = metric.init_data_to_replace_with(data[i:i+1])
-            data_i = metric.preprocess_data(data[i:i+1]) 
+            data_i = data[i:i+1]
+            masking_data_i = metric.get_masking_data(data_i)
             expl_i = expl[i:i+1]
+
+            dic = metric.choose_data_order(data_i,masking_data_i)
+            data1,data2 = dic["data1"],dic["data2"]
 
             k = torch.randint(0,expl.shape[2]*expl.shape[3],size=(1,)).item()
             mask,_ = metric.compute_mask(expl_i,data.shape,k)
-            data_masked = metric.apply_mask(data_i,data_to_replace_with_i,mask)
+            data_masked = metric.apply_mask(data1,data2,mask)
         else:
             metric = metric_dic[metric_name]()
-            data_to_replace_with_i = metric.init_data_to_replace_with(data[i:i+1])
+
+            data_i = data[i:i+1]
+            masking_data_i = metric.get_masking_data(data_i)
+
             mask = metric.compute_mask(expl[i:i+1],data.shape)
-            data_masked = metric.apply_mask(data[i:i+1],data_to_replace_with_i,mask)
+            data_masked = metric.apply_mask(data_i,masking_data_i,mask)
 
         data_masked_list.append(data_masked)
     
