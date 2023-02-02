@@ -1,3 +1,16 @@
+import torchvision
+from torchvision import transforms 
+
+inv_imgnet_norm = transforms.Compose([ transforms.Normalize(mean = [ 0., 0., 0. ],
+                                                     std = [ 1/0.229, 1/0.224, 1/0.225 ]),
+                                transforms.Normalize(mean = [ -0.485, -0.456, -0.406 ],
+                                                     std = [ 1., 1., 1. ]),
+                               ])
+
+def save_image(img,path,**kwargs):
+    img = inv_imgnet_norm(img)
+    torchvision.utils.save_image(img,path,**kwargs)
+
 class Bunch(object):
     def __init__(self, adict):
         self.__dict__.update(adict)
