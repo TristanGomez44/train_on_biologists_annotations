@@ -191,6 +191,8 @@ class BaseCAM:
 
         outputs = self.activations_and_grads(input_tensor)
         if type(targets) is not list:
+            if type(targets) is torch.Tensor and len(targets.shape) == 0:
+                targets = [targets]
             targets = [ClassifierOutputTarget(target) for target in targets]
 
         if self.uses_gradients:
@@ -618,3 +620,7 @@ class AblationCAM(BaseCAM):
         # Replace the model back to the original state
         replace_layer_recursive(self.model, ablation_layer, target_layer)
         return weights
+    
+    def __call__(self, input_tensor: torch.Tensor, targets: List[torch.nn.Module] = None, aug_smooth: bool = False, eigen_smooth: bool = False) -> np.ndarray:
+        explanation = super().__call__(input_tensor, targets, aug_smooth, eigen_smooth)
+        return torch.tensor(explanation)

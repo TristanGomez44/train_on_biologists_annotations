@@ -8,7 +8,7 @@ import matplotlib.pyplot as plt
 plt.switch_backend('agg')
 from saliency_maps_metrics.multi_step_metrics import Deletion, Insertion
 from saliency_maps_metrics.single_step_metrics import IIC_AD, ADD
-from captum.attr import (IntegratedGradients,NoiseTunnel,LayerGradCam,GuidedBackprop)
+from captum.attr import (IntegratedGradients,NoiseTunnel,LayerGradCam,LayerGradCampp,GuidedBackprop)
 
 from args import ArgReader
 from args import str2bool
@@ -123,9 +123,8 @@ def getAttMetrMod(net,testDataset,args):
         kwargs = {}
     elif args.att_metrics_post_hoc == "gradcam_pp":
         netGradMod = modelBuilder.GradCamMod(net)
-        model_dict = dict(type=args.first_mod, arch=netGradMod, layer_name='layer4', input_size=(448, 448))
-        attrMod = GradCAMpp(model_dict,True)
-        attrFunc = attrMod.__call__
+        attrMod = LayerGradCampp(netGradMod.forward,netGradMod.layer4)
+        attrFunc = attrMod.attribute
         kwargs = {}
     elif args.att_metrics_post_hoc == "guided":
         netGradMod = modelBuilder.GradCamMod(net)
@@ -205,7 +204,7 @@ def main(argv=None):
 
     argreader.parser.add_argument('--attention_metric', type=str, help='The attention metric to compute.')
     argreader.parser.add_argument('--img_nb_per_class', type=int, help='The nb of images on which to compute the att metric.')    
-    argreader.parser.add_argument('--do_again', type=str2bool, help='To run computation if already done',default=True)
+    argreader.parser.add_argument('--do_again', type=str2bool, help='To run computation if already done')
     argreader.parser.add_argument('--data_replace_method', type=str, help='The pixel replacement method.',default="black")
 
     argreader = addInitArgs(argreader)
@@ -235,9 +234,6 @@ def main(argv=None):
         attrFunc = lambda i:(salMaps_dataset[i,0:1]).unsqueeze(0)
         kwargs = None
 
-    if args.att_metrics_post_hoc != "gradcam_pp":
-        torch.set_grad_enabled(False)
-
     np.random.seed(0)
     inds = sample_img_inds(testDataset,args.img_nb_per_class)
 
@@ -249,8 +245,15 @@ def main(argv=None):
     else:
         other_img_inds = None
 
+    torch.set_grad_enabled(False) 
     predClassInds = net_lambda(data).argmax(dim=-1)
+    
+    if args.att_metrics_post_hoc == "gradcam_pp":
+        torch.set_grad_enabled(True)
     explanations = getExplanations(inds,data,predClassInds,attrFunc,kwargs,args)
+    
+    torch.set_grad_enabled(False)   
+ 
     is_multi_step_dic,const_dic = get_metric_dics()
 
     if args.data_replace_method is None or args.data_replace_method == "otherimage":
