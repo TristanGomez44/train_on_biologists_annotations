@@ -21,7 +21,7 @@ from args import str2bool
 import modelBuilder
 import load_data
 import metrics
-import att_metr_data_aug
+import sal_metr_data_aug
 import utils
 import update
 from models import inter_by_parts,protopnet
@@ -122,8 +122,8 @@ def epochSeqTr(model, optim, loader, epoch, args, **kwargs):
             resDict = master_net_inference(data,kwargs,resDict)
 
         if args.att_metr_mask and epoch >= args.att_metr_mask_start_epoch:
-            data = att_metr_data_aug.apply_att_metr_masks(model,data)
-        
+            data = sal_metr_data_aug.apply_att_metr_masks(model,data)
+
         resDict_model = model(data)
         resDict.update(resDict_model)
 
