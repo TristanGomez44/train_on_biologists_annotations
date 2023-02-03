@@ -15,7 +15,6 @@ from args import str2bool
 import modelBuilder
 import load_data
 from trainVal import addInitArgs,preprocessAndLoadParams
-from post_hoc_expl.gradcam import GradCAMpp
 from post_hoc_expl.scorecam import ScoreCam
 from post_hoc_expl.xgradcam import AblationCAM,XGradCAM
 from post_hoc_expl.rise import RISE
