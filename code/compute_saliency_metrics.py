@@ -14,9 +14,28 @@ def get_score_file_paths(exp_id,metric_list):
         paths.extend(glob.glob(f"../results/{exp_id}/{metric}*_*.npy"))
     return paths
 
-def write_csv(mean,metric_name_and_replace_method,exp_id,model_id):
-    with open(f"../results/{exp_id}/saliency_metrics.csv","a") as file:
-        print(f"{model_id},{metric_name_and_replace_method},{mean}",file=file)
+def get_col_index_to_value_dic():
+    return {0:"metric_label",1:"replace_method",2:"model_id",3:"post_hoc_method",4:"metric_value"}
+
+def write_csv(**kwargs):
+
+    col_index_to_value_dic = get_col_index_to_value_dic()
+
+    inds = sorted(list(col_index_to_value_dic.keys()))
+    value_list = [str(kwargs[col_index_to_value_dic[ind]]) for ind in inds]
+    row = ",".join(value_list)
+    exp_id = kwargs["exp_id"]
+
+    csv_path = f"../results/{exp_id}/saliency_metrics.csv"
+
+    if not os.path.exists(csv_path):
+        column_names = [col_index_to_value_dic[ind] for ind in inds]
+        header = ",".join(column_names)  
+        with open(csv_path,"a") as file:
+            print(header,file=file)
+
+    with open(csv_path,"a") as file:
+        print(row,file=file)
 
 def main(argv=None):
 
@@ -36,34 +55,32 @@ def main(argv=None):
 
     for path in score_file_paths:
         
-        filename = os.path.basename(path)
+        filename = os.path.basename(path).replace(".npy","")
         
-        model_id = filename.split("_")[-1].replace(".npy","")
-        metric_name_and_replace_method = "_".join(filename.split("_")[:-1])
+        metric_name_and_replace_method,model_id_and_posthoc_method = filename.split("_")
+        print(filename,metric_name_and_replace_method)
+        metric_name,replace_method = metric_name_and_replace_method.split("-")
         
-        if "-" in metric_name_and_replace_method:
-            metric_name,_ = metric_name_and_replace_method.split("-")
+        if "-" in model_id_and_posthoc_method:
+            model_id,post_hoc_method = model_id_and_posthoc_method.split("-")
         else:
-            metric_name = metric_name_and_replace_method
+            model_id = model_id_and_posthoc_method
+            post_hoc_method = ""
 
         metric = const_dic[metric_name]()
 
         result_dic = np.load(path,allow_pickle=True).item()
         if is_multi_step_dic[metric_name]:
             all_score_list,all_sal_score_list = result_dic["prediction_scores"],result_dic["saliency_scores"]
-            
-            mean_auc = compute_auc_metric(all_score_list)
-            mean_calibration = metric.compute_calibration_metric(all_score_list, all_sal_score_list)
-
-            write_csv(mean_auc,metric_name_and_replace_method+"-auc",args.exp_id,model_id)
-            write_csv(mean_calibration,metric_name_and_replace_method+"-cal",args.exp_id,model_id)
-            
+            auc_metric = compute_auc_metric(all_score_list)
+            calibration_metric = metric.compute_calibration_metric(all_score_list, all_sal_score_list)
+            result_dic = metric.make_result_dic(auc_metric,calibration_metric)
         else:
             all_score_list,all_score_masked_list = result_dic["prediction_scores"],result_dic["prediction_scores_with_mask"]
             result_dic = metric.compute_metric(all_score_list,all_score_masked_list)
 
-            for key in result_dic.keys():
-                write_csv(result_dic[key],metric_name_and_replace_method+"-"+key,args.exp_id,model_id)
+        for sub_metric in result_dic.keys():
+            write_csv(exp_id=args.exp_id,metric_label=sub_metric.upper(),replace_method=replace_method,model_id=model_id,post_hoc_method=post_hoc_method,metric_value=result_dic[sub_metric])
 
 if __name__ == "__main__":
     main()
