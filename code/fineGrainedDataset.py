@@ -37,9 +37,10 @@ class FineGrainedDataset(Dataset):
         self.phase = phase
         self.resize = resize
         self.image_id = []
-        self.num_classes = 200
 
         classes = [d.name for d in os.scandir(self.root) if d.is_dir()]
+
+        self.num_classes = len(classes)
 
         if root.find("emb") != -1:
             classes.sort(key = lambda x:formatData.labelDict[x])
