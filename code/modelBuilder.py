@@ -1,15 +1,9 @@
-import math
-
 import torch
 from torch import nn
-import numpy as np
 import matplotlib.pyplot as plt
-from torch.nn.modules.linear import Identity
 plt.switch_backend('agg')
 
 from models import resnet
-from models import inter_by_parts
-from models import abn
 import args
 EPS = 0.000001
 
@@ -211,21 +205,6 @@ class CNN2D_bilinearAttPool(FirstModel):
 
         return retDict
 
-class CNN2D_interbyparts(FirstModel):
-
-    def __init__(self,featModelName,classNb,nb_parts,**kwargs):
-
-        super().__init__(featModelName,**kwargs)
-
-        self.featMod = inter_by_parts.ResNet50(classNb,nb_parts)
-        self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
-
-    def forward(self,x):
-
-        pred,att,features = self.featMod(x)
-        
-        return {"pred":pred,"attMaps":att,"feat":features,"feat_pooled":self.avgpool(features)}
-
 ################################ Temporal Model ########################""
 
 class SecondModel(nn.Module):
@@ -289,46 +268,37 @@ def netBuilder(args,gpu=None):
 
     nbFeat = getResnetFeat(args.first_mod, args.resnet_chan)
 
-    if not args.prototree and not args.protonet and not args.abn:
-        if args.resnet_bilinear:
-            CNNconst = CNN2D_bilinearAttPool
-            kwargs = {"inFeat":nbFeat,"nb_parts":args.resnet_bil_nb_parts,\
-                        "cluster":args.bil_cluster,
-                        "no_refine":args.bil_cluster_norefine,\
-                        "rand_vec":args.bil_cluster_randvec}
+    if args.resnet_bilinear:
+        CNNconst = CNN2D_bilinearAttPool
+        kwargs = {"inFeat":nbFeat,"nb_parts":args.resnet_bil_nb_parts,\
+                    "cluster":args.bil_cluster,
+                    "no_refine":args.bil_cluster_norefine,\
+                    "rand_vec":args.bil_cluster_randvec}
 
-            nbFeat *= args.resnet_bil_nb_parts
- 
-        elif args.inter_by_parts:
-            CNNconst = CNN2D_interbyparts
-            kwargs = {"classNb":args.class_nb,"nb_parts":args.resnet_bil_nb_parts}
-        else:
-            CNNconst = CNN2D
-            kwargs = {}
+        nbFeat *= args.resnet_bil_nb_parts
 
-        if args.first_mod.find("bagnet") == -1 and args.first_mod.find("hrnet") == -1:
-            firstModel = CNNconst(args.first_mod,chan=args.resnet_chan, stride=args.resnet_stride,\
-                                    strideLay2=args.stride_lay2,strideLay3=args.stride_lay3,\
-                                    strideLay4=args.stride_lay4,\
-                                    **kwargs)
-        else:
-            firstModel = CNNconst(args.first_mod,**kwargs)
-
-
-        ############### Second Model #######################
-        if not args.inter_by_parts:
-            if args.second_mod == "linear":
-                secondModel = LinearSecondModel(nbFeat, args.class_nb, args.dropout,args.lin_lay_bias)
-            else:
-                raise ValueError("Unknown second model type : ", args.second_mod)
-        else:
-            secondModel = Identity()
-
-        ############### Whole Model ##########################
-
-        net = Model(firstModel, secondModel)
     else:
-        net = abn.resnet50(fullpretrained=args.abn_pretrained)
+        CNNconst = CNN2D
+        kwargs = {}
+
+    if args.first_mod.find("bagnet") == -1 and args.first_mod.find("hrnet") == -1:
+        firstModel = CNNconst(args.first_mod,chan=args.resnet_chan, stride=args.resnet_stride,\
+                                strideLay2=args.stride_lay2,strideLay3=args.stride_lay3,\
+                                strideLay4=args.stride_lay4,\
+                                **kwargs)
+    else:
+        firstModel = CNNconst(args.first_mod,**kwargs)
+
+
+    ############### Second Model #######################
+    if args.second_mod == "linear":
+        secondModel = LinearSecondModel(nbFeat, args.class_nb, args.dropout,args.lin_lay_bias)
+    else:
+        raise ValueError("Unknown second model type : ", args.second_mod)
+
+    ############## Whole Model ##########################
+
+    net = Model(firstModel, secondModel)
 
     if args.cuda and torch.cuda.is_available():
         net.cuda()
@@ -381,9 +351,6 @@ def addArgs(argreader):
     argreader.parser.add_argument('--prototree', type=args.str2bool, metavar='BOOL',
                                   help="To train a prototree model")
 
-    argreader.parser.add_argument('--inter_by_parts', type=args.str2bool, metavar='BOOL',
-                                  help="To train the model from https://github.com/zxhuang1698/interpretability-by-parts/tree/650f1af573075a41f04f2f715f2b2d4bc0363d31")
-
     argreader.parser.add_argument('--lin_lay_bias', type=args.str2bool, metavar='BOOL',
                                   help="To add a bias to the final layer.")
 
@@ -396,7 +363,5 @@ def addArgs(argreader):
     argreader.parser.add_argument('--kl_temp', type=float, help='KL temperature.')
 
     argreader.parser.add_argument('--end_relu', type=args.str2bool, help='To add a relu at the end of the first block of each layer.')
-    argreader.parser.add_argument('--abn', type=args.str2bool, help='To train an attention branch network')
-    argreader.parser.add_argument('--abn_pretrained', type=args.str2bool, help='To load imagenet pretrained weights for ABN.')
 
     return argreader
