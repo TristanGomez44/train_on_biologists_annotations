@@ -18,13 +18,13 @@ import sqlite3
 import args
 from args import ArgReader
 from args import str2bool
+from loss import Loss
 import modelBuilder
 import load_data
 import metrics
 import sal_metr_data_aug
 import utils
 import update
-from models import inter_by_parts,protopnet
 
 def remove_excess_examples(data,target,accumulated_size,batch_size):
     if accumulated_size + data.size(0) > batch_size:
@@ -62,30 +62,6 @@ def optim_step(model,optim,acc_nb):
 
     return model,optim,accumulated_size,acc_nb
 
-class Loss(torch.nn.Module):
-
-    def __init__(self,args,reduction="mean"):
-        super(Loss, self).__init__()
-        self.reduction = reduction
-        self.args= args
-    def forward(self,output,target,resDict):
-        return computeLoss(self.args,output, target, resDict,reduction=self.reduction).unsqueeze(0)
-
-def computeLoss(args, output, target, resDict,reduction="mean"):
-
-    if args.master_net and ("master_net_pred" in resDict):
-        kl = F.kl_div(F.log_softmax(output/args.kl_temp, dim=1),F.softmax(resDict["master_net_pred"]/args.kl_temp, dim=1),reduction="batchmean")
-        ce = F.cross_entropy(output, target)
-        loss = args.nll_weight*(kl*args.kl_interp*args.kl_temp*args.kl_temp+ce*(1-args.kl_interp))
-    else:
-        loss = args.nll_weight * F.cross_entropy(output, target,reduction=reduction)
-        if args.inter_by_parts:
-            loss += 0.5*inter_by_parts.shapingLoss(resDict["attMaps"],args.resnet_bil_nb_parts,args)
-        if args.abn:
-            loss += args.nll_weight*F.cross_entropy(resDict["att_outputs"], target,reduction=reduction)
-
-    return loss
-
 def epochSeqTr(model, optim, loader, epoch, args, **kwargs):
 
     model.train()
@@ -121,11 +97,15 @@ def epochSeqTr(model, optim, loader, epoch, args, **kwargs):
         if args.master_net:
             resDict = master_net_inference(data,kwargs,resDict)
 
-        if args.att_metr_mask and epoch >= args.att_metr_mask_start_epoch:
-            data = sal_metr_data_aug.apply_att_metr_masks(model,data)
-
-        resDict_model = model(data)
-        resDict.update(resDict_model)
+        if args.sal_metr_mask and epoch >= args.sal_metr_mask_start_epoch:
+            data_masked = sal_metr_data_aug.apply_sal_metr_masks(model,data,args.sal_metr_mask_prob)
+            if args.sal_metr_mask_weight > 0:
+               resDict_masked = model(data_masked) 
+               resDict.update({key+"_masked":resDict_masked[key] for key in resDict_masked})
+            else:
+                data = data_masked
+        
+        resDict.update(model(data))
 
         output = resDict["pred"]
 
@@ -189,7 +169,7 @@ def epochImgEval(model, loader, epoch, args, mode="val",**kwargs):
         # Metrics
         metDictSample = metrics.binaryToMetrics(output, target,resDict,comp_spars=(mode=="test"))
 
-        metDictSample["Loss"] = loss
+        metDictSample["Loss"] = loss.item()
 
         metrDict = metrics.updateMetrDict(metrDict, metDictSample)
 
@@ -380,6 +360,8 @@ def addValArgs(argreader):
 def addLossTermArgs(argreader):
     argreader.parser.add_argument('--nll_weight', type=float, metavar='FLOAT',
                                   help='The weight of the negative log-likelihood term in the loss function.')
+    argreader.parser.add_argument('--sal_metr_mask_weight', type=float, metavar='FLOAT',
+                                  help='The weight of the saliency metric mask in the loss function.')
 
     return argreader
 
@@ -549,17 +531,6 @@ def train(args,trial):
             kwargsTr["epoch"], kwargsVal["epoch"] = epoch, epoch
             kwargsTr["model"], kwargsVal["model"] = net, net
 
-            if args.protonet:
-                if epoch - startEpoch > args.protonet_warm:
-                    protopnet.joint(net.module.firstModel.protopnet)
-                else:
-                    protopnet.warm_only(net.module.firstModel.protopnet)
-            elif args.prototree:
-                if  epoch-startEpoch < args.protonet_warm:
-                    net.module.firstModel.featMod.requires_grad= False 
-                else:
-                    net.module.firstModel.featMod.requires_grad= True
-
             trainFunc(**kwargsTr)
             if not scheduler is None:
                 scheduler.step()
@@ -628,8 +599,9 @@ def main(argv=None):
 
     argreader.parser.add_argument('--trial_id', type=int, help='The trial ID. Useful for grad exp during test')
 
-    argreader.parser.add_argument('--att_metr_mask', type=str2bool, help='To apply the masking of attention metrics during training.')
-    argreader.parser.add_argument('--att_metr_mask_start_epoch', type=int, help='The epoch at which to start applying the masking.')
+    argreader.parser.add_argument('--sal_metr_mask', type=str2bool, help='To apply the masking of attention metrics during training.')
+    argreader.parser.add_argument('--sal_metr_mask_start_epoch', type=int, help='The epoch at which to start applying the masking.')
+    argreader.parser.add_argument('--sal_metr_mask_prob', type=float, help='The probability to apply saliency metrics masking.')
 
     argreader = addInitArgs(argreader)
     argreader = addOptimArgs(argreader)
