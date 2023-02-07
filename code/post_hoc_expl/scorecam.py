@@ -88,7 +88,6 @@ class ScoreCam():
 
         cam = np.maximum(cam, 0)
         cam = (cam - np.min(cam)) / (np.max(cam) - np.min(cam))  # Normalize between 0-1
-        cam = (cam * 255).astype("uint8")  # Scale between 0-255 to visualize
         return torch.tensor(cam).unsqueeze(0).unsqueeze(0)
 
 if __name__ == '__main__':
