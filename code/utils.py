@@ -1,3 +1,5 @@
+
+import os
 import torchvision
 from torchvision import transforms 
 
@@ -22,10 +24,11 @@ def normalize_tensor(tensor,dim=None):
     else:
         tensor_min = tensor
         tensor_max = tensor
-        for i in range(len(dim)):
-            tensor_min = tensor.min(dim=dim[i])[0]
-            tensor_max = tensor.max(dim=dim[i])[0]
-
+        for _ in range(len(dim)):
+            tensor_min = tensor_min.min(dim=-1)[0]
+            tensor_max = tensor_max.max(dim=-1)[0]
+        tensor_min = tensor_min.unsqueeze(-1).unsqueeze(-1).unsqueeze(-1)
+        tensor_max = tensor_max.unsqueeze(-1).unsqueeze(-1).unsqueeze(-1)
         tensor = (tensor-tensor_min)/(tensor_max-tensor_min)
 
     return tensor
@@ -34,6 +37,9 @@ def findNumbers(x):
     '''Extracts the numbers of a string and returns them as an integer'''
 
     return int((''.join(xi for xi in str(x) if xi.isdigit())))
+
+def getEpoch(path):
+    return int(os.path.basename(path).split("epoch")[1].split("_")[0])
 
 def findLastNumbers(weightFileName):
     '''Extract the epoch number of a weith file name.
