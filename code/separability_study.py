@@ -1,16 +1,14 @@
 
-import glob,os 
+import os 
 
 import numpy as np 
 import torch
 from sklearn import svm
 import sklearn.metrics
 
-from trainVal import addInitArgs,addValArgs,getBatch,preprocessAndLoadParams
+from trainVal import addInitArgs,addValArgs
 import modelBuilder,load_data
-import args
 from args import ArgReader
-from args import str2bool
 
 def main(argv=None):
     # Getting arguments from config file and command line

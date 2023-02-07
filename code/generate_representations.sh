@@ -35,4 +35,22 @@ case $1 in
         python generate_representations.py -c model_emb10.config --model_id none_mast --class_map --transf img_size60
         python generate_representations.py -c model_emb10.config --model_id none_mast --class_map --transf img_blur_size60
     ;;
+    "noneRed_crohn")
+        python generate_representations.py -c model_crohn2.config --model_id noneRed --resnet_bilinear False --big_images True  --stride_lay3 2 --stride_lay4 2 --transf saliency_metrics
+        python generate_representations.py -c model_crohn2.config --model_id noneRed --resnet_bilinear False --big_images True  --stride_lay3 2 --stride_lay4 2 --transf identity
+    ;;
+    "noneRed_attMetrMask_crohn")
+        python generate_representations.py -c model_crohn2.config --model_id 2_noneRed_attMetrMask --resnet_bilinear False --big_images True  --stride_lay3 2 --stride_lay4 2 --transf saliency_metrics
+        python generate_representations.py -c model_crohn2.config --model_id 2_noneRed_attMetrMask --resnet_bilinear False --big_images True  --stride_lay3 2 --stride_lay4 2 --transf identity
+    ;;
+    "noneRed_0.5attMetrMask_FT_crohn")
+        python generate_representations.py -c model_crohn2.config --model_id noneRed_0.5attMetrMask_FT --resnet_bilinear False --big_images True  --stride_lay3 2 --stride_lay4 2 --transf saliency_metrics
+        python generate_representations.py -c model_crohn2.config --model_id noneRed_0.5attMetrMask_FT --resnet_bilinear False --big_images True  --stride_lay3 2 --stride_lay4 2 --transf identity
+    ;;
+    "noneRed_0.5attMetrMask_FT_simclr_crohn")
+        python generate_representations.py -c model_crohn2.config --model_id noneRed_0.5attMetrMask_FT_simclr --resnet_bilinear False --big_images True  --stride_lay3 2 --stride_lay4 2 --transf saliency_metrics
+        python generate_representations.py -c model_crohn2.config --model_id noneRed_0.5attMetrMask_FT_simclr --resnet_bilinear False --big_images True  --stride_lay3 2 --stride_lay4 2 --transf identity
+    ;;
 esac
+
+

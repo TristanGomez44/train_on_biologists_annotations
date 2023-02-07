@@ -36,5 +36,11 @@
 
 #Img bckgr aide ! 
 
-python3 separability_study.py -c model_emb10.config --model_id none_mast --model_id2 none_mast_spars --stride_lay3 2 --stride_lay4 2 --transf2 black_patches_nb10
-python3 separability_study.py -c model_emb10.config --model_id none_mast --model_id2 none_mast_spars --stride_lay3 2 --stride_lay4 2 --transf2 black_patches_nb120
+#python3 separability_study.py -c model_emb10.config --model_id none_mast --model_id2 none_mast_spars --stride_lay3 2 --stride_lay4 2 --transf2 black_patches_nb10
+#python3 separability_study.py -c model_emb10.config --model_id none_mast --model_id2 none_mast_spars --stride_lay3 2 --stride_lay4 2 --transf2 black_patches_nb120
+
+#python3 separability_study.py -c model_crohn2.config --model_id 2_noneRed_attMetrMask  --stride_lay3 2 --stride_lay4 2 --transf2 saliency_metrics
+#python3 separability_study.py -c model_crohn2.config --model_id noneRed  --stride_lay3 2 --stride_lay4 2 --transf2 saliency_metrics
+#python3 separability_study.py -c model_crohn2.config --model_id noneRed_0.5attMetrMask_FT  --stride_lay3 2 --stride_lay4 2 --transf2 saliency_metrics
+python3 separability_study.py -c model_crohn2.config --model_id noneRed_0.5attMetrMask_FT_simclr  --stride_lay3 2 --stride_lay4 2 --transf2 saliency_metrics
+

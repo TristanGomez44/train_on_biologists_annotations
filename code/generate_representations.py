@@ -1,23 +1,24 @@
-
-import glob ,sys
-
+import glob
 import numpy as np 
-import torch,torchvision
+import torch 
 
-from trainVal import addInitArgs,addValArgs,getBatch,preprocessAndLoadParams,find_other_class_labels
+from trainVal import addInitArgs,addValArgs,preprocessAndLoadParams
+from compute_scores_for_saliency_metrics import getBatch,init_post_hoc_arg,sample_img_inds,get_other_img_inds
 import modelBuilder,load_data
 import sparse
-import args
 from args import ArgReader
-from args import str2bool
+from sal_metr_data_aug import apply_sal_metr_masks
 
 MIN_PATCH_SIZE = 10 
 MAX_PATCH_SIZE = 100
 
 PATCH_NB = 10
 
-def apply_transf(data,transf,data_bckgr,sparse_conv=False,downsample_ratio=None):
+def apply_transf(data,transf,data_bckgr,sparse_conv=False,downsample_ratio=None,model=None):
     if transf == "identity":
+        return data
+    elif transf == "saliency_metrics":
+        data = apply_sal_metr_masks(model,data)
         return data
     else:
         
@@ -81,6 +82,7 @@ def main(argv=None):
 
     argreader = addInitArgs(argreader)
     argreader = addValArgs(argreader)
+    argreader = init_post_hoc_arg(argreader)
 
     argreader = modelBuilder.addArgs(argreader)
     argreader = load_data.addArgs(argreader)
@@ -94,7 +96,7 @@ def main(argv=None):
 
     bestPath = glob.glob("../models/{}/model{}_best_epoch*".format(args.exp_id, args.model_id))[0]
     net = modelBuilder.netBuilder(args,gpu=0)
-    net = preprocessAndLoadParams(bestPath,args.cuda,net,args.strict_init)
+    net = preprocessAndLoadParams(bestPath,args.cuda,net)
     
     if args.sparse:
         imgSize = load_data.get_img_size(args)
@@ -108,17 +110,16 @@ def main(argv=None):
     net.eval()
     
     args.val_batch_size = 1
-    testLoader,testDataset = load_data.buildTestLoader(args, "test",withSeg=args.with_seg)
+    _,testDataset = load_data.buildTestLoader(args, "test")
 
     np.random.seed(0)
-    torch.manual_seed(0)
-    inds = torch.randint(len(testDataset),size=(args.att_metrics_img_nb,))
+    inds = sample_img_inds(testDataset,args.img_nb_per_class)
 
     if args.class_map:
         inds = inds[:10]
 
     if args.transf.find("img") != -1:
-        inds_bckgr = torch.randint(len(testDataset),size=(len(inds),))
+        inds_bckgr = get_other_img_inds(inds)
     else:
         inds_bckgr = None
 
@@ -127,18 +128,18 @@ def main(argv=None):
     imgList = []
     predMapList = []
     with torch.no_grad():
-        for imgInd,i in enumerate(inds):
-            if imgInd % 20 == 0 :
-                print("Img",i.item(),"(",imgInd,"/",len(inds),")")
+        for i in range(len(inds)):
+            if i % 20 == 0 :
+                print("Img",inds[i].item(),"(",i,"/",len(inds),")")
 
-            data,_ = getBatch(testDataset,i,args)
+            data,_ = getBatch(testDataset,[inds[i]],args)
 
             if args.transf.find("img") != -1:
-                data_bckgr,_ = getBatch(testDataset,inds_bckgr[imgInd],args)
+                data_bckgr,_ = getBatch(testDataset,[inds_bckgr[i]],args)
             else:
                 data_bckgr = None
 
-            data_transf = apply_transf(data,args.transf,data_bckgr,args.sparse,downsample_ratio)
+            data_transf = apply_transf(data,args.transf,data_bckgr,args.sparse,downsample_ratio,net)
 
             resDic = net(data_transf)
 
