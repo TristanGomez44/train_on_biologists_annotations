@@ -120,7 +120,7 @@ def getAttMetrMod(net,testDataset,args):
         attrMod = LayerGradCam(netGradMod.forward,netGradMod.layer4)
         attrFunc = attrMod.attribute
         kwargs = {}
-    elif args.att_metrics_post_hoc == "gradcam_pp":
+    elif args.att_metrics_post_hoc == "gradcampp":
         netGradMod = modelBuilder.GradCamMod(net)
         attrMod = LayerGradCampp(netGradMod.forward,netGradMod.layer4)
         attrFunc = attrMod.attribute
@@ -135,12 +135,12 @@ def getAttMetrMod(net,testDataset,args):
         attrMod = XGradCAM(model=netGradMod,target_layers=netGradMod.layer4,use_cuda=args.cuda)
         attrFunc = attrMod
         kwargs = {}
-    elif args.att_metrics_post_hoc == "ablation_cam":
+    elif args.att_metrics_post_hoc == "ablationcam":
         netGradMod = modelBuilder.GradCamMod(net)
         attrMod = AblationCAM(model=netGradMod,target_layers=netGradMod.layer4,use_cuda=args.cuda)
         attrFunc = attrMod
         kwargs = {}
-    elif args.att_metrics_post_hoc == "score_cam":
+    elif args.att_metrics_post_hoc == "scorecam":
         attrMod = ScoreCam(net)
         attrFunc = attrMod.generate_cam
         kwargs = {}
@@ -194,6 +194,7 @@ def loadSalMaps(exp_id,model_id):
 
 def init_post_hoc_arg(argreader):
     argreader.parser.add_argument('--att_metrics_post_hoc', type=str, help='The post-hoc method to use instead of the model ')
+    argreader.parser.add_argument('--img_nb_per_class', type=int, help='The nb of images on which to compute the att metric.')    
     return argreader
 
 def main(argv=None):
@@ -202,9 +203,8 @@ def main(argv=None):
     argreader = ArgReader(argv)
 
     argreader.parser.add_argument('--attention_metric', type=str, help='The attention metric to compute.')
-    argreader.parser.add_argument('--img_nb_per_class', type=int, help='The nb of images on which to compute the att metric.')    
     argreader.parser.add_argument('--do_again', type=str2bool, help='To run computation if already done')
-    argreader.parser.add_argument('--data_replace_method', type=str, help='The pixel replacement method.',default="black")
+    argreader.parser.add_argument('--data_replace_method', type=str, help='The pixel replacement method.')
 
     argreader = addInitArgs(argreader)
     argreader = init_post_hoc_arg(argreader)
@@ -244,37 +244,41 @@ def main(argv=None):
     else:
         other_img_inds = None
 
-    torch.set_grad_enabled(False) 
-    predClassInds = net_lambda(data).argmax(dim=-1)
-    
-    if args.att_metrics_post_hoc == "gradcam_pp":
-        torch.set_grad_enabled(True)
-    explanations = getExplanations(inds,data,predClassInds,attrFunc,kwargs,args)
-    
-    torch.set_grad_enabled(False)   
- 
+    #Constructing metric
     is_multi_step_dic,const_dic = get_metric_dics()
-
     if args.data_replace_method is None or args.data_replace_method == "otherimage":
         metric_constr_arg_list = []
     else:
         metric_constr_arg_list = [args.data_replace_method]
-
     metric = const_dic[args.attention_metric](*metric_constr_arg_list)
     data_replace_method = metric.data_replace_method if args.data_replace_method is None else args.data_replace_method
     
-    result_file_path = f"../results/{args.exp_id}/{args.attention_metric}-{data_replace_method}_{args.model_id}.npy"
-    
-    if args.debug:
-        data = data[:2]
-        if other_data is not None:
-            other_data = other_data[:2]
-
-    metric_args = [net_lambda,data,explanations,predClassInds]
-    if args.data_replace_method == "otherimage":
-        metric_args.append(other_data)
+    #Constructing result file path
+    post_hoc_suff = "" if args.att_metrics_post_hoc is None else "-"+args.att_metrics_post_hoc
+    formated_attention_metric = args.attention_metric.replace("_","")
+    result_file_path = f"../results/{args.exp_id}/{formated_attention_metric}-{data_replace_method}_{args.model_id}{post_hoc_suff}.npy"
 
     if args.do_again or not os.path.exists(result_file_path):
+
+        torch.set_grad_enabled(False) 
+        predClassInds = net_lambda(data).argmax(dim=-1)
+        
+        if args.att_metrics_post_hoc == "gradcam_pp":
+            torch.set_grad_enabled(True)
+
+        explanations = getExplanations(inds,data,predClassInds,attrFunc,kwargs,args)
+        
+        torch.set_grad_enabled(False)   
+  
+        if args.debug:
+            data = data[:2]
+            if other_data is not None:
+                other_data = other_data[:2]
+
+        metric_args = [net_lambda,data,explanations,predClassInds]
+        if args.data_replace_method == "otherimage":
+            metric_args.append(other_data)
+
         if is_multi_step_dic[args.attention_metric]:  
             scores,saliency_scores = metric.compute_scores(*metric_args)
             saved_dic = {"prediction_scores":scores,"saliency_scores":saliency_scores}
