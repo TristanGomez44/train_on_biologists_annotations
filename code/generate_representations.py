@@ -18,7 +18,7 @@ def apply_transf(data,transf,data_bckgr,sparse_conv=False,downsample_ratio=None,
     if transf == "identity":
         return data
     elif transf == "saliency_metrics":
-        data = apply_sal_metr_masks(model,data)
+        data,_ = apply_sal_metr_masks(model,data)
         return data
     else:
         

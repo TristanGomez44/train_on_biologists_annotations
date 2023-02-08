@@ -13,6 +13,13 @@ import torchvision
 import matplotlib.pyplot as plt
 plt.switch_backend('agg')
 
+from separability_study import run_separability_analysis
+
+def add_losses_to_dic(metDictSample,lossDic):
+    for loss_name in lossDic:
+        metDictSample[loss_name] = lossDic[loss_name].item()
+    return metDictSample
+
 def updateMetrDict(metrDict,metrDictSample):
 
     if metrDict is None:
@@ -44,12 +51,18 @@ def binaryToMetrics(output,target,resDict,comp_spars=False):
     if "attMaps" in resDict.keys() and comp_spars:
         spar = compAttMapSparsity(resDict["attMaps"].clone(),resDict["feat"].clone())
         metDict["Sparsity"] = spar
-
     else:
         norm = torch.sqrt(torch.pow(resDict["feat"],2).sum(dim=1,keepdim=True))
         spar = compSparsity(norm)
         metDict["Sparsity"] = spar 
 
+    return metDict
+
+def separability_metric(feat_pooled,feat_pooled_masked,metDict,seed):
+    sep_dict = run_separability_analysis(feat_pooled,feat_pooled_masked,False,seed)
+    separability_auc,separability_acc = sep_dict["val_auc"].mean(),sep_dict["val_acc"].mean()
+    metDict["Sep_AuC"] = separability_auc
+    metDict["Sep_Acc"] = separability_acc
     return metDict
 
 def compAccuracy(output,target):

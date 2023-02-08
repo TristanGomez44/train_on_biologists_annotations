@@ -51,6 +51,10 @@ case $1 in
         python generate_representations.py -c model_crohn2.config --model_id noneRed_0.5attMetrMask_FT_simclr --resnet_bilinear False --big_images True  --stride_lay3 2 --stride_lay4 2 --transf saliency_metrics
         python generate_representations.py -c model_crohn2.config --model_id noneRed_0.5attMetrMask_FT_simclr --resnet_bilinear False --big_images True  --stride_lay3 2 --stride_lay4 2 --transf identity
     ;;
+    "noneRed_0.5attMetrMask_FT_0.0016simclr")
+        python generate_representations.py -c model_crohn2.config --model_id noneRed_0.5attMetrMask_FT_0.0016simclr --resnet_bilinear False --big_images True  --stride_lay3 2 --stride_lay4 2 --transf saliency_metrics
+        python generate_representations.py -c model_crohn2.config --model_id noneRed_0.5attMetrMask_FT_0.0016simclr --resnet_bilinear False --big_images True  --stride_lay3 2 --stride_lay4 2 --transf identity
+    ;;
 esac
 
 

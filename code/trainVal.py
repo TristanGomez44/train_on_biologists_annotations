@@ -18,7 +18,7 @@ import sqlite3
 import args
 from args import ArgReader
 from args import str2bool
-from loss import Loss
+from loss import Loss,agregate_losses
 import modelBuilder
 import load_data
 import metrics
@@ -75,6 +75,8 @@ def epochSeqTr(model, optim, loader, epoch, args, **kwargs):
     accumulated_size = 0
     acc_nb = 0
 
+    featDic = {} if args.sal_metr_mask_weight > 0 else None
+
     for batch_idx, batch in enumerate(loader):
         optim.zero_grad()
 
@@ -97,39 +99,37 @@ def epochSeqTr(model, optim, loader, epoch, args, **kwargs):
         if args.master_net:
             resDict = master_net_inference(data,kwargs,resDict)
 
-        if args.sal_metr_mask and epoch >= args.sal_metr_mask_start_epoch:
-            data_masked = sal_metr_data_aug.apply_sal_metr_masks(model,data,args.sal_metr_mask_prob)
-            if args.sal_metr_mask_weight > 0:
-               resDict_masked = model(data_masked) 
-               resDict.update({key+"_masked":resDict_masked[key] for key in resDict_masked})
-            else:
-                data = data_masked
-        
+        if args.sal_metr_mask:
+            resDict,data = sal_metr_data_aug.apply_sal_metr_masks_and_update_dic(model,data,args.sal_metr_mask_prob,args.sal_metr_mask_weight,resDict)
+                   
         resDict.update(model(data))
-
         output = resDict["pred"]
-
-        loss = kwargs["lossFunc"](output, target, resDict).mean()
+        loss_dic = kwargs["lossFunc"](output, target, resDict)
+        loss_dic = agregate_losses(loss_dic)
+        loss = loss_dic["loss"]/len(data)
         loss.backward()
 
         if accumulated_size == args.batch_size:
             model,optim,accumulated_size,acc_nb = optim_step(model,optim,acc_nb)
 
-        loss = loss.detach().data.item()
-
         # Metrics
         metDictSample = metrics.binaryToMetrics(output, target,resDict)
-        metDictSample["Loss"] = loss
+        metDictSample = metrics.add_losses_to_dic(metDictSample,loss_dic)
         metrDict = metrics.updateMetrDict(metrDict, metDictSample)
 
-        validBatch += 1
-        totalImgNb += target.size(0)
+        if args.sal_metr_mask_weight > 0: 
+            featDic = update.catFeat(resDict,featDic)
 
-        if validBatch > 3 and args.debug:
+        validBatch += 1
+        totalImgNb += len(data)
+
+        if validBatch > 2 and args.debug:
             break
 
     if not args.optuna:
         torch.save(model.state_dict(), "../models/{}/model{}_epoch{}".format(args.exp_id, args.model_id, epoch))
+        if args.sal_metr_mask_weight > 0: 
+            metrDict = metrics.separability_metric(featDic["feat_pooled"].detach().cpu(),featDic["feat_pooled_masked"].detach().cpu(),metrDict,args.seed)
         writeSummaries(metrDict, totalImgNb, epoch, "train", args.model_id, args.exp_id)
 
 def epochImgEval(model, loader, epoch, args, mode="val",**kwargs):
@@ -142,7 +142,9 @@ def epochImgEval(model, loader, epoch, args, mode="val",**kwargs):
 
     validBatch = 0
     totalImgNb = 0
-    intermVarDict = {"fullAttMap": None, "fullFeatMapSeq": None, "fullNormSeq":None}
+    intermVarDict = {}
+    
+    featDic = {} if args.sal_metr_mask_weight > 0 else None
 
     for batch_idx, batch in enumerate(loader):
         data, target = batch[:2]
@@ -153,35 +155,40 @@ def epochImgEval(model, loader, epoch, args, mode="val",**kwargs):
         # Puting tensors on cuda
         if args.cuda: data, target = data.cuda(non_blocking=True), target.cuda(non_blocking=True)
 
-        # Computing predictions
-        resDict = model(data)
+        resDict = {}
+        
+        if args.sal_metr_mask:
+            resDict,data = sal_metr_data_aug.apply_sal_metr_masks_and_update_dic(model,data,args.sal_metr_mask_prob,args.sal_metr_mask_weight,resDict)
 
+        resDict.update(model(data))
         output = resDict["pred"]
+        loss_dic = kwargs["lossFunc"](output, target, resDict)
+        loss_dic = agregate_losses(loss_dic)
 
-        # Loss
-        loss = kwargs["lossFunc"](output, target, resDict).mean()
+        # Metrics
+        metDictSample = metrics.binaryToMetrics(output, target,resDict,comp_spars=(mode=="test"))
+        metDictSample = metrics.add_losses_to_dic(metDictSample,loss_dic)
+        metrDict = metrics.updateMetrDict(metrDict, metDictSample)
 
         # Other variables produced by the net
         if mode == "test":
             resDict["norm"] = torch.sqrt(torch.pow(resDict["feat"],2).sum(dim=1,keepdim=True))
-            intermVarDict = update.catIntermediateVariables(resDict, intermVarDict, validBatch)
+            intermVarDict = update.catIntermediateVariables(resDict, intermVarDict)
 
-        # Metrics
-        metDictSample = metrics.binaryToMetrics(output, target,resDict,comp_spars=(mode=="test"))
-
-        metDictSample["Loss"] = loss.item()
-
-        metrDict = metrics.updateMetrDict(metrDict, metDictSample)
+        if args.sal_metr_mask_weight > 0: 
+            featDic = update.catFeat(resDict,featDic)
 
         validBatch += 1
-        totalImgNb += target.size(0)
+        totalImgNb += len(data)
 
-        if validBatch  >= 4*(50.0/args.val_batch_size) and args.debug:
+        if validBatch  >= 2 and args.debug:
             break
 
     if mode == "test":
         intermVarDict = update.saveIntermediateVariables(intermVarDict, args.exp_id, args.model_id, epoch, mode)
 
+    if args.sal_metr_mask_weight > 0: 
+        metrDict = metrics.separability_metric(featDic["feat_pooled"].cpu(),featDic["feat_pooled_masked"].cpu(),metrDict,args.seed)
     writeSummaries(metrDict, totalImgNb, epoch, mode, args.model_id, args.exp_id)
 
     return metrDict["Accuracy"]
@@ -189,12 +196,21 @@ def epochImgEval(model, loader, epoch, args, mode="val",**kwargs):
 def writeSummaries(metrDict, totalImgNb, epoch, mode, model_id, exp_id):
  
     for metric in metrDict.keys():
-        metrDict[metric] /= totalImgNb
+        if metric.find("Sep") == -1:
+            metrDict[metric] /= totalImgNb
 
-    header = ",".join([metric.lower().replace(" ", "_") for metric in metrDict.keys()])
+    header_list = ["epoch"]
+    header_list += [metric.lower().replace(" ", "_") for metric in metrDict.keys()]
+    header = ",".join(header_list)
 
-    with open("../results/{}/model{}_epoch{}_metrics_{}.csv".format(exp_id, model_id, epoch, mode), "a") as text_file:
-        print(header, file=text_file)
+    csv_path = f"../results/{exp_id}/metrics_{model_id}_{mode}.csv"
+
+    if not os.path.exists(csv_path):
+        with open(csv_path, "w") as text_file:
+           print(header, file=text_file) 
+
+    with open(csv_path, "a") as text_file:
+        print(epoch,file=text_file,end=",")
         print(",".join([str(metrDict[metric]) for metric in metrDict.keys()]), file=text_file)
 
     return metrDict
@@ -246,7 +262,15 @@ def initialize_Net_And_EpochNumber(net, exp_id, model_id, cuda, start_mode, init
 
         net = preprocessAndLoadParams(init_path,cuda,net)
 
-        startEpoch = utils.findLastNumbers(init_path)+1
+        filename = os.path.basename(init_path)
+        model_id_init_path = filename.split("model")[1]
+        split_keyword = "_best" if filename.find("best") != -1 else "_epoch"      
+        model_id_init_path = model_id_init_path.split(split_keyword)[0]
+            
+        if model_id_init_path == model_id:
+            startEpoch = utils.findLastNumbers(init_path)+1
+        else:
+            startEpoch = 1
 
     return startEpoch
 
@@ -514,7 +538,7 @@ def train(args,trial):
         kwargsTr["master_net"] = initMasterNet(args)
         kwargsVal["master_net"] = kwargsTr["master_net"]
 
-    lossFunc = Loss(args,reduction="mean")
+    lossFunc = Loss(args,reduction="sum")
 
     if args.multi_gpu:
         lossFunc = torch.nn.DataParallel(lossFunc)
@@ -600,8 +624,9 @@ def main(argv=None):
     argreader.parser.add_argument('--trial_id', type=int, help='The trial ID. Useful for grad exp during test')
 
     argreader.parser.add_argument('--sal_metr_mask', type=str2bool, help='To apply the masking of attention metrics during training.')
-    argreader.parser.add_argument('--sal_metr_mask_start_epoch', type=int, help='The epoch at which to start applying the masking.')
+
     argreader.parser.add_argument('--sal_metr_mask_prob', type=float, help='The probability to apply saliency metrics masking.')
+    argreader.parser.add_argument('--sal_metr_mask_remove_masked_obj',type=str2bool, help='Set to True to remove terms masked by the DAUC and ADD metrics.')
 
     argreader = addInitArgs(argreader)
     argreader = addOptimArgs(argreader)

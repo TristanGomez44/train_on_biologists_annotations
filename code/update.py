@@ -69,34 +69,48 @@ def updateSeedAndNote(args):
         args.note += ";s{} at {}".format(args.seed, startEpoch)
     return args
 
-def catIntermediateVariables(visualDict,intermVarDict,nbVideos):
+def catIntermediateVariables(resDict,intermVarDict):
 
-    intermVarDict["fullAttMap"] = catMap(visualDict,intermVarDict["fullAttMap"],key="attMaps")
-    intermVarDict["fullNormSeq"] = catMap(visualDict,intermVarDict["fullNormSeq"],key="norm")
+    intermVarDict = catMap(resDict,intermVarDict,"attMaps")
+    intermVarDict = catMap(resDict,intermVarDict,"norm")
+
+    if "feat_pooled_masked" in resDict:
+        for key in ["feat_pooled","feat_pooled_masked"]:
+            intermVarDict = cat(resDict[key],key,intermVarDict)
+
+    return intermVarDict
+
+def catFeat(resDict,featDic):
+    for key in ["feat_pooled","feat_pooled_masked"]:
+        featDic = cat(resDict[key],key,featDic)
+    return featDic
+
+def cat(tensor,key,intermVarDict):
+    if not key in intermVarDict:
+        intermVarDict[key] = tensor
+    else:
+        intermVarDict[key] = torch.cat((intermVarDict[key],tensor),dim=0)
+    return intermVarDict
+
+def catMap(resDict,intermVarDict,key="attMaps"):
+    if key in resDict.keys():
+
+        #In case attention weights are not comprised between 0 and 1
+        tens_min = resDict[key].min(dim=-1,keepdim=True)[0].min(dim=-2,keepdim=True)[0].min(dim=-3,keepdim=True)[0]
+        tens_max = resDict[key].max(dim=-1,keepdim=True)[0].max(dim=-2,keepdim=True)[0].max(dim=-3,keepdim=True)[0]
+        maps = (resDict[key]-tens_min)/(tens_max-tens_min)
+        maps = (maps.cpu()*255).byte()
+
+        intermVarDict = cat(maps,key,intermVarDict)
 
     return intermVarDict
 
 def saveIntermediateVariables(intermVarDict,exp_id,model_id,epoch,mode="val"):
 
-    intermVarDict["fullAttMap"] = saveMap(intermVarDict["fullAttMap"],exp_id,model_id,epoch,mode,key="attMaps")
-    intermVarDict["fullNormSeq"] = saveMap(intermVarDict["fullNormSeq"],exp_id,model_id,epoch,mode,key="norm")
+    intermVarDict["attMaps"] = saveMap(intermVarDict["attMaps"],exp_id,model_id,epoch,mode,key="attMaps")
+    intermVarDict["norm"] = saveMap(intermVarDict["norm"],exp_id,model_id,epoch,mode,key="norm")
 
     return intermVarDict
-
-def catMap(visualDict,fullMap,key="attMaps"):
-    if key in visualDict.keys():
-
-        #In case attention weights are not comprised between 0 and 1
-        tens_min = visualDict[key].min(dim=-1,keepdim=True)[0].min(dim=-2,keepdim=True)[0].min(dim=-3,keepdim=True)[0]
-        tens_max = visualDict[key].max(dim=-1,keepdim=True)[0].max(dim=-2,keepdim=True)[0].max(dim=-3,keepdim=True)[0]
-        map = (visualDict[key]-tens_min)/(tens_max-tens_min)
-
-        if fullMap is None:
-            fullMap = (map.cpu()*255).byte()
-        else:
-            fullMap = torch.cat((fullMap,(map.cpu()*255).byte()),dim=0)
-
-    return fullMap
 
 def saveMap(fullMap,exp_id,model_id,epoch,mode,key="attMaps"):
     if not fullMap is None:

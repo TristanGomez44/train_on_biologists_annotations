@@ -7,6 +7,7 @@ from saliency_maps_metrics.single_step_metrics import IIC_AD, ADD
 metric_dic = {"DAUC":Deletion, "IAUC":Insertion, "AD":IIC_AD, "ADD":ADD}
 metric_list = list(metric_dic.keys())
 is_multi_step = {"DAUC":True, "IAUC":True, "AD":False, "ADD":False}
+is_masking_object = {"DAUC":True,"IAUC":False,"AD":False,"ADD":True}
 
 def get_att_maps(retDict):
     if not "attMaps" in retDict:
@@ -23,10 +24,12 @@ def apply_sal_metr_masks(model,data,mask_prob=1):
 
     data_masked_list = []
     expl = get_att_maps(retDict)
+    is_masking_object_list = []
     for i in range(len(data)):
         if torch.rand(size=(1,)).item() <= mask_prob:
             metric_ind = torch.randint(0,len(metric_list),size=(1,)).item()
             metric_name = metric_list[metric_ind]
+            is_masking_object_list.append(is_masking_object[metric_name])
             if is_multi_step[metric_name]:
                 metric = metric_dic[metric_name]()
 
@@ -52,12 +55,21 @@ def apply_sal_metr_masks(model,data,mask_prob=1):
                 data_masked_list.append(data_masked)
         else:
             data_masked_list.append(data[i:i+1])
+            is_masking_object_list.append(False)
 
     data_masked = torch.cat(data_masked_list,dim=0).to(data)
 
-    return data_masked
+    return data_masked,is_masking_object_list
         
-
+def apply_sal_metr_masks_and_update_dic(model,data,sal_metr_mask_prob,sal_metr_mask_weight,resDict):
+    data_masked,is_object_masked_list = apply_sal_metr_masks(model,data,sal_metr_mask_prob)
+    resDict["is_object_masked_list"] = is_object_masked_list
+    if sal_metr_mask_weight > 0:
+        resDict_masked = model(data_masked) 
+        resDict.update({key+"_masked":resDict_masked[key] for key in resDict_masked})
+    else:
+        data = data_masked
+    return resDict,data
         
     
         
