@@ -128,6 +128,9 @@ case $1 in
   "noneRed_attMetrMask_FT_0.0016simclr")
     python trainVal.py -c model_crohn2.config --model_id noneRed_attMetrMask_FT_0.0016simclr --resnet_bilinear False  --big_images True  --stride_lay3 2 --stride_lay4 2 --sal_metr_mask True --epochs 500 --start_mode fine_tune --init_path ../models/CROHN2/modelnoneRed_long_copy_best_epoch111 --sal_metr_mask_weight 0.0016
     ;; 
+  "noneRed_attMetrMask_FT_simclr")
+    python trainVal.py -c model_crohn2.config --model_id noneRed_attMetrMask_FT_simclr --resnet_bilinear False  --big_images True  --stride_lay3 2 --stride_lay4 2 --sal_metr_mask True --epochs 500 --start_mode fine_tune --init_path ../models/CROHN2/modelnoneRed_long_copy_best_epoch111 --sal_metr_mask_weight 1
+    ;;
   "*")
     echo "no such model"
     ;;

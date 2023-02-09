@@ -12,23 +12,31 @@ class Loss(torch.nn.Module):
 def computeLoss(args, output, target, resDict,reduction="mean"):
     loss_dic = {}
     if args.master_net and ("master_net_pred" in resDict):
-        kl = F.kl_div(F.log_softmax(output/args.kl_temp, dim=1),F.softmax(resDict["master_net_pred"]/args.kl_temp, dim=1),reduction="batchmean")
-        ce = F.cross_entropy(output, target)
-        loss = args.nll_weight*(kl*args.kl_interp*args.kl_temp*args.kl_temp+ce*(1-args.kl_interp))
+        loss_kl = F.kl_div(F.log_softmax(output/args.kl_temp, dim=1),F.softmax(resDict["master_net_pred"]/args.kl_temp, dim=1),reduction="batchmean")
+        loss_ce = F.cross_entropy(output, target)
+        
+        loss_dic["loss_kl"] = loss_kl.data.unsqueeze(0)
+        loss_dic["loss_ce"] = loss_ce.data.unsqueeze(0)
+
+        loss = (loss_kl*args.kl_interp*args.kl_temp*args.kl_temp+loss_ce*(1-args.kl_interp)).data.unsqueeze(0)
+        loss_dic["loss"] = loss
+        loss = args.nll_weight*loss
+
     else:      
         if args.sal_metr_mask and args.sal_metr_mask_remove_masked_obj and "is_object_masked_list" in resDict:
             obj_is_masked = torch.tensor(resDict["is_object_masked_list"])
             inds = torch.where(~obj_is_masked)
             output,target = output[inds],target[inds]
   
-        loss = args.nll_weight * F.cross_entropy(output, target,reduction=reduction)
-        loss_dic["loss_ce"] = loss.data.unsqueeze(0)
+        loss_ce = F.cross_entropy(output, target,reduction=reduction)
+        loss_dic["loss_ce"] = loss_ce.data.unsqueeze(0)
+        loss = args.nll_weight*loss_ce
 
     if args.sal_metr_mask_weight > 0 and "feat_pooled_masked" in resDict:
         all_feat = torch.cat((resDict["feat_pooled"],resDict["feat_pooled_masked"]),dim=0)
-        nce_loss = args.sal_metr_mask_weight * info_nce_loss(all_feat,reduction=reduction)
+        nce_loss = info_nce_loss(all_feat,reduction=reduction)
         loss_dic["loss_nce"] = nce_loss.data.unsqueeze(0)
-        loss += nce_loss
+        loss += args.sal_metr_mask_weight * nce_loss
         
     loss_dic["loss"] = loss.unsqueeze(0)
 
