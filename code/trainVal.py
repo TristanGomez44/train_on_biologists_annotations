@@ -76,7 +76,7 @@ def epochSeqTr(model, optim, loader, epoch, args, **kwargs):
     acc_nb = 0
 
     featDic = {} if args.sal_metr_mask_weight > 0 else None
-
+    target_list = []
     for batch_idx, batch in enumerate(loader):
         optim.zero_grad()
 
@@ -119,6 +119,7 @@ def epochSeqTr(model, optim, loader, epoch, args, **kwargs):
 
         if args.sal_metr_mask_weight > 0: 
             featDic = update.catFeat(resDict,featDic)
+            target_list.append(target)
 
         validBatch += 1
         totalImgNb += len(data)
@@ -129,7 +130,8 @@ def epochSeqTr(model, optim, loader, epoch, args, **kwargs):
     if not args.optuna:
         torch.save(model.state_dict(), "../models/{}/model{}_epoch{}".format(args.exp_id, args.model_id, epoch))
         if args.sal_metr_mask_weight > 0: 
-            metrDict = metrics.separability_metric(featDic["feat_pooled"].detach().cpu(),featDic["feat_pooled_masked"].detach().cpu(),metrDict,args.seed)
+            target_list = torch.cat(target_list,dim=0)
+            metrDict = metrics.separability_metric(featDic["feat_pooled"].detach().cpu(),featDic["feat_pooled_masked"].detach().cpu(),target_list,metrDict,args.seed,args.img_nb_per_class)
         writeSummaries(metrDict, totalImgNb, epoch, "train", args.model_id, args.exp_id)
 
 def epochImgEval(model, loader, epoch, args, mode="val",**kwargs):
@@ -145,7 +147,7 @@ def epochImgEval(model, loader, epoch, args, mode="val",**kwargs):
     intermVarDict = {}
     
     featDic = {} if args.sal_metr_mask_weight > 0 else None
-
+    target_list = []
     for batch_idx, batch in enumerate(loader):
         data, target = batch[:2]
 
@@ -176,6 +178,7 @@ def epochImgEval(model, loader, epoch, args, mode="val",**kwargs):
             intermVarDict = update.catIntermediateVariables(resDict, intermVarDict)
 
         if args.sal_metr_mask_weight > 0: 
+            target_list.append(target)
             featDic = update.catFeat(resDict,featDic)
 
         validBatch += 1
@@ -188,7 +191,8 @@ def epochImgEval(model, loader, epoch, args, mode="val",**kwargs):
         intermVarDict = update.saveIntermediateVariables(intermVarDict, args.exp_id, args.model_id, epoch, mode)
 
     if args.sal_metr_mask_weight > 0: 
-        metrDict = metrics.separability_metric(featDic["feat_pooled"].cpu(),featDic["feat_pooled_masked"].cpu(),metrDict,args.seed)
+        target_list = torch.cat(target_list)
+        metrDict = metrics.separability_metric(featDic["feat_pooled"].cpu(),featDic["feat_pooled_masked"].cpu(),target_list,metrDict,args.seed,args.img_nb_per_class)
     writeSummaries(metrDict, totalImgNb, epoch, mode, args.model_id, args.exp_id)
 
     return metrDict["Accuracy"]
@@ -387,6 +391,11 @@ def addLossTermArgs(argreader):
     argreader.parser.add_argument('--sal_metr_mask_weight', type=float, metavar='FLOAT',
                                   help='The weight of the saliency metric mask in the loss function.')
 
+    return argreader
+
+def init_post_hoc_arg(argreader):
+    argreader.parser.add_argument('--att_metrics_post_hoc', type=str, help='The post-hoc method to use instead of the model ')
+    argreader.parser.add_argument('--img_nb_per_class', type=int, help='The nb of images on which to compute the att metric.')    
     return argreader
 
 def initMasterNet(args):
@@ -632,6 +641,7 @@ def main(argv=None):
     argreader = addOptimArgs(argreader)
     argreader = addValArgs(argreader)
     argreader = addLossTermArgs(argreader)
+    argreader = init_post_hoc_arg(argreader)
 
     argreader = modelBuilder.addArgs(argreader)
     argreader = load_data.addArgs(argreader)

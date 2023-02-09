@@ -1,3 +1,4 @@
+from random import shuffle
 import utils
 import numpy as np
 import torch
@@ -13,7 +14,7 @@ import torchvision
 import matplotlib.pyplot as plt
 plt.switch_backend('agg')
 
-from separability_study import run_separability_analysis
+import separability_study 
 
 def add_losses_to_dic(metDictSample,lossDic):
     for loss_name in lossDic:
@@ -58,8 +59,26 @@ def binaryToMetrics(output,target,resDict,comp_spars=False):
 
     return metDict
 
-def separability_metric(feat_pooled,feat_pooled_masked,metDict,seed):
-    sep_dict = run_separability_analysis(feat_pooled,feat_pooled_masked,False,seed)
+def separability_metric(feat_pooled,feat_pooled_masked,target_list,metDict,seed,nb_per_class):
+
+    label_to_ind = {}
+    for i in range(len(feat_pooled)):
+        lab = target_list[i].item()
+        if lab not in label_to_ind:
+            label_to_ind[lab] = []  
+        label_to_ind[lab].append(i)
+
+    torch.manual_seed(seed)
+    kept_inds = []
+    for label in label_to_ind:
+        all_inds = torch.tensor(label_to_ind[label])
+        all_inds_perm = all_inds[torch.randperm(len(all_inds))]
+        kept_inds.extend(all_inds_perm[:nb_per_class])
+    kept_inds = torch.tensor(kept_inds)
+    
+    feat_pooled,feat_pooled_masked = feat_pooled[kept_inds],feat_pooled_masked[kept_inds]
+
+    sep_dict = separability_study.run_separability_analysis(feat_pooled,feat_pooled_masked,False,seed)
     separability_auc,separability_acc = sep_dict["val_auc"].mean(),sep_dict["val_acc"].mean()
     metDict["Sep_AuC"] = separability_auc
     metDict["Sep_Acc"] = separability_acc
@@ -84,8 +103,8 @@ def compAttMapSparsity(attMaps,features=None):
 
         attMaps = attMaps*norm
 
-    max = attMaps.max(dim=-1,keepdim=True)[0].max(dim=-2,keepdim=True)[0]
-    attMaps = attMaps/(max+0.00001)
+    max_val = attMaps.max(dim=-1,keepdim=True)[0].max(dim=-2,keepdim=True)[0]
+    attMaps = attMaps/(max_val+0.00001)
 
     if attMaps.size(1) > 1:
         attMaps = attMaps.mean(dim=1,keepdim=True)
@@ -119,3 +138,27 @@ def compIoS(attMapNorm,segmentation):
 
     finalIos = torch.cat(allIos,dim=0).mean(dim=0)
     return finalIos.sum().item()
+
+def main():
+
+    example_nb = 2000
+
+    feat_pooled = torch.rand(size=(example_nb,2048))
+    feat_pooled_masked = torch.rand(size=(example_nb,2048))
+
+    class_nb = 8
+    nb_per_class = 15
+
+    target_list = torch.arange(class_nb).unsqueeze(-1)
+    target_list = target_list.expand(-1,example_nb//class_nb).reshape(-1)
+
+    metDict = {}
+    seed = 0
+
+    retDict = separability_metric(feat_pooled,feat_pooled_masked,target_list,metDict,seed,nb_per_class)
+
+    print(retDict)
+
+if __name__ == "__main__":
+
+    main()

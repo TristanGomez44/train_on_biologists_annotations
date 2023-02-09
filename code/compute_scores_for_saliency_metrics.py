@@ -14,7 +14,7 @@ from args import ArgReader
 from args import str2bool
 import modelBuilder
 import load_data
-from trainVal import addInitArgs,preprocessAndLoadParams
+from trainVal import preprocessAndLoadParams,addInitArgs,init_post_hoc_arg
 from post_hoc_expl.scorecam import ScoreCam
 from post_hoc_expl.xgradcam import AblationCAM,XGradCAM
 from post_hoc_expl.rise import RISE
@@ -192,10 +192,6 @@ def loadSalMaps(exp_id,model_id):
         
     return salMaps
 
-def init_post_hoc_arg(argreader):
-    argreader.parser.add_argument('--att_metrics_post_hoc', type=str, help='The post-hoc method to use instead of the model ')
-    argreader.parser.add_argument('--img_nb_per_class', type=int, help='The nb of images on which to compute the att metric.')    
-    return argreader
 
 def main(argv=None):
     # Getting arguments from config file and command line

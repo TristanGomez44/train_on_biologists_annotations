@@ -8,8 +8,8 @@ import torch
 from args import ArgReader
 import modelBuilder
 import load_data
-from compute_scores_for_saliency_metrics import getAttMetrMod,applyPostHoc,init_post_hoc_arg
-from trainVal import addInitArgs,preprocessAndLoadParams
+from compute_scores_for_saliency_metrics import getAttMetrMod,applyPostHoc
+from trainVal import addInitArgs,preprocessAndLoadParams,init_post_hoc_arg
 
 def main(argv=None):
     # Getting arguments from config file and command line
