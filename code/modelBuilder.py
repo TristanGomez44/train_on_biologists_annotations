@@ -3,7 +3,8 @@ from torch import nn
 import matplotlib.pyplot as plt
 plt.switch_backend('agg')
 
-from models import resnet
+from models import resnet,convnext
+
 import args
 EPS = 0.000001
 
@@ -20,6 +21,8 @@ def buildFeatModel(featModelName, **kwargs):
     '''
     if featModelName.find("resnet") != -1:
         featModel = getattr(resnet, featModelName)(**kwargs)
+    elif featModelName.find("convnext") != -1:
+        featModel = getattr(convnext, featModelName)()
     else:
         raise ValueError("Unknown model type : ", featModelName)
 
@@ -239,14 +242,10 @@ def getResnetFeat(backbone_name, backbone_inplanes):
         nbFeat = backbone_inplanes * 2 ** (4 - 1)
     elif backbone_name.find("resnet18") != -1:
         nbFeat = backbone_inplanes * 2 ** (4 - 1)
-    elif backbone_name == "hrnet44":
-        nbFeat = 44
-    elif backbone_name == "hrnet64":
-        nbFeat = 64
-    elif backbone_name == "hrnet18":
-        nbFeat = 16
-    elif backbone_name.find("efficientnet") != -1:
-        nbFeat = 1792
+    elif backbone_name == "convnext_small":
+        nbFeat = 768
+    elif backbone_name == "convnext_base":
+        nbFeat = 1024
     else:
         raise ValueError("Unkown backbone : {}".format(backbone_name))
     return nbFeat

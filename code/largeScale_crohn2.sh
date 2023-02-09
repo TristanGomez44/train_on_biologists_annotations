@@ -126,10 +126,22 @@ case $1 in
     python trainVal.py -c model_crohn2.config --model_id noneRed_long   --resnet_bilinear False  --stride_lay3 2 --stride_lay4 2  --big_images True --epochs 500 --start_mode fine_tune --init_path ../models/CROHN2/modelnoneRed_best_epoch46
     ;;  
   "noneRed_attMetrMask_FT_0.0016simclr")
-    python trainVal.py -c model_crohn2.config --model_id noneRed_attMetrMask_FT_0.0016simclr --resnet_bilinear False  --big_images True  --stride_lay3 2 --stride_lay4 2 --sal_metr_mask True --epochs 500 --start_mode fine_tune --init_path ../models/CROHN2/modelnoneRed_long_copy_best_epoch111 --sal_metr_mask_weight 0.0016
+    python trainVal.py -c model_crohn2.config --model_id noneRed_attMetrMask_FT_0.0016simclr --resnet_bilinear False  --big_images True  --stride_lay3 2 --stride_lay4 2 --sal_metr_mask True --epochs 500 --start_mode fine_tune --sal_metr_mask_weight 0.0016
     ;; 
   "noneRed_attMetrMask_FT_simclr")
-    python trainVal.py -c model_crohn2.config --model_id noneRed_attMetrMask_FT_simclr --resnet_bilinear False  --big_images True  --stride_lay3 2 --stride_lay4 2 --sal_metr_mask True --epochs 500 --start_mode fine_tune --init_path ../models/CROHN2/modelnoneRed_long_copy_best_epoch111 --sal_metr_mask_weight 1
+    python trainVal.py -c model_crohn2.config --model_id noneRed_attMetrMask_FT_simclr --resnet_bilinear False  --big_images True  --stride_lay3 2 --stride_lay4 2 --sal_metr_mask True --epochs 500 --start_mode fine_tune --sal_metr_mask_weight 1
+    ;;
+  "noneRed_convnextbase")
+    python trainVal.py -c model_crohn2.config --model_id noneRed_convnextbase --resnet_bilinear False  --big_images True  --stride_lay3 2 --stride_lay4 2 --epochs 500 --first_mod convnext_base 
+    ;;
+  "noneRed_convnextsmall")
+    python trainVal.py -c model_crohn2.config --model_id noneRed_convnextsmall --resnet_bilinear False  --big_images True  --stride_lay3 2 --stride_lay4 2 --epochs 500 --first_mod convnext_small
+    ;;    
+  "noneRed_attMetrMask_FT_simclr_convnextbase")
+    python trainVal.py -c model_crohn2.config --model_id noneRed_attMetrMask_FT_simclr_convnextbase --resnet_bilinear False  --big_images True  --stride_lay3 2 --stride_lay4 2 --sal_metr_mask True --epochs 500 --start_mode fine_tune --init_path ../models/CROHN2/modelnoneRed_convnextbase_best_epochX --sal_metr_mask_weight 1 --first_mod convnext_base 
+    ;;
+  "noneRed_attMetrMask_FT_simclr_convnextsmall")
+    python trainVal.py -c model_crohn2.config --model_id noneRed_attMetrMask_FT_simclr_convnextsmall --resnet_bilinear False  --big_images True  --stride_lay3 2 --stride_lay4 2 --sal_metr_mask True --epochs 500 --start_mode fine_tune --init_path ../models/CROHN2/modelnoneRed_convnextsmall_best_epochX --sal_metr_mask_weight 1 --first_mod convnext_small 
     ;;
   "*")
     echo "no such model"
