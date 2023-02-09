@@ -30,7 +30,7 @@ def run_separability_analysis(repres1,repres2,normalize,seed,folds=10):
     val_acc = []
     val_auc = []
 
-    for _ in range(folds):
+    for i in range(folds):
 
         inds = np.random.permutation(len1)
 
@@ -91,7 +91,7 @@ def main(argv=None):
     repres1 = np.load(f"../results/{args.exp_id}/img_repr_model{args.model_id}_transf{args.transf1}.npy")
     repres2 = np.load(f"../results/{args.exp_id}/img_repr_model{args.model_id2}_transf{args.transf2}.npy")
 
-    sep_dict = run_separability_analysis(repres1,repres2,args.normalize,args.seed,args.folds,args.model)
+    sep_dict = run_separability_analysis(repres1,repres2,args.normalize,args.seed,args.folds)
 
     train_acc,train_auc = sep_dict["train_acc"],sep_dict["train_auc"]
     val_acc,val_auc = sep_dict["val_acc"],sep_dict["val_auc"]
