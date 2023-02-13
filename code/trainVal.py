@@ -75,7 +75,7 @@ def epochSeqTr(model, optim, loader, epoch, args, **kwargs):
     accumulated_size = 0
     acc_nb = 0
 
-    featDic = {} if args.sal_metr_mask_weight > 0 else None
+    featDic = {} if args.nce_weight > 0 else None
     target_list = []
     for batch_idx, batch in enumerate(loader):
         optim.zero_grad()
@@ -100,7 +100,7 @@ def epochSeqTr(model, optim, loader, epoch, args, **kwargs):
             resDict = master_net_inference(data,kwargs,resDict)
 
         if args.sal_metr_mask:
-            resDict,data = sal_metr_data_aug.apply_sal_metr_masks_and_update_dic(model,data,args.sal_metr_mask_prob,args.sal_metr_mask_weight,resDict)
+            resDict,data = sal_metr_data_aug.apply_sal_metr_masks_and_update_dic(model,data,args.sal_metr_mask_prob,args.nce_weight,resDict)
                    
         resDict.update(model(data))
         output = resDict["pred"]
@@ -117,22 +117,32 @@ def epochSeqTr(model, optim, loader, epoch, args, **kwargs):
         metDictSample = metrics.add_losses_to_dic(metDictSample,loss_dic)
         metrDict = metrics.updateMetrDict(metrDict, metDictSample)
 
-        if args.sal_metr_mask_weight > 0: 
+        if args.nce_weight > 0: 
             featDic = update.catFeat(resDict,featDic)
             target_list.append(target)
 
         validBatch += 1
         totalImgNb += len(data)
 
-        if validBatch > 2 and args.debug:
+        if validBatch > 5 and args.debug:
             break
+
+    args.nce_weight = kwargs["nce_weight_updater"].update_nce_weight(metrDict)
+    metrDict["nce_weight"] = args.nce_weight
 
     if not args.optuna:
         torch.save(model.state_dict(), "../models/{}/model{}_epoch{}".format(args.exp_id, args.model_id, epoch))
-        if args.sal_metr_mask_weight > 0: 
+        previous_epoch_model = "../models/{}/model{}_epoch{}".format(args.exp_id, args.model_id, epoch-1)
+        if os.path.exists(previous_epoch_model):
+            os.remove(previous_epoch_model)
+
+        if args.nce_weight > 0: 
             target_list = torch.cat(target_list,dim=0)
             metrDict = metrics.separability_metric(featDic["feat_pooled"].detach().cpu(),featDic["feat_pooled_masked"].detach().cpu(),target_list,metrDict,args.seed,args.img_nb_per_class)
+             
         writeSummaries(metrDict, totalImgNb, epoch, "train", args.model_id, args.exp_id)
+
+    return metrDict
 
 def epochImgEval(model, loader, epoch, args, mode="val",**kwargs):
 
@@ -146,7 +156,7 @@ def epochImgEval(model, loader, epoch, args, mode="val",**kwargs):
     totalImgNb = 0
     intermVarDict = {}
     
-    featDic = {} if args.sal_metr_mask_weight > 0 else None
+    featDic = {} if args.nce_weight > 0 else None
     target_list = []
     for batch_idx, batch in enumerate(loader):
         data, target = batch[:2]
@@ -160,7 +170,7 @@ def epochImgEval(model, loader, epoch, args, mode="val",**kwargs):
         resDict = {}
         
         if args.sal_metr_mask:
-            resDict,data = sal_metr_data_aug.apply_sal_metr_masks_and_update_dic(model,data,args.sal_metr_mask_prob,args.sal_metr_mask_weight,resDict)
+            resDict,data = sal_metr_data_aug.apply_sal_metr_masks_and_update_dic(model,data,args.sal_metr_mask_prob,args.nce_weight,resDict)
 
         resDict.update(model(data))
         output = resDict["pred"]
@@ -177,7 +187,7 @@ def epochImgEval(model, loader, epoch, args, mode="val",**kwargs):
             resDict["norm"] = torch.sqrt(torch.pow(resDict["feat"],2).sum(dim=1,keepdim=True))
             intermVarDict = update.catIntermediateVariables(resDict, intermVarDict)
 
-        if args.sal_metr_mask_weight > 0: 
+        if args.nce_weight > 0: 
             target_list.append(target)
             featDic = update.catFeat(resDict,featDic)
 
@@ -190,7 +200,7 @@ def epochImgEval(model, loader, epoch, args, mode="val",**kwargs):
     if mode == "test":
         intermVarDict = update.saveIntermediateVariables(intermVarDict, args.exp_id, args.model_id, epoch, mode)
 
-    if args.sal_metr_mask_weight > 0: 
+    if args.nce_weight > 0: 
         target_list = torch.cat(target_list)
         metrDict = metrics.separability_metric(featDic["feat_pooled"].cpu(),featDic["feat_pooled_masked"].cpu(),target_list,metrDict,args.seed,args.img_nb_per_class)
     writeSummaries(metrDict, totalImgNb, epoch, mode, args.model_id, args.exp_id)
@@ -200,7 +210,7 @@ def epochImgEval(model, loader, epoch, args, mode="val",**kwargs):
 def writeSummaries(metrDict, totalImgNb, epoch, mode, model_id, exp_id):
  
     for metric in metrDict.keys():
-        if metric.find("Sep") == -1:
+        if metric.find("Sep") == -1 and metric != "nce_weight":
             metrDict[metric] /= totalImgNb
 
     header_list = ["epoch"]
@@ -388,9 +398,10 @@ def addValArgs(argreader):
 def addLossTermArgs(argreader):
     argreader.parser.add_argument('--nll_weight', type=float, metavar='FLOAT',
                                   help='The weight of the negative log-likelihood term in the loss function.')
-    argreader.parser.add_argument('--sal_metr_mask_weight', type=float, metavar='FLOAT',
-                                  help='The weight of the saliency metric mask in the loss function.')
-
+    argreader.parser.add_argument('--nce_weight', type=str, metavar='FLOAT',
+                                  help='The weight of the saliency metric mask in the loss function. Can be set to "scheduler".')
+    argreader.parser.add_argument('--nce_sched_start', type=float, metavar='FLOAT',
+                                  help='The initial value of nce_weight loss term.')
     return argreader
 
 def init_post_hoc_arg(argreader):
@@ -537,6 +548,10 @@ def train(args,trial):
 
     kwargsTr["optim"],scheduler = getOptim_and_Scheduler(args.optim, args.lr,args.momentum,args.weight_decay,args.use_scheduler,startEpoch,net)
 
+    nce_weight_updater = update.NCEWeightUpdater(args)
+    args.nce_weight = nce_weight_updater.init_nce_weight()
+    kwargsTr["nce_weight_updater"] = nce_weight_updater
+
     epoch = startEpoch
     bestEpoch, worseEpochNb = getBestEpochInd_and_WorseEpochNb(args.start_mode, args.exp_id, args.model_id, epoch)
 
@@ -554,6 +569,7 @@ def train(args,trial):
 
     kwargsTr["lossFunc"],kwargsVal["lossFunc"] = lossFunc,lossFunc
 
+
     if not args.only_test:
 
         actual_bs = args.batch_size if args.batch_size < args.max_batch_size_single_pass else args.max_batch_size_single_pass
@@ -564,7 +580,7 @@ def train(args,trial):
             kwargsTr["epoch"], kwargsVal["epoch"] = epoch, epoch
             kwargsTr["model"], kwargsVal["model"] = net, net
 
-            trainFunc(**kwargsTr)
+            metrDict = trainFunc(**kwargsTr)
             if not scheduler is None:
                 scheduler.step()
 

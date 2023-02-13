@@ -32,11 +32,11 @@ def computeLoss(args, output, target, resDict,reduction="mean"):
         loss_dic["loss_ce"] = loss_ce.data.unsqueeze(0)
         loss = args.nll_weight*loss_ce
 
-    if args.sal_metr_mask_weight > 0 and "feat_pooled_masked" in resDict:
+    if args.nce_weight > 0 and "feat_pooled_masked" in resDict:
         all_feat = torch.cat((resDict["feat_pooled"],resDict["feat_pooled_masked"]),dim=0)
         nce_loss = info_nce_loss(all_feat,reduction=reduction)
         loss_dic["loss_nce"] = nce_loss.data.unsqueeze(0)
-        loss += args.sal_metr_mask_weight * nce_loss
+        loss += args.nce_weight * nce_loss
         
     loss_dic["loss"] = loss.unsqueeze(0)
 

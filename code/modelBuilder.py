@@ -291,7 +291,10 @@ def netBuilder(args,gpu=None):
 
     ############### Second Model #######################
     if args.second_mod == "linear":
-        secondModel = LinearSecondModel(nbFeat, args.class_nb, args.dropout,args.lin_lay_bias)
+        if args.first_mod.find("convnext") == -1:
+            secondModel = LinearSecondModel(nbFeat, args.class_nb, args.dropout,args.lin_lay_bias)
+        else:
+            secondModel = nn.Identity()
     else:
         raise ValueError("Unknown second model type : ", args.second_mod)
 

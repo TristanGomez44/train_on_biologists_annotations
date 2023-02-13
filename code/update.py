@@ -106,8 +106,8 @@ def catMap(resDict,intermVarDict,key="attMaps"):
     return intermVarDict
 
 def saveIntermediateVariables(intermVarDict,exp_id,model_id,epoch,mode="val"):
-
-    intermVarDict["attMaps"] = saveMap(intermVarDict["attMaps"],exp_id,model_id,epoch,mode,key="attMaps")
+    if "attMaps" in intermVarDict:
+        intermVarDict["attMaps"] = saveMap(intermVarDict["attMaps"],exp_id,model_id,epoch,mode,key="attMaps")
     intermVarDict["norm"] = saveMap(intermVarDict["norm"],exp_id,model_id,epoch,mode,key="norm")
 
     return intermVarDict
@@ -132,3 +132,56 @@ def get_gpu_memory_map():
     gpu_memory = [x for x in result.strip().split('\n')]
     gpu_memory_map = dict(zip(range(len(gpu_memory)), gpu_memory))
     return gpu_memory_map
+
+class NCEWeightUpdater():
+
+    def __init__(self,args,threshold_epoch_nb=5,variation_threshold=1e-2,increase_factor=0.5):
+        self.args = args
+        self.threshold_epoch_nb = threshold_epoch_nb
+        self.variation_threshold = variation_threshold
+        self.increase_factor = increase_factor
+        self.loss_history_dic = {}
+
+    def init_nce_weight(self):
+        if self.args.nce_weight != "scheduler":
+            self.args.nce_weight = float(self.args.nce_weight)
+        else:
+            self.args.nce_weight = self.args.nce_sched_start
+        return self.args.nce_weight
+
+    def update_nce_weight(self,metrDict):
+
+        loss_names = list(filter(lambda x:x.find("loss") != -1,list(metrDict.keys())))
+
+        for loss_name in loss_names:
+            if not loss_name in self.loss_history_dic:
+                self.loss_history_dic[loss_name] = []
+            
+            self.loss_history_dic[loss_name].append(metrDict[loss_name])
+
+        converged_list = []
+
+        for loss_name in self.loss_history_dic.keys():
+
+            values = self.loss_history_dic[loss_name]
+
+            if len(values) > self.threshold_epoch_nb:
+
+                last_values = np.array(values[-self.threshold_epoch_nb-1:])
+                
+                #variations = np.abs(last_values[:-1] - last_values[1:])/last_values[:-1]
+                #criterion = (variations<self.variation_threshold).all()
+
+                criterion = (last_values[-1] - last_values[:-1] < 0).all()
+
+                converged_list.append(criterion)
+
+            else:
+                converged_list.append(False)
+
+        converged_list = np.array(converged_list)
+
+        if converged_list.all():
+            self.args.nce_weight *= 1+self.increase_factor  
+        
+        return self.args.nce_weight
