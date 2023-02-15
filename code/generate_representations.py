@@ -2,7 +2,8 @@ import glob
 import numpy as np 
 import torch 
 
-from trainVal import addInitArgs,addValArgs,preprocessAndLoadParams
+from args import addInitArgs,addValArgs
+from init_model import preprocessAndLoadParams
 from compute_scores_for_saliency_metrics import getBatch,init_post_hoc_arg,sample_img_inds,get_other_img_inds
 import modelBuilder,load_data
 import sparse
@@ -122,6 +123,8 @@ def main(argv=None):
         inds_bckgr = get_other_img_inds(inds)
     else:
         inds_bckgr = None
+
+    torch.random.manual_seed(0)
 
     featList = []
     attMapList = []

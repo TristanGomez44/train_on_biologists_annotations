@@ -133,3 +133,31 @@ class ArgReader():
 
         with open(filePath, 'w') as f:
             config.write(f)
+
+def addInitArgs(argreader):
+    argreader.parser.add_argument('--start_mode', type=str, metavar='SM',
+                                  help='The mode to use to initialise the model. Can be \'scratch\' or \'fine_tune\'.')
+    argreader.parser.add_argument('--init_path', type=str, metavar='SM',
+                                  help='The path to the weight file to use to initialise the network')
+    argreader.parser.add_argument('--strict_init', type=str2bool, metavar='SM',
+                                  help='Set to True to make torch.load_state_dict throw an error when not all keys match (to use with --init_path)')
+
+    return argreader
+
+def addValArgs(argreader):
+
+    argreader.parser.add_argument('--metric_early_stop', type=str, metavar='METR',
+                                  help='The metric to use to choose the best model')
+    argreader.parser.add_argument('--maximise_val_metric', type=str2bool, metavar='BOOL',
+                                  help='If true, The chosen metric for chosing the best model will be maximised')
+    argreader.parser.add_argument('--max_worse_epoch_nb', type=int, metavar='NB',
+                                  help='The number of epochs to wait if the validation performance does not improve.')
+    argreader.parser.add_argument('--run_test', type=str2bool, metavar='NB',
+                                  help='Evaluate the model on the test set')
+
+    return argreader
+
+def init_post_hoc_arg(argreader):
+    argreader.parser.add_argument('--att_metrics_post_hoc', type=str, help='The post-hoc method to use instead of the model ')
+    argreader.parser.add_argument('--img_nb_per_class', type=int, help='The nb of images on which to compute the att metric.')    
+    return argreader

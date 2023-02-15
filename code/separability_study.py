@@ -1,14 +1,16 @@
 
-import os 
+import os ,sys
 
 import numpy as np 
 import torch
 from sklearn import svm
 import sklearn.metrics
 
-from trainVal import addInitArgs,addValArgs
+from args import addInitArgs,addValArgs
 import modelBuilder,load_data
 from args import ArgReader
+
+import matplotlib.pyplot as plt
 
 def run_separability_analysis(repres1,repres2,normalize,seed,folds=10):
 
@@ -29,6 +31,9 @@ def run_separability_analysis(repres1,repres2,normalize,seed,folds=10):
     train_auc = []
     val_acc = []
     val_auc = []
+
+    train_inv_auc = []
+    val_inv_auc = []   
 
     for i in range(folds):
 
@@ -54,11 +59,40 @@ def run_separability_analysis(repres1,repres2,normalize,seed,folds=10):
         val_acc.append(model.score(test_x,test_y))
         val_auc.append(sklearn.metrics.roc_auc_score(test_y,test_y_score))
 
+        '''
+        #Inversed model
+        train_inv_y_score = 1 - train_y_score
+        train_inv_auc.append(sklearn.metrics.roc_auc_score(train_y,train_inv_y_score))
+
+        test_inv_y_score = 1 - test_y_score
+        val_inv_auc.append(sklearn.metrics.roc_auc_score(test_y,test_inv_y_score))
+
+        plt.figure()
+
+        fpr,tpr,_ = sklearn.metrics.roc_curve(train_y, train_y_score)
+        plt.plot(fpr,tpr,label="train")
+        fpr,tpr,_ = sklearn.metrics.roc_curve(test_y, test_y_score)
+        plt.plot(fpr,tpr,label="val")
+        plt.legend()
+        plt.xlabel("False positive rate")
+        plt.ylabel("True positive rate")
+
+        plt.savefig(f"../vis/CROHN2/roc_curve_{i}.png")
+        plt.close()
+        '''
+        
+    #sys.exit(0)
     train_acc,train_auc = np.array(train_acc),np.array(train_auc)
     val_acc,val_auc = np.array(val_acc),np.array(val_auc)
 
-    return {"train_acc":train_acc,"train_auc":train_auc,"val_acc":val_acc,"val_auc":val_auc}
+    train_inv_auc = np.array(train_inv_auc)
+    val_inv_auc = np.array(val_inv_auc)
 
+    return {"train_acc":train_acc,"train_auc":train_auc,"val_acc":val_acc,"val_auc":val_auc,"train_inv_auc":train_inv_auc,"val_inv_auc":val_inv_auc}
+
+def list_to_str(values):
+    string = str(round(values.mean(),4)) + "±" +str(round(values.std(),4))
+    return string
 
 def main(argv=None):
     # Getting arguments from config file and command line
@@ -96,10 +130,15 @@ def main(argv=None):
     train_acc,train_auc = sep_dict["train_acc"],sep_dict["train_auc"]
     val_acc,val_auc = sep_dict["val_acc"],sep_dict["val_auc"]
 
-    train_acc = str(round(train_acc.mean(),4)) + "±" +str(round(train_acc.std(),4))
-    train_auc = str(round(train_auc.mean(),4)) + "±" +str(round(train_auc.std(),4))
-    val_acc = str(round(val_acc.mean(),4)) + "±" +str(round(val_acc.std(),4))
-    val_auc = str(round(val_auc.mean(),4)) + "±" +str(round(val_auc.std(),4))
+    train_inv_auc,val_inv_auc = sep_dict["train_inv_auc"],sep_dict["val_inv_auc"]
+
+    train_acc = list_to_str(train_acc)
+    train_auc = list_to_str(train_auc)
+    val_acc = list_to_str(val_acc)
+    val_auc = list_to_str(val_auc)
+
+    #train_inv_auc = list_to_str(train_inv_auc)
+    #val_inv_auc = list_to_str(val_inv_auc)
 
     csv_path = f"../results/{args.exp_id}/separability_study.csv"
     if not os.path.exists(csv_path):

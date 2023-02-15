@@ -10,11 +10,10 @@ from saliency_maps_metrics.multi_step_metrics import Deletion, Insertion
 from saliency_maps_metrics.single_step_metrics import IIC_AD, ADD
 from captum.attr import (IntegratedGradients,NoiseTunnel,LayerGradCam,LayerGradCampp,GuidedBackprop)
 
-from args import ArgReader
-from args import str2bool
+from args import ArgReader,str2bool,addInitArgs,init_post_hoc_arg
 import modelBuilder
 import load_data
-from trainVal import preprocessAndLoadParams,addInitArgs,init_post_hoc_arg
+from init_model import preprocessAndLoadParams
 from post_hoc_expl.scorecam import ScoreCam
 from post_hoc_expl.xgradcam import AblationCAM,XGradCAM
 from post_hoc_expl.rise import RISE
@@ -44,7 +43,7 @@ def sample_img_inds(testDataset,nb_per_class):
 
     nb_classes_to_be_sampled = len(class_first_image_inds)
 
-    rng = Generator(PCG64())
+    rng = np.random.default_rng(0)
     all_chosen_inds = []
     for label in range(nb_classes_to_be_sampled):
 
@@ -211,34 +210,10 @@ def main(argv=None):
     argreader.getRemainingArgs()
 
     args = argreader.args
-  
-    args.val_batch_size = 1
-    _,testDataset = load_data.buildTestLoader(args, "test")
 
-    bestPath = glob.glob(f"../models/{args.exp_id}/model{args.model_id}_best_epoch*")[0]
-
-    net = modelBuilder.netBuilder(args)
-    net = preprocessAndLoadParams(bestPath,args.cuda,net)
-    net.eval()
-    net_lambda = lambda x:torch.softmax(net(x)["pred"],dim=-1)
-    
-    if args.att_metrics_post_hoc:
-        attrFunc,kwargs = getAttMetrMod(net,testDataset,args)
-    else:
-        salMaps_dataset = loadSalMaps(args.exp_id,args.model_id)
-        attrFunc = lambda i:(salMaps_dataset[i,0:1]).unsqueeze(0)
-        kwargs = None
-
-    np.random.seed(0)
-    inds = sample_img_inds(testDataset,args.img_nb_per_class)
-
-    data,_ = getBatch(testDataset,inds,args)
-    
-    if args.data_replace_method == "otherimage":
-        other_img_inds = get_other_img_inds(inds)
-        other_data,_ = getBatch(testDataset,other_img_inds,args)
-    else:
-        other_img_inds = None
+    #Constructing result file path
+    post_hoc_suff = "" if args.att_metrics_post_hoc is None else "-"+args.att_metrics_post_hoc
+    formated_attention_metric = args.attention_metric.replace("_","")
 
     #Constructing metric
     is_multi_step_dic,const_dic = get_metric_dics()
@@ -247,14 +222,41 @@ def main(argv=None):
     else:
         metric_constr_arg_list = [args.data_replace_method]
     metric = const_dic[args.attention_metric](*metric_constr_arg_list)
+
     data_replace_method = metric.data_replace_method if args.data_replace_method is None else args.data_replace_method
-    
-    #Constructing result file path
-    post_hoc_suff = "" if args.att_metrics_post_hoc is None else "-"+args.att_metrics_post_hoc
-    formated_attention_metric = args.attention_metric.replace("_","")
+        
     result_file_path = f"../results/{args.exp_id}/{formated_attention_metric}-{data_replace_method}_{args.model_id}{post_hoc_suff}.npy"
 
     if args.do_again or not os.path.exists(result_file_path):
+
+        args.val_batch_size = 1
+        _,testDataset = load_data.buildTestLoader(args, "test")
+
+        bestPath = glob.glob(f"../models/{args.exp_id}/model{args.model_id}_best_epoch*")[0]
+
+        net = modelBuilder.netBuilder(args)
+        net = preprocessAndLoadParams(bestPath,args.cuda,net)
+        net.eval()
+        net_lambda = lambda x:torch.softmax(net(x)["pred"],dim=-1)
+        
+        if args.att_metrics_post_hoc:
+            attrFunc,kwargs = getAttMetrMod(net,testDataset,args)
+        else:
+            salMaps_dataset = loadSalMaps(args.exp_id,args.model_id)
+            attrFunc = lambda i:(salMaps_dataset[i,0:1]).unsqueeze(0)
+            kwargs = None
+
+        inds = sample_img_inds(testDataset,args.img_nb_per_class)
+
+        data,_ = getBatch(testDataset,inds,args)
+        
+        if args.data_replace_method == "otherimage":
+            other_img_inds = get_other_img_inds(inds)
+            other_data,_ = getBatch(testDataset,other_img_inds,args)
+        else:
+            other_img_inds = None
+
+ 
 
         torch.set_grad_enabled(False) 
         predClassInds = net_lambda(data).argmax(dim=-1)
@@ -283,6 +285,8 @@ def main(argv=None):
             saved_dic = {"prediction_scores":scores,"prediction_scores_with_mask":scores_masked}
         
         np.save(result_file_path,saved_dic)
-
+    else:
+        print("Already done:",formated_attention_metric,data_replace_method,args.model_id,post_hoc_suff)
+        
 if __name__ == "__main__":
     main()
