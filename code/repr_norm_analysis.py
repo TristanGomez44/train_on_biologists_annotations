@@ -4,8 +4,9 @@ import matplotlib.pyplot as plt
 import torchvision 
 import torch
 from skimage.transform import resize
-
+import os
 import args
+import utils
 from args import ArgReader
 from args import str2bool
 
@@ -28,8 +29,8 @@ def main(argv=None):
     if args.model_id2 is None:
         args.model_id2 = args.model_id
 
-    repr1 = np.load(f"../results/EMB10/img_repr_model{args.model_id}_transf{args.transf1}.npy")
-    repr2 = np.load(f"../results/EMB10/img_repr_model{args.model_id2}_transf{args.transf2}.npy")
+    repr1 = np.load(f"../results/{args.exp_id}/img_repr_model{args.model_id}_transf{args.transf1}.npy")
+    repr2 = np.load(f"../results/{args.exp_id}/img_repr_model{args.model_id2}_transf{args.transf2}.npy")
 
     if args.model_id == args.model_id2:
         model_ids = args.model_id 
@@ -40,11 +41,16 @@ def main(argv=None):
 
     norm1,norm2 = np.abs(repr1).sum(axis=1),np.abs(repr2).sum(axis=1)
 
+    os.makedirs(f"../vis/{args.exp_id}/repr_attMap/",exist_ok=True)
+
+    xmin,xmax = 200,2000
     plt.figure()
-    plt.hist(norm1,label=args.transf1,alpha=0.5)
-    plt.hist(norm2,label=args.transf2,alpha=0.5)
+    plt.hist(norm1,label=args.transf1,alpha=0.5,range=(xmin,xmax),bins=20)
+    plt.hist(norm2,label=args.transf2,alpha=0.5,range=(xmin,xmax),bins=20)
+    plt.xlim(xmin,xmax)
+    plt.ylim(0,30)
     plt.legend()
-    plt.savefig(f"../vis/EMB10/repr_attMap/{args.transf1}_vs_{args.transf2}_repre_distr_{model_ids}.png")
+    plt.savefig(f"../vis/{args.exp_id}/repr_attMap/{args.transf1}_vs_{args.transf2}_repre_distr_{model_ids}.png")
     plt.close()
 
     stat,pvalue = scipy.stats.ttest_ind(norm1,norm2,equal_var=False)
@@ -60,11 +66,11 @@ def main(argv=None):
         keyword = "attMaps"
         color_map = plt.get_cmap('plasma')
 
-    maps1 = np.load(f"../results/EMB10/img_{keyword}_model{args.model_id}_transf{args.transf1}.npy")
-    maps2 = np.load(f"../results/EMB10/img_{keyword}_model{args.model_id2}_transf{args.transf2}.npy")
+    maps1 = np.load(f"../results/{args.exp_id}/img_{keyword}_model{args.model_id}_transf{args.transf1}.npy")
+    maps2 = np.load(f"../results/{args.exp_id}/img_{keyword}_model{args.model_id2}_transf{args.transf2}.npy")
 
-    imgs1 = torch.from_numpy(np.load(f"../results/EMB10/img_model{args.model_id}_transf{args.transf1}.npy"))
-    imgs2 = torch.from_numpy(np.load(f"../results/EMB10/img_model{args.model_id2}_transf{args.transf2}.npy"))
+    imgs1 = torch.from_numpy(np.load(f"../results/{args.exp_id}/img_model{args.model_id}_transf{args.transf1}.npy"))
+    imgs2 = torch.from_numpy(np.load(f"../results/{args.exp_id}/img_model{args.model_id2}_transf{args.transf2}.npy"))
 
     for i in range(min(len(maps1),10)):
 
@@ -89,6 +95,8 @@ def main(argv=None):
                 viz_map = viz_map * viz_map_pred_norm
 
             img = imgs[i:i+1]
+            img = utils.inv_imgnet_norm(img)
+
 
             viz_map = torch.nn.functional.interpolate(viz_map,(img.shape[2],img.shape[3]),mode="nearest")
 
@@ -98,7 +106,7 @@ def main(argv=None):
 
         grid = torch.cat(grid,dim=0)
 
-        torchvision.utils.save_image(grid,f"../vis/EMB10/repr_attMap/repr_{keyword}_analysis_{model_ids}_{i}_{args.transf1}_vs_{args.transf2}.png")
+        torchvision.utils.save_image(grid,f"../vis/{args.exp_id}/repr_attMap/repr_{keyword}_analysis_{model_ids}_{i}_{args.transf1}_vs_{args.transf2}.png")
 
 if __name__ == "__main__":
     main()
