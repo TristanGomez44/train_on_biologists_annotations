@@ -58,7 +58,7 @@ def main(argv=None):
         filename = os.path.basename(path).replace(".npy","")
         
         metric_name_and_replace_method,model_id_and_posthoc_method = filename.split("_")
-        print(filename,metric_name_and_replace_method)
+        
         metric_name,replace_method = metric_name_and_replace_method.split("-")
         
         if "-" in model_id_and_posthoc_method:
