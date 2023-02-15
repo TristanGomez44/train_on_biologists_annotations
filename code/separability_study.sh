@@ -43,4 +43,6 @@
 #python3 separability_study.py -c model_crohn2.config --model_id noneRed  --stride_lay3 2 --stride_lay4 2 --transf2 saliency_metrics
 #python3 separability_study.py -c model_crohn2.config --model_id noneRed_0.5attMetrMask_FT  --stride_lay3 2 --stride_lay4 2 --transf2 saliency_metrics
 #python3 separability_study.py -c model_crohn2.config --model_id noneRed_0.5attMetrMask_FT_simclr  --stride_lay3 2 --stride_lay4 2 --transf2 saliency_metrics
-python3 separability_study.py -c model_crohn2.config --model_id noneRed_0.5attMetrMask_FT_0.0016simclr  --stride_lay3 2 --stride_lay4 2 --transf2 saliency_metrics
+#python3 separability_study.py -c model_crohn2.config --model_id noneRed  --stride_lay3 2 --stride_lay4 2 --transf2 saliency_metrics --normalize
+
+python3 separability_study.py -c model_crohn2.config --model_id noneRed_0.5attMetrMask_FT_simclr  --stride_lay3 2 --stride_lay4 2 --transf2 saliency_metrics --normalize
