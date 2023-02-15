@@ -130,18 +130,24 @@ case $1 in
     ;; 
   "noneRed_attMetrMask_FT_schedsimclr_v2")
     python trainVal.py -c model_crohn2.config --model_id noneRed_attMetrMask_FT_schedsimclr_v2 --resnet_bilinear False  --big_images True  --stride_lay3 2 --stride_lay4 2 --sal_metr_mask True --epochs 500 --nce_weight scheduler
-    ;;   
+    ;;
+  "noneRed_r101_attMetrMask_FT_schedsimclr_v2")
+    python trainVal.py -c model_crohn2.config --model_id noneRed_r101_attMetrMask_FT_schedsimclr_v2 --resnet_bilinear False  --big_images True  --stride_lay3 2 --stride_lay4 2 --sal_metr_mask True --epochs 500 --nce_weight scheduler --first_mod resnet101 --nce_sched_start 1 --start_mode fine_tune --init_path ../models/CROHN2/modelnoneRed_r101_best_epoch70
+    ;;     
   "noneRed_attMetrMask_FT_0.0016simclr")
     python trainVal.py -c model_crohn2.config --model_id noneRed_attMetrMask_FT_0.0016simclr --resnet_bilinear False  --big_images True  --stride_lay3 2 --stride_lay4 2 --sal_metr_mask True --epochs 500 --start_mode fine_tune --nce_weight 0.0016
     ;; 
   "noneRed_attMetrMask_FT_simclr")
     python trainVal.py -c model_crohn2.config --model_id noneRed_attMetrMask_FT_simclr --resnet_bilinear False  --big_images True  --stride_lay3 2 --stride_lay4 2 --sal_metr_mask True --epochs 500 --start_mode fine_tune --nce_weight 1
     ;;
+  "noneRed_r101_attMetrMask_FT_simclr")
+    python trainVal.py -c model_crohn2.config --model_id noneRed_r101_attMetrMask_FT_simclr --resnet_bilinear False  --big_images True  --stride_lay3 2 --stride_lay4 2 --sal_metr_mask True --epochs 500  --nce_weight 1 --first_mod resnet101 --start_mode fine_tune
+    ;;
   "noneRed_convnextbase")
     python trainVal.py -c model_crohn2.config --model_id noneRed_convnextbase --resnet_bilinear False  --big_images True  --stride_lay3 2 --stride_lay4 2 --epochs 500 --first_mod convnext_base --start_mode scratch --lin_lay_bias True --lr 5e-5
     ;;
   "noneRed_r101")
-    python trainVal.py -c model_crohn2.config --model_id noneRed_r101 --resnet_bilinear False  --big_images True  --stride_lay3 2 --stride_lay4 2 --epochs 500 --first_mod resnet101 --start_mode fine_tune 
+    python trainVal.py -c model_crohn2.config --model_id noneRed_r101 --resnet_bilinear False  --big_images True  --stride_lay3 2 --stride_lay4 2 --epochs 100 --first_mod resnet101 --start_mode fine_tune 
     ;;
   "noneRed2")
     python trainVal.py -c model_crohn2.config --model_id noneRed2 --resnet_bilinear False  --big_images True  --stride_lay3 2 --stride_lay4 2 --epochs 500 --start_mode scratch --debug True
