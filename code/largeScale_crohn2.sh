@@ -140,6 +140,15 @@ case $1 in
   "noneRed_attMetrMask_FT_simclr")
     python trainVal.py -c model_crohn2.config --model_id noneRed_attMetrMask_FT_simclr --resnet_bilinear False  --big_images True  --stride_lay3 2 --stride_lay4 2 --sal_metr_mask True --epochs 500 --start_mode fine_tune --nce_weight 1
     ;;
+  "noneRed_attMetrMask_FT_simclr_slowsched")
+    python trainVal.py -c model_crohn2.config --model_id noneRed_attMetrMask_FT_simclr_slowsched --resnet_bilinear False  --big_images True  --stride_lay3 2 --stride_lay4 2 --sal_metr_mask True --epochs 300 --start_mode fine_tune --init_path ../models/CROHN2/modelnoneRed_best_epoch46 --nce_weight 1 --sched_step_size 100 --sched_gamma 0.1 --weight_decay 1e-8
+    ;;
+  "noneRed_attMetrMask_FT_simclr_slowsched_adamw")
+    python trainVal.py -c model_crohn2.config --model_id noneRed_attMetrMask_FT_simclr_slowsched_adamW --resnet_bilinear False  --big_images True  --stride_lay3 2 --stride_lay4 2 --sal_metr_mask True --epochs 300 --start_mode fine_tune --init_path ../models/CROHN2/modelnoneRed_best_epoch46 --nce_weight 1 --sched_step_size 100 --sched_gamma 0.1 --weight_decay 1e-8 --optim AdamW
+    ;;
+  "noneRed_attMetrMask_simclr_slowsched")
+    python trainVal.py -c model_crohn2.config --model_id noneRed_attMetrMask_simclr_slowsched --resnet_bilinear False  --big_images True  --stride_lay3 2 --stride_lay4 2 --sal_metr_mask True --epochs 300  --nce_weight 1 --sched_step_size 100 --sched_gamma 0.1 --weight_decay 1e-8
+    ;;
   "noneRed_r101_attMetrMask_FT_simclr")
     python trainVal.py -c model_crohn2.config --model_id noneRed_r101_attMetrMask_FT_simclr --resnet_bilinear False  --big_images True  --stride_lay3 2 --stride_lay4 2 --sal_metr_mask True --epochs 500  --nce_weight 1 --first_mod resnet101 --start_mode fine_tune
     ;;
@@ -152,8 +161,8 @@ case $1 in
   "noneRed2")
     python trainVal.py -c model_crohn2.config --model_id noneRed2 --resnet_bilinear False  --big_images True  --stride_lay3 2 --stride_lay4 2 --epochs 500 --start_mode scratch --debug True
     ;;
-  "noneRed_convnextsmall")
-    python trainVal.py -c model_crohn2.config --model_id noneRed_convnextsmall --resnet_bilinear False  --big_images True  --stride_lay3 2 --stride_lay4 2 --epochs 500 --first_mod convnext_small
+  "noneRed_convnextsmall_slowsched")
+    python trainVal.py -c model_crohn2.config --model_id noneRed_convnextsmall_slowsched --resnet_bilinear False  --big_images True  --stride_lay3 2 --stride_lay4 2 --epochs 300 --first_mod convnext_small --sched_step_size 100 --sched_gamma 0.1 --weight_decay 1e-8 --start_mode fine_tune
     ;;    
   "noneRed_attMetrMask_FT_simclr_convnextbase")
     python trainVal.py -c model_crohn2.config --model_id noneRed_attMetrMask_FT_simclr_convnextbase --resnet_bilinear False  --big_images True  --stride_lay3 2 --stride_lay4 2 --sal_metr_mask True --epochs 500 --start_mode fine_tune --init_path ../models/CROHN2/modelnoneRed_convnextbase_best_epochX --nce_weight 1 --first_mod convnext_base 

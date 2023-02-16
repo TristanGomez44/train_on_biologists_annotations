@@ -125,9 +125,10 @@ def epochSeqTr(model, optim, loader, epoch, args, **kwargs):
 
         if validBatch > 5 and args.debug:
             break
-
-    args.nce_weight = kwargs["nce_weight_updater"].update_nce_weight(metrDict)
-    metrDict["nce_weight"] = args.nce_weight
+    
+    if "nce_weight_updater" in kwargs:
+        args.nce_weight = kwargs["nce_weight_updater"].update_nce_weight(metrDict)
+        metrDict["nce_weight"] = args.nce_weight
 
     if not args.optuna:
         torch.save(model.state_dict(), "../models/{}/model{}_epoch{}".format(args.exp_id, args.model_id, epoch))
@@ -239,6 +240,10 @@ def addOptimArgs(argreader):
                                   help='To use a learning rate scheduler')
     argreader.parser.add_argument('--always_sched', type=str2bool, metavar='M',
                                   help='To always use a learning rate scheduler when optimizing hyper params')
+    argreader.parser.add_argument('--sched_step_size', type=int, metavar='M',
+                                  help='The number of epochs before reducing learning rate.')
+    argreader.parser.add_argument('--sched_gamma', type=float, metavar='M',
+                                  help='Multiplicative factor of learning rate decay')
 
     argreader.parser.add_argument('--optim', type=str, metavar='OPTIM',
                                   help='the optimizer to use (default: \'SGD\')')
@@ -338,11 +343,14 @@ def train(args,trial):
     startEpoch = init_model.initialize_Net_And_EpochNumber(net, args.exp_id, args.model_id, args.cuda, args.start_mode,
                                                 args.init_path,args.optuna)
 
-    kwargsTr["optim"],scheduler = init_model.getOptim_and_Scheduler(args.optim, args.lr,args.momentum,args.weight_decay,args.use_scheduler,startEpoch,net)
+    kwargsTr["optim"],scheduler = init_model.getOptim_and_Scheduler(args.optim, args.lr,args.momentum,args.weight_decay,args.use_scheduler,startEpoch,net,args.sched_step_size,args.sched_gamma)
 
-    nce_weight_updater = update.NCEWeightUpdater(args)
-    args.nce_weight = nce_weight_updater.init_nce_weight()
-    kwargsTr["nce_weight_updater"] = nce_weight_updater
+    if args.nce_weight == "scheduler":
+        nce_weight_updater = update.NCEWeightUpdater(args)
+        args.nce_weight = nce_weight_updater.init_nce_weight()
+        kwargsTr["nce_weight_updater"] = nce_weight_updater
+    else:
+        args.nce_weight = float(args.nce_weight)
 
     epoch = startEpoch
     bestEpoch, worseEpochNb = init_model.getBestEpochInd_and_WorseEpochNb(args.start_mode, args.exp_id, args.model_id, epoch)
