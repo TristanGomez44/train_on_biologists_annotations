@@ -231,8 +231,8 @@ class LinearSecondModel(SecondModel):
     def forward(self, retDict):
         x = retDict["feat_pooled"]
         x = self.dropout(x)
-        pred = self.linLay(x)
-        retDict["pred"]=pred
+        output = self.linLay(x)
+        retDict["output"]=output
         return retDict
 
 def getResnetFeat(backbone_name, backbone_inplanes):

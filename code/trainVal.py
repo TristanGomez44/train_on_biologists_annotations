@@ -43,7 +43,7 @@ def remove_excess_examples(data,target,accumulated_size,batch_size):
 def master_net_inference(data,kwargs,resDict):
     with torch.no_grad():
         mastDict = kwargs["master_net"](data)
-        resDict["master_net_pred"] = mastDict["pred"]
+        resDict["master_net_output"] = mastDict["output"]
         resDict["master_net_features"] = mastDict["features"]
         if "attMaps" in mastDict:
             resDict["master_net_attMaps"] = mastDict["attMaps"]
@@ -74,8 +74,7 @@ def epochSeqTr(model, optim, loader, epoch, args, **kwargs):
     accumulated_size = 0
     acc_nb = 0
 
-    featDic = {} if args.nce_weight > 0 else None
-    target_list = []
+    var_dic = {}
     for batch_idx, batch in enumerate(loader):
         optim.zero_grad()
 
@@ -102,7 +101,7 @@ def epochSeqTr(model, optim, loader, epoch, args, **kwargs):
             resDict,data = sal_metr_data_aug.apply_sal_metr_masks_and_update_dic(model,data,args.sal_metr_mask_prob,args.nce_weight,resDict)
                    
         resDict.update(model(data))
-        output = resDict["pred"]
+        output = resDict["output"]
         loss_dic = kwargs["lossFunc"](output, target, resDict)
         loss_dic = agregate_losses(loss_dic)
         loss = loss_dic["loss"]/len(data)
@@ -116,10 +115,8 @@ def epochSeqTr(model, optim, loader, epoch, args, **kwargs):
         metDictSample = metrics.add_losses_to_dic(metDictSample,loss_dic)
         metrDict = metrics.updateMetrDict(metrDict, metDictSample)
 
-        if args.nce_weight > 0: 
-            featDic = update.catFeat(resDict,featDic)
-            target_list.append(target)
-
+        var_dic = update.all_cat_var_dic(var_dic,resDict,target,args,"train")
+            
         validBatch += 1
         totalImgNb += len(data)
 
@@ -137,9 +134,10 @@ def epochSeqTr(model, optim, loader, epoch, args, **kwargs):
             os.remove(previous_epoch_model)
 
         if args.nce_weight > 0: 
-            target_list = torch.cat(target_list,dim=0)
-            metrDict = metrics.separability_metric(featDic["feat_pooled"].detach().cpu(),featDic["feat_pooled_masked"].detach().cpu(),target_list,metrDict,args.seed,args.img_nb_per_class)
-             
+            metrDict = metrics.separability_metric(var_dic["feat_pooled"].detach().cpu(),var_dic["feat_pooled_masked"].detach().cpu(),var_dic["target"],metrDict,args.seed,args.img_nb_per_class)
+        if args.focal_weight > 0:
+            metrDict = metrics.expected_calibration_error(var_dic["output"], var_dic["target"], metrDict)
+    
         writeSummaries(metrDict, totalImgNb, epoch, "train", args.model_id, args.exp_id)
 
     return metrDict
@@ -154,10 +152,7 @@ def epochImgEval(model, loader, epoch, args, mode="val",**kwargs):
 
     validBatch = 0
     totalImgNb = 0
-    intermVarDict = {}
-    
-    featDic = {} if args.nce_weight > 0 else None
-    target_list = []
+    var_dic = {}
     for batch_idx, batch in enumerate(loader):
         data, target = batch[:2]
 
@@ -173,7 +168,7 @@ def epochImgEval(model, loader, epoch, args, mode="val",**kwargs):
             resDict,data = sal_metr_data_aug.apply_sal_metr_masks_and_update_dic(model,data,args.sal_metr_mask_prob,args.nce_weight,resDict)
 
         resDict.update(model(data))
-        output = resDict["pred"]
+        output = resDict["output"]
         loss_dic = kwargs["lossFunc"](output, target, resDict)
         loss_dic = agregate_losses(loss_dic)
 
@@ -182,14 +177,7 @@ def epochImgEval(model, loader, epoch, args, mode="val",**kwargs):
         metDictSample = metrics.add_losses_to_dic(metDictSample,loss_dic)
         metrDict = metrics.updateMetrDict(metrDict, metDictSample)
 
-        # Other variables produced by the net
-        if mode == "test":
-            resDict["norm"] = torch.sqrt(torch.pow(resDict["feat"],2).sum(dim=1,keepdim=True))
-            intermVarDict = update.catIntermediateVariables(resDict, intermVarDict)
-
-        if args.nce_weight > 0: 
-            target_list.append(target)
-            featDic = update.catFeat(resDict,featDic)
+        var_dic = update.all_cat_var_dic(var_dic,resDict,target,args,mode)
 
         validBatch += 1
         totalImgNb += len(data)
@@ -198,11 +186,13 @@ def epochImgEval(model, loader, epoch, args, mode="val",**kwargs):
             break
 
     if mode == "test":
-        intermVarDict = update.saveIntermediateVariables(intermVarDict, args.exp_id, args.model_id, epoch, mode)
+        update.save_maps(var_dic, args.exp_id, args.model_id, epoch, mode)
 
     if args.nce_weight > 0: 
-        target_list = torch.cat(target_list)
-        metrDict = metrics.separability_metric(featDic["feat_pooled"].cpu(),featDic["feat_pooled_masked"].cpu(),target_list,metrDict,args.seed,args.img_nb_per_class)
+        metrDict = metrics.separability_metric(var_dic["feat_pooled"].cpu(),var_dic["feat_pooled_masked"].cpu(),var_dic["target"],metrDict,args.seed,args.img_nb_per_class)
+    if args.focal_weight > 0:
+        metrDict = metrics.expected_calibration_error(var_dic["output"], var_dic["target"], metrDict)
+    
     writeSummaries(metrDict, totalImgNb, epoch, mode, args.model_id, args.exp_id)
 
     return metrDict["Accuracy"]
@@ -260,6 +250,9 @@ def addLossTermArgs(argreader):
                                   help='The weight of the saliency metric mask in the loss function. Can be set to "scheduler".')
     argreader.parser.add_argument('--nce_sched_start', type=float, metavar='FLOAT',
                                   help='The initial value of nce_weight loss term.')
+    argreader.parser.add_argument('--focal_weight', type=float, metavar='FLOAT',
+                                  help='The weight of the focal loss term.')
+                              
     return argreader
 
 

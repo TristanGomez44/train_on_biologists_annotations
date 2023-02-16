@@ -2,7 +2,16 @@ import torch
 import torch.nn.functional as F
 import matplotlib.pyplot as plt
 plt.switch_backend('agg')
+import math
+
 import separability_study 
+
+#Keys for ECE metric 
+COUNT = 'count'
+CONF = 'conf'
+ACC = 'acc'
+BIN_ACC = 'bin_acc'
+BIN_CONF = 'bin_conf'
 
 def add_losses_to_dic(metDictSample,lossDic):
     for loss_name in lossDic:
@@ -126,6 +135,70 @@ def compIoS(attMapNorm,segmentation):
 
     finalIos = torch.cat(allIos,dim=0).mean(dim=0)
     return finalIos.sum().item()
+
+
+'''
+Metrics to measure calibration of a trained deep neural network.
+References:
+[1] C. Guo, G. Pleiss, Y. Sun, and K. Q. Weinberger. On calibration of modern neural networks.
+    arXiv preprint arXiv:1706.04599, 2017.
+'''
+def _bin_initializer(bin_dict, num_bins=10):
+    for i in range(num_bins):
+        bin_dict[i][COUNT] = 0
+        bin_dict[i][CONF] = 0
+        bin_dict[i][ACC] = 0
+        bin_dict[i][BIN_ACC] = 0
+        bin_dict[i][BIN_CONF] = 0
+
+def _populate_bins(confs, preds, labels, num_bins=10):
+    bin_dict = {}
+    for i in range(num_bins):
+        bin_dict[i] = {}
+    _bin_initializer(bin_dict, num_bins)
+    num_test_samples = len(confs)
+
+    for i in range(0, num_test_samples):
+        confidence = confs[i]
+        prediction = preds[i]
+        label = labels[i]
+        binn = int(math.ceil(((num_bins * confidence) - 1)))
+        bin_dict[binn][COUNT] = bin_dict[binn][COUNT] + 1
+        bin_dict[binn][CONF] = bin_dict[binn][CONF] + confidence
+        bin_dict[binn][ACC] = bin_dict[binn][ACC] + \
+            (1 if (label == prediction) else 0)
+
+    for binn in range(0, num_bins):
+        if (bin_dict[binn][COUNT] == 0):
+            bin_dict[binn][BIN_ACC] = 0
+            bin_dict[binn][BIN_CONF] = 0
+        else:
+            bin_dict[binn][BIN_ACC] = float(
+                bin_dict[binn][ACC]) / bin_dict[binn][COUNT]
+            bin_dict[binn][BIN_CONF] = bin_dict[binn][CONF] / \
+                float(bin_dict[binn][COUNT])
+    return bin_dict
+
+def expected_calibration_error(all_outputs, all_target, metrDict,num_bins=10):
+
+    all_outputs = F.softmax(all_outputs,dim=-1)
+    preds = all_outputs.argmax(dim=-1)
+    preds = preds.view(-1,1)
+    confs = all_outputs.gather(1,preds)
+ 
+    bin_dict = _populate_bins(confs, preds, all_target, num_bins)
+    num_samples = len(all_target)
+    ece = 0
+    for i in range(num_bins):
+        bin_accuracy = bin_dict[i][BIN_ACC]
+        bin_confidence = bin_dict[i][BIN_CONF]
+        bin_count = bin_dict[i][COUNT]
+        ece += (float(bin_count) / num_samples) * \
+            abs(bin_accuracy - bin_confidence)
+
+    metrDict["ECE"] = ece.item()
+    
+    return metrDict
 
 def main():
 

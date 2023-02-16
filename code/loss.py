@@ -1,3 +1,6 @@
+
+import sys 
+
 import torch
 from torch.nn import functional as F
 
@@ -11,6 +14,15 @@ class Loss(torch.nn.Module):
 
 def computeLoss(args, output, target, resDict,reduction="mean"):
     loss_dic = {}
+
+    if args.sal_metr_mask and args.sal_metr_mask_remove_masked_obj and "is_object_masked_list" in resDict:
+        obj_is_masked = torch.tensor(resDict["is_object_masked_list"])
+        inds = torch.where(~obj_is_masked)
+        output,target = output[inds],target[inds]
+        resDict["master_net_pred"] = resDict["master_net_pred"][inds]
+
+    loss = 0
+
     if args.master_net and ("master_net_pred" in resDict):
         loss_kl = F.kl_div(F.log_softmax(output/args.kl_temp, dim=1),F.softmax(resDict["master_net_pred"]/args.kl_temp, dim=1),reduction="batchmean")
         loss_ce = F.cross_entropy(output, target)
@@ -23,21 +35,23 @@ def computeLoss(args, output, target, resDict,reduction="mean"):
         loss = args.nll_weight*loss
 
     else:      
-        if args.sal_metr_mask and args.sal_metr_mask_remove_masked_obj and "is_object_masked_list" in resDict:
-            obj_is_masked = torch.tensor(resDict["is_object_masked_list"])
-            inds = torch.where(~obj_is_masked)
-            output,target = output[inds],target[inds]
-  
-        loss_ce = F.cross_entropy(output, target,reduction=reduction)
-        loss_dic["loss_ce"] = loss_ce.data.unsqueeze(0)
-        loss = args.nll_weight*loss_ce
+
+        if args.nll_weight > 0:
+            loss_ce = F.cross_entropy(output, target,reduction=reduction)
+            loss_dic["loss_ce"] = loss_ce.data.unsqueeze(0)
+            loss += args.nll_weight*loss_ce
 
     if args.nce_weight > 0 and "feat_pooled_masked" in resDict:
         all_feat = torch.cat((resDict["feat_pooled"],resDict["feat_pooled_masked"]),dim=0)
         nce_loss = info_nce_loss(all_feat,reduction=reduction)
         loss_dic["loss_nce"] = nce_loss.data.unsqueeze(0)
         loss += args.nce_weight * nce_loss
-        
+    
+    if args.focal_weight > 0:
+        focal_loss = adaptive_focal_loss(output, target,reduction)
+        loss_dic["focal_loss"] = focal_loss.data.unsqueeze(0)
+        loss += args.focal_weight * focal_loss            
+
     loss_dic["loss"] = loss.unsqueeze(0)
 
     return loss_dic
@@ -74,6 +88,57 @@ def info_nce_loss(features,n_views=2,temperature=0.07,reduction="sum"):
 
     logits = logits / temperature
     return F.cross_entropy(logits, labels,reduction=reduction)
+
+
+'''
+Implementation of Focal Loss with adaptive gamma.
+Reference:
+[1]  T.-Y. Lin, P. Goyal, R. Girshick, K. He, and P. Dollar, Focal loss for dense object detection.
+     arXiv preprint arXiv:1708.02002, 2017.
+'''
+def get_gamma_dic():
+    return {0.2:5.0,0.5:3.0,1:1}
+
+def get_gamma_list(pt):
+    gamma_dict = get_gamma_dic()
+    gamma_list = []
+    batch_size = pt.shape[0]
+    for i in range(batch_size):
+        pt_sample = pt[i].item()
+
+        j = 0
+        gamma_found =False
+        thres_list = list(sorted(gamma_dict.keys()))
+        while (not gamma_found) and (j < len(thres_list)):
+
+            gamma = gamma_dict[thres_list[j]]
+            gamma_found = pt_sample < thres_list[j]
+
+            if gamma_found:
+                gamma_list.append(gamma)
+            else:
+                j += 1
+        
+        if not gamma_found:
+            gamma_list.append(gamma_dict[thres_list[-1]])
+
+    return torch.tensor(gamma_list).to(pt.device)
+
+def adaptive_focal_loss(logits, target,reduction):
+
+    target = target.view(-1,1)
+    logpt = F.log_softmax(logits, dim=1).gather(1,target).view(-1)
+    pt = F.softmax(logits, dim=1).gather(1,target).view(-1)
+
+    gamma = get_gamma_list(pt)
+    loss = -1 * (1-pt)**gamma * logpt
+
+    if reduction == "mean":
+        return loss.mean()
+    elif reduction == "sum":
+        return loss.sum()
+    else:
+        raise ValueError("Unkown reduction method",reduction)
 
 def agregate_losses(loss_dic):
     for loss_name in loss_dic:

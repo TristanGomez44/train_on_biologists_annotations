@@ -1,11 +1,7 @@
-from torch.nn import functional as F
 import numpy as np
 import torch
-import matplotlib.cm as cm
 import matplotlib.pyplot as plt
 plt.switch_backend('agg')
-from sklearn.metrics import roc_auc_score
-import subprocess
 import os,glob 
 import utils
 
@@ -24,39 +20,6 @@ def updateBestModel(metricVal,bestMetricVal,exp_id,model_id,bestEpoch,epoch,net,
 
     return bestEpoch,bestMetricVal,worseEpochNb
 
-def updateHardWareOccupation(debug,benchmark,cuda,epoch,mode,exp_id,model_id,batch_idx):
-    if debug or benchmark:
-        if cuda:
-            updateOccupiedGPURamCSV(epoch,mode,exp_id,model_id,batch_idx)
-        updateOccupiedRamCSV(epoch,mode,exp_id,model_id,batch_idx)
-        updateOccupiedCPUCSV(epoch,mode,exp_id,model_id,batch_idx)
-
-def updateOccupiedGPURamCSV(epoch,mode,exp_id,model_id,batch_idx):
-
-    occRamDict = get_gpu_memory_map()
-
-    csvPath = "../results/{}/{}_occRam_{}.csv".format(exp_id,model_id,mode)
-
-    if epoch==1 and batch_idx==0:
-        with open(csvPath,"w") as text_file:
-            print("epoch,"+",".join([str(device) for device in occRamDict.keys()]),file=text_file)
-            print(str(epoch)+","+",".join([occRamDict[device] for device in occRamDict.keys()]),file=text_file)
-    else:
-        with open(csvPath,"a") as text_file:
-            print(str(epoch)+","+",".join([occRamDict[device] for device in occRamDict.keys()]),file=text_file)
-
-def updateTimeCSV(epoch,mode,exp_id,model_id,totalTime,batch_idx):
-
-    csvPath = "../results/{}/{}_time_{}.csv".format(exp_id,model_id,mode)
-
-    if epoch==1 and batch_idx==0:
-        with open(csvPath,"w") as text_file:
-            print("epoch,"+","+"time",file=text_file)
-            print(str(epoch)+","+str(totalTime),file=text_file)
-    else:
-        with open(csvPath,"a") as text_file:
-            print(str(epoch)+","+str(totalTime),file=text_file)
-
 def updateSeedAndNote(args):
     if args.start_mode == "auto" and (not args.optuna) and len(
             glob.glob("../models/{}/model{}_epoch*".format(args.exp_id, args.model_id))) > 0:
@@ -69,69 +32,61 @@ def updateSeedAndNote(args):
         args.note += ";s{} at {}".format(args.seed, startEpoch)
     return args
 
-def catIntermediateVariables(resDict,intermVarDict):
+def all_cat_var_dic(var_dic,resDict,target,args,mode):
+    # Other variables produced by the net
+    if mode == "test":
+        norm = torch.sqrt(torch.pow(resDict["feat"],2).sum(dim=1,keepdim=True))
+        var_dic = cat_var_dic(var_dic,"attMaps",resDict["attMaps"])
+        var_dic = cat_var_dic(var_dic,"norm",norm)
 
-    intermVarDict = catMap(resDict,intermVarDict,"attMaps")
-    intermVarDict = catMap(resDict,intermVarDict,"norm")
+    if args.nce_weight > 0: 
+        var_dic = cat_var_dic(var_dic,"feat_pooled_masked",resDict["feat_pooled_masked"])
+        var_dic = cat_var_dic(var_dic,"feat_pooled",resDict["feat_pooled_"])
 
-    if "feat_pooled_masked" in resDict:
-        for key in ["feat_pooled","feat_pooled_masked"]:
-            intermVarDict = cat(resDict[key],key,intermVarDict)
+    if args.focal_weight > 0:
+        var_dic = cat_var_dic(var_dic,"output",resDict["output"])
 
-    return intermVarDict
+    if args.focal_weight > 0 or args.nce_weight > 0:
+        var_dic = cat_var_dic(var_dic,"target",target)
 
-def catFeat(resDict,featDic):
-    for key in ["feat_pooled","feat_pooled_masked"]:
-        featDic = cat(resDict[key],key,featDic)
-    return featDic
+    return var_dic
 
-def cat(tensor,key,intermVarDict):
-    if not key in intermVarDict:
-        intermVarDict[key] = tensor
+def cat_var_dic(var_dic,tensor_name,tensor):
+    
+    assert tensor.ndim in [1,2,4]
+
+    if tensor.ndim == 4:
+        preproc_func = preproc_maps 
     else:
-        intermVarDict[key] = torch.cat((intermVarDict[key],tensor),dim=0)
-    return intermVarDict
+        preproc_func = preproc_vect
 
-def catMap(resDict,intermVarDict,key="attMaps"):
-    if key in resDict.keys():
+    tensor = preproc_func(tensor)
 
-        #In case attention weights are not comprised between 0 and 1
-        tens_min = resDict[key].min(dim=-1,keepdim=True)[0].min(dim=-2,keepdim=True)[0].min(dim=-3,keepdim=True)[0]
-        tens_max = resDict[key].max(dim=-1,keepdim=True)[0].max(dim=-2,keepdim=True)[0].max(dim=-3,keepdim=True)[0]
-        maps = (resDict[key]-tens_min)/(tens_max-tens_min)
-        maps = (maps.cpu()*255).byte()
+    if not tensor_name in var_dic:
+        var_dic[tensor_name] = tensor
+    else:
+        var_dic[tensor_name] = torch.cat((var_dic[tensor_name],tensor),dim=0)
 
-        intermVarDict = cat(maps,key,intermVarDict)
+    return var_dic
 
-    return intermVarDict
+def preproc_maps(maps):
+    maps = maps.detach()
+    maps_min = maps.min(dim=-1,keepdim=True)[0].min(dim=-2,keepdim=True)[0].min(dim=-3,keepdim=True)[0]
+    maps_max = maps.max(dim=-1,keepdim=True)[0].max(dim=-2,keepdim=True)[0].max(dim=-3,keepdim=True)[0]
+    maps = (maps-maps_min)/(maps_max-maps_max)
+    maps = (maps.cpu()*255).byte()
+    return maps
 
-def saveIntermediateVariables(intermVarDict,exp_id,model_id,epoch,mode="val"):
+def preproc_vect(vect):
+    return vect.detach().cpu()
+
+def save_maps(intermVarDict,exp_id,model_id,epoch,mode="val"):
     if "attMaps" in intermVarDict:
-        intermVarDict["attMaps"] = saveMap(intermVarDict["attMaps"],exp_id,model_id,epoch,mode,key="attMaps")
-    intermVarDict["norm"] = saveMap(intermVarDict["norm"],exp_id,model_id,epoch,mode,key="norm")
-
-    return intermVarDict
+        saveMap(intermVarDict["attMaps"],exp_id,model_id,epoch,mode,key="attMaps")
+    saveMap(intermVarDict["norm"],exp_id,model_id,epoch,mode,key="norm")
 
 def saveMap(fullMap,exp_id,model_id,epoch,mode,key="attMaps"):
-    if not fullMap is None:
-        np.save("../results/{}/{}_{}_epoch{}_{}.npy".format(exp_id,key,model_id,epoch,mode),fullMap.numpy())
-        fullMap = None
-    return fullMap
-
-def get_gpu_memory_map():
-    """Get the current gpu usage.
-
-    Returns
-    -------
-    usage: dict
-        Keys are device ids as integers.
-        Values are memory usage as integers in MB.
-    """
-    result = subprocess.check_output(['nvidia-smi', '--query-gpu=memory.used','--format=csv,nounits,noheader'], encoding='utf-8')
-    # Convert lines into a dictionary
-    gpu_memory = [x for x in result.strip().split('\n')]
-    gpu_memory_map = dict(zip(range(len(gpu_memory)), gpu_memory))
-    return gpu_memory_map
+    np.save("../results/{}/{}_{}_epoch{}_{}.npy".format(exp_id,key,model_id,epoch,mode),fullMap.numpy())
 
 class NCEWeightUpdater():
 
