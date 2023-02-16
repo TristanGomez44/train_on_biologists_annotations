@@ -143,10 +143,7 @@ class NCEWeightUpdater():
         self.loss_history_dic = {}
 
     def init_nce_weight(self):
-        if self.args.nce_weight != "scheduler":
-            self.args.nce_weight = float(self.args.nce_weight)
-        else:
-            self.args.nce_weight = self.args.nce_sched_start
+        self.args.nce_weight = self.args.nce_sched_start
         return self.args.nce_weight
 
     def update_nce_weight(self,metrDict):
