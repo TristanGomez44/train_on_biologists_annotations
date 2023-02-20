@@ -171,7 +171,16 @@ case $1 in
     python trainVal.py -c model_crohn2.config --model_id noneRed_attMetrMask_FT_simclr_convnextsmall --resnet_bilinear False  --big_images True  --stride_lay3 2 --stride_lay4 2 --sal_metr_mask True --epochs 500 --start_mode fine_tune --init_path ../models/CROHN2/modelnoneRed_convnextsmall_best_epochX --nce_weight 1 --first_mod convnext_small 
     ;;
   "noneRed_focalloss")
-    python trainVal.py -c model_crohn2.config --model_id noneRed_focalloss --resnet_bilinear False  --big_images True  --stride_lay3 2 --stride_lay4 2 --epochs 500 --nll_weight 0 --focal_weight 1 --sched_step_size 100 --sched_gamma 0.1 --weight_decay 1e-8
+    python trainVal.py -c model_crohn2.config --model_id noneRed_focalloss --resnet_bilinear False  --big_images True  --stride_lay3 2 --stride_lay4 2 --epochs 200 --nll_weight 0 --focal_weight 1 --sched_step_size 100 --sched_gamma 0.1 --weight_decay 1e-8 --start_mode fine_tune
+    ;;
+  "noneRed_attMetrMask_FT_simclr_focal")
+    python trainVal.py -c model_crohn2.config --model_id noneRed_attMetrMask_FT_simclr_focal --resnet_bilinear False  --big_images True  --stride_lay3 2 --stride_lay4 2 --sal_metr_mask True --epochs 500  --nll_weight 0 --nce_weight 1 --focal_weight 1 --start_mode fine_tune --init_path ../models/CROHN2/modelnoneRed_focalloss_best_epoch90 --sched_step_size 100 --sched_gamma 0.1 --weight_decay 1e-8
+    ;;
+  "noneRed_attMetrMask_FT_simclr_focal2")
+    python trainVal.py -c model_crohn2.config --model_id noneRed_attMetrMask_FT_simclr_focal2 --resnet_bilinear False  --big_images True  --stride_lay3 2 --stride_lay4 2 --sal_metr_mask True --epochs 500  --nll_weight 0 --nce_weight 1 --focal_weight 1 --start_mode fine_tune --init_path ../models/CROHN2/modelnoneRed_focalloss_best_epoch171 --lr 0.0001 --use_scheduler False --weight_decay 1e-6
+    ;;
+  "noneRed_focalloss_adamW")
+    python trainVal.py -c model_crohn2.config --model_id noneRed_focalloss_adamW --resnet_bilinear False  --big_images True  --stride_lay3 2 --stride_lay4 2 --epochs 100 --nll_weight 0 --focal_weight 1 --sched_step_size 100 --sched_gamma 0.1 --weight_decay 1e-8 --optim AdamW
     ;;
   "*")
     echo "no such model"
