@@ -36,12 +36,13 @@ def all_cat_var_dic(var_dic,resDict,target,args,mode):
     # Other variables produced by the net
     if mode == "test":
         norm = torch.sqrt(torch.pow(resDict["feat"],2).sum(dim=1,keepdim=True))
-        var_dic = cat_var_dic(var_dic,"attMaps",resDict["attMaps"])
+        if "attMaps" in resDict:
+            var_dic = cat_var_dic(var_dic,"attMaps",resDict["attMaps"])
         var_dic = cat_var_dic(var_dic,"norm",norm)
 
     if args.nce_weight > 0: 
         var_dic = cat_var_dic(var_dic,"feat_pooled_masked",resDict["feat_pooled_masked"])
-        var_dic = cat_var_dic(var_dic,"feat_pooled",resDict["feat_pooled_"])
+        var_dic = cat_var_dic(var_dic,"feat_pooled",resDict["feat_pooled"])
 
     if args.focal_weight > 0:
         var_dic = cat_var_dic(var_dic,"output",resDict["output"])
