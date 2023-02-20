@@ -8,6 +8,32 @@ import matplotlib.pyplot as plt
 from compute_scores_for_saliency_metrics import get_metric_dics
 from saliency_maps_metrics.multi_step_metrics import compute_auc_metric
 
+def fix_type(tensor):
+
+    if type (tensor) is not np.ndarray:
+        tensor = tensor.numpy()
+
+    return tensor
+
+def add_validity_rate_multi_step(result_dic,metric_name,all_score_list):
+    if metric_name == "Deletion":
+        validity_rate = (all_score_list[:,:-1] > all_score_list[:,1:]).astype("float").mean()
+    else: 
+        validity_rate = (all_score_list[:,:-1] < all_score_list[:,1:]).astype("float").mean()
+
+    result_dic[metric_name+"_val_rate"] = validity_rate
+    return result_dic 
+
+def add_validity_rate_single_step(result_dic,metric_name,all_score_list,all_score_masked_list):
+    if metric_name == "IIC_AD":
+        validity_rate = (all_score_list < all_score_masked_list).astype("float").mean()
+    else: 
+        validity_rate = (all_score_list > all_score_masked_list).astype("float").mean()
+
+    result_dic[metric_name+"_val_rate"] = validity_rate
+
+    return result_dic 
+
 def get_score_file_paths(exp_id,metric_list):
     paths = []
     for metric in metric_list:
@@ -72,12 +98,21 @@ def main(argv=None):
         result_dic = np.load(path,allow_pickle=True).item()
         if is_multi_step_dic[metric_name]:
             all_score_list,all_sal_score_list = result_dic["prediction_scores"],result_dic["saliency_scores"]
+            all_score_list = fix_type(all_score_list)
+            
             auc_metric = compute_auc_metric(all_score_list)
             calibration_metric = metric.compute_calibration_metric(all_score_list, all_sal_score_list)
             result_dic = metric.make_result_dic(auc_metric,calibration_metric)
+
+            result_dic = add_validity_rate_multi_step(result_dic,metric_name,all_score_list)
+
         else:
             all_score_list,all_score_masked_list = result_dic["prediction_scores"],result_dic["prediction_scores_with_mask"]
+            all_score_list = fix_type(all_score_list)
+            all_score_masked_list = fix_type(all_score_masked_list)
             result_dic = metric.compute_metric(all_score_list,all_score_masked_list)
+            
+            result_dic = add_validity_rate_single_step(result_dic,metric_name,all_score_list,all_score_masked_list)
 
         for sub_metric in result_dic.keys():
             write_csv(exp_id=args.exp_id,metric_label=sub_metric.upper(),replace_method=replace_method,model_id=model_id,post_hoc_method=post_hoc_method,metric_value=result_dic[sub_metric])
