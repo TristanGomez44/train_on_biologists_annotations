@@ -137,7 +137,9 @@ def epochSeqTr(model, optim, loader, epoch, args, **kwargs):
             metrDict = metrics.separability_metric(var_dic["feat_pooled"].detach().cpu(),var_dic["feat_pooled_masked"].detach().cpu(),var_dic["target"],metrDict,args.seed,args.img_nb_per_class)
         if args.focal_weight > 0:
             metrDict = metrics.expected_calibration_error(var_dic["output"], var_dic["target"], metrDict)
-    
+            with torch.no_grad():
+                metrDict = metrics.saliency_metric_validity(loader.dataset,model,args,metrDict)
+
         writeSummaries(metrDict, totalImgNb, epoch, "train", args.model_id, args.exp_id)
 
     return metrDict
@@ -192,7 +194,8 @@ def epochImgEval(model, loader, epoch, args, mode="val",**kwargs):
         metrDict = metrics.separability_metric(var_dic["feat_pooled"].cpu(),var_dic["feat_pooled_masked"].cpu(),var_dic["target"],metrDict,args.seed,args.img_nb_per_class)
     if args.focal_weight > 0:
         metrDict = metrics.expected_calibration_error(var_dic["output"], var_dic["target"], metrDict)
-    
+        metrDict = metrics.saliency_metric_validity(loader.dataset,model,args,metrDict)
+
     writeSummaries(metrDict, totalImgNb, epoch, mode, args.model_id, args.exp_id)
 
     return metrDict["Accuracy"]
@@ -373,7 +376,7 @@ def train(args,trial):
             kwargsTr["epoch"], kwargsVal["epoch"] = epoch, epoch
             kwargsTr["model"], kwargsVal["model"] = net, net
 
-            metrDict = trainFunc(**kwargsTr)
+            trainFunc(**kwargsTr)
             if not scheduler is None:
                 scheduler.step()
 
