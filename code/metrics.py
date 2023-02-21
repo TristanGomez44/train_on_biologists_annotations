@@ -3,15 +3,25 @@ import torch.nn.functional as F
 import matplotlib.pyplot as plt
 plt.switch_backend('agg')
 import math
-
-import separability_study 
-
+import numpy as np
+from sklearn.metrics import roc_auc_score
+from sklearn import svm
+ 
 #Keys for ECE metric 
 COUNT = 'count'
 CONF = 'conf'
 ACC = 'acc'
 BIN_ACC = 'bin_acc'
 BIN_CONF = 'bin_conf'
+
+from saliency_maps_metrics.multi_step_metrics import Deletion, Insertion
+from saliency_maps_metrics.single_step_metrics import IIC_AD, ADD
+
+is_multi_step_dic = {"Deletion":True,"Insertion":True,"IIC_AD":False,"ADD":False}
+const_dic = {"Deletion":Deletion,"Insertion":Insertion,"IIC_AD":IIC_AD,"ADD":ADD}
+
+def get_sal_metric_dics():
+    return is_multi_step_dic,const_dic
 
 def add_losses_to_dic(metDictSample,lossDic):
     for loss_name in lossDic:
@@ -56,31 +66,45 @@ def binaryToMetrics(output,target,resDict,comp_spars=False):
 
     return metDict
 
-def separability_metric(feat_pooled,feat_pooled_masked,target_list,metDict,seed,nb_per_class):
+def separability_metric(feat_pooled,feat_pooled_masked,label_list,metDict,seed,nb_per_class):
 
-    label_to_ind = {}
-    for i in range(len(feat_pooled)):
-        lab = target_list[i].item()
-        if lab not in label_to_ind:
-            label_to_ind[lab] = []  
-        label_to_ind[lab].append(i)
+    kept_inds = sample_img_inds(nb_per_class,label_list=label_list) 
 
-    torch.manual_seed(seed)
-    kept_inds = []
-    for label in label_to_ind:
-        all_inds = torch.tensor(label_to_ind[label])
-        all_inds_perm = all_inds[torch.randperm(len(all_inds))]
-        kept_inds.extend(all_inds_perm[:nb_per_class])
-    kept_inds = torch.tensor(kept_inds)
-    
     feat_pooled,feat_pooled_masked = feat_pooled[kept_inds],feat_pooled_masked[kept_inds]
 
-    sep_dict = separability_study.run_separability_analysis(feat_pooled,feat_pooled_masked,False,seed)
+    sep_dict = run_separability_analysis(feat_pooled,feat_pooled_masked,False,seed)
     separability_auc,separability_acc = sep_dict["val_auc"].mean(),sep_dict["val_acc"].mean()
     metDict["Sep_AuC"] = separability_auc
     metDict["Sep_Acc"] = separability_acc
+
     return metDict
 
+def saliency_metric_validity(testDataset,model,args,metDict,img_nb=20):
+
+    nb_per_class = int(round(float(img_nb)/testDataset.num_classes))
+    if nb_per_class == 0:
+        nb_per_class = 1
+
+    kept_inds = sample_img_inds(nb_per_class,testDataset=testDataset) 
+    data,_ = getBatch(testDataset,kept_inds,args)
+    net_lambda = lambda x:torch.softmax(model(x)["output"],dim=-1)
+    
+    resDict = model(data)
+    predClassInds = resDict["output"].argmax(dim=-1)
+    explanations = torch.sqrt(torch.pow(resDict["feat"],2).sum(dim=1,keepdim=True))
+    
+    is_multi_step_dic,const_dic = get_sal_metric_dics()
+    
+    for metric_name in const_dic:
+ 
+        if not is_multi_step_dic[metric_name]:
+            metric = const_dic[metric_name]()
+            scores,scores_masked = metric.compute_scores(net_lambda,data,explanations,predClassInds)
+            val_rate = add_validity_rate_single_step(metric_name,scores,scores_masked) 
+            metDict[metric_name+"_val_rate"] = val_rate
+
+    return metDict
+        
 def compAccuracy(output,target):
     pred = output.argmax(dim=-1)
     acc = (pred == target).float().sum()
@@ -200,6 +224,155 @@ def expected_calibration_error(all_outputs, all_target, metrDict,num_bins=10):
     
     return metrDict
 
+def make_label_list(dataset):
+    return [dataset.image_label[img_ind] for img_ind in sorted(dataset.image_label.keys())]
+
+def sample_img_inds(nb_per_class,label_list=None,testDataset=None):
+
+    assert (label_list is not None) or (testDataset is not None)
+    
+    if label_list is None:
+        label_list = make_label_list(testDataset)
+
+    label_to_ind = {}
+    for i in range(len(label_list)):
+        lab = label_list[i]
+        if lab not in label_to_ind:
+            label_to_ind[lab] = []  
+        label_to_ind[lab].append(i)
+
+    torch.manual_seed(0)
+    chosen_inds = []
+    for label in label_to_ind:
+        all_inds = torch.tensor(label_to_ind[label])
+        all_inds_perm = all_inds[torch.randperm(len(all_inds))]
+        chosen_class_inds = all_inds_perm[:nb_per_class]
+        if len(chosen_class_inds) < nb_per_class:
+            raise ValueError(f"Number of image to be sampled per class is too high for class {label} which has only {len(chosen_class_inds)} images.")
+        chosen_inds.extend(chosen_class_inds)
+    
+    chosen_inds = torch.tensor(chosen_inds)
+    
+    return chosen_inds 
+
+def applyPostHoc(attrFunc,data,targ,kwargs,args):
+
+    if args.att_metrics_post_hoc.find("var") == -1 and args.att_metrics_post_hoc.find("smooth") == -1:
+        argList = [data,targ]
+    else:
+        argList = [data]
+        kwargs["target"] = targ
+
+    attMap = attrFunc(*argList,**kwargs).clone().detach().to(data.device)
+
+    if len(attMap.size()) == 2:
+        attMap = attMap.unsqueeze(0).unsqueeze(0)
+    elif len(attMap.size()) == 3:
+        attMap = attMap.unsqueeze(0)
+        
+    return attMap
+
+def getBatch(testDataset,inds,args):
+    data_list = []
+    targ_list = []
+    for i in inds:
+        batch = testDataset.__getitem__(i)
+        data,targ = batch[0].unsqueeze(0),torch.tensor(batch[1]).unsqueeze(0)
+        data_list.append(data)
+        targ_list.append(targ)
+    
+    data_list = torch.cat(data_list,dim=0)
+    targ_list = torch.cat(targ_list,dim=0)
+
+    if args.cuda:
+        data_list = data_list.cuda() 
+        targ_list = targ_list.cuda()
+        
+    return data_list,targ_list 
+
+def getExplanations(inds,data,predClassInds,attrFunc,kwargs,args):
+    explanations = []
+    for i,data_i,predClassInd in zip(inds,data,predClassInds):
+        if args.att_metrics_post_hoc:
+            explanation = applyPostHoc(attrFunc,data_i.unsqueeze(0),predClassInd,kwargs,args)
+        else:
+            explanation = attrFunc(i)
+        explanations.append(explanation)
+    explanations = torch.cat(explanations,dim=0)
+    return explanations 
+
+def add_validity_rate_multi_step(metric_name,all_score_list):
+    if metric_name == "Deletion":
+        validity_rate = (all_score_list[:,:-1] > all_score_list[:,1:]).astype("float").mean()
+    else: 
+        validity_rate = (all_score_list[:,:-1] < all_score_list[:,1:]).astype("float").mean()
+
+    return validity_rate
+
+def add_validity_rate_single_step(metric_name,all_score_list,all_score_masked_list):
+    if metric_name == "IIC_AD":
+        validity_rate = (all_score_list < all_score_masked_list).astype("float").mean()
+    else: 
+        validity_rate = (all_score_list > all_score_masked_list).astype("float").mean()
+    return validity_rate 
+
+
+def run_separability_analysis(repres1,repres2,normalize,seed,folds=10):
+
+    len1 = len(repres1)
+    len2 = len(repres2)
+
+    if normalize:
+        repres1 = repres1/np.abs(repres1).sum(axis=1,keepdims=True)
+        repres2 = repres2/np.abs(repres2).sum(axis=1,keepdims=True)
+
+    labels1 = np.zeros(len1).astype("int")
+    labels2 = np.ones(len2).astype("int")
+
+    torch.manual_seed(seed)
+    np.random.seed(seed)
+
+    train_acc = []
+    train_auc = []
+    val_acc = []
+    val_auc = []
+
+    train_inv_auc = []
+    val_inv_auc = []   
+
+    for _ in range(folds):
+
+        inds = np.random.permutation(len1)
+
+        repr1_perm,lab1_perm = repres1[inds],labels1[inds]
+        repr2_perm,lab2_perm = repres2[inds],labels2[inds]
+
+        train_x = np.concatenate((repr1_perm[:len1//2],repr2_perm[:len2//2]),axis=0)
+        test_x = np.concatenate((repr1_perm[len1//2:],repr2_perm[len2//2:]),axis=0)
+
+        train_y = np.concatenate((lab1_perm[:len1//2],lab2_perm[:len2//2]),axis=0)
+        test_y = np.concatenate((lab1_perm[len1//2:],lab2_perm[len2//2:]),axis=0)
+
+        model = svm.SVC(probability=True)
+        model.fit(train_x,train_y)
+
+        train_y_score = model.predict_proba(train_x)[:,1]
+        train_acc.append(model.score(train_x,train_y))
+        train_auc.append(roc_auc_score(train_y,train_y_score))
+        
+        test_y_score = model.predict_proba(test_x)[:,1]
+        val_acc.append(model.score(test_x,test_y))
+        val_auc.append(roc_auc_score(test_y,test_y_score))
+
+    train_acc,train_auc = np.array(train_acc),np.array(train_auc)
+    val_acc,val_auc = np.array(val_acc),np.array(val_auc)
+
+    train_inv_auc = np.array(train_inv_auc)
+    val_inv_auc = np.array(val_inv_auc)
+
+    return {"train_acc":train_acc,"train_auc":train_auc,"val_acc":val_acc,"val_auc":val_auc,"train_inv_auc":train_inv_auc,"val_inv_auc":val_inv_auc}
+
+
 def main():
 
     example_nb = 2000
@@ -219,6 +392,8 @@ def main():
     retDict = separability_metric(feat_pooled,feat_pooled_masked,target_list,metDict,seed,nb_per_class)
 
     print(retDict)
+
+
 
 if __name__ == "__main__":
 

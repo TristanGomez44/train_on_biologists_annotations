@@ -3,9 +3,8 @@ from args import ArgReader
 import os
 import glob
 import numpy as np
-import matplotlib.pyplot as plt
 
-from compute_scores_for_saliency_metrics import get_metric_dics
+from metrics import get_sal_metric_dics,add_validity_rate_multi_step,add_validity_rate_single_step
 from saliency_maps_metrics.multi_step_metrics import compute_auc_metric
 
 def fix_type(tensor):
@@ -14,25 +13,6 @@ def fix_type(tensor):
         tensor = tensor.numpy()
 
     return tensor
-
-def add_validity_rate_multi_step(result_dic,metric_name,all_score_list):
-    if metric_name == "Deletion":
-        validity_rate = (all_score_list[:,:-1] > all_score_list[:,1:]).astype("float").mean()
-    else: 
-        validity_rate = (all_score_list[:,:-1] < all_score_list[:,1:]).astype("float").mean()
-
-    result_dic[metric_name+"_val_rate"] = validity_rate
-    return result_dic 
-
-def add_validity_rate_single_step(result_dic,metric_name,all_score_list,all_score_masked_list):
-    if metric_name == "IIC_AD":
-        validity_rate = (all_score_list < all_score_masked_list).astype("float").mean()
-    else: 
-        validity_rate = (all_score_list > all_score_masked_list).astype("float").mean()
-
-    result_dic[metric_name+"_val_rate"] = validity_rate
-
-    return result_dic 
 
 def get_score_file_paths(exp_id,metric_list):
     paths = []
@@ -75,7 +55,7 @@ def main(argv=None):
     #Getting the args from command line and config file
     args = argreader.args
 
-    is_multi_step_dic,const_dic = get_metric_dics()
+    is_multi_step_dic,const_dic = get_sal_metric_dics()
     metric_list = list(const_dic.keys())
     score_file_paths = get_score_file_paths(args.exp_id,metric_list)
 
@@ -104,15 +84,18 @@ def main(argv=None):
             calibration_metric = metric.compute_calibration_metric(all_score_list, all_sal_score_list)
             result_dic = metric.make_result_dic(auc_metric,calibration_metric)
 
-            result_dic = add_validity_rate_multi_step(result_dic,metric_name,all_score_list)
+            val_rate = add_validity_rate_multi_step(metric_name,all_score_list)
+            result_dic[metric_name+"_val_rate"] = val_rate
 
         else:
             all_score_list,all_score_masked_list = result_dic["prediction_scores"],result_dic["prediction_scores_with_mask"]
             all_score_list = fix_type(all_score_list)
+
             all_score_masked_list = fix_type(all_score_masked_list)
             result_dic = metric.compute_metric(all_score_list,all_score_masked_list)
             
-            result_dic = add_validity_rate_single_step(result_dic,metric_name,all_score_list,all_score_masked_list)
+            val_rate = add_validity_rate_single_step(metric_name,all_score_list,all_score_masked_list)
+            result_dic[metric_name+"_val_rate"] = val_rate
 
         for sub_metric in result_dic.keys():
             write_csv(exp_id=args.exp_id,metric_label=sub_metric.upper(),replace_method=replace_method,model_id=model_id,post_hoc_method=post_hoc_method,metric_value=result_dic[sub_metric])

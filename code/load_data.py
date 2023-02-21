@@ -34,9 +34,13 @@ def buildTrainLoader(args,shuffle=True):
     torch.manual_seed(1)
     if args.cuda:
         torch.cuda.manual_seed(1)
-
-    train_dataset, _ = torch.utils.data.random_split(train_dataset, [int(totalLength * train_prop),
+    
+    if args.dataset_train == args.dataset_val:
+        train_dataset, _ = torch.utils.data.random_split(train_dataset, [int(totalLength * train_prop),
                                                                      totalLength - int(totalLength * train_prop)])
+
+        train_dataset.num_classes = train_dataset.dataset.num_classes
+        train_dataset.image_label = train_dataset.dataset.image_label
 
     bsz = args.batch_size
     bsz = bsz if bsz < args.max_batch_size_single_pass else args.max_batch_size_single_pass

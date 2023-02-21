@@ -4,7 +4,8 @@ import torch
 
 from args import addInitArgs,addValArgs
 from init_model import preprocessAndLoadParams
-from compute_scores_for_saliency_metrics import getBatch,init_post_hoc_arg,sample_img_inds,get_other_img_inds
+from compute_scores_for_saliency_metrics import getBatch,init_post_hoc_arg,get_other_img_inds
+from metrics import sample_img_inds
 import modelBuilder,load_data
 import sparse
 from args import ArgReader
@@ -113,8 +114,7 @@ def main(argv=None):
     args.val_batch_size = 1
     _,testDataset = load_data.buildTestLoader(args, "test")
 
-    np.random.seed(0)
-    inds = sample_img_inds(testDataset,args.img_nb_per_class)
+    inds = sample_img_inds(args.img_nb_per_class,testDataset=testDataset)
 
     if args.class_map:
         inds = inds[:10]

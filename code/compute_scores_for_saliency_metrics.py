@@ -2,12 +2,9 @@ import os
 import glob
 
 import numpy as np
-from numpy.random import Generator, PCG64
 import torch
 import matplotlib.pyplot as plt
 plt.switch_backend('agg')
-from saliency_maps_metrics.multi_step_metrics import Deletion, Insertion
-from saliency_maps_metrics.single_step_metrics import IIC_AD, ADD
 from captum.attr import (IntegratedGradients,NoiseTunnel,LayerGradCam,LayerGradCampp,GuidedBackprop)
 
 from args import ArgReader,str2bool,addInitArgs,init_post_hoc_arg
@@ -17,49 +14,19 @@ from init_model import preprocessAndLoadParams
 from post_hoc_expl.scorecam import ScoreCam
 from post_hoc_expl.xgradcam import AblationCAM,XGradCAM
 from post_hoc_expl.rise import RISE
-
+from metrics import sample_img_inds,get_sal_metric_dics,getBatch,getExplanations
 from utils import normalize_tensor
 
-is_multi_step_dic = {"Deletion":True,"Insertion":True,"IIC_AD":False,"ADD":False}
-const_dic = {"Deletion":Deletion,"Insertion":Insertion,"IIC_AD":IIC_AD,"ADD":ADD}
-
-def get_metric_dics():
-    return is_multi_step_dic,const_dic
-
-def find_class_first_image_inds(testDataset):
+def find_class_first_image_inds(label_list):
     class_first_image_inds = [0]
     labels = [0]
-    for i in range(len(testDataset)):
-        label = testDataset.image_label[i]
+    for i in range(len(label_list)):
+        label = label_list[i]
         if label not in labels:
             labels.append(label)
             class_first_image_inds.append(i)
     
     return class_first_image_inds
-
-def sample_img_inds(testDataset,nb_per_class):
-
-    class_first_image_inds = find_class_first_image_inds(testDataset)
-
-    nb_classes_to_be_sampled = len(class_first_image_inds)
-
-    rng = np.random.default_rng(0)
-    all_chosen_inds = []
-    for label in range(nb_classes_to_be_sampled):
-
-        startInd = class_first_image_inds[label]
-        endInd = class_first_image_inds[label+1] if label+1<len(class_first_image_inds) else len(testDataset)
-        candidate_inds = np.arange(startInd,endInd)
-
-        if len(candidate_inds) < nb_per_class:
-            raise ValueError(f"Number of image to be sampled per class is too high for class {label} which has only {len(candidate_inds)} images.")
-        
-        chosen_inds = rng.choice(candidate_inds, size=(nb_per_class,),replace=False)
-        all_chosen_inds.append(chosen_inds)
-    
-    all_chosen_inds = np.concatenate(all_chosen_inds,axis=0)
-
-    return all_chosen_inds 
 
 def get_other_img_inds(inds):
     other_img_inds = np.zeros_like(inds)
@@ -67,52 +34,6 @@ def get_other_img_inds(inds):
     other_img_inds = inds[shift]
     return other_img_inds
 
-def getBatch(testDataset,inds,args):
-    data_list = []
-    targ_list = []
-    for i in inds:
-        batch = testDataset.__getitem__(i)
-        data,targ = batch[0].unsqueeze(0),torch.tensor(batch[1]).unsqueeze(0)
-        data_list.append(data)
-        targ_list.append(targ)
-    
-    data_list = torch.cat(data_list,dim=0)
-    targ_list = torch.cat(targ_list,dim=0)
-
-    if args.cuda:
-        data_list = data_list.cuda() 
-        targ_list = targ_list.cuda()
-        
-    return data_list,targ_list 
-
-def getExplanations(inds,data,predClassInds,attrFunc,kwargs,args):
-    explanations = []
-    for i,data_i,predClassInd in zip(inds,data,predClassInds):
-        if args.att_metrics_post_hoc:
-            explanation = applyPostHoc(attrFunc,data_i.unsqueeze(0),predClassInd,kwargs,args)
-        else:
-            explanation = attrFunc(i)
-        explanations.append(explanation)
-    explanations = torch.cat(explanations,dim=0)
-    return explanations 
-
-def applyPostHoc(attrFunc,data,targ,kwargs,args):
-
-    if args.att_metrics_post_hoc.find("var") == -1 and args.att_metrics_post_hoc.find("smooth") == -1:
-        argList = [data,targ]
-    else:
-        argList = [data]
-        kwargs["target"] = targ
-
-    attMap = attrFunc(*argList,**kwargs).clone().detach().to(data.device)
-
-    if len(attMap.size()) == 2:
-        attMap = attMap.unsqueeze(0).unsqueeze(0)
-    elif len(attMap.size()) == 3:
-        attMap = attMap.unsqueeze(0)
-        
-    return attMap
-    
 def getAttMetrMod(net,testDataset,args):
     if args.att_metrics_post_hoc == "gradcam":
         netGradMod = modelBuilder.GradCamMod(net)
@@ -216,7 +137,7 @@ def main(argv=None):
     formated_attention_metric = args.attention_metric.replace("_","")
 
     #Constructing metric
-    is_multi_step_dic,const_dic = get_metric_dics()
+    is_multi_step_dic,const_dic = get_sal_metric_dics()
     if args.data_replace_method is None or args.data_replace_method == "otherimage":
         metric_constr_arg_list = []
     else:
@@ -246,7 +167,7 @@ def main(argv=None):
             attrFunc = lambda i:(salMaps_dataset[i,0:1]).unsqueeze(0)
             kwargs = None
 
-        inds = sample_img_inds(testDataset,args.img_nb_per_class)
+        inds = sample_img_inds(args.img_nb_per_class,testDataset=testDataset)
 
         data,_ = getBatch(testDataset,inds,args)
         
@@ -255,8 +176,6 @@ def main(argv=None):
             other_data,_ = getBatch(testDataset,other_img_inds,args)
         else:
             other_img_inds = None
-
- 
 
         torch.set_grad_enabled(False) 
         predClassInds = net_lambda(data).argmax(dim=-1)

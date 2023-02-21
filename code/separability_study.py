@@ -2,93 +2,10 @@
 import os ,sys
 
 import numpy as np 
-import torch
-from sklearn import svm
-import sklearn.metrics
 
 from args import addInitArgs,addValArgs
 import modelBuilder,load_data
 from args import ArgReader
-
-import matplotlib.pyplot as plt
-
-def run_separability_analysis(repres1,repres2,normalize,seed,folds=10):
-
-    len1 = len(repres1)
-    len2 = len(repres2)
-
-    if normalize:
-        repres1 = repres1/np.abs(repres1).sum(axis=1,keepdims=True)
-        repres2 = repres2/np.abs(repres2).sum(axis=1,keepdims=True)
-
-    labels1 = np.zeros(len1).astype("int")
-    labels2 = np.ones(len2).astype("int")
-
-    torch.manual_seed(seed)
-    np.random.seed(seed)
-
-    train_acc = []
-    train_auc = []
-    val_acc = []
-    val_auc = []
-
-    train_inv_auc = []
-    val_inv_auc = []   
-
-    for i in range(folds):
-
-        inds = np.random.permutation(len1)
-
-        repr1_perm,lab1_perm = repres1[inds],labels1[inds]
-        repr2_perm,lab2_perm = repres2[inds],labels2[inds]
-
-        train_x = np.concatenate((repr1_perm[:len1//2],repr2_perm[:len2//2]),axis=0)
-        test_x = np.concatenate((repr1_perm[len1//2:],repr2_perm[len2//2:]),axis=0)
-
-        train_y = np.concatenate((lab1_perm[:len1//2],lab2_perm[:len2//2]),axis=0)
-        test_y = np.concatenate((lab1_perm[len1//2:],lab2_perm[len2//2:]),axis=0)
-
-        model = svm.SVC(probability=True)
-        model.fit(train_x,train_y)
-
-        train_y_score = model.predict_proba(train_x)[:,1]
-        train_acc.append(model.score(train_x,train_y))
-        train_auc.append(sklearn.metrics.roc_auc_score(train_y,train_y_score))
-        
-        test_y_score = model.predict_proba(test_x)[:,1]
-        val_acc.append(model.score(test_x,test_y))
-        val_auc.append(sklearn.metrics.roc_auc_score(test_y,test_y_score))
-
-        '''
-        #Inversed model
-        train_inv_y_score = 1 - train_y_score
-        train_inv_auc.append(sklearn.metrics.roc_auc_score(train_y,train_inv_y_score))
-
-        test_inv_y_score = 1 - test_y_score
-        val_inv_auc.append(sklearn.metrics.roc_auc_score(test_y,test_inv_y_score))
-
-        plt.figure()
-
-        fpr,tpr,_ = sklearn.metrics.roc_curve(train_y, train_y_score)
-        plt.plot(fpr,tpr,label="train")
-        fpr,tpr,_ = sklearn.metrics.roc_curve(test_y, test_y_score)
-        plt.plot(fpr,tpr,label="val")
-        plt.legend()
-        plt.xlabel("False positive rate")
-        plt.ylabel("True positive rate")
-
-        plt.savefig(f"../vis/CROHN2/roc_curve_{i}.png")
-        plt.close()
-        '''
-        
-    #sys.exit(0)
-    train_acc,train_auc = np.array(train_acc),np.array(train_auc)
-    val_acc,val_auc = np.array(val_acc),np.array(val_auc)
-
-    train_inv_auc = np.array(train_inv_auc)
-    val_inv_auc = np.array(val_inv_auc)
-
-    return {"train_acc":train_acc,"train_auc":train_auc,"val_acc":val_acc,"val_auc":val_auc,"train_inv_auc":train_inv_auc,"val_inv_auc":val_inv_auc}
 
 def list_to_str(values):
     string = str(round(values.mean(),4)) + "±" +str(round(values.std(),4))
