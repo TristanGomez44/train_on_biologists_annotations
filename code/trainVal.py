@@ -276,6 +276,8 @@ def addLossTermArgs(argreader):
                                   help='The weight of the saliency metric mask in the loss function. Can be set to "scheduler".')
     argreader.parser.add_argument('--nce_sched_start', type=float, metavar='FLOAT',
                                   help='The initial value of nce_weight loss term.')
+    argreader.parser.add_argument('--nce_norm', type=str2bool, metavar='FLOAT',
+                                  help='To add the NCE normalisation (i.e. cross entropy and negatives terms)')
     argreader.parser.add_argument('--focal_weight', type=float, metavar='FLOAT',
                                   help='The weight of the focal loss term.')
     argreader.parser.add_argument('--adv_weight', type=float, metavar='FLOAT',

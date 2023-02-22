@@ -41,9 +41,16 @@ def computeLoss(args, output, target, resDict,reduction="mean"):
             loss_dic["loss_ce"] = loss_ce.data.unsqueeze(0)
             loss += args.nll_weight*loss_ce
 
-    if args.nce_weight > 0 and "feat_pooled_masked" in resDict:
-        all_feat = torch.cat((resDict["feat_pooled"],resDict["feat_pooled_masked"]),dim=0)
-        nce_loss = info_nce_loss(all_feat,reduction=reduction)
+    if args.nce_weight > 0 and (("feat_pooled_masked" in resDict) or ("projection_masked" in resDict)):
+        if args.nce_proj_layer:
+            feat = resDict["projection"]
+            feat_masked = resDict["projection_masked"]
+        else:
+            feat = resDict["feat_pooled"]
+            feat_masked = resDict["feat_pooled_masked"]
+
+        all_feat = torch.cat((feat,feat_masked),dim=0)
+        nce_loss = info_nce_loss(all_feat,reduction=reduction,normalisation=args.nce_norm)
         loss_dic["loss_nce"] = nce_loss.data.unsqueeze(0)
         loss += args.nce_weight * nce_loss
     
@@ -62,7 +69,7 @@ def computeLoss(args, output, target, resDict,reduction="mean"):
     return loss_dic
 
 #From https://github.com/sthalles/SimCLR/
-def info_nce_loss(features,n_views=2,temperature=0.07,reduction="sum"):
+def info_nce_loss(features,n_views=2,temperature=0.07,reduction="sum",normalisation=True):
     batch_size = features.shape[0]//n_views
 
     labels = torch.cat([torch.arange(batch_size) for i in range(n_views)], dim=0)
@@ -85,14 +92,23 @@ def info_nce_loss(features,n_views=2,temperature=0.07,reduction="sum"):
     # select and combine multiple positives
     positives = similarity_matrix[labels.bool()].view(labels.shape[0], -1)
 
-    # select only the negatives the negatives
-    negatives = similarity_matrix[~labels.bool()].view(similarity_matrix.shape[0], -1)
+    if normalisation:
+        # select only the negatives the negatives
+        negatives = similarity_matrix[~labels.bool()].view(similarity_matrix.shape[0], -1)
 
-    logits = torch.cat([positives, negatives], dim=1)
-    labels = torch.zeros(logits.shape[0], dtype=torch.long).to(features.device)
+        logits = torch.cat([positives, negatives], dim=1)
+        labels = torch.zeros(logits.shape[0], dtype=torch.long).to(features.device)
 
-    logits = logits / temperature
-    return F.cross_entropy(logits, labels,reduction=reduction)
+        logits = logits / temperature
+        return F.cross_entropy(logits, labels,reduction=reduction)
+    else:
+
+        if reduction == "sum":
+            return -positives.sum()
+        elif reduction == "mean":
+            return -positives.mean()
+        else:
+            raise ValueError("Unkown reduction",reduction)
 
 
 '''

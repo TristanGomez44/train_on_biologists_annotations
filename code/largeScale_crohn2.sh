@@ -143,6 +143,9 @@ case $1 in
   "noneRed_attMetrMask_FT_simclr2")
     python trainVal.py -c model_crohn2.config --model_id noneRed_attMetrMask_FT_simclr2 --resnet_bilinear False  --big_images True  --stride_lay3 2 --stride_lay4 2 --sal_metr_mask True --epochs 500 --start_mode fine_tune --init_path ../models/CROHN2/modelnoneRed_best_epoch46 --nce_weight 1 --val_batch_size 200 
     ;;
+  "noneRed_attMetrMask_FT_simclr_nonorm_proj")
+    python trainVal.py -c model_crohn2.config --model_id noneRed_attMetrMask_FT_simclr_nonorm_proj --resnet_bilinear False  --big_images True  --stride_lay3 2 --stride_lay4 2 --sal_metr_mask True --epochs 500 --start_mode fine_tune --init_path ../models/CROHN2/modelnoneRed_best_epoch46 --nce_weight 1 --val_batch_size 200 --nce_proj_layer True --nce_norm False
+    ;;
   "noneRed_attMetrMask_FT_adv")
     python trainVal.py -c model_crohn2.config --model_id noneRed_attMetrMask_FT_adv --resnet_bilinear False  --big_images True  --stride_lay3 2 --stride_lay4 2 --sal_metr_mask True --epochs 500 --start_mode fine_tune --init_path ../models/CROHN2/modelnoneRed_best_epoch46 --adv_weight 1 --val_batch_size 200
     ;;

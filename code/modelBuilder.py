@@ -238,16 +238,21 @@ class SecondModel(nn.Module):
 
 class LinearSecondModel(SecondModel):
 
-    def __init__(self, nbFeat, nbClass, dropout,bias=True,adv_layer=False):
+    def __init__(self, nbFeat, nbClass, dropout,bias=True,adv_layer=False,nce_proj_layer=False):
 
         super().__init__(nbFeat, nbClass)
         self.dropout = nn.Dropout(p=dropout)
         self.linLay = nn.Linear(self.nbFeat, self.nbClass,bias=bias)
 
         if adv_layer:
-            self.adv_layer = nn.Sequential(nn.Linear(nbFeat,nbFeat*2),nn.ReLU(),nn.Linear(nbFeat*2,2))
+            self.adv_layer = get_mlp(nbFeat)
         else:
             self.adv_layer = None
+        
+        if nce_proj_layer:
+            self.nce_proj_layer = get_mlp(nbFeat)
+        else:
+            self.nce_proj_layer = None
 
     def forward(self, retDict):
         x = retDict["feat_pooled"]
@@ -256,10 +261,16 @@ class LinearSecondModel(SecondModel):
         if self.adv_layer:
             retDict["output_adv"] = self.adv_layer(ReverseLayerF.apply(x,1))
 
+        if self.nce_proj_layer:
+            retDict["projection"] = self.nce_proj_layer(x)
+
         output = self.linLay(x)
         retDict["output"]=output
 
         return retDict
+
+def get_mlp(nbFeat):
+    return nn.Sequential(nn.Linear(nbFeat,nbFeat*2),nn.ReLU(),nn.Linear(nbFeat*2,2))
 
 def getResnetFeat(backbone_name, backbone_inplanes):
     if backbone_name in ["resnet50","resnet101","resnet152"]:
@@ -330,7 +341,7 @@ def netBuilder(args,gpu=None):
     ############### Second Model #######################
     if args.second_mod == "linear":
         if args.first_mod.find("convnext") == -1:
-            secondModel = LinearSecondModel(nbFeat, args.class_nb, args.dropout,args.lin_lay_bias,args.adv_weight>0)
+            secondModel = LinearSecondModel(nbFeat, args.class_nb, args.dropout,args.lin_lay_bias,args.adv_weight>0,args.nce_proj_layer)
         else:
             secondModel = nn.Identity()
     else:
@@ -403,5 +414,6 @@ def addArgs(argreader):
     argreader.parser.add_argument('--kl_temp', type=float, help='KL temperature.')
 
     argreader.parser.add_argument('--end_relu', type=args.str2bool, help='To add a relu at the end of the first block of each layer.')
+    argreader.parser.add_argument('--nce_proj_layer', type=args.str2bool, help='To add a projection layer when running NCE training.')
 
     return argreader
