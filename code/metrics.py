@@ -1,3 +1,4 @@
+from uuid import RESERVED_MICROSOFT
 import torch
 import torch.nn.functional as F
 import matplotlib.pyplot as plt
@@ -52,13 +53,22 @@ def binaryToMetrics(output,target,resDict,comp_spars=False):
     metDict = {"Accuracy":acc}
 
     for key in resDict.keys():
-        if key.find("pred_") != -1:
+        if key.find("output_") != -1:
             suff = key.split("_")[-1]
-            metDict["Accuracy_{}".format(suff)] = compAccuracy(resDict[key],target)
+
+            if not "adv" in key:
+                metDict["Accuracy_{}".format(suff)] = compAccuracy(resDict[key],target)
+
+    if "output_adv" in resDict:
+        sigm_output_adv = torch.softmax(resDict["output_adv"].detach(),dim=1).cpu().numpy()[:,1]
+        target_adv = resDict["target_adv"].detach().cpu().numpy()
+        metDict["AuC_adv"] = roc_auc_score(target_adv,sigm_output_adv)*len(sigm_output_adv)*0.5
+        metDict["Accuracy_adv"] = compAccuracy(resDict["output_adv"],resDict["target_adv"])*0.5
 
     if "attMaps" in resDict.keys() and comp_spars:
         spar = compAttMapSparsity(resDict["attMaps"].clone(),resDict["feat"].clone())
         metDict["Sparsity"] = spar
+
     else:
         norm = torch.sqrt(torch.pow(resDict["feat"],2).sum(dim=1,keepdim=True))
         spar = compSparsity(norm)
@@ -237,6 +247,10 @@ def sample_img_inds(nb_per_class,label_list=None,testDataset=None):
     label_to_ind = {}
     for i in range(len(label_list)):
         lab = label_list[i]
+
+        if type(lab) is torch.Tensor:
+            lab = lab.item()
+
         if lab not in label_to_ind:
             label_to_ind[lab] = []  
         label_to_ind[lab].append(i)

@@ -24,8 +24,8 @@ def computeLoss(args, output, target, resDict,reduction="mean"):
     loss = 0
 
     if args.master_net and ("master_net_pred" in resDict):
-        loss_kl = F.kl_div(F.log_softmax(output/args.kl_temp, dim=1),F.softmax(resDict["master_net_pred"]/args.kl_temp, dim=1),reduction="batchmean")
-        loss_ce = F.cross_entropy(output, target)
+        loss_kl = F.kl_div(F.log_softmax(output/args.kl_temp, dim=1),F.softmax(resDict["master_net_pred"]/args.kl_temp, dim=1),reduction=reduction)
+        loss_ce = F.cross_entropy(output, target,reduction=reduction)
         
         loss_dic["loss_kl"] = loss_kl.data.unsqueeze(0)
         loss_dic["loss_ce"] = loss_ce.data.unsqueeze(0)
@@ -51,6 +51,11 @@ def computeLoss(args, output, target, resDict,reduction="mean"):
         focal_loss = adaptive_focal_loss(output, target,reduction)
         loss_dic["focal_loss"] = focal_loss.data.unsqueeze(0)
         loss += args.focal_weight * focal_loss            
+
+    if args.adv_weight > 0:
+        loss_adv_ce = F.cross_entropy(resDict["output_adv"], resDict["target_adv"],reduction=reduction)
+        loss_dic["loss_adv_ce"]= loss_adv_ce.data.unsqueeze(0)
+        loss += args.adv_weight * loss_adv_ce
 
     loss_dic["loss"] = loss.unsqueeze(0)
 

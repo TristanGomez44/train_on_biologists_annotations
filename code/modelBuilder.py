@@ -10,6 +10,23 @@ EPS = 0.000001
 
 import torch.nn.functional as F
 
+from torch.autograd import Function
+
+
+class ReverseLayerF(Function):
+
+    @staticmethod
+    def forward(ctx, x, alpha):
+        ctx.alpha = alpha
+
+        return x.view_as(x)
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        output = grad_output.neg() * ctx.alpha
+
+        return output, None
+
 def buildFeatModel(featModelName, **kwargs):
     ''' Build a visual feature model
 
@@ -221,18 +238,27 @@ class SecondModel(nn.Module):
 
 class LinearSecondModel(SecondModel):
 
-    def __init__(self, nbFeat, nbClass, dropout,bias=True):
+    def __init__(self, nbFeat, nbClass, dropout,bias=True,adv_layer=False):
 
         super().__init__(nbFeat, nbClass)
         self.dropout = nn.Dropout(p=dropout)
-
         self.linLay = nn.Linear(self.nbFeat, self.nbClass,bias=bias)
+
+        if adv_layer:
+            self.adv_layer = nn.Sequential(nn.Linear(nbFeat,nbFeat*2),nn.ReLU(),nn.Linear(nbFeat*2,2))
+        else:
+            self.adv_layer = None
 
     def forward(self, retDict):
         x = retDict["feat_pooled"]
         x = self.dropout(x)
+
+        if self.adv_layer:
+            retDict["output_adv"] = self.adv_layer(ReverseLayerF.apply(x,1))
+
         output = self.linLay(x)
         retDict["output"]=output
+
         return retDict
 
 def getResnetFeat(backbone_name, backbone_inplanes):
@@ -261,6 +287,18 @@ def getResnetDownSampleRatio(args):
         return int(ratio)
 
     raise ValueError("Unkown backbone",backbone_name)
+
+def advNetBuilder(args):
+    nbFeat = getResnetFeat(args.first_mod, args.resnet_chan)
+    adv_mlp = nn.Sequential(nn.Linear(nbFeat,nbFeat*2),nn.ReLU(),nn.Linear(nbFeat*2,2))
+
+    if args.cuda and torch.cuda.is_available():
+        adv_mlp.cuda()
+        if args.multi_gpu:
+            adv_mlp = DataParallelModel(adv_mlp)
+
+    return adv_mlp
+
 
 def netBuilder(args,gpu=None):
     ############### Visual Model #######################
@@ -292,7 +330,7 @@ def netBuilder(args,gpu=None):
     ############### Second Model #######################
     if args.second_mod == "linear":
         if args.first_mod.find("convnext") == -1:
-            secondModel = LinearSecondModel(nbFeat, args.class_nb, args.dropout,args.lin_lay_bias)
+            secondModel = LinearSecondModel(nbFeat, args.class_nb, args.dropout,args.lin_lay_bias,args.adv_weight>0)
         else:
             secondModel = nn.Identity()
     else:

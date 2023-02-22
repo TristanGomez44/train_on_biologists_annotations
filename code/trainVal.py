@@ -9,6 +9,7 @@ import subprocess
 
 import numpy as np
 import torch
+import torch.nn as nn
 from torch.nn import functional as F
 import matplotlib.pyplot as plt
 plt.switch_backend('agg')
@@ -61,6 +62,20 @@ def optim_step(model,optim,acc_nb):
 
     return model,optim,accumulated_size,acc_nb
 
+def adv_mlp_optim_step(loss_dic,kwargs):
+    loss_dic["loss_adv_ce"].backward()
+    kwargs["optim_adv_mlp"].step()
+    kwargs["optim_adv_mlp"].zero_grad()
+    loss_dic["loss_adv_ce"] = loss_dic["loss_adv_ce"].data
+    return loss_dic,kwargs
+
+def get_adv_target(resDict):
+    resDict["output_adv"] = torch.cat((resDict["output_adv"],resDict["output_adv_masked"]),dim=0)
+    target_adv = torch.zeros(len(resDict["feat_pooled"]))
+    target_adv_masked = torch.ones(len(resDict["feat_pooled_masked"]))
+    resDict["target_adv"] = torch.cat((target_adv,target_adv_masked),dim=0).to(resDict["output_adv"].device).long()
+    return resDict
+
 def epochSeqTr(model, optim, loader, epoch, args, **kwargs):
 
     model.train()
@@ -98,10 +113,14 @@ def epochSeqTr(model, optim, loader, epoch, args, **kwargs):
             resDict = master_net_inference(data,kwargs,resDict)
 
         if args.sal_metr_mask:
-            resDict,data = sal_metr_data_aug.apply_sal_metr_masks_and_update_dic(model,data,args.sal_metr_mask_prob,args.nce_weight,resDict)
+            resDict,data = sal_metr_data_aug.apply_sal_metr_masks_and_update_dic(model,data,args,resDict)
                    
         resDict.update(model(data))
         output = resDict["output"]
+
+        if args.adv_weight > 0: 
+            resDict = get_adv_target(resDict)
+   
         loss_dic = kwargs["lossFunc"](output, target, resDict)
         loss_dic = agregate_losses(loss_dic)
         loss = loss_dic["loss"]/len(data)
@@ -133,12 +152,12 @@ def epochSeqTr(model, optim, loader, epoch, args, **kwargs):
         if os.path.exists(previous_epoch_model):
             os.remove(previous_epoch_model)
 
-        if args.nce_weight > 0: 
+        if args.nce_weight > 0 or args.adv_weight > 0: 
             metrDict = metrics.separability_metric(var_dic["feat_pooled"].detach().cpu(),var_dic["feat_pooled_masked"].detach().cpu(),var_dic["target"],metrDict,args.seed,args.img_nb_per_class)
-        if args.focal_weight > 0:
-            metrDict = metrics.expected_calibration_error(var_dic["output"], var_dic["target"], metrDict)
             with torch.no_grad():
                 metrDict = metrics.saliency_metric_validity(loader.dataset,model,args,metrDict)
+        if args.focal_weight > 0:
+            metrDict = metrics.expected_calibration_error(var_dic["output"], var_dic["target"], metrDict)
 
         writeSummaries(metrDict, totalImgNb, epoch, "train", args.model_id, args.exp_id)
 
@@ -167,10 +186,14 @@ def epochImgEval(model, loader, epoch, args, mode="val",**kwargs):
         resDict = {}
         
         if args.sal_metr_mask:
-            resDict,data = sal_metr_data_aug.apply_sal_metr_masks_and_update_dic(model,data,args.sal_metr_mask_prob,args.nce_weight,resDict)
+            resDict,data = sal_metr_data_aug.apply_sal_metr_masks_and_update_dic(model,data,args,resDict)
 
         resDict.update(model(data))
         output = resDict["output"]
+
+        if args.adv_weight > 0:  
+            resDict = get_adv_target(resDict)
+
         loss_dic = kwargs["lossFunc"](output, target, resDict)
         loss_dic = agregate_losses(loss_dic)
 
@@ -190,11 +213,11 @@ def epochImgEval(model, loader, epoch, args, mode="val",**kwargs):
     if mode == "test":
         update.save_maps(var_dic, args.exp_id, args.model_id, epoch, mode)
 
-    if args.nce_weight > 0: 
+    if args.nce_weight > 0 or args.adv_weight > 0: 
         metrDict = metrics.separability_metric(var_dic["feat_pooled"].cpu(),var_dic["feat_pooled_masked"].cpu(),var_dic["target"],metrDict,args.seed,args.img_nb_per_class)
+        metrDict = metrics.saliency_metric_validity(loader.dataset,model,args,metrDict)
     if args.focal_weight > 0:
         metrDict = metrics.expected_calibration_error(var_dic["output"], var_dic["target"], metrDict)
-        metrDict = metrics.saliency_metric_validity(loader.dataset,model,args,metrDict)
 
     writeSummaries(metrDict, totalImgNb, epoch, mode, args.model_id, args.exp_id)
 
@@ -203,7 +226,7 @@ def epochImgEval(model, loader, epoch, args, mode="val",**kwargs):
 def writeSummaries(metrDict, totalImgNb, epoch, mode, model_id, exp_id):
  
     for metric in metrDict.keys():
-        if metric.find("Sep") == -1 and metric != "nce_weight":
+        if metric.find("Sep") == -1 and metric != "nce_weight" and metric.find("_val_rate") == -1:
             metrDict[metric] /= totalImgNb
 
     header_list = ["epoch"]
@@ -255,7 +278,9 @@ def addLossTermArgs(argreader):
                                   help='The initial value of nce_weight loss term.')
     argreader.parser.add_argument('--focal_weight', type=float, metavar='FLOAT',
                                   help='The weight of the focal loss term.')
-                              
+    argreader.parser.add_argument('--adv_weight', type=float, metavar='FLOAT',
+                                  help='The weight of the adversarial loss term to ensure masked representations are indistinguishable from regular representations.')
+
     return argreader
 
 
@@ -340,6 +365,13 @@ def train(args,trial):
                                                 args.init_path,args.optuna)
 
     kwargsTr["optim"],scheduler = init_model.getOptim_and_Scheduler(args.optim, args.lr,args.momentum,args.weight_decay,args.use_scheduler,startEpoch,net,args.sched_step_size,args.sched_gamma)
+
+    #if args.adv_weight > 0:
+    #    adv_mlp = modelBuilder.advNetBuilder(args)
+    #    adv_mlp_optim = torch.optim.SGD(adv_mlp.parameters(),lr=0.001)
+    #    kwargsTr["optim_adv_mlp"] = adv_mlp_optim
+    #    kwargsTr["adv_mlp"] = adv_mlp
+    #    kwargsVal["adv_mlp"] = adv_mlp
 
     if args.nce_weight == "scheduler":
         nce_weight_updater = update.NCEWeightUpdater(args)
@@ -467,6 +499,8 @@ def main(argv=None):
 
     if args.redirect_out:
         sys.stdout = open("python.out", 'w')
+
+    torch.autograd.set_detect_anomaly(True)
 
     # The folders where the experience file will be written
     if not os.path.exists("../vis/{}".format(args.exp_id)):

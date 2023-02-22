@@ -61,10 +61,11 @@ def apply_sal_metr_masks(model,data,mask_prob=1):
 
     return data_masked,is_masking_object_list
         
-def apply_sal_metr_masks_and_update_dic(model,data,sal_metr_mask_prob,sal_metr_mask_weight,resDict):
-    data_masked,is_object_masked_list = apply_sal_metr_masks(model,data,sal_metr_mask_prob)
+def apply_sal_metr_masks_and_update_dic(model,data,args,resDict):
+
+    data_masked,is_object_masked_list = apply_sal_metr_masks(model,data,args.sal_metr_mask_prob)
     resDict["is_object_masked_list"] = is_object_masked_list
-    if sal_metr_mask_weight > 0:
+    if args.nce_weight > 0 or args.adv_weight > 0:
         resDict_masked = model(data_masked) 
         resDict.update({key+"_masked":resDict_masked[key] for key in resDict_masked})
     else:
