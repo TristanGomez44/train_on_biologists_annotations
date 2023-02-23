@@ -43,7 +43,7 @@ class ConvNeXt(_ConvNeXt):
         x = self.avgpool(x)
         retDict["feat_pooled"] = x
         x = self.classifier(x)
-        retDict["pred"] = x
+        retDict["output"] = x
         return retDict
 
 def _convnext(
