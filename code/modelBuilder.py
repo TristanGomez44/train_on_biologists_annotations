@@ -39,7 +39,7 @@ def buildFeatModel(featModelName, **kwargs):
     if featModelName.find("resnet") != -1:
         featModel = getattr(resnet, featModelName)(**kwargs)
     elif featModelName.find("convnext") != -1:
-        featModel = getattr(convnext, featModelName)()
+        featModel = getattr(convnext, featModelName)(**kwargs)
     else:
         raise ValueError("Unknown model type : ", featModelName)
 
@@ -327,15 +327,15 @@ def netBuilder(args,gpu=None):
 
     else:
         CNNconst = CNN2D
-        kwargs = {}
+        if args.first_mod.find("convnext") == -1:
+            kwargs = {} 
+        else:
+            kwargs = {"stochastic_depth_prob":args.stochastic_depth_prob}
 
-    if args.first_mod.find("bagnet") == -1 and args.first_mod.find("hrnet") == -1:
-        firstModel = CNNconst(args.first_mod,chan=args.resnet_chan, stride=args.resnet_stride,\
+    firstModel = CNNconst(args.first_mod,chan=args.resnet_chan, stride=args.resnet_stride,\
                                 strideLay2=args.stride_lay2,strideLay3=args.stride_lay3,\
                                 strideLay4=args.stride_lay4,\
                                 **kwargs)
-    else:
-        firstModel = CNNconst(args.first_mod,**kwargs)
 
 
     ############### Second Model #######################

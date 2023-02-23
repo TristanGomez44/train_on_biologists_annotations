@@ -148,17 +148,21 @@ def epochSeqTr(model, optim, loader, epoch, args, **kwargs):
         if os.path.exists(previous_epoch_model):
             os.remove(previous_epoch_model)
 
-        if args.nce_weight > 0 or args.adv_weight > 0: 
-            metrDict = metrics.separability_metric(var_dic["feat_pooled"].detach().cpu(),var_dic["feat_pooled_masked"].detach().cpu(),var_dic["target"],metrDict,args.seed,args.img_nb_per_class)
-            with torch.no_grad():
-                metrDict = metrics.saliency_metric_validity(loader.dataset,model,args,metrDict)
-        if args.focal_weight > 0:
-            metrDict = metrics.expected_calibration_error(var_dic["output"], var_dic["target"], metrDict)
+    if args.nce_weight > 0 or args.adv_weight > 0: 
+        metrDict = metrics.separability_metric(var_dic["feat_pooled"].detach().cpu(),var_dic["feat_pooled_masked"].detach().cpu(),var_dic["target"],metrDict,args.seed,args.img_nb_per_class)
+        with torch.no_grad():
+            metrDict = metrics.saliency_metric_validity(loader.dataset,model,args,metrDict)
+    if args.focal_weight > 0:
+        metrDict = metrics.expected_calibration_error(var_dic["output"], var_dic["target"], metrDict)
+    if args.nce_weight_sched:
+        metrDict["nce_weight"] = args.nce_weight
 
-        if args.nce_weight_sched:
-            metrDict["nce_weight"] = args.nce_weight
+    if args.optuna:
+        optuna_suff = "_trial"+args.trial_id
+    else:
+        optuna_suff = ""
 
-        writeSummaries(metrDict, totalImgNb, epoch, "train", args.model_id, args.exp_id)
+    writeSummaries(metrDict, totalImgNb, epoch, "train", args.model_id+optuna_suff, args.exp_id)
 
     return metrDict
 
@@ -291,8 +295,8 @@ def addLossTermArgs(argreader):
 
 def run(args,trial):
 
-    args.lr = trial.suggest_float("lr", 1e-4, 1e-2, log=True)
-    args.optim = trial.suggest_categorical("optim", ["Adam", "AMSGrad", "SGD"])
+    args.lr = trial.suggest_float("lr", 1e-6, 1e-2, log=True)
+    args.optim = trial.suggest_categorical("optim", ["Adam", "AMSGrad", "SGD","AdamW"])
 
     if args.max_batch_size <= 12:
         minBS = 4
@@ -301,27 +305,14 @@ def run(args,trial):
 
     args.batch_size = trial.suggest_int("batch_size", minBS, args.max_batch_size, log=True)
     args.dropout = trial.suggest_float("dropout", 0, 0.6,step=0.2)
-    args.weight_decay = trial.suggest_float("weight_decay", 1e-6, 1e-3, log=True)
+    args.weight_decay = trial.suggest_float("weight_decay", 1e-8, 1e-3, log=True)
 
-    if args.optim == "SGD":
-        args.momentum = trial.suggest_float("momentum", 0., 0.9,step=0.1)
-        if not args.always_sched:
-            args.use_scheduler = trial.suggest_categorical("use_scheduler",[True,False])
-
-    if args.always_sched:
-        args.use_scheduler = True
-
-    if args.opt_data_aug:
-        args.brightness = trial.suggest_float("brightness", 0, 0.5, step=0.05)
-        args.saturation = trial.suggest_float("saturation", 0, 0.9, step=0.1)
-        args.crop_ratio = trial.suggest_float("crop_ratio", 0.8, 1, step=0.05)
-
+    if args.first_mod.find("convnext") != -1:
+        args.stochastic_depth_prob = trial.suggest_float("dropout", 0, 0.6,step=0.2)
+    
     if args.master_net:
         args.kl_temp = trial.suggest_float("kl_temp", 1, 21, step=5)
         args.kl_interp = trial.suggest_float("kl_interp", 0.1, 1, step=0.1)
-
-    if args.opt_att_maps_nb:
-        args.resnet_bil_nb_parts = trial.suggest_int("resnet_bil_nb_parts", 3, 64, log=True)
 
     value = train(args,trial)
     return value
@@ -532,11 +523,11 @@ def main(argv=None):
         curr = con.cursor()
 
         failedTrials = 0
-        for elem in curr.execute('SELECT trial_id,value FROM trials WHERE study_id == 1').fetchall():
-            if elem[1] is None:
+        for elem in curr.execute('SELECT trial_id,state FROM trials WHERE study_id == 1').fetchall():
+            if elem[1] != "COMPLETE":
                 failedTrials += 1
 
-        trialsAlreadyDone = len(curr.execute('SELECT trial_id,value FROM trials WHERE study_id == 1').fetchall())
+        trialsAlreadyDone = len(curr.execute('SELECT trial_id FROM trials WHERE study_id == 1').fetchall())
 
         if trialsAlreadyDone-failedTrials < args.optuna_trial_nb:
 
