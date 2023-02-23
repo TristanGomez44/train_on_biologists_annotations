@@ -83,7 +83,7 @@ def main(argv=None):
                 viz_map_raw = torch.from_numpy(viz_map)
                 viz_map = viz_map_raw.argmax(dim=1,keepdim=True)
 
-            viz_map = viz_map/viz_map.max()
+            viz_map = viz_map/max(maps1[i:i+1].max(),maps2[i:i+1].max())
 
             viz_mapShape = viz_map.shape
             viz_map = color_map(viz_map.reshape(-1))[:,:3].reshape((1,viz_mapShape[2],viz_mapShape[3],3))
