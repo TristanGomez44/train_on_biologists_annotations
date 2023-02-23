@@ -142,10 +142,6 @@ def epochSeqTr(model, optim, loader, epoch, args, **kwargs):
         if validBatch > 5 and args.debug:
             break
     
-    if "nce_weight_updater" in kwargs:
-        args.nce_weight = kwargs["nce_weight_updater"].update_nce_weight(metrDict)
-        metrDict["nce_weight"] = args.nce_weight
-
     if not args.optuna:
         torch.save(model.state_dict(), "../models/{}/model{}_epoch{}".format(args.exp_id, args.model_id, epoch))
         previous_epoch_model = "../models/{}/model{}_epoch{}".format(args.exp_id, args.model_id, epoch-1)
@@ -158,6 +154,9 @@ def epochSeqTr(model, optim, loader, epoch, args, **kwargs):
                 metrDict = metrics.saliency_metric_validity(loader.dataset,model,args,metrDict)
         if args.focal_weight > 0:
             metrDict = metrics.expected_calibration_error(var_dic["output"], var_dic["target"], metrDict)
+
+        if args.nce_weight_sched:
+            metrDict["nce_weight"] = args.nce_weight
 
         writeSummaries(metrDict, totalImgNb, epoch, "train", args.model_id, args.exp_id)
 
@@ -272,8 +271,12 @@ def addOptimArgs(argreader):
 def addLossTermArgs(argreader):
     argreader.parser.add_argument('--nll_weight', type=float, metavar='FLOAT',
                                   help='The weight of the negative log-likelihood term in the loss function.')
-    argreader.parser.add_argument('--nce_weight', type=str, metavar='FLOAT',
+    argreader.parser.add_argument('--nce_weight', type=float, metavar='FLOAT',
                                   help='The weight of the saliency metric mask in the loss function. Can be set to "scheduler".')
+    
+    argreader.parser.add_argument('--nce_weight_sched', type=str2bool, metavar='FLOAT',
+                                  help='Whether or not to use a scheduler for nce weight.')
+    
     argreader.parser.add_argument('--nce_sched_start', type=float, metavar='FLOAT',
                                   help='The initial value of nce_weight loss term.')
     argreader.parser.add_argument('--nce_norm', type=str2bool, metavar='FLOAT',
@@ -368,25 +371,14 @@ def train(args,trial):
 
     kwargsTr["optim"],scheduler = init_model.getOptim_and_Scheduler(args.optim, args.lr,args.momentum,args.weight_decay,args.use_scheduler,startEpoch,net,args.sched_step_size,args.sched_gamma)
 
-    #if args.adv_weight > 0:
-    #    adv_mlp = modelBuilder.advNetBuilder(args)
-    #    adv_mlp_optim = torch.optim.SGD(adv_mlp.parameters(),lr=0.001)
-    #    kwargsTr["optim_adv_mlp"] = adv_mlp_optim
-    #    kwargsTr["adv_mlp"] = adv_mlp
-    #    kwargsVal["adv_mlp"] = adv_mlp
-
-    if args.nce_weight == "scheduler":
-        nce_weight_updater = update.NCEWeightUpdater(args)
-        args.nce_weight = nce_weight_updater.init_nce_weight()
-        kwargsTr["nce_weight_updater"] = nce_weight_updater
-    else:
-        args.nce_weight = float(args.nce_weight)
-
     epoch = startEpoch
     bestEpoch, worseEpochNb = init_model.getBestEpochInd_and_WorseEpochNb(args.start_mode, args.exp_id, args.model_id, epoch)
 
     bestMetricVal = -np.inf
     isBetter = lambda x, y: x > y
+
+    if args.nce_weight_sched:
+        nce_weight_updater = update.NCEWeightUpdater(args)
 
     if args.master_net:
         kwargsTr["master_net"] = init_model.initMasterNet(args)
@@ -399,13 +391,15 @@ def train(args,trial):
 
     kwargsTr["lossFunc"],kwargsVal["lossFunc"] = lossFunc,lossFunc
 
-
     if not args.only_test:
 
         actual_bs = args.batch_size if args.batch_size < args.max_batch_size_single_pass else args.max_batch_size_single_pass
         args.batch_per_epoch = len(trainLoader.dataset)//actual_bs if len(trainLoader.dataset) > actual_bs else 1
 
         while epoch < args.epochs + 1 and worseEpochNb < args.max_worse_epoch_nb:
+            
+            if args.nce_weight_sched:
+                args.nce_weight = nce_weight_updater.compute_nce_weight(epoch)
 
             kwargsTr["epoch"], kwargsVal["epoch"] = epoch, epoch
             kwargsTr["model"], kwargsVal["model"] = net, net

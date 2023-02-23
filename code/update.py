@@ -91,50 +91,13 @@ def saveMap(fullMap,exp_id,model_id,epoch,mode,key="attMaps"):
 
 class NCEWeightUpdater():
 
-    def __init__(self,args,threshold_epoch_nb=5,variation_threshold=1e-2,increase_factor=0.5):
+    def __init__(self,args,epoch_nb=150):
         self.args = args
-        self.threshold_epoch_nb = threshold_epoch_nb
-        self.variation_threshold = variation_threshold
-        self.increase_factor = increase_factor
-        self.loss_history_dic = {}
+        self.epoch_nb = epoch_nb
 
-    def init_nce_weight(self):
-        self.args.nce_weight = self.args.nce_sched_start
-        return self.args.nce_weight
-
-    def update_nce_weight(self,metrDict):
-
-        loss_names = list(filter(lambda x:x.find("loss") != -1,list(metrDict.keys())))
-
-        for loss_name in loss_names:
-            if not loss_name in self.loss_history_dic:
-                self.loss_history_dic[loss_name] = []
-            
-            self.loss_history_dic[loss_name].append(metrDict[loss_name])
-
-        converged_list = []
-
-        for loss_name in self.loss_history_dic.keys():
-
-            values = self.loss_history_dic[loss_name]
-
-            if len(values) > self.threshold_epoch_nb:
-
-                last_values = np.array(values[-self.threshold_epoch_nb-1:])
-                
-                #variations = np.abs(last_values[:-1] - last_values[1:])/last_values[:-1]
-                #criterion = (variations<self.variation_threshold).all()
-
-                criterion = (last_values[-1] - last_values[:-1] < 0).all()
-
-                converged_list.append(criterion)
-
-            else:
-                converged_list.append(False)
-
-        converged_list = np.array(converged_list)
-
-        if converged_list.all():
-            self.args.nce_weight *= 1+self.increase_factor  
-        
-        return self.args.nce_weight
+    def compute_nce_weight(self,epoch):
+        if epoch < self.epoch_nb:
+            self.nce_weight = (epoch*1.0/self.epoch_nb)
+        else:
+            self.nce_weight = 1
+        return self.nce_weight
