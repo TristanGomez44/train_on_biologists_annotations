@@ -47,7 +47,7 @@ def all_cat_var_dic(var_dic,resDict,target,args,mode):
     if args.focal_weight > 0:
         var_dic = cat_var_dic(var_dic,"output",resDict["output"])
 
-    if args.focal_weight > 0 or args.nce_weight > 0 or args.adv_weight > 0:
+    if args.focal_weight > 0 or args.nce_weight > 0 or args.adv_weight > 0 or args.compute_ece:
         var_dic = cat_var_dic(var_dic,"target",target)
 
     return var_dic

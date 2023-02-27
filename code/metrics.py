@@ -213,7 +213,16 @@ def _populate_bins(confs, preds, labels, num_bins=10):
                 float(bin_dict[binn][COUNT])
     return bin_dict
 
-def expected_calibration_error(all_outputs, all_target, metrDict,num_bins=10):
+def expected_calibration_error(var_dic,metrDict):
+
+    metrDict["ECE"] = _expected_calibration_error(var_dic["output"], var_dic["target"])
+
+    if "output_masked" in var_dic:
+        metrDict["ECE_masked"] = _expected_calibration_error(var_dic["output_masked"], var_dic["target_masked"])
+   
+    return metrDict
+
+def _expected_calibration_error(all_outputs, all_target,num_bins=10):
 
     all_outputs = F.softmax(all_outputs,dim=-1)
     preds = all_outputs.argmax(dim=-1)
@@ -230,9 +239,7 @@ def expected_calibration_error(all_outputs, all_target, metrDict,num_bins=10):
         ece += (float(bin_count) / num_samples) * \
             abs(bin_accuracy - bin_confidence)
 
-    metrDict["ECE"] = ece.item()
-    
-    return metrDict
+    return ece.item()
 
 def make_label_list(dataset):
     return [dataset.image_label[img_ind] for img_ind in sorted(dataset.image_label.keys())]

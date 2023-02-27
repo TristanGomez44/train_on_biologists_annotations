@@ -152,13 +152,14 @@ def epochSeqTr(model, optim, loader, epoch, args, **kwargs):
         metrDict = metrics.separability_metric(var_dic["feat_pooled"].detach().cpu(),var_dic["feat_pooled_masked"].detach().cpu(),var_dic["target"],metrDict,args.seed,args.img_nb_per_class)
         with torch.no_grad():
             metrDict = metrics.saliency_metric_validity(loader.dataset,model,args,metrDict)
-    if args.focal_weight > 0:
-        metrDict = metrics.expected_calibration_error(var_dic["output"], var_dic["target"], metrDict)
+    if args.focal_weight > 0 or args.compute_ece:
+        metrDict = metrics.expected_calibration_error(var_dic, metrDict)
+    
     if args.nce_weight_sched:
         metrDict["nce_weight"] = args.nce_weight
 
     if args.optuna:
-        optuna_suff = "_trial"+args.trial_id
+        optuna_suff = "_trial"+str(args.trial_id)
     else:
         optuna_suff = ""
 
@@ -219,8 +220,8 @@ def epochImgEval(model, loader, epoch, args, mode="val",**kwargs):
     if args.nce_weight > 0 or args.adv_weight > 0: 
         metrDict = metrics.separability_metric(var_dic["feat_pooled"].cpu(),var_dic["feat_pooled_masked"].cpu(),var_dic["target"],metrDict,args.seed,args.img_nb_per_class)
         metrDict = metrics.saliency_metric_validity(loader.dataset,model,args,metrDict)
-    if args.focal_weight > 0:
-        metrDict = metrics.expected_calibration_error(var_dic["output"], var_dic["target"], metrDict)
+    if args.focal_weight > 0 or args.compute_ece:
+        metrDict = metrics.expected_calibration_error(var_dic, metrDict)
 
     writeSummaries(metrDict, totalImgNb, epoch, mode, args.model_id, args.exp_id)
 
@@ -467,6 +468,9 @@ def main(argv=None):
 
     argreader.parser.add_argument('--sal_metr_mask_prob', type=float, help='The probability to apply saliency metrics masking.')
     argreader.parser.add_argument('--sal_metr_mask_remove_masked_obj',type=str2bool, help='Set to True to remove terms masked by the DAUC and ADD metrics.')
+
+    argreader.parser.add_argument('--compute_ece',type=str2bool, help='To compute ECE even if no focal loss is used.')
+    argreader.parser.add_argument('--focal_loss_on_masked',type=str2bool, help='To apply the focal loss on the output corresponding to masked data.')
 
     argreader = addInitArgs(argreader)
     argreader = addOptimArgs(argreader)
