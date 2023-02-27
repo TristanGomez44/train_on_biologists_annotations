@@ -61,7 +61,7 @@ def computeLoss(args, output, target, resDict,reduction="mean"):
 
         if args.focal_loss_on_masked:
             focal_loss_masked = adaptive_focal_loss(resDict["output_masked"], target,reduction)
-            loss_dic["focal_loss_masked"] = focal_loss.data.unsqueeze(0)
+            loss_dic["focal_loss_masked"] = focal_loss_masked.data.unsqueeze(0)
             loss += args.focal_weight * focal_loss_masked 
 
     if args.adv_weight > 0:
