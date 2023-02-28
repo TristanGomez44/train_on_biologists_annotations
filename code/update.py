@@ -44,8 +44,11 @@ def all_cat_var_dic(var_dic,resDict,target,args,mode):
         var_dic = cat_var_dic(var_dic,"feat_pooled_masked",resDict["feat_pooled_masked"])
         var_dic = cat_var_dic(var_dic,"feat_pooled",resDict["feat_pooled"])
 
-    if args.focal_weight > 0:
+    if args.focal_weight > 0 or args.compute_ece:
         var_dic = cat_var_dic(var_dic,"output",resDict["output"])
+
+        if args.sal_metr_mask or args.compute_masked:
+            var_dic = cat_var_dic(var_dic,"output_masked",resDict["output_masked"])
 
     if args.focal_weight > 0 or args.nce_weight > 0 or args.adv_weight > 0 or args.compute_ece:
         var_dic = cat_var_dic(var_dic,"target",target)

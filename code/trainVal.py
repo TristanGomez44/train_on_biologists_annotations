@@ -25,7 +25,7 @@ import metrics
 import sal_metr_data_aug
 import utils
 import update
-
+import multi_obj_epoch_selection
 def remove_excess_examples(data,target,accumulated_size,batch_size):
     if accumulated_size + data.size(0) > batch_size:
 
@@ -112,7 +112,7 @@ def epochSeqTr(model, optim, loader, epoch, args, **kwargs):
         if args.master_net:
             resDict = master_net_inference(data,kwargs,resDict)
 
-        if args.sal_metr_mask:
+        if args.sal_metr_mask or args.compute_masked:
             resDict,data = sal_metr_data_aug.apply_sal_metr_masks_and_update_dic(model,data,args,resDict)
                    
         resDict.update(model(data))
@@ -144,9 +144,11 @@ def epochSeqTr(model, optim, loader, epoch, args, **kwargs):
     
     if not args.optuna:
         torch.save(model.state_dict(), "../models/{}/model{}_epoch{}".format(args.exp_id, args.model_id, epoch))
-        previous_epoch_model = "../models/{}/model{}_epoch{}".format(args.exp_id, args.model_id, epoch-1)
-        if os.path.exists(previous_epoch_model):
-            os.remove(previous_epoch_model)
+        
+        if args.focal_weight == 0 and not args.compute_ece:
+            previous_epoch_model = "../models/{}/model{}_epoch{}".format(args.exp_id, args.model_id, epoch-1)
+            if os.path.exists(previous_epoch_model):
+                os.remove(previous_epoch_model)
 
     if args.nce_weight > 0 or args.adv_weight > 0: 
         metrDict = metrics.separability_metric(var_dic["feat_pooled"].detach().cpu(),var_dic["feat_pooled_masked"].detach().cpu(),var_dic["target"],metrDict,args.seed,args.img_nb_per_class)
@@ -189,7 +191,7 @@ def epochImgEval(model, loader, epoch, args, mode="val",**kwargs):
 
         resDict = {}
         
-        if args.sal_metr_mask:
+        if args.sal_metr_mask or args.compute_masked:
             resDict,data = sal_metr_data_aug.apply_sal_metr_masks_and_update_dic(model,data,args,resDict)
 
         resDict.update(model(data))
@@ -222,15 +224,20 @@ def epochImgEval(model, loader, epoch, args, mode="val",**kwargs):
         metrDict = metrics.saliency_metric_validity(loader.dataset,model,args,metrDict)
     if args.focal_weight > 0 or args.compute_ece:
         metrDict = metrics.expected_calibration_error(var_dic, metrDict)
+    
+    if args.optuna:
+        optuna_suff = "_trial"+str(args.trial_id)
+    else:
+        optuna_suff = ""
 
-    writeSummaries(metrDict, totalImgNb, epoch, mode, args.model_id, args.exp_id)
+    writeSummaries(metrDict, totalImgNb, epoch, mode, args.model_id+optuna_suff, args.exp_id)
 
     return metrDict["Accuracy"]
 
 def writeSummaries(metrDict, totalImgNb, epoch, mode, model_id, exp_id):
  
     for metric in metrDict.keys():
-        if metric.find("Sep") == -1 and metric != "nce_weight" and metric.find("_val_rate") == -1:
+        if metric.find("Sep") == -1 and metric != "nce_weight" and metric.find("_val_rate") == -1 and metric.find("ECE") == -1:
             metrDict[metric] /= totalImgNb
 
     header_list = ["epoch"]
@@ -424,7 +431,14 @@ def train(args,trial):
 
             kwargsTest['loader'] = testLoader
 
-            net = init_model.preprocessAndLoadParams("../models/{}/model{}_best_epoch{}".format(args.exp_id, args.model_id, bestEpoch),args.cuda,net)
+            if args.focal_weight > 0 or args.compute_ece and not args.optuna:
+                val_metrics_path = f"../results/{args.exp_id}/metrics_{args.model_id}_val.csv"
+                bestEpoch = multi_obj_epoch_selection.acc_and_ece_selection(val_metrics_path)
+                best_path = f"../models/{args.exp_id}/model{args.model_id}_epoch{bestEpoch}"
+            else:
+                best_path = f"../models/{args.exp_id}/model{args.model_id}_best_epoch{bestEpoch}"
+                
+            net = init_model.preprocessAndLoadParams(best_path,args.cuda,net)
 
             kwargsTest["model"] = net
             kwargsTest["epoch"] = bestEpoch
@@ -470,7 +484,9 @@ def main(argv=None):
     argreader.parser.add_argument('--sal_metr_mask_remove_masked_obj',type=str2bool, help='Set to True to remove terms masked by the DAUC and ADD metrics.')
 
     argreader.parser.add_argument('--compute_ece',type=str2bool, help='To compute ECE even if no focal loss is used.')
-    argreader.parser.add_argument('--focal_loss_on_masked',type=str2bool, help='To apply the focal loss on the output corresponding to masked data.')
+    argreader.parser.add_argument('--compute_masked',type=str2bool, help='To compute masked image even if not used in loss function.')
+    
+    argreader.parser.add_argument('--loss_on_masked',type=str2bool, help='To apply the focal loss on the output corresponding to masked data.')
 
     argreader = addInitArgs(argreader)
     argreader = addOptimArgs(argreader)

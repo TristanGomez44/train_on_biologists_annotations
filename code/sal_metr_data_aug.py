@@ -65,7 +65,7 @@ def apply_sal_metr_masks_and_update_dic(model,data,args,resDict):
 
     data_masked,is_object_masked_list = apply_sal_metr_masks(model,data,args.sal_metr_mask_prob)
     resDict["is_object_masked_list"] = is_object_masked_list
-    if args.nce_weight > 0 or args.adv_weight > 0 or args.focal_loss_on_masked:
+    if args.nce_weight > 0 or args.adv_weight > 0 or args.loss_on_masked or args.compute_masked:
         resDict_masked = model(data_masked) 
         resDict.update({key+"_masked":resDict_masked[key] for key in resDict_masked})
     else:

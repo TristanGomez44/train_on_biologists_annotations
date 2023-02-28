@@ -218,7 +218,7 @@ def expected_calibration_error(var_dic,metrDict):
     metrDict["ECE"] = _expected_calibration_error(var_dic["output"], var_dic["target"])
 
     if "output_masked" in var_dic:
-        metrDict["ECE_masked"] = _expected_calibration_error(var_dic["output_masked"], var_dic["target_masked"])
+        metrDict["ECE_masked"] = _expected_calibration_error(var_dic["output_masked"], var_dic["target"])
    
     return metrDict
 

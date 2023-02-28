@@ -59,10 +59,18 @@ def computeLoss(args, output, target, resDict,reduction="mean"):
         loss_dic["focal_loss"] = focal_loss.data.unsqueeze(0)
         loss += args.focal_weight * focal_loss            
 
-        if args.focal_loss_on_masked:
-            focal_loss_masked = adaptive_focal_loss(resDict["output_masked"], target,reduction)
-            loss_dic["focal_loss_masked"] = focal_loss_masked.data.unsqueeze(0)
-            loss += args.focal_weight * focal_loss_masked 
+    if args.loss_on_masked:
+        if args.focal_weight > 0:
+            loss_func = adaptive_focal_loss
+            weight = args.focal_weight
+        else:
+            loss_func = F.cross_entropy
+            weight = args.nll_weight
+
+        loss_func = adaptive_focal_loss if args.focal_weight > 0 else F.cross_entropy
+        loss_masked = loss_func(resDict["output_masked"], target,reduction=reduction)
+        loss_dic["loss_masked"] = loss_masked.data.unsqueeze(0)
+        loss += weight * loss_masked 
 
     if args.adv_weight > 0:
         loss_adv_ce = F.cross_entropy(resDict["output_adv"], resDict["target_adv"],reduction=reduction)
