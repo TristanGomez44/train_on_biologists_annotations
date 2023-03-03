@@ -6,16 +6,16 @@ case $1 in
     python trainVal.py -c model_crohn25.config --model_id noneRed_focal --epochs 100 --focal_weight 1 --nll_weight 0 --loss_on_masked True --sal_metr_mask True
     ;;
   "noneRed2")
-    python trainVal.py -c model_crohn25.config --model_id noneRed2 --epochs 100 --compute_ece True --compute_ece True --max_worse_epoch_nb 10 --compute_masked True
+    python trainVal.py -c model_crohn25.config --model_id noneRed2 --epochs 100  --compute_ece True --max_worse_epoch_nb 10 --compute_masked True
     ;;
  "noneRed_focal2")
     python trainVal.py -c model_crohn25.config --model_id noneRed_focal2 --epochs 100 --focal_weight 1 --nll_weight 0 --loss_on_masked True --sal_metr_mask True --max_worse_epoch_nb 10 
     ;;
  "noneRed_onlyfocal")
-    python trainVal.py -c model_crohn25.config --model_id noneRed_onlyfocal --epochs 100 --focal_weight 1 --nll_weight 0 --max_worse_epoch_nb 10 
+    python trainVal.py -c model_crohn25.config --model_id noneRed_onlyfocal --epochs 100 --focal_weight 1 --nll_weight 0 --max_worse_epoch_nb 10   --compute_masked True --compute_ece True
     ;;
  "noneRed_onlylossonmasked")
-    python trainVal.py -c model_crohn25.config --model_id noneRed_onlylossonmasked --epochs 100 --loss_on_masked True --sal_metr_mask True --max_worse_epoch_nb 10 
+    python trainVal.py -c model_crohn25.config --model_id noneRed_onlylossonmasked --epochs 100 --loss_on_masked True --sal_metr_mask True --max_worse_epoch_nb 10 --compute_masked True --compute_ece True
     ;;
   "noneRed_salMask_FT_linschedsimclr")
     python trainVal.py -c model_crohn25.config --model_id noneRed_salMask_FT_linschedsimclr --sal_metr_mask True --nce_weight_sched True --start_mode fine_tune --init_path ../models/CROHN2/modelnoneRed_best_epochX
