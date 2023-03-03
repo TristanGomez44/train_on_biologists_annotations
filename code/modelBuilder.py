@@ -238,7 +238,7 @@ class SecondModel(nn.Module):
 
 class LinearSecondModel(SecondModel):
 
-    def __init__(self, nbFeat, nbClass, dropout,bias=True,adv_layer=False,nce_proj_layer=False):
+    def __init__(self, nbFeat, nbClass, dropout,bias=True,adv_layer=False,nce_proj_layer=False,temperature=1):
 
         super().__init__(nbFeat, nbClass)
         self.dropout = nn.Dropout(p=dropout)
@@ -254,6 +254,8 @@ class LinearSecondModel(SecondModel):
         else:
             self.nce_proj_layer = None
 
+        self.temperature = temperature
+
     def forward(self, retDict):
         x = retDict["feat_pooled"]
         x = self.dropout(x)
@@ -264,7 +266,8 @@ class LinearSecondModel(SecondModel):
         if self.nce_proj_layer:
             retDict["projection"] = self.nce_proj_layer(x)
 
-        output = self.linLay(x)
+        output = self.linLay(x)/self.temperature
+
         retDict["output"]=output
 
         return retDict
@@ -341,7 +344,7 @@ def netBuilder(args,gpu=None):
     ############### Second Model #######################
     if args.second_mod == "linear":
         if args.first_mod.find("convnext") == -1:
-            secondModel = LinearSecondModel(nbFeat, args.class_nb, args.dropout,args.lin_lay_bias,args.adv_weight>0,args.nce_proj_layer)
+            secondModel = LinearSecondModel(nbFeat, args.class_nb, args.dropout,args.lin_lay_bias,args.adv_weight>0,args.nce_proj_layer,args.temperature)
         else:
             secondModel = nn.Identity()
     else:
@@ -415,5 +418,8 @@ def addArgs(argreader):
 
     argreader.parser.add_argument('--end_relu', type=args.str2bool, help='To add a relu at the end of the first block of each layer.')
     argreader.parser.add_argument('--nce_proj_layer', type=args.str2bool, help='To add a projection layer when running NCE training.')
+
+    argreader.parser.add_argument('--temperature', type=float, help='Temperature applied to output')
+
 
     return argreader

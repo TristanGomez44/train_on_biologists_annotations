@@ -16,7 +16,7 @@ plt.switch_backend('agg')
 import optuna
 import sqlite3
 
-from args import ArgReader,str2bool,addInitArgs,addValArgs,init_post_hoc_arg
+from args import ArgReader,str2bool,addInitArgs,addValArgs,init_post_hoc_arg,addLossTermArgs
 import init_model
 from loss import Loss,agregate_losses
 import modelBuilder
@@ -26,6 +26,7 @@ import sal_metr_data_aug
 import utils
 import update
 import multi_obj_epoch_selection
+
 def remove_excess_examples(data,target,accumulated_size,batch_size):
     if accumulated_size + data.size(0) > batch_size:
 
@@ -230,6 +231,9 @@ def epochImgEval(model, loader, epoch, args, mode="val",**kwargs):
     else:
         optuna_suff = ""
 
+    if mode == "test":
+        metrDict["temperature"] = args.temperature
+
     writeSummaries(metrDict, totalImgNb, epoch, mode, args.model_id+optuna_suff, args.exp_id)
 
     return metrDict["Accuracy"]
@@ -237,7 +241,7 @@ def epochImgEval(model, loader, epoch, args, mode="val",**kwargs):
 def writeSummaries(metrDict, totalImgNb, epoch, mode, model_id, exp_id):
  
     for metric in metrDict.keys():
-        if metric.find("Sep") == -1 and metric != "nce_weight" and metric.find("_val_rate") == -1 and metric.find("ECE") == -1:
+        if (metric not in ["nce_weight","temperature"]) and metric.find("Sep") == -1 and metric.find("_val_rate") == -1 and metric.find("ECE") == -1:
             metrDict[metric] /= totalImgNb
 
     header_list = ["epoch"]
@@ -277,26 +281,6 @@ def addOptimArgs(argreader):
 
     argreader.parser.add_argument('--bil_clus_soft_sched', type=str2bool, metavar='BOOL',
                                   help='Added schedule to increase temperature of the softmax of the bilinear cluster model.')
-
-    return argreader
-
-def addLossTermArgs(argreader):
-    argreader.parser.add_argument('--nll_weight', type=float, metavar='FLOAT',
-                                  help='The weight of the negative log-likelihood term in the loss function.')
-    argreader.parser.add_argument('--nce_weight', type=float, metavar='FLOAT',
-                                  help='The weight of the saliency metric mask in the loss function. Can be set to "scheduler".')
-    
-    argreader.parser.add_argument('--nce_weight_sched', type=str2bool, metavar='FLOAT',
-                                  help='Whether or not to use a scheduler for nce weight.')
-    
-    argreader.parser.add_argument('--nce_sched_start', type=float, metavar='FLOAT',
-                                  help='The initial value of nce_weight loss term.')
-    argreader.parser.add_argument('--nce_norm', type=str2bool, metavar='FLOAT',
-                                  help='To add the NCE normalisation (i.e. cross entropy and negatives terms)')
-    argreader.parser.add_argument('--focal_weight', type=float, metavar='FLOAT',
-                                  help='The weight of the focal loss term.')
-    argreader.parser.add_argument('--adv_weight', type=float, metavar='FLOAT',
-                                  help='The weight of the adversarial loss term to ensure masked representations are indistinguishable from regular representations.')
 
     return argreader
 
@@ -353,7 +337,7 @@ def train(args,trial):
     else:
         trainLoader = None
     valLoader,_ = load_data.buildTestLoader(args,"val")
-
+    
     # Building the net
     net = modelBuilder.netBuilder(args)
 

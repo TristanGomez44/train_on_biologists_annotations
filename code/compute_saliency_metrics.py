@@ -1,11 +1,20 @@
 
 from args import ArgReader
-import os
+import os,sys
 import glob
 import numpy as np
+import torch 
 
 from metrics import get_sal_metric_dics,add_validity_rate_multi_step,add_validity_rate_single_step
 from saliency_maps_metrics.multi_step_metrics import compute_auc_metric
+from modelBuilder import addArgs as addArgsModelBuilder
+
+def apply_softmax(array,temperature):
+    tensor = torch.from_numpy(array)
+    tensor = torch.softmax(tensor.double()/temperature,dim=-1)
+    tensor = tensor.max(dim=-1)[0]
+    array = tensor.numpy()
+    return array
 
 def fix_type(tensor):
 
@@ -17,6 +26,7 @@ def fix_type(tensor):
 def get_score_file_paths(exp_id,metric_list):
     paths = []
     for metric in metric_list:
+        metric = metric.replace("_","")
         paths.extend(glob.glob(f"../results/{exp_id}/{metric}*_*.npy"))
     return paths
 
@@ -43,11 +53,18 @@ def write_csv(**kwargs):
     with open(csv_path,"a") as file:
         print(row,file=file)
 
+def list_to_fmt_str(array):
+    return str(np.nanmean(array)) + "\pm" + str(np.nanstd(array))
+
 def main(argv=None):
 
     #Getting arguments from config file and command line
     #Building the arg reader
     argreader = ArgReader(argv)
+
+    argreader.parser.add_argument('--model_ids', type=str,nargs="*", help='Authorized model IDs. Do not set this arg to authorize all model.')
+
+    argreader = addArgsModelBuilder(argreader)
 
     #Reading the comand line arg
     argreader.getRemainingArgs()
@@ -63,42 +80,66 @@ def main(argv=None):
         
         filename = os.path.basename(path).replace(".npy","")
         
-        metric_name_and_replace_method,model_id_and_posthoc_method = filename.split("_")
+        underscore_ind = filename.find("_")
+        metric_name_and_replace_method,model_id_and_posthoc_method = filename[:underscore_ind],filename[underscore_ind+1:]
         
         metric_name,replace_method = metric_name_and_replace_method.split("-")
         
+        if metric_name == "IICAD":
+            metric_name = "IIC_AD"
+
         if "-" in model_id_and_posthoc_method:
             model_id,post_hoc_method = model_id_and_posthoc_method.split("-")
         else:
             model_id = model_id_and_posthoc_method
             post_hoc_method = ""
 
-        metric = const_dic[metric_name]()
+        if args.model_ids is None or model_id in args.model_ids:
 
-        result_dic = np.load(path,allow_pickle=True).item()
-        if is_multi_step_dic[metric_name]:
-            all_score_list,all_sal_score_list = result_dic["prediction_scores"],result_dic["saliency_scores"]
-            all_score_list = fix_type(all_score_list)
-            
-            auc_metric = compute_auc_metric(all_score_list)
-            calibration_metric = metric.compute_calibration_metric(all_score_list, all_sal_score_list)
-            result_dic = metric.make_result_dic(auc_metric,calibration_metric)
+            metric = const_dic[metric_name]()
 
-            val_rate = add_validity_rate_multi_step(metric_name,all_score_list)
-            result_dic[metric_name+"_val_rate"] = val_rate
+            result_dic = np.load(path,allow_pickle=True).item()
+            if is_multi_step_dic[metric_name]:
+                all_score_list,all_sal_score_list = result_dic["prediction_scores"],result_dic["saliency_scores"]
+                all_score_list = fix_type(all_score_list)
+                
+                if len(all_score_list.shape) == 3:
+                    all_score_list = apply_softmax(all_score_list,args.temperature)
+                    if args.temperature != 1:
+                        model_id += "T"+str(args.temperature)
 
-        else:
-            all_score_list,all_score_masked_list = result_dic["prediction_scores"],result_dic["prediction_scores_with_mask"]
-            all_score_list = fix_type(all_score_list)
+                auc_metric = compute_auc_metric(all_score_list)        
+                calibration_metric = metric.compute_calibration_metric(all_score_list, all_sal_score_list)
 
-            all_score_masked_list = fix_type(all_score_masked_list)
-            result_dic = metric.compute_metric(all_score_list,all_score_masked_list)
-            
-            val_rate = add_validity_rate_single_step(metric_name,all_score_list,all_score_masked_list)
-            result_dic[metric_name+"_val_rate"] = val_rate
+                auc_metric = list_to_fmt_str(auc_metric)
+                calibration_metric = list_to_fmt_str(calibration_metric)
+        
+                result_dic = metric.make_result_dic(auc_metric,calibration_metric)
 
-        for sub_metric in result_dic.keys():
-            write_csv(exp_id=args.exp_id,metric_label=sub_metric.upper(),replace_method=replace_method,model_id=model_id,post_hoc_method=post_hoc_method,metric_value=result_dic[sub_metric])
+                val_rate = add_validity_rate_multi_step(metric_name,all_score_list)
+                result_dic[metric_name+"_val_rate"] = val_rate
+
+            else:
+                all_score_list,all_score_masked_list = result_dic["prediction_scores"],result_dic["prediction_scores_with_mask"]
+                all_score_list = fix_type(all_score_list)
+                all_score_masked_list = fix_type(all_score_masked_list)
+                
+                if len(all_score_list.shape) == 2:
+                    all_score_list = apply_softmax(all_score_list,args.temperature)
+                    all_score_masked_list = apply_softmax(all_score_masked_list,args.temperature)
+                    if args.temperature != 1:
+                        model_id += "T"+str(args.temperature)
+
+                result_dic = metric.compute_metric(all_score_list,all_score_masked_list)
+                
+                for sub_metric in result_dic:
+                    result_dic[sub_metric] = list_to_fmt_str(result_dic[sub_metric])
+
+                val_rate = add_validity_rate_single_step(metric_name,all_score_list,all_score_masked_list)
+                result_dic[metric_name+"_val_rate"] = val_rate
+
+            for sub_metric in result_dic.keys():
+                write_csv(exp_id=args.exp_id,metric_label=sub_metric.upper(),replace_method=replace_method,model_id=model_id,post_hoc_method=post_hoc_method,metric_value=result_dic[sub_metric])
 
 if __name__ == "__main__":
     main()
