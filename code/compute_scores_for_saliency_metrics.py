@@ -7,7 +7,7 @@ import matplotlib.pyplot as plt
 plt.switch_backend('agg')
 from captum.attr import (IntegratedGradients,NoiseTunnel,LayerGradCam,LayerGradCampp,GuidedBackprop)
 
-from args import ArgReader,str2bool,addInitArgs,init_post_hoc_arg
+from args import ArgReader,str2bool,addInitArgs,init_post_hoc_arg,addLossTermArgs
 import modelBuilder
 import load_data
 from init_model import preprocessAndLoadParams
@@ -126,6 +126,7 @@ def main(argv=None):
     argreader = init_post_hoc_arg(argreader)
     argreader = modelBuilder.addArgs(argreader)
     argreader = load_data.addArgs(argreader)
+    argreader = addLossTermArgs(argreader)
 
     # Reading the comand line arg
     argreader.getRemainingArgs()
@@ -158,7 +159,7 @@ def main(argv=None):
         net = modelBuilder.netBuilder(args)
         net = preprocessAndLoadParams(bestPath,args.cuda,net)
         net.eval()
-        net_lambda = lambda x:torch.softmax(net(x)["pred"],dim=-1)
+        net_lambda = lambda x:net(x)["output"]
         
         if args.att_metrics_post_hoc:
             attrFunc,kwargs = getAttMetrMod(net,testDataset,args)
@@ -193,14 +194,16 @@ def main(argv=None):
                 other_data = other_data[:2]
 
         metric_args = [net_lambda,data,explanations,predClassInds]
+        kwargs = {"save_all_class_scores":True}
+
         if args.data_replace_method == "otherimage":
             metric_args.append(other_data)
 
         if is_multi_step_dic[args.attention_metric]:  
-            scores,saliency_scores = metric.compute_scores(*metric_args)
+            scores,saliency_scores = metric.compute_scores(*metric_args,**kwargs)
             saved_dic = {"prediction_scores":scores,"saliency_scores":saliency_scores}
         else:
-            scores,scores_masked = metric.compute_scores(*metric_args)
+            scores,scores_masked = metric.compute_scores(*metric_args,**kwargs)
             saved_dic = {"prediction_scores":scores,"prediction_scores_with_mask":scores_masked}
         
         np.save(result_file_path,saved_dic)

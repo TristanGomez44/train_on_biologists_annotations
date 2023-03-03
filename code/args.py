@@ -161,3 +161,24 @@ def init_post_hoc_arg(argreader):
     argreader.parser.add_argument('--att_metrics_post_hoc', type=str, help='The post-hoc method to use instead of the model ')
     argreader.parser.add_argument('--img_nb_per_class', type=int, help='The nb of images on which to compute the att metric.')    
     return argreader
+
+
+def addLossTermArgs(argreader):
+    argreader.parser.add_argument('--nll_weight', type=float, metavar='FLOAT',
+                                  help='The weight of the negative log-likelihood term in the loss function.')
+    argreader.parser.add_argument('--nce_weight', type=float, metavar='FLOAT',
+                                  help='The weight of the saliency metric mask in the loss function. Can be set to "scheduler".')
+    
+    argreader.parser.add_argument('--nce_weight_sched', type=str2bool, metavar='FLOAT',
+                                  help='Whether or not to use a scheduler for nce weight.')
+    
+    argreader.parser.add_argument('--nce_sched_start', type=float, metavar='FLOAT',
+                                  help='The initial value of nce_weight loss term.')
+    argreader.parser.add_argument('--nce_norm', type=str2bool, metavar='FLOAT',
+                                  help='To add the NCE normalisation (i.e. cross entropy and negatives terms)')
+    argreader.parser.add_argument('--focal_weight', type=float, metavar='FLOAT',
+                                  help='The weight of the focal loss term.')
+    argreader.parser.add_argument('--adv_weight', type=float, metavar='FLOAT',
+                                  help='The weight of the adversarial loss term to ensure masked representations are indistinguishable from regular representations.')
+
+    return argreader
