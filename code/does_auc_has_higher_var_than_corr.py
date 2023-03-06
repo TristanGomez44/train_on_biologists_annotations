@@ -103,7 +103,6 @@ def main(argv=None):
                 metric_label = get_metric_name(is_corr_metric,is_deletion_metric)
                 background = background_func(metric_label)
     
-                print(post_hoc_method,type(post_hoc_method))
                 metric_value = cur.execute(f'SELECT metric_value FROM metrics WHERE post_hoc_method=="{post_hoc_method}" and model_id=="{model_id}" and metric_label=="{metric_label}" and replace_method=="{background}"').fetchall()[0][0]
 
                 metric_var = metric_value.split("\pm")[1]
