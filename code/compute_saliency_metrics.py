@@ -9,6 +9,17 @@ from metrics import get_sal_metric_dics,add_validity_rate_multi_step,add_validit
 from saliency_maps_metrics.multi_step_metrics import compute_auc_metric
 from modelBuilder import addArgs as addArgsModelBuilder
 
+import sqlite3 ,csv as csvLib,os,sys
+
+def make_db(col_list,db_path):
+
+    con = sqlite3.connect(db_path) # change to 'sqlite:///your_filename.db'
+    cur = con.cursor()
+    header = ",".join(col_list)
+    cur.execute(f"CREATE TABLE metrics ({header},UNIQUE({header}) ON CONFLICT IGNORE);") # use your column names here
+
+    con.commit()
+
 def apply_softmax(array,temperature):
     tensor = torch.from_numpy(array)
     tensor = torch.softmax(tensor.double()/temperature,dim=-1)
@@ -32,6 +43,24 @@ def get_score_file_paths(exp_id,metric_list):
 
 def get_col_index_to_value_dic():
     return {0:"metric_label",1:"replace_method",2:"model_id",3:"post_hoc_method",4:"metric_value"}
+
+def write_db(cur,**kwargs):
+
+    col_index_to_value_dic = get_col_index_to_value_dic()
+    inds = sorted(list(col_index_to_value_dic.keys()))
+    header = [col_index_to_value_dic[ind] for ind in inds]
+    header = ",".join(header)
+
+    value_list = [str(kwargs[col_index_to_value_dic[ind]]) for ind in inds]
+
+    question_marks = ",".join(['?' for _ in range(len(inds))])
+    cur.execute(f"INSERT INTO metrics ({header}) VALUES ({question_marks});", value_list)
+
+def get_header():
+    col_index_to_value_dic = get_col_index_to_value_dic()
+    inds = sorted(list(col_index_to_value_dic.keys()))
+    column_names = [col_index_to_value_dic[ind] for ind in inds]
+    return column_names
 
 def write_csv(**kwargs):
 
@@ -75,6 +104,14 @@ def main(argv=None):
     is_multi_step_dic,const_dic = get_sal_metric_dics()
     metric_list = list(const_dic.keys())
     score_file_paths = get_score_file_paths(args.exp_id,metric_list)
+
+    csv_path = f"../results/{args.exp_id}/saliency_metrics.csv"
+    db_path = csv_path.replace(".csv",".db")
+    if not os.path.exists(db_path):
+        col_list = get_header()
+        make_db(col_list,db_path)
+    con = sqlite3.connect(db_path) # change to 'sqlite:///your_filename.db'
+    cur = con.cursor()
 
     for path in score_file_paths:
         
@@ -139,7 +176,12 @@ def main(argv=None):
                 result_dic[metric_name+"_val_rate"] = val_rate
 
             for sub_metric in result_dic.keys():
-                write_csv(exp_id=args.exp_id,metric_label=sub_metric.upper(),replace_method=replace_method,model_id=model_id,post_hoc_method=post_hoc_method,metric_value=result_dic[sub_metric])
+                #write_csv(exp_id=args.exp_id,metric_label=sub_metric.upper(),replace_method=replace_method,model_id=model_id,post_hoc_method=post_hoc_method,metric_value=result_dic[sub_metric])
+
+                write_db(cur,exp_id=args.exp_id,metric_label=sub_metric.upper(),replace_method=replace_method,model_id=model_id,post_hoc_method=post_hoc_method,metric_value=result_dic[sub_metric])
+
+    con.commit()
+    con.close()
 
 if __name__ == "__main__":
     main()
