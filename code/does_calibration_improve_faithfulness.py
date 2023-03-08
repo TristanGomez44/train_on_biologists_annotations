@@ -1,9 +1,21 @@
 
 from args import ArgReader
-import os
+import os,sys
 import glob
 import numpy as np
 import sqlite3 
+
+def string_to_mean_std(string):
+    values = np.array(string.split(";"))
+    values = values.astype("float")
+    mean = np.nanmean(values)
+    std = np.nanmean(values)
+    return mean,std
+
+def str_values_to_fmt_str(string):
+    mean,std = string_to_mean_std(string)
+    return str(mean)+"\pm"+str(std)
+
 def make_dic(csv):
 
     dic = {}
@@ -11,8 +23,9 @@ def make_dic(csv):
     for row in csv[1:]:
 
         key = " ".join(row[:-1])
-        dic[key] = row[-1]
-        print(key)    
+
+        dic[key] = str_values_to_fmt_str(row[-1]) 
+            
     return dic
 
 def csv_from_db(db_path):

@@ -1,9 +1,10 @@
 
+import sys
 from args import ArgReader
 import numpy as np
 import matplotlib.pyplot as plt 
 from scipy.stats import pearsonr
-from does_calibration_improve_faithfulness import csv_from_db
+from does_calibration_improve_faithfulness import csv_from_db,string_to_mean_std
 
 def make_temp_to_faithmetric_dict(path,ref_model_id,background_func,ref_post_hoc_method):
 
@@ -25,10 +26,7 @@ def make_temp_to_faithmetric_dict(path,ref_model_id,background_func,ref_post_hoc
             else:
                 temp = 1
 
-            if "\pm" in metric_value:
-                metric_value = metric_value.split("\pm")[0]
-
-            temp_to_faith_dict[metric][temp] = float(metric_value)
+            temp_to_faith_dict[metric][temp],_ = string_to_mean_std(metric_value)
         
     return temp_to_faith_dict
 
@@ -70,40 +68,33 @@ def main(argv=None):
 
     ece_to_temp = make_ece_to_temp_dict("../results/CROHN25/metrics_noneRed_focal2_test.csv")
 
-    #for key in ece_to_temp:
-    #    print(key,ece_to_temp[key],type(ece_to_temp[key]))
-    #print("Temp")
-    #for key in temp_to_faith["DAUC"]:
-    #    print(type(key),key,temp_to_faith["DAUC"][key])
-
     cmap = plt.get_cmap("rainbow")
 
     for metric in temp_to_faith:
-        print(metric)
-        ece_list=[]
-        metric_value_list=[]
-        temp_list = []
-        for ece in ece_to_temp:
+        if "-nc" not in metric:
+            ece_list=[]
+            metric_value_list=[]
+            temp_list = []
+            for ece in ece_to_temp:
+                temp = ece_to_temp[ece]
+                metric_value = temp_to_faith[metric][temp]
 
-            temp = ece_to_temp[ece]
-            metric_value = temp_to_faith[metric][temp]
-
-            ece_list.append(ece)
-            metric_value_list.append(metric_value)
-        
-            temp_list.append(temp)
-
-        correlation,pvalue = pearsonr(ece_list,metric_value_list)
-
-        print(correlation,pvalue)
-
-        temp_list = np.array(temp_list)
-
-        plt.figure()
-        plt.scatter(ece_list,metric_value_list,color=cmap(temp_list/max(temp_list)))
-        plt.ylabel(metric)
-        plt.xlabel("ece")
-        plt.savefig(f"../vis/{exp_id}/{metric}_vs_ece.png")
+                ece_list.append(ece)
+                metric_value_list.append(metric_value)
             
+                temp_list.append(temp)
+
+            correlation,pvalue = pearsonr(ece_list,metric_value_list)
+
+            print(metric,correlation,pvalue)
+
+            temp_list = np.array(temp_list)
+
+            plt.figure()
+            plt.scatter(ece_list,metric_value_list,color=cmap(temp_list/max(temp_list)))
+            plt.ylabel(metric)
+            plt.xlabel("ece")
+            plt.savefig(f"../vis/{exp_id}/{metric}_vs_ece.png")
+                
 if __name__ == "__main__":
     main()

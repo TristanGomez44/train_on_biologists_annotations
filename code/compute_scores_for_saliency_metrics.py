@@ -121,6 +121,7 @@ def main(argv=None):
     argreader.parser.add_argument('--attention_metric', type=str, help='The attention metric to compute.')
     argreader.parser.add_argument('--do_again', type=str2bool, help='To run computation if already done')
     argreader.parser.add_argument('--data_replace_method', type=str, help='The pixel replacement method.')
+    argreader.parser.add_argument('--cumulative', type=str2bool, help='To prevent acumulation of perturbation when computing metrics.',default=True)
 
     argreader = addInitArgs(argreader)
     argreader = init_post_hoc_arg(argreader)
@@ -140,10 +141,17 @@ def main(argv=None):
     #Constructing metric
     is_multi_step_dic,const_dic = get_sal_metric_dics()
     if args.data_replace_method is None or args.data_replace_method == "otherimage":
-        metric_constr_arg_list = []
+        metric_constr_arg_dict = {}
     else:
-        metric_constr_arg_list = [args.data_replace_method]
-    metric = const_dic[args.attention_metric](*metric_constr_arg_list)
+        metric_constr_arg_dict = {"data_replace_method":args.data_replace_method}
+
+    if is_multi_step_dic[args.attention_metric]:
+        metric_constr_arg_dict.update({"cumulative":args.cumulative})
+
+        if not args.cumulative:
+            formated_attention_metric += "nc"
+
+    metric = const_dic[args.attention_metric](**metric_constr_arg_dict)
 
     data_replace_method = metric.data_replace_method if args.data_replace_method is None else args.data_replace_method
         

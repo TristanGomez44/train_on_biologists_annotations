@@ -83,7 +83,7 @@ def write_csv(**kwargs):
         print(row,file=file)
 
 def list_to_fmt_str(array):
-    return str(np.nanmean(array)) + "\pm" + str(np.nanstd(array))
+    return str(";".join(array.astype("str")))
 
 def main(argv=None):
 
@@ -125,6 +125,14 @@ def main(argv=None):
         if metric_name == "IICAD":
             metric_name = "IIC_AD"
 
+        kwargs = {}
+        if "nc" in metric_name:
+            metric_name = metric_name.replace("nc","")
+            kwargs["cumulative"] = False
+            suff = "-nc"
+        else:
+            suff = ""
+
         if "-" in model_id_and_posthoc_method:
             model_id,post_hoc_method = model_id_and_posthoc_method.split("-")
         else:
@@ -133,7 +141,7 @@ def main(argv=None):
 
         if args.model_ids is None or model_id in args.model_ids:
 
-            metric = const_dic[metric_name]()
+            metric = const_dic[metric_name](**kwargs)
 
             result_dic = np.load(path,allow_pickle=True).item()
             if is_multi_step_dic[metric_name]:
@@ -150,7 +158,7 @@ def main(argv=None):
 
                 auc_metric = list_to_fmt_str(auc_metric)
                 calibration_metric = list_to_fmt_str(calibration_metric)
-        
+
                 result_dic = metric.make_result_dic(auc_metric,calibration_metric)
 
                 val_rate = add_validity_rate_multi_step(metric_name,all_score_list)
@@ -178,7 +186,7 @@ def main(argv=None):
             for sub_metric in result_dic.keys():
                 #write_csv(exp_id=args.exp_id,metric_label=sub_metric.upper(),replace_method=replace_method,model_id=model_id,post_hoc_method=post_hoc_method,metric_value=result_dic[sub_metric])
 
-                write_db(cur,exp_id=args.exp_id,metric_label=sub_metric.upper(),replace_method=replace_method,model_id=model_id,post_hoc_method=post_hoc_method,metric_value=result_dic[sub_metric])
+                write_db(cur,exp_id=args.exp_id,metric_label=sub_metric.upper()+suff,replace_method=replace_method,model_id=model_id,post_hoc_method=post_hoc_method,metric_value=result_dic[sub_metric])
 
     con.commit()
     con.close()
