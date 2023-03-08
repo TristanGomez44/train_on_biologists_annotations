@@ -41,7 +41,12 @@ def apply_sal_metr_masks(model,data,mask_prob=1):
                 data1,data2 = dic["data1"],dic["data2"]
 
                 k = torch.randint(0,expl.shape[2]*expl.shape[3],size=(1,)).item()
-                mask,_ = metric.compute_mask(expl_i,data.shape,k)
+
+                total_pixel_nb = expl.shape[2]*expl.shape[3]
+                step_nb = min(metric.max_step_nb,total_pixel_nb) if metric.bound_max_step else total_pixel_nb
+                pixel_removed_per_step = total_pixel_nb//step_nb
+
+                mask,_ = metric.compute_mask(expl_i,data.shape,k,pixel_removed_per_step)
                 data_masked = metric.apply_mask(data1,data2,mask)
                 data_masked_list.append(data_masked)
             else:
