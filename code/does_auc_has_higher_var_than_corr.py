@@ -105,7 +105,7 @@ def main(argv=None):
     
                 metric_value = cur.execute(f'SELECT metric_value FROM metrics WHERE post_hoc_method=="{post_hoc_method}" and model_id=="{model_id}" and metric_label=="{metric_label}" and replace_method=="{background}"').fetchall()[0][0]
 
-                metric_var = metric_value.split("\pm")[1]
+                metric_var = str(np.array(metric_value.split(";")).astype("float").std())
 
                 row += ","+metric_var
                 
