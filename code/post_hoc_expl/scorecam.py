@@ -57,7 +57,7 @@ class ScoreCam():
         # model_output is the final output of the model (1, 1000)
         retDict = self.model(input_image)
 
-        conv_output, model_output = retDict["feat"],retDict["pred"]
+        conv_output, model_output = retDict["feat"],retDict["output"]
 
         if target_class is None:
             target_class = np.argmax(model_output.data.cpu().numpy())
@@ -80,7 +80,7 @@ class ScoreCam():
             norm_saliency_map = (saliency_map - saliency_map.min()) / (saliency_map.max() - saliency_map.min())
             # Get the target score
 
-            w = F.softmax(self.model(input_image*norm_saliency_map)["pred"].detach(),dim=1)[0][target_class]
+            w = F.softmax(self.model(input_image*norm_saliency_map)["output"].detach(),dim=1)[0][target_class]
 
             #inp = None
             cam += w.data.cpu().numpy() * target[i, :, :].data.cpu().numpy()
