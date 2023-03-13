@@ -1,4 +1,4 @@
-from uuid import RESERVED_MICROSOFT
+import sys
 import torch
 import torch.nn.functional as F
 import matplotlib.pyplot as plt
@@ -396,8 +396,29 @@ def run_separability_analysis(repres1,repres2,normalize,seed,folds=10):
 def interval_metric(a, b):
     return (a-b)**2
 
+def krippendorff_alpha_bootstrap(*data,**kwargs):
+
+    #print("krippendorff_alpha_bootstrap",len(data))
+    #for i in range(len(data)):
+    #    print("\t",data[i].shape)
+
+    data = np.stack(data)
+    
+    if len(data.shape) == 3:
+        data = data.transpose(1,0,2)
+    else:
+        data = data[np.newaxis]
+
+    res_list = []
+
+    #print("final shape",data.shape)
+    for i in range(len(data)):
+        res_list.append(krippendorff_alpha_paralel(data[i],**kwargs))
+  
+    return res_list
+
 #From https://github.com/grrrr/krippendorff-alpha/blob/master/krippendorff_alpha.py
-def krippendorff_alpha(data, metric=interval_metric, convert_items=float, missing_items=None):
+def krippendorff_alpha_paralel(data, metric=interval_metric, missing_items=None,axis=None):
     '''
     Calculate Krippendorff's alpha (inter-rater reliability):
     
@@ -429,6 +450,93 @@ def krippendorff_alpha(data, metric=interval_metric, convert_items=float, missin
     
     # convert input data to a dict of items
     units = {}
+
+    #for d in data:
+    #    diter = enumerate(d)
+            
+    #    for it, g in diter:
+    #        try:
+    #            its = units[it]
+    #        except KeyError:
+    #            its = []
+    #            units[it] = its
+    #        its.append(g)
+
+    #print(data.shape)
+
+    #print("krippendorff_alpha_paralel",data.shape)
+    units = {j:data[:,j] for j in range(data.shape[1])}
+
+
+    units = dict((it, d) for it, d in units.items() if len(d) > 1)  # units with pairable values
+    #n = sum(len(pv) for pv in units.values())  # number of pairable values
+
+    n = data.size
+  
+    Do = 0.
+
+    data_perm = data.transpose(1,0)
+
+
+    Do = metric(data_perm[:,:,np.newaxis],data_perm[:,np.newaxis,:]).sum()
+  
+    #for grades in units.values():
+        
+    #    Du = metric(grades[:,np.newaxis],grades[np.newaxis,:]).sum()
+
+        #Du = sum(np.sum(metric(gr, gri)) for gri in gr)
+        #Do += Du/float(len(grades)-1)
+    #    Do += Du
+
+    #Do /= n
+    Do /= (n*(data.shape[0]-1))
+
+    if Do == 0:
+        return 1.
+
+    De = metric(data_perm[np.newaxis,:,:,np.newaxis],data_perm[:,np.newaxis,np.newaxis,:]).sum()
+  
+    De /= float(n*(n-1))
+
+    coeff = 1.-Do/De if (Do and De) else 1.
+
+    #print(data.mean(),coeff,Do,De)
+
+    return coeff
+
+def krippendorff_alpha(data, metric=interval_metric, convert_items=float, missing_items=None,axis=None):
+    '''
+    Calculate Krippendorff's alpha (inter-rater reliability):
+    
+    data is in the format
+    [
+        {unit1:value, unit2:value, ...},  # coder 1
+        {unit1:value, unit3:value, ...},   # coder 2
+        ...                            # more coders
+    ]
+    or 
+    it is a sequence of (masked) sequences (list, numpy.array, numpy.ma.array, e.g.) with rows corresponding to coders and columns to items
+    
+    metric: function calculating the pairwise distance
+    force_vecmath: force vector math for custom metrics (numpy required)
+    convert_items: function for the type conversion of items (default: float)
+    missing_items: indicator for missing items (default: None)
+    '''
+    
+    # number of coders
+    m = len(data)
+    
+    # set of constants identifying missing values
+    if missing_items is None:
+        maskitems = []
+    else:
+        maskitems = list(missing_items)
+    if np is not None:
+        maskitems.append(np.ma.masked_singleton)
+    
+    # convert input data to a dict of items
+    units = {}
+
     for d in data:
         try:
             # try if d behaves as a dict
@@ -445,7 +553,6 @@ def krippendorff_alpha(data, metric=interval_metric, convert_items=float, missin
                     its = []
                     units[it] = its
                 its.append(convert_items(g))
-
 
     units = dict((it, d) for it, d in units.items() if len(d) > 1)  # units with pairable values
     n = sum(len(pv) for pv in units.values())  # number of pairable values
