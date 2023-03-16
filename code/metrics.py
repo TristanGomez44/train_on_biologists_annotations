@@ -396,6 +396,16 @@ def run_separability_analysis(repres1,repres2,normalize,seed,folds=10):
 def interval_metric(a, b):
     return (a-b)**2
 
+def ratio_metric(a,b):
+
+    if a.dtype == "bool":
+        result = (a==b)*1.0
+    else:
+        result = (((a-b)/(a+b))**2)
+        result[a+b == 0] = 0
+
+    return result
+
 def krippendorff_alpha_bootstrap(*data,**kwargs):
 
     #print("krippendorff_alpha_bootstrap",len(data))
@@ -418,7 +428,7 @@ def krippendorff_alpha_bootstrap(*data,**kwargs):
     return res_list
 
 #From https://github.com/grrrr/krippendorff-alpha/blob/master/krippendorff_alpha.py
-def krippendorff_alpha_paralel(data, metric=interval_metric, missing_items=None,axis=None):
+def krippendorff_alpha_paralel(data, metric=ratio_metric, missing_items=None,axis=None):
     '''
     Calculate Krippendorff's alpha (inter-rater reliability):
     
