@@ -6,7 +6,20 @@ import numpy as np
 import sqlite3 
 from metrics import krippendorff_alpha,krippendorff_alpha_paralel,krippendorff_alpha_bootstrap
 import matplotlib.pyplot as plt 
+from matplotlib.colors import Normalize
+from matplotlib import cm
 from scipy.stats._resampling import _bootstrap_iv,rng_integers,_percentile_of_score,ndtri,ndtr,_percentile_along_axis,BootstrapResult,ConfidenceInterval
+from scipy.stats import pearsonr
+
+def preprocc_matrix(metric_values_matrix,metric):
+
+    #if metric in ["DC","IC"]:
+    #    metric_values_matrix = (metric_values_matrix + 1)/2
+    
+    if metric == "IIC":
+        metric_values_matrix = metric_values_matrix.astype("bool")
+
+    return metric_values_matrix
 
 def fmt_metric_values(metric_values_list):
 
@@ -139,11 +152,48 @@ def plot_bootstrap_distr(res,exp_id,metric,cumulative_suff,method):
     ax.set_ylabel('frequency')
     plt.savefig(f"../vis/{exp_id}/bootstrap_distr_{metric}{cumulative_suff}_{method}.png")
 
+def make_comparison_matrix(res_mat,p_val_mat,exp_id,labels,filename):
+
+    p_val_mat = (p_val_mat<0.05)
+
+    cmap = plt.get_cmap('bwr')
+
+    fig = plt.figure()
+
+    ax = fig.gca()
+
+    ax.spines['top'].set_visible(False)
+    ax.spines['right'].set_visible(False)
+    ax.spines['bottom'].set_visible(False)
+    ax.spines['left'].set_visible(False)
+    ax.get_xaxis().set_ticks([])
+    ax.get_yaxis().set_ticks([])
+
+    plt.imshow(p_val_mat*0,cmap="Greys")
+    for i in range(len(res_mat)):
+        for j in range(len(res_mat)):
+            if i < j:
+                rad = 0.3 if p_val_mat[i,j] else 0.1
+                circle = plt.Circle((i, j), rad, color=cmap(res_mat[i,j]))
+                ax.add_patch(circle)
+
+    fontsize = 17
+    plt.yticks(np.arange(1,len(res_mat)),labels[1:],fontsize=fontsize)
+    plt.xticks(np.arange(len(res_mat)-1),["" for _ in range(len(res_mat)-1)])
+    
+    for i in range(len(res_mat)-1):
+        plt.text(i-0.2,i-0.4+1,labels[i],rotation=45,ha="left",fontsize=fontsize)
+    plt.colorbar(cm.ScalarMappable(norm=Normalize(-1,1),cmap=cmap),orientation="vertical",pad=0.17,shrink=0.8,ax=ax)
+    plt.tight_layout()
+    plt.savefig(f"../vis/{exp_id}/{filename}")
+
 def main(argv=None):
 
     #Getting arguments from config file and command line
     #Building the arg reader
     argreader = ArgReader(argv)
+
+    argreader.parser.add_argument('--background', type=str)
 
     #Reading the comand line arg
     argreader.getRemainingArgs()
@@ -153,55 +203,126 @@ def main(argv=None):
 
     exp_id = "CROHN25"
     #model_ids = ["noneRed2","noneRed_onlyfocal","noneRed_onlylossonmasked","noneRed_focal2"]
-    model_id = "noneRed_focal2"
-    metrics = ["DAUC","DC","IAUC","IC"]
-    background_func = lambda x:"blur" if x in ["IAUC","IC","INSERTION_VAL_RATE"] else "black"
+    model_id = args.model_id
+    #single_step_metrics = ["IIC","AD","ADD"]
+    #multi_step_metrics = ["DAUC","DC","IAUC","IC"]
+
+    #single_step_metrics = ["ADD"]
+    #multi_step_metrics = ["IC","DC"]
+
+    single_step_metrics = []
+    multi_step_metrics = ["DC"]
+
+    metrics = multi_step_metrics+single_step_metrics
+    if args.background is None:
+        background_func = lambda x:"blur" if x in ["IAUC","IC","INSERTION_VAL_RATE"] else "black"
+    else:
+        background_func = lambda x:args.background
 
     db_path = f"../results/{exp_id}/saliency_metrics.db"
    
     con = sqlite3.connect(db_path) # change to 'sqlite:///your_filename.db'
     cur = con.cursor()
 
-    csv = "cumulative,"+ ",".join(metrics) + "\n"
+    csv_krippen = "cumulative,"+ ",".join(metrics) + "\n"
     
     post_hoc_methods_list = []
 
+    all_metric_values_matrix = []
+    all_metric_values_matrix_cum = []
+
     for cumulative_suff in ["","-nc"]:
 
-        csv += "False" if cumulative_suff == "-nc" else "True"
+        csv_krippen += "False" if cumulative_suff == "-nc" else "True"
 
         for metric in metrics:
+            
+            print(metric,cumulative_suff)
 
-            background = background_func(metric)
-            metric += cumulative_suff
-            output = cur.execute(f'SELECT post_hoc_method,metric_value FROM metrics WHERE model_id=="{model_id}" and metric_label=="{metric}" and replace_method=="{background}"').fetchall()
+            if metric not in single_step_metrics or cumulative_suff=="": 
+                background = background_func(metric)
+                metric += cumulative_suff
+                output = cur.execute(f'SELECT post_hoc_method,metric_value FROM metrics WHERE model_id=="{model_id}" and metric_label=="{metric}" and replace_method=="{background}"').fetchall()
 
-            post_hoc_methods,metric_values_list = zip(*output)
+                post_hoc_methods,metric_values_list = zip(*output)
 
-            metric_values_matrix = fmt_metric_values(metric_values_list)
+                metric_values_matrix = fmt_metric_values(metric_values_list)
+                metric_values_matrix = preprocc_matrix(metric_values_matrix,metric)
 
-            alpha = krippendorff_alpha_paralel(metric_values_matrix)
-        
-  
-            post_hoc_methods_list.append(post_hoc_methods)
+                if cumulative_suff == "-nc":
+                    all_metric_values_matrix.append(metric_values_matrix)
+                else:
+                    all_metric_values_matrix_cum.append(metric_values_matrix)
 
-            #Bootstrap 
-            rng = np.random.default_rng(0)
-            method="bca"    
-            res = bootstrap(metric_values_matrix, krippendorff_alpha_bootstrap, confidence_level=0.99,random_state=rng,method=method,vectorized=True,n_resamples=5000)
-            confinterv= res.confidence_interval
-            csv += ","+str(alpha)+" ("+str(confinterv.low)+" "+str(confinterv.high)+")"
+                #Krippendorf's alpha (inter-rater reliabiilty) 
+                alpha = krippendorff_alpha_paralel(metric_values_matrix)
+                rng = np.random.default_rng(0)
+                res = bootstrap(metric_values_matrix, krippendorff_alpha_bootstrap, confidence_level=0.99,random_state=rng,method="bca" ,vectorized=True,n_resamples=5000)
+                confinterv= res.confidence_interval
+                csv_krippen += ","+str(alpha)+" ("+str(confinterv.low)+" "+str(confinterv.high)+")"
 
+                plot_bootstrap_distr(res,exp_id,metric,cumulative_suff,"bca")
 
-        csv += "\n"
+                '''
+                #Inter-method reliability
+                method_nb = metric_values_matrix.shape[1]
+                inter_method_corr_mat = np.zeros((method_nb,method_nb))
+                signif_mat = np.empty((method_nb,method_nb),dtype="bool")
+                fig, ax = plt.subplots(method_nb,1,figsize=(10,14))
+                for i in range(method_nb):
+                    values_i = metric_values_matrix[:,i]
+                    
+                    ax[i].hist(values_i,label=post_hoc_methods[i])
+                    ax[i].legend()
+                    
+                    for j in range(method_nb):
+                        values_j = metric_values_matrix[:,j]
+                        inter_method_corr_mat[i,j],signif_mat[i,j] = pearsonr(values_i,values_j)
 
-    with open(f"../results/{exp_id}/krippendorff_alpha.csv","w") as file:
-        print(csv,file=file)
+                fig.tight_layout()
+                fig.savefig(f"../vis/{exp_id}/{metric}.png")
+                plt.close()
+
+                make_comparison_matrix(inter_method_corr_mat,signif_mat,exp_id,post_hoc_methods,f"ttest_{metric}_{model_id}_b{background}.png")
+                '''
+                post_hoc_methods_list.append(post_hoc_methods)
+
+        csv_krippen += "\n"
+
+    with open(f"../results/{exp_id}/krippendorff_alpha_{model_id}_b{args.background}.csv","w") as file:
+        print(csv_krippen,file=file)
+
+    sys.exit(0)
 
     post_hoc_methods_set = set(post_hoc_methods_list)
 
     if len(post_hoc_methods_set) != 1:
         print("Different sets of posthoc methods were used:",post_hoc_methods_set)
+
+    all_metric_values_matrix = np.stack(all_metric_values_matrix)
+    all_metric_values_matrix_cum = np.stack(all_metric_values_matrix_cum)
+
+    for i in range(all_metric_values_matrix.shape[2]):
+
+        for cumulative in [True,False]:
+
+            if cumulative:
+                all_mat = all_metric_values_matrix_cum
+            else:
+                all_mat = all_metric_values_matrix
+        
+            metrics_ = metrics if cumulative else multi_step_metrics
+
+            inter_metric_corr_mat = np.zeros((len(metrics_),len(metrics_)))
+            signif_mat = np.empty((len(metrics_),len(metrics_)),dtype="bool")
+
+            for j in range(len(metrics_)):
+
+                for k in range(len(metrics_)):
+
+                    inter_metric_corr_mat[j,k],signif_mat[j,k] = pearsonr(all_mat[j,:,i],all_mat[k,:,i])
+
+            make_comparison_matrix(inter_metric_corr_mat,signif_mat,exp_id,metrics_,f"ttest_{post_hoc_methods[i]}_cum={cumulative}_{model_id}_b{background}.png")
 
 if __name__ == "__main__":
     main()
