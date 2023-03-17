@@ -427,6 +427,56 @@ def krippendorff_alpha_bootstrap(*data,**kwargs):
   
     return res_list
 
+def make_n_dict(data):
+
+    unit_nb = data.shape[1]
+
+    o = np.zeros((unit_nb,unit_nb))
+
+    for i in range(unit_nb):
+        for j in range(unit_nb):
+            o[i,j] = 0
+            for u in range(unit_nb):
+                number_of_ij_pairs = (data[:,u] == i+1).sum()*(data[:,u] == j+1).sum()
+                o[i,j] += number_of_ij_pairs/(unit_nb-1)
+
+    n_vector = o.sum(axis=1)
+
+    diff_mat = np.zeros((unit_nb,unit_nb))
+
+    for i in range(unit_nb):
+        for j in range(unit_nb):
+            if i >= j:
+                start,end = j,i 
+            else:
+                start,end = i,j
+
+            diff_mat[i,j] = sum([n_vector[k] for k in range(start,end+1)])
+            diff_mat[i,j] -= (n_vector[i] + n_vector[j])/2
+
+    diff_mat = np.power(diff_mat,2)
+
+    return diff_mat
+
+def ordinal_metric(a,b,diff_mat):
+
+    shape = np.broadcast(a,b).shape
+
+    a = np.broadcast_to(a,shape)
+    b = np.broadcast_to(b,shape)
+
+    diff = diff_mat[a.reshape(-1)-1,b.reshape(-1)-1]
+
+    diff = diff.reshape(shape)
+
+    return diff
+
+def binary_metric(a,b):
+    return (a==b)*1.0
+
+metric_dict = {"ratio_metric":ratio_metric,"interval_metric":interval_metric,"ordinal_metric":ordinal_metric,"binary_metric":binary_metric}
+
+
 #From https://github.com/grrrr/krippendorff-alpha/blob/master/krippendorff_alpha.py
 def krippendorff_alpha_paralel(data, metric=ratio_metric, missing_items=None,axis=None):
     '''
@@ -446,7 +496,24 @@ def krippendorff_alpha_paralel(data, metric=ratio_metric, missing_items=None,axi
     convert_items: function for the type conversion of items (default: float)
     missing_items: indicator for missing items (default: None)
     '''
-    
+
+    if data.dtype == np.int64:
+        metric= "ordinal_metric"
+    elif data.dtype == bool:
+        metric = "binary_metric"
+        data = data.astype("int")
+        print("binarymetr")
+
+    if type(metric) is str:
+        metric = metric_dict[metric]
+
+    if metric is ordinal_metric:
+        
+        diff_mat=make_n_dict(data)
+
+        metric = lambda a,b:ordinal_metric(a,b,diff_mat)
+
+
     # number of coders
     m = len(data)
     
@@ -589,28 +656,26 @@ def krippendorff_alpha(data, metric=interval_metric, convert_items=float, missin
 
     return 1.-Do/De if (Do and De) else 1.
 
-
 def main():
 
-    example_nb = 2000
+    p_list=np.arange(11)/10
 
-    feat_pooled = torch.rand(size=(example_nb,2048))
-    feat_pooled_masked = torch.rand(size=(example_nb,2048))
+    for p in p_list:
+        data = np.arange(4)[np.newaxis]
 
-    class_nb = 8
-    nb_per_class = 15
+        data = data.repeat(int(p*100),0)
+ 
+        data_rand = np.zeros((int((1-p)*100),4))
+        for i in range(len(data_rand)):
+            data_rand[i] = np.random.permutation(4)+1
+        
+        data = np.concatenate((data,data_rand),axis=0)
 
-    target_list = torch.arange(class_nb).unsqueeze(-1)
-    target_list = target_list.expand(-1,example_nb//class_nb).reshape(-1)
+        data = data.astype("int")
+ 
+        alpha = krippendorff_alpha_paralel(data, metric=ordinal_metric)
 
-    metDict = {}
-    seed = 0
-
-    retDict = separability_metric(feat_pooled,feat_pooled_masked,target_list,metDict,seed,nb_per_class)
-
-    print(retDict)
-
-
+        print(p,alpha)
 
 if __name__ == "__main__":
 
