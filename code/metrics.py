@@ -170,76 +170,96 @@ def compIoS(attMapNorm,segmentation):
     finalIos = torch.cat(allIos,dim=0).mean(dim=0)
     return finalIos.sum().item()
 
-
-'''
-Metrics to measure calibration of a trained deep neural network.
-References:
-[1] C. Guo, G. Pleiss, Y. Sun, and K. Q. Weinberger. On calibration of modern neural networks.
-    arXiv preprint arXiv:1706.04599, 2017.
-'''
-def _bin_initializer(bin_dict, num_bins=10):
-    for i in range(num_bins):
-        bin_dict[i][COUNT] = 0
-        bin_dict[i][CONF] = 0
-        bin_dict[i][ACC] = 0
-        bin_dict[i][BIN_ACC] = 0
-        bin_dict[i][BIN_CONF] = 0
-
-def _populate_bins(confs, preds, labels, num_bins=10):
-    bin_dict = {}
-    for i in range(num_bins):
-        bin_dict[i] = {}
-    _bin_initializer(bin_dict, num_bins)
-    num_test_samples = len(confs)
-
-    for i in range(0, num_test_samples):
-        confidence = confs[i]
-        prediction = preds[i]
-        label = labels[i]
-        binn = int(math.ceil(((num_bins * confidence) - 1)))
-        bin_dict[binn][COUNT] = bin_dict[binn][COUNT] + 1
-        bin_dict[binn][CONF] = bin_dict[binn][CONF] + confidence
-        bin_dict[binn][ACC] = bin_dict[binn][ACC] + \
-            (1 if (label == prediction) else 0)
-
-    for binn in range(0, num_bins):
-        if (bin_dict[binn][COUNT] == 0):
-            bin_dict[binn][BIN_ACC] = 0
-            bin_dict[binn][BIN_CONF] = 0
-        else:
-            bin_dict[binn][BIN_ACC] = float(
-                bin_dict[binn][ACC]) / bin_dict[binn][COUNT]
-            bin_dict[binn][BIN_CONF] = bin_dict[binn][CONF] / \
-                float(bin_dict[binn][COUNT])
-    return bin_dict
-
+#From https://github.com/torrvision/focal_calibration/blob/main/Metrics/metrics.py
 def expected_calibration_error(var_dic,metrDict):
 
-    metrDict["ECE"] = _expected_calibration_error(var_dic["output"], var_dic["target"])
+    func_dic= {"ECE":ece,"AdaECE":ada_ece,"ClassECE":class_ece}
 
-    if "output_masked" in var_dic:
-        metrDict["ECE_masked"] = _expected_calibration_error(var_dic["output_masked"], var_dic["target"])
-   
+    for metric_name in func_dic:
+
+        metrDict[metric_name] = func_dic[metric_name](var_dic["output"], var_dic["target"])
+
+        if "output_masked" in var_dic:
+            metrDict[metric_name+"_masked"] = func_dic[metric_name](var_dic["output_masked"], var_dic["target"])
+    
     return metrDict
 
-def _expected_calibration_error(all_outputs, all_target,num_bins=10):
+def ece(logits, labels,n_bins=15):
+    bin_boundaries = torch.linspace(0, 1, n_bins + 1)
+    bin_lowers = bin_boundaries[:-1]
+    bin_uppers = bin_boundaries[1:]
+   
+    softmaxes = F.softmax(logits, dim=1)
+    confidences, predictions = torch.max(softmaxes, 1)
+    accuracies = predictions.eq(labels)
 
-    all_outputs = F.softmax(all_outputs,dim=-1)
-    preds = all_outputs.argmax(dim=-1)
-    preds = preds.view(-1,1)
-    confs = all_outputs.gather(1,preds)
- 
-    bin_dict = _populate_bins(confs, preds, all_target, num_bins)
-    num_samples = len(all_target)
-    ece = 0
-    for i in range(num_bins):
-        bin_accuracy = bin_dict[i][BIN_ACC]
-        bin_confidence = bin_dict[i][BIN_CONF]
-        bin_count = bin_dict[i][COUNT]
-        ece += (float(bin_count) / num_samples) * \
-            abs(bin_accuracy - bin_confidence)
+    ece = torch.zeros(1, device=logits.device)
+    for bin_lower, bin_upper in zip(bin_lowers, bin_uppers):
+        # Calculated |confidence - accuracy| in each bin
+        in_bin = confidences.gt(bin_lower.item()) * confidences.le(bin_upper.item())
+        prop_in_bin = in_bin.float().mean()
+        if prop_in_bin.item() > 0:
+            accuracy_in_bin = accuracies[in_bin].float().mean()
+            avg_confidence_in_bin = confidences[in_bin].mean()
+            ece += torch.abs(avg_confidence_in_bin - accuracy_in_bin) * prop_in_bin
 
     return ece.item()
+
+def histedges_equalN(x,nbins):
+    npt = len(x)
+    return np.interp(np.linspace(0, npt, nbins + 1),
+                    np.arange(npt),
+                    np.sort(x))
+
+def ada_ece(logits, labels,n_bins=15):
+
+    softmaxes = F.softmax(logits, dim=1)
+    confidences, predictions = torch.max(softmaxes, 1)
+    accuracies = predictions.eq(labels)
+    n, bin_boundaries = np.histogram(confidences.cpu().detach(), histedges_equalN(confidences.cpu().detach(),n_bins))
+    bin_lowers = bin_boundaries[:-1]
+    bin_uppers = bin_boundaries[1:]
+    ece = torch.zeros(1, device=logits.device)
+    for bin_lower, bin_upper in zip(bin_lowers, bin_uppers):
+        # Calculated |confidence - accuracy| in each bin
+        in_bin = confidences.gt(bin_lower.item()) * confidences.le(bin_upper.item())
+        prop_in_bin = in_bin.float().mean()
+        if prop_in_bin.item() > 0:
+            accuracy_in_bin = accuracies[in_bin].float().mean()
+            avg_confidence_in_bin = confidences[in_bin].mean()
+            ece += torch.abs(avg_confidence_in_bin - accuracy_in_bin) * prop_in_bin
+    return ece.item()
+
+def class_ece(logits, labels,n_bins=15):
+
+    bin_boundaries = torch.linspace(0, 1, n_bins + 1)
+    bin_lowers = bin_boundaries[:-1]
+    bin_uppers = bin_boundaries[1:]
+
+    num_classes = int((torch.max(labels) + 1).item())
+    softmaxes = F.softmax(logits, dim=1)
+    per_class_sce = None
+
+    for i in range(num_classes):
+        class_confidences = softmaxes[:, i]
+        class_sce = torch.zeros(1, device=logits.device)
+        labels_in_class = labels.eq(i) # one-hot vector of all positions where the label belongs to the class i
+
+        for bin_lower, bin_upper in zip(bin_lowers, bin_uppers):
+            in_bin = class_confidences.gt(bin_lower.item()) * class_confidences.le(bin_upper.item())
+            prop_in_bin = in_bin.float().mean()
+            if prop_in_bin.item() > 0:
+                accuracy_in_bin = labels_in_class[in_bin].float().mean()
+                avg_confidence_in_bin = class_confidences[in_bin].mean()
+                class_sce += torch.abs(avg_confidence_in_bin - accuracy_in_bin) * prop_in_bin
+
+        if (i == 0):
+            per_class_sce = class_sce
+        else:
+            per_class_sce = torch.cat((per_class_sce, class_sce), dim=0)
+
+    sce = torch.mean(per_class_sce)
+    return sce.item()
 
 def make_label_list(dataset):
     return [dataset.image_label[img_ind] for img_ind in sorted(dataset.image_label.keys())]
