@@ -1,21 +1,14 @@
-
+from tkinter import Y
 from args import ArgReader
-import os,sys,time
-import glob
 import numpy as np
 import sqlite3 
-from metrics import krippendorff_alpha,krippendorff_alpha_paralel,krippendorff_alpha_bootstrap
+from metrics import krippendorff_alpha_paralel,krippendorff_alpha_bootstrap
 import matplotlib.pyplot as plt 
-from matplotlib.colors import Normalize
-from matplotlib import cm
 from scipy.stats._resampling import _bootstrap_iv,rng_integers,_percentile_of_score,ndtri,ndtr,_percentile_along_axis,BootstrapResult,ConfidenceInterval
-from scipy.stats import pearsonr
+from scipy.stats import pearsonr,kendalltau
 
 def preprocc_matrix(metric_values_matrix,metric):
 
-    #if metric in ["DC","IC"]:
-    #    metric_values_matrix = (metric_values_matrix + 1)/2
-    
     if metric == "IIC":
         metric_values_matrix = metric_values_matrix.astype("bool")
 
@@ -50,7 +43,7 @@ def _bca_interval(data, statistic, axis, alpha, theta_hat_b, batch):
     # closely follows [1] 14.3 and 15.4 (Eq. 15.36)
 
     # calculate z0_hat
-    theta_hat = np.asarray(statistic(*data, axis=axis))[..., None]
+    theta_hat = np.asarray(statistic(*data))[..., None]
     percentile = _percentile_of_score(theta_hat_b, theta_hat, axis=-1)
 
     z0_hat = ndtri(percentile)
@@ -60,12 +53,11 @@ def _bca_interval(data, statistic, axis, alpha, theta_hat_b, batch):
     theta_hat_i = []
     for i in range(len(data)):
         inds =[j for j in range(len(data))]
-        #print(inds,i)
         inds.remove(i)
         inds = np.array(inds).astype("int")
         data = np.array(data)
         data_jackknife = data[inds]
-        theta_hat_i.append(statistic(*data_jackknife, axis=-1)[0])
+        theta_hat_i.append(statistic(*data_jackknife)[0])
     theta_hat_ji.append(theta_hat_i)
 
     theta_hat_ji = [np.array(theta_hat_i)
@@ -111,14 +103,12 @@ def bootstrap(data, statistic, *, n_resamples=9999, batch=None,
     for k in range(0, n_resamples):
         batch_actual = min(batch_nominal, n_resamples-k)
         # Generate resamples
-        #resampled_data = []
 
         resampled_data = _bootstrap_resample(data, n_resamples=batch_actual,
                                         random_state=random_state)
-        #resampled_data.append(resample)
 
         # Compute bootstrap distribution of statistic
-        theta_hat_b.append(statistic(*resampled_data, axis=-1))
+        theta_hat_b.append(statistic(*resampled_data))
     theta_hat_b = np.concatenate(theta_hat_b, axis=-1)
 
     # Calculate percentile interval
@@ -137,12 +127,13 @@ def bootstrap(data, statistic, *, n_resamples=9999, batch=None,
     ci_l = percentile_fun(theta_hat_b, interval[0]*100)
     ci_u = percentile_fun(theta_hat_b, interval[1]*100)
     if method == 'basic':  # see [3]
-        theta_hat = statistic(*data, axis=-1)
+        theta_hat = statistic(*data)
         ci_l, ci_u = 2*theta_hat - ci_u, 2*theta_hat - ci_l
 
     return BootstrapResult(confidence_interval=ConfidenceInterval(ci_l, ci_u),
                            bootstrap_distribution=theta_hat_b,
                            standard_error=np.std(theta_hat_b, ddof=1, axis=-1))
+
 
 def plot_bootstrap_distr(res,exp_id,metric,cumulative_suff,method):
     fig, ax = plt.subplots()
@@ -151,17 +142,20 @@ def plot_bootstrap_distr(res,exp_id,metric,cumulative_suff,method):
     ax.set_xlabel('statistic value')
     ax.set_ylabel('frequency')
     plt.savefig(f"../vis/{exp_id}/bootstrap_distr_{metric}{cumulative_suff}_{method}.png")
+    plt.close()
 
-def make_comparison_matrix(res_mat,p_val_mat,exp_id,labels,filename):
+def get_post_hoc_label_dic():
+    return {"ablationcam":"Ablation-CAM","gradcam":"Grad-CAM","gradcampp":"Grad-CAM++","scorecam":"Score-CAM"}
+
+def make_comparison_matrix(res_mat,p_val_mat,exp_id,labels,filename,axs,subplot_col,subplot_row,label=None,fontsize=17):
+
+    label_dic = get_post_hoc_label_dic()
 
     p_val_mat = (p_val_mat<0.05)
 
     cmap = plt.get_cmap('bwr')
-
-    fig = plt.figure()
-
-    ax = fig.gca()
-
+    
+    ax = axs[subplot_row,subplot_col]
     ax.spines['top'].set_visible(False)
     ax.spines['right'].set_visible(False)
     ax.spines['bottom'].set_visible(False)
@@ -169,23 +163,108 @@ def make_comparison_matrix(res_mat,p_val_mat,exp_id,labels,filename):
     ax.get_xaxis().set_ticks([])
     ax.get_yaxis().set_ticks([])
 
-    plt.imshow(p_val_mat*0,cmap="Greys")
+    ax.imshow(p_val_mat*0,cmap="Greys")
     for i in range(len(res_mat)):
         for j in range(len(res_mat)):
             if i < j:
-                rad = 0.3 if p_val_mat[i,j] else 0.1
-                circle = plt.Circle((i, j), rad, color=cmap(res_mat[i,j]))
-                ax.add_patch(circle)
+                rad = 0.4 if p_val_mat[i,j] else 0.1
 
-    fontsize = 17
-    plt.yticks(np.arange(1,len(res_mat)),labels[1:],fontsize=fontsize)
-    plt.xticks(np.arange(len(res_mat)-1),["" for _ in range(len(res_mat)-1)])
-    
+                circle = plt.Circle((i, j), rad+0.05, color="black")
+                ax.add_patch(circle)
+                if p_val_mat[i,j]:
+                    circle = plt.Circle((i, j), rad, color=cmap(res_mat[i,j]*0.5+0.5))
+                    ax.add_patch(circle)
+
+                    color = "white" if abs(res_mat[i,j]) > 0.6 else "black"
+
+                    ax.text(i,j+0.1,round(res_mat[i,j]*100),ha="center",fontsize=fontsize,color=color)                
+
+   
+    labels = [label_dic[label] if label in label_dic else label for label in labels]
+
+    ax.set_yticks(np.arange(1,len(res_mat)),labels[:-1],fontsize=fontsize)
+    ax.set_xticks(np.arange(len(res_mat)-1),["" for _ in range(len(res_mat)-1)])
     for i in range(len(res_mat)-1):
-        plt.text(i-0.2,i-0.4+1,labels[i],rotation=45,ha="left",fontsize=fontsize)
-    plt.colorbar(cm.ScalarMappable(norm=Normalize(-1,1),cmap=cmap),orientation="vertical",pad=0.17,shrink=0.8,ax=ax)
+        ax.text(i-0.2,i-0.5+1,labels[i+1],rotation=45,ha="left",fontsize=fontsize)
+
+    if not label is None:
+        if label in label_dic:
+            label = label_dic[label]
+        ax.set_title(label,y=-0.2,fontsize=20)
+
     plt.tight_layout()
     plt.savefig(f"../vis/{exp_id}/{filename}")
+
+def scattter(j,k,j_inds,k_inds,values_j,values_k,labels,file_id):
+    if j in j_inds and k in k_inds and (j!=k):
+        plt.figure(j*100+k)
+        plt.scatter(values_j,values_k)
+        plt.ylabel(labels[k])
+        plt.xlabel(labels[j])
+        plt.savefig(f"../vis/CROHN25/scatter_{labels[k]}_{labels[j]}_{file_id}.png")
+        plt.close()
+
+def get_metric_ind(metric):
+    order_dic = {"DAUC":1,"DC":2,"ADD":3,"IAUC":4,"IC":5,"AD":6}
+
+    order = 0
+
+    if "-nc" in metric:
+        order += 0.5
+        metric = metric.split("-")[0]
+
+    order = order_dic[metric]
+
+
+    return order
+    
+def sort_lerf_from_morf(metrics,all_mat):
+    key= lambda x:get_metric_ind(x[0])
+    metrics_and_all_mat = zip(metrics,all_mat)
+    metrics_and_all_mat = sorted(metrics_and_all_mat,key=key)
+    metrics,all_mat = zip(*metrics_and_all_mat)
+    
+    all_mat = np.stack(all_mat)
+
+    return metrics,all_mat
+
+def make_krippen_bar_plot(array_krippen,array_krippen_err,metrics,multi_step_metrics,exp_id,model_id,background):
+
+    width = 0.2
+    fontsize = 17 
+
+    plt.figure(-1)
+
+    x = np.arange(len(metrics))
+    y = array_krippen[0]
+    yerr = array_krippen_err[0].transpose(1,0)
+    yerr = np.abs(y[np.newaxis] - yerr)
+
+    plt.bar(x,y,width=width,label="Cumulative")
+    plt.errorbar(x,y,yerr,fmt='none',color="black")
+
+    plt.ylabel("Krippendorf's alpha",fontsize=fontsize)
+    plt.xticks(x,metrics,rotation=45,fontsize=fontsize,ha="right")
+    yticks = np.arange(10)/10
+    plt.yticks(yticks,yticks,fontsize=fontsize)
+    plt.xlim(-0.5,len(metrics)+0.5)
+
+    for threshold,label in zip([0.667,0.8],["Minimum reliability","Acceptable reliability"]):
+        plt.plot([-0.5,len(metrics)],[threshold,threshold],"--",color="black")
+        plt.text(-0.25,threshold+0.01,label)
+
+    x = np.arange(len(multi_step_metrics))
+    y = array_krippen[1,:len(x)]
+    yerr = array_krippen_err[1,:len(x)].transpose(1,0)
+    yerr = np.abs(y[np.newaxis] - yerr)
+    plt.bar(x+width,y,width=width,label="Non cumulative")
+    plt.errorbar(x+width,y,yerr,fmt='none',color="black")
+
+    plt.legend()
+    plt.tight_layout()
+
+    plt.savefig(f"../vis/{exp_id}/krippendorf_{model_id}_b{background}.png")
+    plt.close()
 
 def main(argv=None):
 
@@ -194,6 +273,7 @@ def main(argv=None):
     argreader = ArgReader(argv)
 
     argreader.parser.add_argument('--background', type=str)
+    argreader.parser.add_argument('--ordinal_metric', action="store_true")
 
     #Reading the comand line arg
     argreader.getRemainingArgs()
@@ -202,18 +282,14 @@ def main(argv=None):
     args = argreader.args
 
     exp_id = "CROHN25"
-    #model_ids = ["noneRed2","noneRed_onlyfocal","noneRed_onlylossonmasked","noneRed_focal2"]
     model_id = args.model_id
-    #single_step_metrics = ["IIC","AD","ADD"]
-    #multi_step_metrics = ["DAUC","DC","IAUC","IC"]
+    single_step_metrics = ["IIC","AD","ADD"]
+    multi_step_metrics = ["DAUC","DC","IAUC","IC"]
 
-    #single_step_metrics = ["ADD"]
-    #multi_step_metrics = ["IC","DC"]
-
-    single_step_metrics = []
-    multi_step_metrics = ["DC"]
+    metrics_to_minimize = ["DAUC","AD"]
 
     metrics = multi_step_metrics+single_step_metrics
+    
     if args.background is None:
         background_func = lambda x:"blur" if x in ["IAUC","IC","INSERTION_VAL_RATE"] else "black"
     else:
@@ -225,17 +301,26 @@ def main(argv=None):
     cur = con.cursor()
 
     csv_krippen = "cumulative,"+ ",".join(metrics) + "\n"
-    
+    array_krippen=np.zeros((2,len(metrics)))
+    array_krippen_err=np.zeros((2,len(metrics),2))
+
     post_hoc_methods_list = []
 
     all_metric_values_matrix = []
     all_metric_values_matrix_cum = []
 
+    if args.ordinal_metric:
+        corr_func = kendalltau
+    else:
+        corr_func = pearsonr
+
+    fig, axs = plt.subplots(2,len(metrics),figsize=(35,15))
+
     for cumulative_suff in ["","-nc"]:
 
         csv_krippen += "False" if cumulative_suff == "-nc" else "True"
 
-        for metric in metrics:
+        for metr_ind,metric in enumerate(metrics):
             
             print(metric,cumulative_suff)
 
@@ -245,46 +330,48 @@ def main(argv=None):
                 output = cur.execute(f'SELECT post_hoc_method,metric_value FROM metrics WHERE model_id=="{model_id}" and metric_label=="{metric}" and replace_method=="{background}"').fetchall()
 
                 post_hoc_methods,metric_values_list = zip(*output)
-
                 metric_values_matrix = fmt_metric_values(metric_values_list)
                 metric_values_matrix = preprocc_matrix(metric_values_matrix,metric)
 
-                if cumulative_suff == "-nc":
-                    all_metric_values_matrix.append(metric_values_matrix)
+                if args.ordinal_metric:
+                    if metric not in metrics_to_minimize and metric != "IIC":
+                        metric_values_matrix = -metric_values_matrix
+                    
+                    metric_values_matrix_alpha = metric_values_matrix.argsort(-1)+1
                 else:
-                    all_metric_values_matrix_cum.append(metric_values_matrix)
+                    metric_values_matrix_alpha = metric_values_matrix
 
                 #Krippendorf's alpha (inter-rater reliabiilty) 
-                alpha = krippendorff_alpha_paralel(metric_values_matrix)
+                alpha = krippendorff_alpha_paralel(metric_values_matrix_alpha)
                 rng = np.random.default_rng(0)
-                res = bootstrap(metric_values_matrix, krippendorff_alpha_bootstrap, confidence_level=0.99,random_state=rng,method="bca" ,vectorized=True,n_resamples=5000)
+                res = bootstrap(metric_values_matrix_alpha, krippendorff_alpha_bootstrap, confidence_level=0.99,random_state=rng,method="bca" ,vectorized=True,n_resamples=5000)
                 confinterv= res.confidence_interval
                 csv_krippen += ","+str(alpha)+" ("+str(confinterv.low)+" "+str(confinterv.high)+")"
 
+                array_krippen[1*(cumulative_suff == "-nc"),metr_ind] = alpha
+                array_krippen_err[1*(cumulative_suff == "-nc"),metr_ind] = np.array([confinterv.low,confinterv.high])
+
                 plot_bootstrap_distr(res,exp_id,metric,cumulative_suff,"bca")
 
-                '''
-                #Inter-method reliability
-                method_nb = metric_values_matrix.shape[1]
-                inter_method_corr_mat = np.zeros((method_nb,method_nb))
-                signif_mat = np.empty((method_nb,method_nb),dtype="bool")
-                fig, ax = plt.subplots(method_nb,1,figsize=(10,14))
-                for i in range(method_nb):
-                    values_i = metric_values_matrix[:,i]
-                    
-                    ax[i].hist(values_i,label=post_hoc_methods[i])
-                    ax[i].legend()
-                    
-                    for j in range(method_nb):
-                        values_j = metric_values_matrix[:,j]
-                        inter_method_corr_mat[i,j],signif_mat[i,j] = pearsonr(values_i,values_j)
+                if metric != "IIC":
+                    #Inter-method reliability
+                    method_nb = metric_values_matrix.shape[1]
+                    inter_method_corr_mat = np.zeros((method_nb,method_nb))
+                    signif_mat = np.empty((method_nb,method_nb))
+                    for i in range(method_nb):
+                        values_i = metric_values_matrix[:,i]
+                            
+                        for j in range(method_nb):
+                            values_j = metric_values_matrix[:,j]
+                            inter_method_corr_mat[i,j],signif_mat[i,j] = corr_func(values_i,values_j)
 
-                fig.tight_layout()
-                fig.savefig(f"../vis/{exp_id}/{metric}.png")
-                plt.close()
+                    make_comparison_matrix(inter_method_corr_mat,signif_mat,exp_id,post_hoc_methods,f"ttest_intermethod_{model_id}_b{args.background}.png",axs,metr_ind,1*(cumulative_suff=="-nc"),metric)
 
-                make_comparison_matrix(inter_method_corr_mat,signif_mat,exp_id,post_hoc_methods,f"ttest_{metric}_{model_id}_b{background}.png")
-                '''
+                    if cumulative_suff == "-nc":
+                        all_metric_values_matrix.append(metric_values_matrix)
+                    else:
+                        all_metric_values_matrix_cum.append(metric_values_matrix)
+
                 post_hoc_methods_list.append(post_hoc_methods)
 
         csv_krippen += "\n"
@@ -292,7 +379,7 @@ def main(argv=None):
     with open(f"../results/{exp_id}/krippendorff_alpha_{model_id}_b{args.background}.csv","w") as file:
         print(csv_krippen,file=file)
 
-    sys.exit(0)
+    make_krippen_bar_plot(array_krippen,array_krippen_err,metrics,multi_step_metrics,exp_id,args.model_id,args.background)
 
     post_hoc_methods_set = set(post_hoc_methods_list)
 
@@ -301,28 +388,31 @@ def main(argv=None):
 
     all_metric_values_matrix = np.stack(all_metric_values_matrix)
     all_metric_values_matrix_cum = np.stack(all_metric_values_matrix_cum)
+    
+    plot_nb= all_metric_values_matrix.shape[2]
+
+    fig, axs = plt.subplots(2,plot_nb//2,figsize=(20,10))
+    
+    print(all_metric_values_matrix_cum.shape,all_metric_values_matrix.shape)
+    all_mat = np.concatenate((all_metric_values_matrix_cum,all_metric_values_matrix),axis=0)
+
+    metrics.remove("IIC")
+    metrics_ = metrics + [metric+"-nc" for metric in multi_step_metrics]
+
+    metrics_,all_mat = sort_lerf_from_morf(metrics_,all_mat)
+
+    print(len(metrics_),all_mat.shape)
 
     for i in range(all_metric_values_matrix.shape[2]):
 
-        for cumulative in [True,False]:
+        inter_metric_corr_mat = np.zeros((len(metrics_),len(metrics_)))
+        signif_mat = np.empty((len(metrics_),len(metrics_)))
 
-            if cumulative:
-                all_mat = all_metric_values_matrix_cum
-            else:
-                all_mat = all_metric_values_matrix
-        
-            metrics_ = metrics if cumulative else multi_step_metrics
+        for j in range(all_mat.shape[0]):
+            for k in range(all_mat.shape[0]):
+                inter_metric_corr_mat[j,k],signif_mat[j,k] = corr_func(all_mat[j,:,i],all_mat[k,:,i])
 
-            inter_metric_corr_mat = np.zeros((len(metrics_),len(metrics_)))
-            signif_mat = np.empty((len(metrics_),len(metrics_)),dtype="bool")
-
-            for j in range(len(metrics_)):
-
-                for k in range(len(metrics_)):
-
-                    inter_metric_corr_mat[j,k],signif_mat[j,k] = pearsonr(all_mat[j,:,i],all_mat[k,:,i])
-
-            make_comparison_matrix(inter_metric_corr_mat,signif_mat,exp_id,metrics_,f"ttest_{post_hoc_methods[i]}_cum={cumulative}_{model_id}_b{background}.png")
+        make_comparison_matrix(inter_metric_corr_mat,signif_mat,exp_id,metrics_,f"ttest_intermetric_{model_id}_b{args.background}.png",axs,i%2,i//2,post_hoc_methods[i],fontsize=12)
 
 if __name__ == "__main__":
     main()
