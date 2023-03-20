@@ -113,9 +113,8 @@ def epochSeqTr(model, optim, loader, epoch, args, **kwargs):
             resDict = master_net_inference(data,kwargs,resDict)
 
         if args.sal_metr_mask or args.compute_masked:
-            other_data = batch[2] if args.sal_metr_otherimg else None
-            other_data = other_data.cuda(non_blocking=True) if args.cuda else other_data
-            resDict,data,data_masked = sal_metr_data_aug.apply_sal_metr_masks_and_update_dic(model,data,args,resDict,other_data)
+            other_data = batch[2].to(data.device) if args.sal_metr_otherimg else None
+            resDict,data,_ = sal_metr_data_aug.apply_sal_metr_masks_and_update_dic(model,data,args,resDict,other_data)
                    
         resDict.update(model(data))
         output = resDict["output"]
@@ -194,8 +193,7 @@ def epochImgEval(model, loader, epoch, args, mode="val",**kwargs):
         resDict = {}
         
         if args.sal_metr_mask or args.compute_masked:
-            other_data = batch[2] if args.sal_metr_otherimg else None
-            other_data = other_data.cuda(non_blocking=True) if args.cuda else other_data
+            other_data = batch[2].to(data.device) if args.sal_metr_otherimg else None
             resDict,data,_ = sal_metr_data_aug.apply_sal_metr_masks_and_update_dic(model,data,args,resDict,other_data)
 
         resDict.update(model(data))
