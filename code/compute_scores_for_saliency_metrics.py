@@ -5,7 +5,7 @@ import numpy as np
 import torch
 import matplotlib.pyplot as plt
 plt.switch_backend('agg')
-from captum.attr import (IntegratedGradients,NoiseTunnel,LayerGradCam,LayerGradCampp,GuidedBackprop)
+from captum.attr import (IntegratedGradients,NoiseTunnel,LayerGradCam,GuidedBackprop)
 
 from args import ArgReader,str2bool,addInitArgs,init_post_hoc_arg,addLossTermArgs
 import modelBuilder
@@ -14,6 +14,7 @@ from init_model import preprocessAndLoadParams
 from post_hoc_expl.scorecam import ScoreCam
 from post_hoc_expl.xgradcam import AblationCAM,XGradCAM
 from post_hoc_expl.rise import RISE
+from post_hoc_expl.gradcampp import LayerGradCampp
 from metrics import sample_img_inds,get_sal_metric_dics,getBatch,getExplanations
 from utils import normalize_tensor
 
@@ -93,11 +94,14 @@ def getAttMetrMod(net,testDataset,args):
 
 def loadSalMaps(exp_id,model_id):
 
-    norm_paths = glob.glob(f"../results/{exp_id}/norm_{model_id}_epoch*.npy")
-    if len(norm_paths) != 1:
-        raise ValueError(f"Wrong norm path number for exp {exp_id} model {model_id}")
+    if not "transf" in model_id:
+        norm_paths = glob.glob(f"../results/{exp_id}/norm_{model_id}_epoch*.npy")
+        if len(norm_paths) != 1:
+            raise ValueError(f"Wrong norm path number for exp {exp_id} model {model_id}")
+        else:
+            norm = torch.tensor(np.load(norm_paths[0],mmap_mode="r"))/255.
     else:
-        norm = torch.tensor(np.load(norm_paths[0],mmap_mode="r"))/255.
+        norm = torch.ones((1,1,1,1))
 
     attMaps_paths = glob.glob(norm_paths[0].replace("norm","attMaps"))
     if len(attMaps_paths) >1:
