@@ -17,7 +17,7 @@ def get_att_maps(retDict):
 
     return attMaps
 
-def apply_sal_metr_masks(model,data,mask_prob=1):
+def apply_sal_metr_masks(model,data,mask_prob=1,masking_data=None):
 
     with torch.no_grad():
         retDict = model(data)
@@ -34,7 +34,11 @@ def apply_sal_metr_masks(model,data,mask_prob=1):
                 metric = metric_dic[metric_name]()
 
                 data_i = data[i:i+1]
-                masking_data_i = metric.get_masking_data(data_i)
+                if masking_data is None:
+                    masking_data_i = metric.get_masking_data(data_i)
+                else:
+                    masking_data_i = masking_data[i:i+1]
+
                 expl_i = expl[i:i+1]
 
                 dic = metric.choose_data_order(data_i,masking_data_i)
@@ -53,7 +57,11 @@ def apply_sal_metr_masks(model,data,mask_prob=1):
                 metric = metric_dic[metric_name]()
 
                 data_i = data[i:i+1]
-                masking_data_i = metric.get_masking_data(data_i)
+
+                if masking_data is None:
+                    masking_data_i = metric.get_masking_data(data_i)
+                else:
+                    masking_data_i = masking_data[i:i+1]
 
                 mask = metric.compute_mask(expl[i:i+1],data.shape)
                 data_masked = metric.apply_mask(data_i,masking_data_i,mask)
@@ -66,16 +74,16 @@ def apply_sal_metr_masks(model,data,mask_prob=1):
 
     return data_masked,is_masking_object_list
         
-def apply_sal_metr_masks_and_update_dic(model,data,args,resDict):
+def apply_sal_metr_masks_and_update_dic(model,data,args,resDict,other_data):
 
-    data_masked,is_object_masked_list = apply_sal_metr_masks(model,data,args.sal_metr_mask_prob)
+    data_masked,is_object_masked_list = apply_sal_metr_masks(model,data,args.sal_metr_mask_prob,other_data)
     resDict["is_object_masked_list"] = is_object_masked_list
     if args.nce_weight > 0 or args.adv_weight > 0 or args.loss_on_masked or args.compute_masked:
         resDict_masked = model(data_masked) 
         resDict.update({key+"_masked":resDict_masked[key] for key in resDict_masked})
     else:
         data = data_masked
-    return resDict,data
+    return resDict,data,data_masked
         
     
         

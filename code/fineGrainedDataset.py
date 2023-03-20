@@ -29,7 +29,7 @@ class FineGrainedDataset(Dataset):
     """
 
     def __init__(self, root, phase,resize,sqResizing,\
-                        cropRatio,brightness,saturation,add_patches=False,patch_res=14):
+                        cropRatio,brightness,saturation,other_image_batch=False):
 
         self.image_path = {}
         self.image_label = {}
@@ -37,7 +37,7 @@ class FineGrainedDataset(Dataset):
         self.phase = phase
         self.resize = resize
         self.image_id = []
-
+        self.other_image_batch = other_image_batch
         classes = [d.name for d in os.scandir(self.root) if d.is_dir()]
 
         self.num_classes = len(classes)
@@ -51,6 +51,7 @@ class FineGrainedDataset(Dataset):
 
         instances = []
         id = 0
+        self.class_to_id = {class_ind:[] for class_ind in np.arange(self.num_classes)}
         for target_class in sorted(class_to_idx.keys()):
             class_index = class_to_idx[target_class]
             target_dir = os.path.join(self.root, target_class)
@@ -67,12 +68,14 @@ class FineGrainedDataset(Dataset):
                         self.image_label[id] = class_index
                         self.image_id.append(id)
 
+                        self.class_to_id[class_index].append(id)
+
                         id += 1
 
         # transform
         self.transform = get_transform(self.resize, self.phase,colorDataset=self.root.find("emb") == -1,\
                                         sqResizing=sqResizing,cropRatio=cropRatio,brightness=brightness,\
-                                        saturation=saturation,add_patches=add_patches,patch_res=patch_res)
+                                        saturation=saturation)
 
     def __getitem__(self, item):
         # get image id
@@ -82,9 +85,27 @@ class FineGrainedDataset(Dataset):
         # image
         image = self.transform(image)
 
-        if self.root.find("embryo_img_test") != -1:
-            return image, self.image_label[image_id],self.image_path[image_id]
+        if self.other_image_batch:
+
+            candidate_class_labels = [i for i in range(self.num_classes)]
+            candidate_class_labels.remove(self.image_label[image_id])
+            
+            rand_ind = np.random.randint(0,self.num_classes-1,size=(1,))[0]
+            class_to_sample_from = candidate_class_labels[rand_ind]
+
+            candidate_img_list = self.class_to_id[class_to_sample_from]
+            rand_ind = np.random.randint(0,len(candidate_img_list),size=(1,))[0]
+            img_to_sample_id = candidate_img_list[rand_ind]
+            
+            other_image = Image.open(self.image_path[img_to_sample_id]).convert('RGB')  # (C, H, W)
+            other_image = self.transform(other_image)
+
+            assert self.image_label[image_id] != class_to_sample_from
+
+            return image,self.image_label[image_id],other_image 
+        
         else:
+
             return image, self.image_label[image_id]
 
     def __len__(self):
@@ -127,7 +148,7 @@ def add_patches_func(img,patch_res):
     return mask
 
 def get_transform(resize, phase='train',colorDataset=True,sqResizing=True,\
-                    cropRatio=0.875,brightness=0.126,saturation=0.5,add_patches=False,patch_res=14):
+                    cropRatio=0.875,brightness=0.126,saturation=0.5):
 
     if sqResizing:
         kwargs={"size":(int(resize[0] / cropRatio), int(resize[1] / cropRatio))}
@@ -149,10 +170,6 @@ def get_transform(resize, phase='train',colorDataset=True,sqResizing=True,\
 
     if colorDataset:
         transf.extend([transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])])
-
-    if phase == "train" and add_patches:
-
-        transf.append(transforms.Lambda(lambda x:add_patches_func(x,patch_res)))
 
     transf = transforms.Compose(transf)
 

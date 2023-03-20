@@ -23,7 +23,6 @@ import modelBuilder
 import load_data
 import metrics
 import sal_metr_data_aug
-import utils
 import update
 import multi_obj_epoch_selection
 
@@ -114,7 +113,9 @@ def epochSeqTr(model, optim, loader, epoch, args, **kwargs):
             resDict = master_net_inference(data,kwargs,resDict)
 
         if args.sal_metr_mask or args.compute_masked:
-            resDict,data = sal_metr_data_aug.apply_sal_metr_masks_and_update_dic(model,data,args,resDict)
+            other_data = batch[2] if args.sal_metr_otherimg else None
+            other_data = other_data.cuda(non_blocking=True) if args.cuda else other_data
+            resDict,data,data_masked = sal_metr_data_aug.apply_sal_metr_masks_and_update_dic(model,data,args,resDict,other_data)
                    
         resDict.update(model(data))
         output = resDict["output"]
@@ -193,7 +194,9 @@ def epochImgEval(model, loader, epoch, args, mode="val",**kwargs):
         resDict = {}
         
         if args.sal_metr_mask or args.compute_masked:
-            resDict,data = sal_metr_data_aug.apply_sal_metr_masks_and_update_dic(model,data,args,resDict)
+            other_data = batch[2] if args.sal_metr_otherimg else None
+            other_data = other_data.cuda(non_blocking=True) if args.cuda else other_data
+            resDict,data,_ = sal_metr_data_aug.apply_sal_metr_masks_and_update_dic(model,data,args,resDict,other_data)
 
         resDict.update(model(data))
         output = resDict["output"]
@@ -471,6 +474,8 @@ def main(argv=None):
     argreader.parser.add_argument('--compute_masked',type=str2bool, help='To compute masked image even if not used in loss function.')
     
     argreader.parser.add_argument('--loss_on_masked',type=str2bool, help='To apply the focal loss on the output corresponding to masked data.')
+    
+    argreader.parser.add_argument('--sal_metr_otherimg',type=str2bool, help='To fill removed image areas with parts of another image.')
 
     argreader = addInitArgs(argreader)
     argreader = addOptimArgs(argreader)

@@ -21,7 +21,7 @@ def buildTrainLoader(args,shuffle=True):
     train_dataset = fineGrainedDataset.FineGrainedDataset(args.dataset_train, "train",(imgSize,imgSize),\
                                             sqResizing=args.sq_resizing,\
                                             cropRatio=args.crop_ratio,brightness=args.brightness,\
-                                            saturation=args.saturation,add_patches=args.add_patches,patch_res=args.patch_res)
+                                            saturation=args.saturation,other_image_batch=args.sal_metr_otherimg)
 
     totalLength = len(train_dataset)
 
@@ -58,7 +58,7 @@ def buildTestLoader(args, mode):
     test_dataset = fineGrainedDataset.FineGrainedDataset(datasetName, mode,(imgSize,imgSize),\
                                                         sqResizing=args.sq_resizing,\
                                                         cropRatio=args.crop_ratio,brightness=args.brightness,\
-                                                        saturation=args.saturation)
+                                                        saturation=args.saturation,other_image_batch=args.sal_metr_otherimg)
 
     if mode == "val" and args.dataset_train == args.dataset_val:
         np.random.seed(1)
