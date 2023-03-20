@@ -3,7 +3,7 @@ from torch import nn
 import matplotlib.pyplot as plt
 plt.switch_backend('agg')
 
-from models import resnet,convnext
+from models import resnet,transformer
 
 import args
 EPS = 0.000001
@@ -12,6 +12,7 @@ import torch.nn.functional as F
 
 from torch.autograd import Function
 
+from load_data import get_img_size 
 
 class ReverseLayerF(Function):
 
@@ -36,10 +37,10 @@ def buildFeatModel(featModelName, **kwargs):
     - featModel (nn.Module): the visual feature extractor
 
     '''
-    if featModelName.find("resnet") != -1:
+    if "resnet"in featModelName:
         featModel = getattr(resnet, featModelName)(**kwargs)
-    elif featModelName.find("convnext") != -1:
-        featModel = getattr(convnext, featModelName)(**kwargs)
+    elif "vit" in featModelName:
+        featModel = getattr(transformer, featModelName)(weights="IMAGENET1K_V1",**kwargs)
     else:
         raise ValueError("Unknown model type : ", featModelName)
 
@@ -131,7 +132,8 @@ class CNN2D(FirstModel):
         # N x C x H x L
         retDict = self.featMod(x)
 
-        retDict["feat_pooled"] = self.avgpool(retDict["feat"]).squeeze(-1).squeeze(-1)
+        if "feat" in retDict:
+            retDict["feat_pooled"] = self.avgpool(retDict["feat"]).squeeze(-1).squeeze(-1)
 
         return retDict
 
@@ -286,6 +288,8 @@ def getResnetFeat(backbone_name, backbone_inplanes):
         nbFeat = 768
     elif backbone_name == "convnext_base":
         nbFeat = 1024
+    elif backbone_name == "vit_b_16":
+        nbFeat = 768
     else:
         raise ValueError("Unkown backbone : {}".format(backbone_name))
     return nbFeat
@@ -330,23 +334,18 @@ def netBuilder(args,gpu=None):
 
     else:
         CNNconst = CNN2D
-        if args.first_mod.find("convnext") == -1:
-            kwargs = {} 
+        if "vit" in args.first_mod:
+            kwargs = {"image_size":get_img_size(args)}
         else:
-            kwargs = {"stochastic_depth_prob":args.stochastic_depth_prob}
-
-    firstModel = CNNconst(args.first_mod,chan=args.resnet_chan, stride=args.resnet_stride,\
-                                strideLay2=args.stride_lay2,strideLay3=args.stride_lay3,\
-                                strideLay4=args.stride_lay4,\
-                                **kwargs)
-
+            kwargs = {"chan":args.resnet_chan, "stride":args.resnet_stride,\
+                        "strideLay2":args.stride_lay2,"strideLay3":args.stride_lay3,\
+                        "strideLay4":args.stride_lay4} 
+        
+    firstModel = CNNconst(args.first_mod,**kwargs)
 
     ############### Second Model #######################
     if args.second_mod == "linear":
-        if args.first_mod.find("convnext") == -1:
-            secondModel = LinearSecondModel(nbFeat, args.class_nb, args.dropout,args.lin_lay_bias,args.adv_weight>0,args.nce_proj_layer,args.temperature)
-        else:
-            secondModel = nn.Identity()
+        secondModel = LinearSecondModel(nbFeat, args.class_nb, args.dropout,args.lin_lay_bias,args.adv_weight>0,args.nce_proj_layer,args.temperature)
     else:
         raise ValueError("Unknown second model type : ", args.second_mod)
 
