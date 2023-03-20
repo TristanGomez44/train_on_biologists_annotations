@@ -65,14 +65,15 @@ def binaryToMetrics(output,target,resDict,comp_spars=False):
         metDict["AuC_adv"] = roc_auc_score(target_adv,sigm_output_adv)*len(sigm_output_adv)*0.5
         metDict["Accuracy_adv"] = compAccuracy(resDict["output_adv"],resDict["target_adv"])*0.5
 
-    if "attMaps" in resDict.keys() and comp_spars:
-        spar = compAttMapSparsity(resDict["attMaps"].clone(),resDict["feat"].clone())
-        metDict["Sparsity"] = spar
-
-    else:
-        norm = torch.sqrt(torch.pow(resDict["feat"],2).sum(dim=1,keepdim=True))
-        spar = compSparsity(norm)
-        metDict["Sparsity"] = spar 
+    if comp_spars:
+        if "attMaps" in resDict.keys() :
+            feat = resDict["feat"].clone() if "feat" in resDict else None
+            spar = compAttMapSparsity(resDict["attMaps"].clone(),feat)
+            metDict["Sparsity"] = spar
+        else:
+            norm = torch.sqrt(torch.pow(resDict["feat"],2).sum(dim=1,keepdim=True))
+            spar = compSparsity(norm)
+            metDict["Sparsity"] = spar 
 
     return metDict
 
@@ -101,7 +102,11 @@ def saliency_metric_validity(testDataset,model,args,metDict,img_nb=20):
     
     resDict = model(data)
     predClassInds = resDict["output"].argmax(dim=-1)
-    explanations = torch.sqrt(torch.pow(resDict["feat"],2).sum(dim=1,keepdim=True))
+
+    if "attMaps" in resDict:
+        explanations = resDict["attMaps"]
+    else:
+        explanations = torch.sqrt(torch.pow(resDict["feat"],2).sum(dim=1,keepdim=True))
     
     is_multi_step_dic,const_dic = get_sal_metric_dics()
     

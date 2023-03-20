@@ -35,11 +35,13 @@ def updateSeedAndNote(args):
 def all_cat_var_dic(var_dic,resDict,target,args,mode):
     # Other variables produced by the net
     if mode == "test":
-        norm = torch.sqrt(torch.pow(resDict["feat"],2).sum(dim=1,keepdim=True))
+        if "feat" in resDict:
+            norm = torch.sqrt(torch.pow(resDict["feat"],2).sum(dim=1,keepdim=True))
+            var_dic = cat_var_dic(var_dic,"norm",norm)
+
         if "attMaps" in resDict:
             var_dic = cat_var_dic(var_dic,"attMaps",resDict["attMaps"])
-        var_dic = cat_var_dic(var_dic,"norm",norm)
-
+        
     if args.nce_weight > 0 or args.adv_weight > 0: 
         var_dic = cat_var_dic(var_dic,"feat_pooled_masked",resDict["feat_pooled_masked"])
         var_dic = cat_var_dic(var_dic,"feat_pooled",resDict["feat_pooled"])
@@ -77,7 +79,7 @@ def preproc_maps(maps):
     maps = maps.detach()
     maps_min = maps.min(dim=-1,keepdim=True)[0].min(dim=-2,keepdim=True)[0].min(dim=-3,keepdim=True)[0]
     maps_max = maps.max(dim=-1,keepdim=True)[0].max(dim=-2,keepdim=True)[0].max(dim=-3,keepdim=True)[0]
-    maps = (maps-maps_min)/(maps_max-maps_max)
+    maps = (maps-maps_min)/(maps_max-maps_min)
     maps = (maps.cpu()*255).byte()
     return maps
 
@@ -85,12 +87,12 @@ def preproc_vect(vect):
     return vect.detach().cpu()
 
 def save_maps(intermVarDict,exp_id,model_id,epoch,mode="val"):
-    if "attMaps" in intermVarDict:
-        saveMap(intermVarDict["attMaps"],exp_id,model_id,epoch,mode,key="attMaps")
-    saveMap(intermVarDict["norm"],exp_id,model_id,epoch,mode,key="norm")
+    for key in ["attMaps","norm"]:
+        if key in intermVarDict:
+            saveMap(intermVarDict[key],exp_id,model_id,epoch,mode,key=key)
 
 def saveMap(fullMap,exp_id,model_id,epoch,mode,key="attMaps"):
-    np.save("../results/{}/{}_{}_epoch{}_{}.npy".format(exp_id,key,model_id,epoch,mode),fullMap.numpy())
+    np.save(f"../results/{exp_id}/{key}_{model_id}_epoch{epoch}_{mode}.npy",fullMap.numpy())
 
 class NCEWeightUpdater():
 

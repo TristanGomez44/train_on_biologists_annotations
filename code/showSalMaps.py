@@ -22,18 +22,21 @@ import load_data
 
 def compNorm(featPath):
 
-    features = np.load(featPath,mmap_mode="r+")
-    nbFeat = features.shape[0]
-    splitLen = [100*(i+1) for i in range(nbFeat//100)]
-    features_split = np.split(features,splitLen)
+    if os.path.exists(featPath):
+        features = np.load(featPath,mmap_mode="r+")
+        nbFeat = features.shape[0]
+        splitLen = [100*(i+1) for i in range(nbFeat//100)]
+        features_split = np.split(features,splitLen)
 
-    allNorm = None
-    for feat in features_split:
-        norm = np.sqrt(np.power(feat.astype(float),2).sum(axis=1,keepdims=True))
-        if allNorm is None:
-            allNorm = norm
-        else:
-            allNorm = np.concatenate((allNorm,norm),axis=0)
+        allNorm = None
+        for feat in features_split:
+            norm = np.sqrt(np.power(feat.astype(float),2).sum(axis=1,keepdims=True))
+            if allNorm is None:
+                allNorm = norm
+            else:
+                allNorm = np.concatenate((allNorm,norm),axis=0)
+    else:
+        allNorm = torch.ones((1,1,1,1))
     return allNorm
 
 def find_saliency_maps(viz_id,model_ids,exp_id,expl):
@@ -44,10 +47,11 @@ def find_saliency_maps(viz_id,model_ids,exp_id,expl):
         if expl[j] not in ["attMaps","norm"]:
             paths = glob.glob(f"../results/{exp_id}/saliencymaps_{expl[j]}_{model_ids[j]}_epoch*_{suff}.npy")
         else:
+            print(f"../results/{exp_id}/{expl[j]}_{model_ids[j]}_epoch*.npy")
             paths = glob.glob(f"../results/{exp_id}/{expl[j]}_{model_ids[j]}_epoch*.npy")
 
         if len(paths) != 1:
-            raise ValueError("Wrong paths number",paths)
+            raise ValueError(f"Wrong paths number for {model_ids[j]}-{expl[j]}:",paths)
 
         mapPaths.append(paths[0])
     return mapPaths 
@@ -56,26 +60,25 @@ def select_images(args,class_index,inds,img_nb):
     _,testDataset = load_data.buildTestLoader(args,"test")
     maxInd = len(glob.glob(os.path.join("../data/",args.dataset_test,"*/*.*")))
 
-    #Looking for the image at which the class we want begins
-    if not class_index is None:
-        startInd = 0
-
-        classes = sorted(map(lambda x:x.split("/")[-2],glob.glob("../data/{}/*/".format(args.dataset_test))))
-        for ind in range(class_index):
-            className = classes[ind]
-            startInd += len(glob.glob("../data/{}/{}/*".format(args.dataset_test,className)))
-
-        className = classes[class_index]
-
-        endInd = startInd + len(glob.glob("../data/{}/{}/*".format(args.dataset_test,className)))
-
-    else:
-        startInd = 0
-        endInd = maxInd
-
-    torch.manual_seed(1)
-
     if len(inds) == 0:
+        #Looking for the image at which the class we want begins
+        if not class_index is None:
+            startInd = 0
+
+            classes = sorted(map(lambda x:x.split("/")[-2],glob.glob("../data/{}/*/".format(args.dataset_test))))
+            for ind in range(class_index):
+                className = classes[ind]
+                startInd += len(glob.glob("../data/{}/{}/*".format(args.dataset_test,className)))
+
+            className = classes[class_index]
+
+            endInd = startInd + len(glob.glob("../data/{}/{}/*".format(args.dataset_test,className)))
+
+        else:
+            startInd = 0
+            endInd = maxInd
+
+        torch.manual_seed(1)
         inds = torch.randperm(endInd-startInd)[:img_nb]+startInd
    
     print("inds",inds)
@@ -149,6 +152,7 @@ def showSalMaps(exp_id,img_nb,plot_id,nrows,class_index,inds,viz_id,args,
         for j in range(len(mapPaths)):
             
             all_attMaps = np.load(mapPaths[j],mmap_mode="r")
+            print(mapPaths[j],all_attMaps.shape,all_attMaps.min(),all_attMaps.max())
             attMap = all_attMaps[i] if direct_ind[j] else all_attMaps[inds[i]]
 
             if attMap.shape[0] != 1 and maps_inds[j] != -1:
@@ -212,7 +216,7 @@ def main(argv=None):
     argreader.parser.add_argument('--model_ids',type=str,metavar="IDS",nargs="*",help='The list of model ids.')
     argreader.parser.add_argument('--maps_inds',type=int,nargs="*",metavar="INT",help='The index of the attention map to use\
                                      when there is several. If there only one or if there is none, set this to -1',default=[])
-    argreader.parser.add_argument('--inds',type=int,nargs="*",metavar="INT",help='The index of the images to keep')
+    argreader.parser.add_argument('--inds',type=int,nargs="*",metavar="INT",help='The index of the images to keep',default=[])
     argreader.parser.add_argument('--interp',type=str2bool,nargs="*",metavar="BOOL",help='To smoothly interpolate the att map.',default=[])
     argreader.parser.add_argument('--direct_ind',type=str2bool,nargs="*",metavar="BOOL",help='To use direct indices',default=[])
     argreader.parser.add_argument('--pond_by_norm',type=str2bool,nargs="*",metavar="BOOL",help='To also show the norm of pixels along with the attention weights.',default=[])
