@@ -17,10 +17,15 @@ def get_att_maps(retDict):
 
     return attMaps
 
-def apply_sal_metr_masks(model,data,mask_prob=1,masking_data=None):
+def apply_sal_metr_masks(model,data,mask_prob=1,masking_data=None,sal_metr_bckgr=None):
 
     with torch.no_grad():
         retDict = model(data)
+
+    if sal_metr_bckgr is None:
+        metric_constr_kwargs = {}
+    else:
+        metric_constr_kwargs = {"data_replace_method":sal_metr_bckgr}
 
     data_masked_list = []
     expl = get_att_maps(retDict)
@@ -31,7 +36,7 @@ def apply_sal_metr_masks(model,data,mask_prob=1,masking_data=None):
             metric_name = metric_list[metric_ind]
             is_masking_object_list.append(is_masking_object[metric_name])
             if is_multi_step[metric_name]:
-                metric = metric_dic[metric_name]()
+                metric = metric_dic[metric_name](**metric_constr_kwargs)
 
                 data_i = data[i:i+1]
                 if masking_data is None:
@@ -54,7 +59,7 @@ def apply_sal_metr_masks(model,data,mask_prob=1,masking_data=None):
                 data_masked = metric.apply_mask(data1,data2,mask)
                 data_masked_list.append(data_masked)
             else:
-                metric = metric_dic[metric_name]()
+                metric = metric_dic[metric_name](**metric_constr_kwargs)
 
                 data_i = data[i:i+1]
 
@@ -76,7 +81,7 @@ def apply_sal_metr_masks(model,data,mask_prob=1,masking_data=None):
         
 def apply_sal_metr_masks_and_update_dic(model,data,args,resDict,other_data):
 
-    data_masked,is_object_masked_list = apply_sal_metr_masks(model,data,args.sal_metr_mask_prob,other_data)
+    data_masked,is_object_masked_list = apply_sal_metr_masks(model,data,args.sal_metr_mask_prob,other_data,args.sal_metr_bckgr)
     resDict["is_object_masked_list"] = is_object_masked_list
     if args.nce_weight > 0 or args.adv_weight > 0 or args.loss_on_masked or args.compute_masked:
         resDict_masked = model(data_masked) 
