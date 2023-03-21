@@ -96,14 +96,20 @@ def loadSalMaps(exp_id,model_id):
 
     if not "transf" in model_id:
         norm_paths = glob.glob(f"../results/{exp_id}/norm_{model_id}_epoch*.npy")
+   
         if len(norm_paths) != 1:
             raise ValueError(f"Wrong norm path number for exp {exp_id} model {model_id}")
         else:
             norm = torch.tensor(np.load(norm_paths[0],mmap_mode="r"))/255.
     else:
+        norm_paths = []
         norm = torch.ones((1,1,1,1))
-
-    attMaps_paths = glob.glob(norm_paths[0].replace("norm","attMaps"))
+    
+    if len(norm_paths) == 0:
+        attMaps_paths = glob.glob(f"../results/{exp_id}/attMaps_{model_id}_epoch*.npy")
+    else:
+        attMaps_paths = glob.glob(norm_paths[0].replace("norm","attMaps"))
+        
     if len(attMaps_paths) >1:
         raise ValueError(f"Wrong path number for exp {exp_id} model {model_id}")
     elif len(attMaps_paths) == 0:
