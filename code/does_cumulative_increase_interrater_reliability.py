@@ -147,9 +147,13 @@ def plot_bootstrap_distr(res,exp_id,metric,cumulative_suff,method):
 def get_post_hoc_label_dic():
     return {"ablationcam":"Ablation-CAM","gradcam":"Grad-CAM","gradcampp":"Grad-CAM++","scorecam":"Score-CAM"}
 
+def get_model_label_dic():
+    return {"noneRed2":"ResNet50","noneRed_focal2":"ResNet50-FL","noneRed2_transf":"ViT-b16","noneRed_focal2_transf":"ViT-b16-FL"}
+
 def make_comparison_matrix(res_mat,p_val_mat,exp_id,labels,filename,axs,subplot_col,subplot_row,label=None,fontsize=17):
 
     label_dic = get_post_hoc_label_dic()
+    label_dic.update(get_model_label_dic())
 
     p_val_mat = (p_val_mat<0.05)
 
@@ -228,7 +232,7 @@ def sort_lerf_from_morf(metrics,all_mat):
 
     return metrics,all_mat
 
-def make_krippen_bar_plot(array_krippen,array_krippen_err,metrics,multi_step_metrics,exp_id,model_id,background):
+def make_krippen_bar_plot(array_krippen,array_krippen_err,metrics,multi_step_metrics,exp_id,filename_suff):
 
     width = 0.2
     fontsize = 17 
@@ -263,8 +267,63 @@ def make_krippen_bar_plot(array_krippen,array_krippen_err,metrics,multi_step_met
     plt.legend()
     plt.tight_layout()
 
-    plt.savefig(f"../vis/{exp_id}/krippendorf_{model_id}_b{background}.png")
+    plt.savefig(f"../vis/{exp_id}/krippendorf_{filename_suff}.png")
     plt.close()
+
+def inter_method_reliability(metric_values_matrix,corr_func,exp_id,labels,filename_suff,axs,subplot_ind,cumulative_suff,subplot_name):
+    method_nb = metric_values_matrix.shape[1]
+    inter_method_corr_mat = np.zeros((method_nb,method_nb))
+    signif_mat = np.empty((method_nb,method_nb))
+    for i in range(method_nb):
+        values_i = metric_values_matrix[:,i]
+            
+        for j in range(method_nb):
+            values_j = metric_values_matrix[:,j]
+            inter_method_corr_mat[i,j],signif_mat[i,j] = corr_func(values_i,values_j)
+
+    make_comparison_matrix(inter_method_corr_mat,signif_mat,exp_id,labels,f"ttest_intermethod_{filename_suff}.png",axs,subplot_ind,1*(cumulative_suff=="-nc"),subplot_name)
+
+def krippendorf(metric_values_matrix_alpha,exp_id,metric,cumulative_suff,csv_krippen,array_krippen,array_krippen_err,metr_ind):
+
+    alpha = krippendorff_alpha_paralel(metric_values_matrix_alpha)
+    rng = np.random.default_rng(0)
+    res = bootstrap(metric_values_matrix_alpha, krippendorff_alpha_bootstrap, confidence_level=0.99,random_state=rng,method="bca" ,vectorized=True,n_resamples=50)
+    confinterv= res.confidence_interval
+    csv_krippen += ","+str(alpha)+" ("+str(confinterv.low)+" "+str(confinterv.high)+")"
+
+    array_krippen[1*(cumulative_suff == "-nc"),metr_ind] = alpha
+    array_krippen_err[1*(cumulative_suff == "-nc"),metr_ind] = np.array([confinterv.low,confinterv.high])
+
+    plot_bootstrap_distr(res,exp_id,metric,cumulative_suff,"bca")
+
+    return csv_krippen, array_krippen, array_krippen_err
+
+def inner_reliability(metrics,multi_step_metrics,all_metric_values_matrix,all_metric_values_matrix_cum,corr_func,exp_id,filename_suff,explanation_names):
+
+    all_metric_values_matrix = np.stack(all_metric_values_matrix)
+    all_metric_values_matrix_cum = np.stack(all_metric_values_matrix_cum)
+    
+    plot_nb= all_metric_values_matrix.shape[2]
+
+    fig, axs = plt.subplots(2,plot_nb//2,figsize=(20,10))
+    
+    all_mat = np.concatenate((all_metric_values_matrix_cum,all_metric_values_matrix),axis=0)
+
+    metrics.remove("IIC")
+    metrics_ = metrics + [metric+"-nc" for metric in multi_step_metrics]
+
+    metrics_,all_mat = sort_lerf_from_morf(metrics_,all_mat)
+
+    for i in range(all_metric_values_matrix.shape[2]):
+
+        inter_metric_corr_mat = np.zeros((len(metrics_),len(metrics_)))
+        signif_mat = np.empty((len(metrics_),len(metrics_)))
+
+        for j in range(all_mat.shape[0]):
+            for k in range(all_mat.shape[0]):
+                inter_metric_corr_mat[j,k],signif_mat[j,k] = corr_func(all_mat[j,:,i],all_mat[k,:,i])
+
+        make_comparison_matrix(inter_metric_corr_mat,signif_mat,exp_id,metrics_,f"ttest_intermetric_{filename_suff}.png",axs,i%2,i//2,explanation_names[i],fontsize=12)
 
 def main(argv=None):
 
@@ -274,6 +333,8 @@ def main(argv=None):
 
     argreader.parser.add_argument('--background', type=str)
     argreader.parser.add_argument('--ordinal_metric', action="store_true")
+    argreader.parser.add_argument('--compare_models', action="store_true")
+    argreader.parser.add_argument('--accepted_models_to_compare',nargs="*",type=str)
 
     #Reading the comand line arg
     argreader.getRemainingArgs()
@@ -282,14 +343,23 @@ def main(argv=None):
     args = argreader.args
 
     exp_id = "CROHN25"
+
     model_id = args.model_id
+
+    if args.compare_models:
+        if args.accepted_models_to_compare is None:
+            accepted_models = ["noneRed2","noneRed2_transf","noneRed_focal2","noneRed_focal2_transf"]
+        else:
+            accepted_models = args.accepted_models_to_compare
+    else:
+        accepted_models = None
+
     single_step_metrics = ["IIC","AD","ADD"]
     multi_step_metrics = ["DAUC","DC","IAUC","IC"]
-
     metrics_to_minimize = ["DAUC","AD"]
-
     metrics = multi_step_metrics+single_step_metrics
-    
+
+
     if args.background is None:
         background_func = lambda x:"blur" if x in ["IAUC","IC","INSERTION_VAL_RATE"] else "black"
     else:
@@ -304,7 +374,7 @@ def main(argv=None):
     array_krippen=np.zeros((2,len(metrics)))
     array_krippen_err=np.zeros((2,len(metrics),2))
 
-    post_hoc_methods_list = []
+    explanation_names_list = []
 
     all_metric_values_matrix = []
     all_metric_values_matrix_cum = []
@@ -313,6 +383,11 @@ def main(argv=None):
         corr_func = kendalltau
     else:
         corr_func = pearsonr
+
+    if args.compare_models:
+        filename_suff = f"models"
+    else:
+        filename_suff = f"{model_id}_b{args.background}"
 
     fig, axs = plt.subplots(2,len(metrics),figsize=(35,15))
 
@@ -327,9 +402,21 @@ def main(argv=None):
             if metric not in single_step_metrics or cumulative_suff=="": 
                 background = background_func(metric)
                 metric += cumulative_suff
-                output = cur.execute(f'SELECT post_hoc_method,metric_value FROM metrics WHERE model_id=="{model_id}" and metric_label=="{metric}" and replace_method=="{background}"').fetchall()
 
-                post_hoc_methods,metric_values_list = zip(*output)
+                if args.compare_models:
+                    query = f'SELECT model_id,metric_value FROM metrics WHERE post_hoc_method=="" and metric_label=="{metric}" and replace_method=="{background}"'    
+                else:
+                    query = f'SELECT post_hoc_method,metric_value FROM metrics WHERE model_id=="{model_id}" and metric_label=="{metric}" and replace_method=="{background}"'
+                
+                output = cur.execute(query).fetchall()
+
+                if args.compare_models:
+                    output = list(filter(lambda x:x[0] in accepted_models,output))
+
+                explanation_names,metric_values_list = zip(*output)
+
+                print(explanation_names)
+
                 metric_values_matrix = fmt_metric_values(metric_values_list)
                 metric_values_matrix = preprocc_matrix(metric_values_matrix,metric)
 
@@ -342,77 +429,32 @@ def main(argv=None):
                     metric_values_matrix_alpha = metric_values_matrix
 
                 #Krippendorf's alpha (inter-rater reliabiilty) 
-                alpha = krippendorff_alpha_paralel(metric_values_matrix_alpha)
-                rng = np.random.default_rng(0)
-                res = bootstrap(metric_values_matrix_alpha, krippendorff_alpha_bootstrap, confidence_level=0.99,random_state=rng,method="bca" ,vectorized=True,n_resamples=5000)
-                confinterv= res.confidence_interval
-                csv_krippen += ","+str(alpha)+" ("+str(confinterv.low)+" "+str(confinterv.high)+")"
-
-                array_krippen[1*(cumulative_suff == "-nc"),metr_ind] = alpha
-                array_krippen_err[1*(cumulative_suff == "-nc"),metr_ind] = np.array([confinterv.low,confinterv.high])
-
-                plot_bootstrap_distr(res,exp_id,metric,cumulative_suff,"bca")
+                csv_krippen, array_krippen, array_krippen_err = krippendorf(metric_values_matrix_alpha,exp_id,metric,cumulative_suff,csv_krippen,array_krippen,array_krippen_err,metr_ind)
 
                 if metric != "IIC":
                     #Inter-method reliability
-                    method_nb = metric_values_matrix.shape[1]
-                    inter_method_corr_mat = np.zeros((method_nb,method_nb))
-                    signif_mat = np.empty((method_nb,method_nb))
-                    for i in range(method_nb):
-                        values_i = metric_values_matrix[:,i]
-                            
-                        for j in range(method_nb):
-                            values_j = metric_values_matrix[:,j]
-                            inter_method_corr_mat[i,j],signif_mat[i,j] = corr_func(values_i,values_j)
-
-                    make_comparison_matrix(inter_method_corr_mat,signif_mat,exp_id,post_hoc_methods,f"ttest_intermethod_{model_id}_b{args.background}.png",axs,metr_ind,1*(cumulative_suff=="-nc"),metric)
+                    inter_method_reliability(metric_values_matrix,corr_func,exp_id,explanation_names,filename_suff,axs,metr_ind,cumulative_suff,metric)
 
                     if cumulative_suff == "-nc":
                         all_metric_values_matrix.append(metric_values_matrix)
                     else:
                         all_metric_values_matrix_cum.append(metric_values_matrix)
 
-                post_hoc_methods_list.append(post_hoc_methods)
+                explanation_names_list.append(explanation_names)
 
         csv_krippen += "\n"
 
-    with open(f"../results/{exp_id}/krippendorff_alpha_{model_id}_b{args.background}.csv","w") as file:
+    with open(f"../results/{exp_id}/krippendorff_alpha_{filename_suff}.csv","w") as file:
         print(csv_krippen,file=file)
 
-    make_krippen_bar_plot(array_krippen,array_krippen_err,metrics,multi_step_metrics,exp_id,args.model_id,args.background)
+    make_krippen_bar_plot(array_krippen,array_krippen_err,metrics,multi_step_metrics,exp_id,filename_suff)
 
-    post_hoc_methods_set = set(post_hoc_methods_list)
+    explanation_names_set = set(explanation_names_list)
 
-    if len(post_hoc_methods_set) != 1:
-        print("Different sets of posthoc methods were used:",post_hoc_methods_set)
+    if len(explanation_names_set) != 1:
+        print("Different sets of explanations methods were used:",explanation_names_set)
 
-    all_metric_values_matrix = np.stack(all_metric_values_matrix)
-    all_metric_values_matrix_cum = np.stack(all_metric_values_matrix_cum)
-    
-    plot_nb= all_metric_values_matrix.shape[2]
-
-    fig, axs = plt.subplots(2,plot_nb//2,figsize=(20,10))
-    
-    print(all_metric_values_matrix_cum.shape,all_metric_values_matrix.shape)
-    all_mat = np.concatenate((all_metric_values_matrix_cum,all_metric_values_matrix),axis=0)
-
-    metrics.remove("IIC")
-    metrics_ = metrics + [metric+"-nc" for metric in multi_step_metrics]
-
-    metrics_,all_mat = sort_lerf_from_morf(metrics_,all_mat)
-
-    print(len(metrics_),all_mat.shape)
-
-    for i in range(all_metric_values_matrix.shape[2]):
-
-        inter_metric_corr_mat = np.zeros((len(metrics_),len(metrics_)))
-        signif_mat = np.empty((len(metrics_),len(metrics_)))
-
-        for j in range(all_mat.shape[0]):
-            for k in range(all_mat.shape[0]):
-                inter_metric_corr_mat[j,k],signif_mat[j,k] = corr_func(all_mat[j,:,i],all_mat[k,:,i])
-
-        make_comparison_matrix(inter_metric_corr_mat,signif_mat,exp_id,metrics_,f"ttest_intermetric_{model_id}_b{args.background}.png",axs,i%2,i//2,post_hoc_methods[i],fontsize=12)
+    inner_reliability(metrics,multi_step_metrics,all_metric_values_matrix,all_metric_values_matrix_cum,corr_func,exp_id,filename_suff,explanation_names)
 
 if __name__ == "__main__":
     main()
