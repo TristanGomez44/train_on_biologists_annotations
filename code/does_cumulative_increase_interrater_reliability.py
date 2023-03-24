@@ -1,10 +1,15 @@
 from tkinter import Y
+import sys
 from args import ArgReader
 import numpy as np
 import sqlite3 
 from metrics import krippendorff_alpha_paralel,krippendorff_alpha_bootstrap
 import matplotlib.pyplot as plt 
-from scipy.stats._resampling import _bootstrap_iv,rng_integers,_percentile_of_score,ndtri,ndtr,_percentile_along_axis,BootstrapResult,ConfidenceInterval
+from scipy.stats._resampling import _bootstrap_iv,rng_integers,_percentile_of_score,ndtri,ndtr,BootstrapResult,ConfidenceInterval
+
+import warnings
+from scipy.stats._warnings_errors import DegenerateDataWarning
+
 from scipy.stats import pearsonr,kendalltau
 
 def preprocc_matrix(metric_values_matrix,metric):
@@ -14,17 +19,27 @@ def preprocc_matrix(metric_values_matrix,metric):
 
     return metric_values_matrix
 
+def fmt_value_str(value_str):
+
+    value_list = value_str.split(";")
+
+    if value_list[0].startswith("shape="):
+        shape = value_list[0].replace("shape=(","").replace(")","").replace(",","").split(" ")
+        shape = [int(size) for size in shape]
+
+        value_list= value_list[1:]
+    else:
+        shape = (-1,)
+    value_list = np.array(value_list).astype("float").reshape(shape)
+
+    return value_list 
+
 def fmt_metric_values(metric_values_list):
-
     matrix = []
-
     for i in range(len(metric_values_list)):
-        matrix.append(np.array(metric_values_list[i].split(";")).astype("float"))
-
+        matrix.append(fmt_value_str(metric_values_list[i]))
     metric_values_matrix = np.stack(matrix,axis=0)
-
     metric_values_matrix = metric_values_matrix.transpose(1,0)
-
     return metric_values_matrix
 
 def _bootstrap_resample(sample, n_resamples=None, random_state=None):
@@ -84,6 +99,31 @@ def _bca_interval(data, statistic, axis, alpha, theta_hat_b, batch):
     num2 = z0_hat + z_1alpha
     alpha_2 = ndtr(z0_hat + num2/(1 - a_hat*num2))
     return alpha_1, alpha_2, a_hat  # return a_hat for testing
+
+def _percentile_along_axis(theta_hat_b, alpha):
+    """`np.percentile` with different percentile for each slice."""
+    # the difference between _percentile_along_axis and np.percentile is that
+    # np.percentile gets _all_ the qs for each axis slice, whereas
+    # _percentile_along_axis gets the q corresponding with each axis slice
+    shape = theta_hat_b.shape[:-1]
+
+    alpha = np.broadcast_to(alpha[0], shape)
+    percentiles = np.zeros_like(alpha, dtype=np.float64)
+    for indices, alpha_i in np.ndenumerate(alpha):
+        if np.isnan(alpha_i):
+            # e.g. when bootstrap distribution has only one unique element
+            msg = (
+                "The BCa confidence interval cannot be calculated."
+                " This problem is known to occur when the distribution"
+                " is degenerate or the statistic is np.min."
+            )
+            warnings.warn(DegenerateDataWarning(msg))
+            percentiles[indices] = np.nan
+        else:
+            theta_hat_b_i = theta_hat_b[indices]
+            percentiles[indices] = np.percentile(theta_hat_b_i, alpha_i)
+    return percentiles[()]  # return scalar instead of 0d array
+
 
 def bootstrap(data, statistic, *, n_resamples=9999, batch=None,
               vectorized=None, paired=False, axis=0, confidence_level=0.95,
@@ -150,7 +190,7 @@ def get_post_hoc_label_dic():
 def get_model_label_dic():
     return {"noneRed2":"ResNet50","noneRed_focal2":"ResNet50-FL","noneRed2_transf":"ViT-b16","noneRed_focal2_transf":"ViT-b16-FL"}
 
-def make_comparison_matrix(res_mat,p_val_mat,exp_id,labels,filename,axs,subplot_col,subplot_row,label=None,fontsize=17):
+def make_comparison_matrix(res_mat,p_val_mat,exp_id,labels,filename,axs,subplot_row,subplot_col,label=None,fontsize=17):
 
     label_dic = get_post_hoc_label_dic()
     label_dic.update(get_model_label_dic())
@@ -281,7 +321,7 @@ def inter_method_reliability(metric_values_matrix,corr_func,exp_id,labels,filena
             values_j = metric_values_matrix[:,j]
             inter_method_corr_mat[i,j],signif_mat[i,j] = corr_func(values_i,values_j)
 
-    make_comparison_matrix(inter_method_corr_mat,signif_mat,exp_id,labels,f"ttest_intermethod_{filename_suff}.png",axs,subplot_ind,1*(cumulative_suff=="-nc"),subplot_name)
+    make_comparison_matrix(inter_method_corr_mat,signif_mat,exp_id,labels,f"ttest_intermethod_{filename_suff}.png",axs,1*(cumulative_suff=="-nc"),subplot_ind,subplot_name)
 
 def krippendorf(metric_values_matrix_alpha,exp_id,metric,cumulative_suff,csv_krippen,array_krippen,array_krippen_err,metr_ind):
 
@@ -323,7 +363,7 @@ def inner_reliability(metrics,multi_step_metrics,all_metric_values_matrix,all_me
             for k in range(all_mat.shape[0]):
                 inter_metric_corr_mat[j,k],signif_mat[j,k] = corr_func(all_mat[j,:,i],all_mat[k,:,i])
 
-        make_comparison_matrix(inter_metric_corr_mat,signif_mat,exp_id,metrics_,f"ttest_intermetric_{filename_suff}.png",axs,i%2,i//2,explanation_names[i],fontsize=12)
+        make_comparison_matrix(inter_metric_corr_mat,signif_mat,exp_id,metrics_,f"ttest_intermetric_{filename_suff}.png",axs,i//2,i%2,explanation_names[i],fontsize=12)
 
 def main(argv=None):
 
@@ -412,10 +452,10 @@ def main(argv=None):
 
                 if args.compare_models:
                     output = list(filter(lambda x:x[0] in accepted_models,output))
-
+                else:
+                    output = list(filter(lambda x:x[0] != "",output))
+                
                 explanation_names,metric_values_list = zip(*output)
-
-                print(explanation_names)
 
                 metric_values_matrix = fmt_metric_values(metric_values_list)
                 metric_values_matrix = preprocc_matrix(metric_values_matrix,metric)

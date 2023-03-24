@@ -122,6 +122,14 @@ def loadSalMaps(exp_id,model_id):
         
     return salMaps
 
+def get_attr_func(net,testDataset,args):
+    if args.att_metrics_post_hoc:
+        attrFunc,kwargs = getAttMetrMod(net,testDataset,args)
+    else:
+        salMaps_dataset = loadSalMaps(args.exp_id,args.model_id)
+        attrFunc = lambda i:(salMaps_dataset[i,0:1]).unsqueeze(0)
+        kwargs = {}
+    return attrFunc,kwargs
 
 def main(argv=None):
     # Getting arguments from config file and command line
@@ -150,7 +158,7 @@ def main(argv=None):
 
     #Constructing metric
     is_multi_step_dic,const_dic = get_sal_metric_dics()
-    if args.data_replace_method is None or args.data_replace_method == "otherimage":
+    if args.data_replace_method=="default" or args.data_replace_method is None or args.data_replace_method == "otherimage":
         metric_constr_arg_dict = {}
     else:
         metric_constr_arg_dict = {"data_replace_method":args.data_replace_method}
@@ -163,11 +171,18 @@ def main(argv=None):
 
     metric = const_dic[args.attention_metric](**metric_constr_arg_dict)
 
-    data_replace_method = metric.data_replace_method if args.data_replace_method is None else args.data_replace_method
+    if args.data_replace_method is None or args.data_replace_method == "default":
+        data_replace_method = metric.data_replace_method 
+    else:
+        data_replace_method = args.data_replace_method
         
     result_file_path = f"../results/{args.exp_id}/{formated_attention_metric}-{data_replace_method}_{args.model_id}{post_hoc_suff}.npy"
+    
+    print(result_file_path)
+    result_file_exists = os.path.exists(result_file_path)
+    result_file_misses_supp_keys = len(np.load(result_file_path,allow_pickle=True).item().keys()) < 5
 
-    if args.do_again or not os.path.exists(result_file_path):
+    if args.do_again or (not result_file_exists) or result_file_misses_supp_keys:
 
         args.val_batch_size = 1
         _,testDataset = load_data.buildTestLoader(args, "test")
@@ -179,16 +194,11 @@ def main(argv=None):
         net.eval()
         net_lambda = lambda x:net(x)["output"]
         
-        if args.att_metrics_post_hoc:
-            attrFunc,kwargs = getAttMetrMod(net,testDataset,args)
-        else:
-            salMaps_dataset = loadSalMaps(args.exp_id,args.model_id)
-            attrFunc = lambda i:(salMaps_dataset[i,0:1]).unsqueeze(0)
-            kwargs = None
+        attrFunc,kwargs = get_attr_func(net,testDataset,args)
 
         inds = sample_img_inds(args.img_nb_per_class,testDataset=testDataset)
 
-        data,_ = getBatch(testDataset,inds,args)
+        data,target = getBatch(testDataset,inds,args)
         
         if args.data_replace_method == "otherimage":
             other_img_inds = get_other_img_inds(inds)
@@ -196,37 +206,47 @@ def main(argv=None):
         else:
             other_img_inds = None
 
-        torch.set_grad_enabled(False) 
-        predClassInds = net_lambda(data).argmax(dim=-1)
+        torch.set_grad_enabled(False)
+        outputs =  net_lambda(data)
+
+        predClassInds = outputs.argmax(dim=-1)
         
         if args.att_metrics_post_hoc == "gradcam_pp":
             torch.set_grad_enabled(True)
 
-        explanations = getExplanations(inds,data,predClassInds,attrFunc,kwargs,args)
-        
-        torch.set_grad_enabled(False)   
-  
-        if args.debug:
-            data = data[:2]
-            if other_data is not None:
-                other_data = other_data[:2]
-
-        metric_args = [net_lambda,data,explanations,predClassInds]
-        kwargs = {"save_all_class_scores":True}
-
-        if args.data_replace_method == "otherimage":
-            metric_args.append(other_data)
-
-        if is_multi_step_dic[args.attention_metric]:  
-            scores,saliency_scores = metric.compute_scores(*metric_args,**kwargs)
-            saved_dic = {"prediction_scores":scores,"saliency_scores":saliency_scores}
+        print(result_file_exists,result_file_misses_supp_keys)
+        if result_file_exists and result_file_misses_supp_keys:
+            print("Just adding missing supplementary keys...")
+            result_dic = np.load(result_file_path,allow_pickle=True).item()
+            result_dic.update({"outputs":outputs,"target":target,"inds":inds})
+            np.save(result_file_path,result_dic)
         else:
-            scores,scores_masked = metric.compute_scores(*metric_args,**kwargs)
-            saved_dic = {"prediction_scores":scores,"prediction_scores_with_mask":scores_masked}
-        
-        np.save(result_file_path,saved_dic)
+
+            explanations = getExplanations(inds,data,predClassInds,attrFunc,kwargs,args)
+
+            torch.set_grad_enabled(False)   
+    
+            if args.debug:
+                data = data[:2]
+                if args.data_replace_method == "otherimage" and other_data is not None:
+                    other_data = other_data[:2]
+
+            metric_args = [net_lambda,data,explanations,predClassInds]
+            kwargs = {"save_all_class_scores":True}
+
+            if args.data_replace_method == "otherimage":
+                metric_args.append(other_data)
+
+            if is_multi_step_dic[args.attention_metric]:  
+                scores,saliency_scores = metric.compute_scores(*metric_args,**kwargs)
+                saved_dic = {"prediction_scores":scores,"saliency_scores":saliency_scores,"outputs":outputs,"target":target,"inds":inds}
+            else:
+                scores,scores_masked = metric.compute_scores(*metric_args,**kwargs)
+                saved_dic = {"prediction_scores":scores,"prediction_scores_with_mask":scores_masked,"outputs":outputs,"target":target,"inds":inds}
+            
+            np.save(result_file_path,saved_dic)
     else:
-        print("Already done:",formated_attention_metric,data_replace_method,args.model_id,post_hoc_suff)
+        print("Already done:",result_file_path)
         
 if __name__ == "__main__":
     main()

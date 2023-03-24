@@ -11,6 +11,7 @@ from modelBuilder import addArgs as addArgsModelBuilder
 
 import sqlite3 ,csv as csvLib,os,sys
 
+
 def make_db(col_list,db_path):
 
     con = sqlite3.connect(db_path) # change to 'sqlite:///your_filename.db'
@@ -34,15 +35,20 @@ def fix_type(tensor):
 
     return tensor
 
-def get_score_file_paths(exp_id,metric_list):
+def get_score_file_paths(exp_id,metric_list,pref=""):
     paths = []
     for metric in metric_list:
         metric = metric.replace("_","")
-        paths.extend(glob.glob(f"../results/{exp_id}/{metric}*_*.npy"))
+        paths.extend(glob.glob(f"../results/{exp_id}/{pref}{metric}*_*.npy"))
     return paths
 
+def get_supp_kw():
+    return {5:"saliency_scores",6:"outputs",7:"target",8:"inds"}
+
 def get_col_index_to_value_dic():
-    return {0:"metric_label",1:"replace_method",2:"model_id",3:"post_hoc_method",4:"metric_value"}
+    dic = {0:"metric_label",1:"replace_method",2:"model_id",3:"post_hoc_method",4:"metric_value"}
+    dic.update(get_supp_kw())
+    return dic 
 
 def write_db(cur,**kwargs):
 
@@ -83,7 +89,42 @@ def write_csv(**kwargs):
         print(row,file=file)
 
 def list_to_fmt_str(array):
-    return str(";".join(array.astype("str")))
+    if type(array) is torch.Tensor:
+        array = array.cpu().numpy()
+    if len(array.shape) > 1:
+        fmt_str = f"shape={str(array.shape)};"
+    else:
+        fmt_str = ""
+    fmt_str += str(";".join(array.reshape(-1).astype("str")))  
+    return fmt_str
+
+def get_info(path):
+
+    filename = os.path.basename(path).replace(".npy","")
+        
+    underscore_ind = filename.find("_")
+    metric_name_and_replace_method,model_id_and_posthoc_method = filename[:underscore_ind],filename[underscore_ind+1:]
+    
+    metric_name,replace_method = metric_name_and_replace_method.split("-")
+    
+    if metric_name == "IICAD":
+        metric_name = "IIC_AD"
+
+    kwargs = {}
+    if "nc" in metric_name:
+        metric_name = metric_name.replace("nc","")
+        kwargs["cumulative"] = False
+        suff = "-nc"
+    else:
+        suff = ""
+
+    if "-" in model_id_and_posthoc_method:
+        model_id,post_hoc_method = model_id_and_posthoc_method.split("-")
+    else:
+        model_id = model_id_and_posthoc_method
+        post_hoc_method = ""
+    
+    return model_id,post_hoc_method,metric_name,replace_method,kwargs,suff
 
 def main(argv=None):
 
@@ -115,37 +156,15 @@ def main(argv=None):
 
     for path in score_file_paths:
         
-        filename = os.path.basename(path).replace(".npy","")
-        
-        underscore_ind = filename.find("_")
-        metric_name_and_replace_method,model_id_and_posthoc_method = filename[:underscore_ind],filename[underscore_ind+1:]
-        
-        metric_name,replace_method = metric_name_and_replace_method.split("-")
-        
-        if metric_name == "IICAD":
-            metric_name = "IIC_AD"
-
-        kwargs = {}
-        if "nc" in metric_name:
-            metric_name = metric_name.replace("nc","")
-            kwargs["cumulative"] = False
-            suff = "-nc"
-        else:
-            suff = ""
-
-        if "-" in model_id_and_posthoc_method:
-            model_id,post_hoc_method = model_id_and_posthoc_method.split("-")
-        else:
-            model_id = model_id_and_posthoc_method
-            post_hoc_method = ""
+        model_id,post_hoc_method,metric_name,replace_method,kwargs,suff = get_info(path)
 
         if args.model_ids is None or model_id in args.model_ids:
 
             metric = const_dic[metric_name](**kwargs)
 
-            result_dic = np.load(path,allow_pickle=True).item()
+            scores_dic = np.load(path,allow_pickle=True).item()
             if is_multi_step_dic[metric_name]:
-                all_score_list,all_sal_score_list = result_dic["prediction_scores"],result_dic["saliency_scores"]
+                all_score_list,all_sal_score_list = scores_dic["prediction_scores"],scores_dic["saliency_scores"]
                 all_score_list = fix_type(all_score_list)
                 
                 if len(all_score_list.shape) == 3:
@@ -165,7 +184,7 @@ def main(argv=None):
                 result_dic[metric_name+"_val_rate"] = val_rate
 
             else:
-                all_score_list,all_score_masked_list = result_dic["prediction_scores"],result_dic["prediction_scores_with_mask"]
+                all_score_list,all_score_masked_list = scores_dic["prediction_scores"],scores_dic["prediction_scores_with_mask"]
                 all_score_list = fix_type(all_score_list)
                 all_score_masked_list = fix_type(all_score_masked_list)
                 
@@ -183,10 +202,14 @@ def main(argv=None):
                 val_rate = add_validity_rate_single_step(metric_name,all_score_list,all_score_masked_list)
                 result_dic[metric_name+"_val_rate"] = val_rate
 
+            supp_kwargs = {}
+            for supp_kw in get_supp_kw().values():
+                supp_kwargs[supp_kw] = list_to_fmt_str(scores_dic[supp_kw]) if supp_kw in scores_dic else None
+
             for sub_metric in result_dic.keys():
                 #write_csv(exp_id=args.exp_id,metric_label=sub_metric.upper(),replace_method=replace_method,model_id=model_id,post_hoc_method=post_hoc_method,metric_value=result_dic[sub_metric])
 
-                write_db(cur,exp_id=args.exp_id,metric_label=sub_metric.upper()+suff,replace_method=replace_method,model_id=model_id,post_hoc_method=post_hoc_method,metric_value=result_dic[sub_metric])
+                write_db(cur,exp_id=args.exp_id,metric_label=sub_metric.upper()+suff,replace_method=replace_method,model_id=model_id,post_hoc_method=post_hoc_method,metric_value=result_dic[sub_metric],**supp_kwargs)
 
     con.commit()
     con.close()
