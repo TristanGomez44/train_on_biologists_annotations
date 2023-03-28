@@ -39,6 +39,7 @@ def fmt_metric_values(metric_values_list):
     for i in range(len(metric_values_list)):
         matrix.append(fmt_value_str(metric_values_list[i]))
     metric_values_matrix = np.stack(matrix,axis=0)
+    print(metric_values_matrix.shape)
     metric_values_matrix = metric_values_matrix.transpose(1,0)
     return metric_values_matrix
 
@@ -365,16 +366,27 @@ def inner_reliability(metrics,multi_step_metrics,all_metric_values_matrix,all_me
 
         make_comparison_matrix(inter_metric_corr_mat,signif_mat,exp_id,metrics_,f"ttest_intermetric_{filename_suff}.png",axs,i//2,i%2,explanation_names[i],fontsize=12)
 
+def get_background_func(background):
+    if background is None:
+        background_func = lambda x:"blur" if x in ["IAUC","IC","INSERTION_VAL_RATE"] else "black"
+    else:
+        background_func = lambda x:background
+    return background_func 
+
+def addArgs(argreader):
+    argreader.parser.add_argument('--background', type=str)
+    argreader.parser.add_argument('--ordinal_metric', action="store_true")
+    argreader.parser.add_argument('--compare_models', action="store_true")
+    argreader.parser.add_argument('--accepted_models_to_compare',nargs="*",type=str)
+    return argreader
+
 def main(argv=None):
 
     #Getting arguments from config file and command line
     #Building the arg reader
     argreader = ArgReader(argv)
 
-    argreader.parser.add_argument('--background', type=str)
-    argreader.parser.add_argument('--ordinal_metric', action="store_true")
-    argreader.parser.add_argument('--compare_models', action="store_true")
-    argreader.parser.add_argument('--accepted_models_to_compare',nargs="*",type=str)
+    argreader = addArgs(argreader)
 
     #Reading the comand line arg
     argreader.getRemainingArgs()
@@ -399,11 +411,7 @@ def main(argv=None):
     metrics_to_minimize = ["DAUC","AD"]
     metrics = multi_step_metrics+single_step_metrics
 
-
-    if args.background is None:
-        background_func = lambda x:"blur" if x in ["IAUC","IC","INSERTION_VAL_RATE"] else "black"
-    else:
-        background_func = lambda x:args.background
+    background_func = get_background_func(args.background)
 
     db_path = f"../results/{exp_id}/saliency_metrics.db"
    

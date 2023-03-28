@@ -15,11 +15,11 @@ from does_cumulative_increase_interrater_reliability import fmt_metric_values,pr
 
 from torch.nn.functional import cross_entropy
 from torch import from_numpy,arange,softmax
-def filter_query_result(result):
+def filter_query_result(result,inds):
 
     result = list(filter(lambda x:x[0] != "",result))
 
-    for i in [2,3,4,5]:
+    for i in inds:
         result = list(filter(lambda x:x[i] != "None",result))
     return result
 
@@ -119,7 +119,7 @@ def score_vs_metric(explanation_names,metric_values_matrix,output_list,target_li
         axs[i].scatter(output_list,metric_val,alpha=0.5,color=colors)
         axs[i].set_title(name)
         axs[i].set_ylabel(metric)
-        axs[i].set_xlabel("Output score")
+        axs[i].set_xlabel("Output scores")
         axs[i].set_ylim(metric_values_matrix.min()-0.1,metric_values_matrix.max()+0.1)
         axs[i].set_xlim(output_list.min()-0.1,output_list.max()+0.1)
 
@@ -218,7 +218,7 @@ def main(argv=None):
                 
                 output = cur.execute(query).fetchall()
                 
-                output = filter_query_result(output)
+                output = filter_query_result(output,[2,3,4,5])
                 
                 if len(output) > 0:
                     explanation_names,metric_values_list,output_list,target_list,inds,saliency_scores_list = zip(*output)

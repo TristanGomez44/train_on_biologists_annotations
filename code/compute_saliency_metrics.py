@@ -11,6 +11,14 @@ from modelBuilder import addArgs as addArgsModelBuilder
 
 import sqlite3 ,csv as csvLib,os,sys
 
+def get_db(exp_id):
+    db_path = f"../results/{exp_id}/saliency_metrics.db"
+    if not os.path.exists(db_path):
+        col_list = get_header()
+        make_db(col_list,db_path)
+    con = sqlite3.connect(db_path) # change to 'sqlite:///your_filename.db'
+    cur = con.cursor()
+    return con,cur 
 
 def make_db(col_list,db_path):
 
@@ -145,14 +153,8 @@ def main(argv=None):
     is_multi_step_dic,const_dic = get_sal_metric_dics()
     metric_list = list(const_dic.keys())
     score_file_paths = get_score_file_paths(args.exp_id,metric_list)
-
-    csv_path = f"../results/{args.exp_id}/saliency_metrics.csv"
-    db_path = csv_path.replace(".csv",".db")
-    if not os.path.exists(db_path):
-        col_list = get_header()
-        make_db(col_list,db_path)
-    con = sqlite3.connect(db_path) # change to 'sqlite:///your_filename.db'
-    cur = con.cursor()
+    
+    con,cur = get_db(args.exp_id)
 
     for path in score_file_paths:
         

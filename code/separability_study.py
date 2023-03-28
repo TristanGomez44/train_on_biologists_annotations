@@ -6,6 +6,7 @@ import numpy as np
 from args import addInitArgs,addValArgs
 import modelBuilder,load_data
 from args import ArgReader
+from metrics import run_separability_analysis
 
 def list_to_str(values):
     string = str(round(values.mean(),4)) + "±" +str(round(values.std(),4))
