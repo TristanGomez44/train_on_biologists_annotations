@@ -39,7 +39,6 @@ def fmt_metric_values(metric_values_list):
     for i in range(len(metric_values_list)):
         matrix.append(fmt_value_str(metric_values_list[i]))
     metric_values_matrix = np.stack(matrix,axis=0)
-    print(metric_values_matrix.shape)
     metric_values_matrix = metric_values_matrix.transpose(1,0)
     return metric_values_matrix
 
