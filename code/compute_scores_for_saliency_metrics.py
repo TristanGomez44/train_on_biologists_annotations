@@ -180,7 +180,7 @@ def main(argv=None):
     
     print(result_file_path)
     result_file_exists = os.path.exists(result_file_path)
-    result_file_misses_supp_keys = len(np.load(result_file_path,allow_pickle=True).item().keys()) < 5
+    result_file_misses_supp_keys = result_file_exists and len(np.load(result_file_path,allow_pickle=True).item().keys()) < 5
 
     if args.do_again or (not result_file_exists) or result_file_misses_supp_keys:
 
