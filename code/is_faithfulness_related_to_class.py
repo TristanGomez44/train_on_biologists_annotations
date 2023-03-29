@@ -23,7 +23,7 @@ def filter_query_result(result,inds):
         result = list(filter(lambda x:x[i] != "None",result))
     return result
 
-def target_vs_metric(explanation_names,metric_values_matrix,target_list,exp_id,metric):
+def target_vs_metric(explanation_names,metric_values_matrix,target_list,exp_id,model_id,metric):
     fig, axs = plt.subplots(1,len(explanation_names),figsize=(20,10))
     if len(explanation_names) == 1:
         axs = np.array([axs])
@@ -60,10 +60,10 @@ def target_vs_metric(explanation_names,metric_values_matrix,target_list,exp_id,m
         axs[i].set_title(name)
         axs[i].set_ylim(metric_values_matrix.min()-0.1,metric_values_matrix.max()+0.1)
 
-    plt.savefig(f"../vis/{exp_id}/relationship_class_vs_{metric}.png")
+    plt.savefig(f"../vis/{exp_id}/relationship_class_vs_{metric}_{model_id}.png")
     plt.close()
 
-def correctness_vs_metric(explanation_names,metric_values_matrix,correct_list,exp_id,metric):
+def correctness_vs_metric(explanation_names,metric_values_matrix,correct_list,exp_id,model_id,metric):
     fig, axs = plt.subplots(1,len(explanation_names),figsize=(20,10))
 
     if len(explanation_names) == 1:
@@ -83,10 +83,10 @@ def correctness_vs_metric(explanation_names,metric_values_matrix,correct_list,ex
         axs[i].set_title(name)
         axs[i].set_xlim(min_val,max_val)
 
-    plt.savefig(f"../vis/{exp_id}/relationship_correctness_vs_{metric}.png")
+    plt.savefig(f"../vis/{exp_id}/relationship_correctness_vs_{metric}_{model_id}.png")
     plt.close()
 
-def loss_vs_metric(explanation_names,metric_values_matrix,loss_list,target_list,exp_id,metric,cmap):
+def loss_vs_metric(explanation_names,metric_values_matrix,loss_list,target_list,exp_id,model_id,metric,cmap):
 
     fig, axs = plt.subplots(1,len(explanation_names),figsize=(20,10))
     if len(explanation_names) == 1:
@@ -101,12 +101,14 @@ def loss_vs_metric(explanation_names,metric_values_matrix,loss_list,target_list,
         axs[i].set_ylabel(metric)
         axs[i].set_xlabel("Cross entropy loss")
         axs[i].set_ylim(metric_values_matrix.min()-0.1,metric_values_matrix.max()+0.1)
-        axs[i].set_xlim(loss_list.min()-0.1,loss_list.max()+0.1)
+        #axs[i].set_xlim(loss_list.min()-0.1,loss_list.max()+0.1)
+        axs[i].set_xscale("log")
+        #axs[i].set_xlim(0,0.025)
 
-    plt.savefig(f"../vis/{exp_id}/relationship_loss_vs_{metric}.png")
+    plt.savefig(f"../vis/{exp_id}/relationship_loss_vs_{metric}_{model_id}.png")
     plt.close()
 
-def score_vs_metric(explanation_names,metric_values_matrix,output_list,target_list,exp_id,metric,cmap):
+def score_vs_metric(explanation_names,metric_values_matrix,output_list,target_list,exp_id,model_id,metric,cmap):
 
     fig, axs = plt.subplots(1,len(explanation_names),figsize=(20,10))
     if len(explanation_names) == 1:
@@ -123,10 +125,10 @@ def score_vs_metric(explanation_names,metric_values_matrix,output_list,target_li
         axs[i].set_ylim(metric_values_matrix.min()-0.1,metric_values_matrix.max()+0.1)
         axs[i].set_xlim(output_list.min()-0.1,output_list.max()+0.1)
 
-    plt.savefig(f"../vis/{exp_id}/relationship_output_vs_{metric}.png")
+    plt.savefig(f"../vis/{exp_id}/relationship_output_vs_{metric}_{model_id}.png")
     plt.close()
 
-def sparsity_vs_metric(explanation_names,metric_values_matrix,sparsity,target_list,exp_id,metric,cmap):
+def sparsity_vs_metric(explanation_names,metric_values_matrix,sparsity,target_list,exp_id,model_id,metric,cmap):
 
     fig, axs = plt.subplots(1,len(explanation_names),figsize=(20,10))
     if len(explanation_names) == 1:
@@ -143,7 +145,7 @@ def sparsity_vs_metric(explanation_names,metric_values_matrix,sparsity,target_li
         axs[i].set_ylim(metric_values_matrix.min()-0.1,metric_values_matrix.max()+0.1)
         axs[i].set_xlim(sparsity.min()-0.1,sparsity.max()+0.1)
 
-    plt.savefig(f"../vis/{exp_id}/relationship_sparsity_vs_{metric}.png")
+    plt.savefig(f"../vis/{exp_id}/relationship_sparsity_vs_{metric}_{model_id}.png")
     plt.close()      
 
 def main(argv=None):
@@ -232,20 +234,20 @@ def main(argv=None):
 
                     pred_list = output_list.argmax(axis=-1)
                     correct_list = (pred_list==target_list)
-                    correctness_vs_metric(explanation_names,metric_values_matrix,correct_list,exp_id,metric)
+                    correctness_vs_metric(explanation_names,metric_values_matrix,correct_list,exp_id,model_id,metric)
 
-                    target_vs_metric(explanation_names,metric_values_matrix,target_list,exp_id,metric)
+                    target_vs_metric(explanation_names,metric_values_matrix,target_list,exp_id,model_id,metric)
 
                     output_list,target_list = from_numpy(output_list), from_numpy(target_list).long()
                     loss_list = cross_entropy(output_list,target_list,reduction="none").numpy()
-                    loss_vs_metric(explanation_names,metric_values_matrix,loss_list,target_list,exp_id,metric,cmap)
+                    loss_vs_metric(explanation_names,metric_values_matrix,loss_list,target_list,exp_id,args.model_id,metric,cmap)
 
                     output_list = softmax(output_list,dim=-1)[arange(len(target_list)),target_list]
-                    score_vs_metric(explanation_names,metric_values_matrix,output_list,target_list,exp_id,metric,cmap)
+                    score_vs_metric(explanation_names,metric_values_matrix,output_list,target_list,exp_id,args.model_id,metric,cmap)
 
                     saliency_scores_list = saliency_scores_list.reshape(saliency_scores_list.shape[0],-1)
                     sparsity = saliency_scores_list.max(axis=-1)/saliency_scores_list.mean(axis=-1)
-                    sparsity_vs_metric(explanation_names,metric_values_matrix,sparsity,target_list,exp_id,metric,cmap)
+                    sparsity_vs_metric(explanation_names,metric_values_matrix,sparsity,target_list,exp_id,args.model_id,metric,cmap)
          
                     explanation_names_list.append(explanation_names)
                     inds_lists.append(tuple(inds))
@@ -253,7 +255,7 @@ def main(argv=None):
     for parameter_list,parameter_name in zip([explanation_names_list,inds_lists],["explanations","inds"]):
         parameter_set = set(parameter_list)
         if len(parameter_set) != 1:
-            print(f"Different sets of {parameter_name} methods were used:{parameter_set}")
+            print(f"Wrong number of sets of {parameter_name}:{parameter_set}")
 
 if __name__ == "__main__":
     main()
