@@ -17,6 +17,9 @@ case $1 in
  "noneRed_focal2_allblack")
     python trainVal.py -c model_crohn25.config --model_id noneRed_focal2_allblack --epochs 100 --focal_weight 1 --nll_weight 0 --loss_on_masked True --sal_metr_mask True --max_worse_epoch_nb 10 --sal_metr_bckgr black
     ;;
+ "noneRed_focal2_allblur")
+    python trainVal.py -c model_crohn25.config --model_id noneRed_focal2_allblur --epochs 100 --focal_weight 1 --nll_weight 0 --loss_on_masked True --sal_metr_mask True --max_worse_epoch_nb 10 --sal_metr_bckgr blur
+    ;;
  "noneRed_focal2_transf")
     python trainVal.py -c model_crohn25.config --model_id noneRed_focal2_transf --epochs 100 --focal_weight 1 --nll_weight 0 --loss_on_masked True --sal_metr_mask True --max_worse_epoch_nb 10 --first_mod vit_b_16 --big_images False
     ;;
