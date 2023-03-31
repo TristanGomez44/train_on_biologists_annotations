@@ -51,7 +51,7 @@ def get_score_file_paths(exp_id,metric_list,pref=""):
     return paths
 
 def get_supp_kw():
-    return {5:"saliency_scores",6:"outputs",7:"target",8:"inds"}
+    return {5:"saliency_scores",6:"outputs",7:"target",8:"inds",9:"prediction_scores"}
 
 def get_col_index_to_value_dic():
     dic = {0:"metric_label",1:"replace_method",2:"model_id",3:"post_hoc_method",4:"metric_value"}

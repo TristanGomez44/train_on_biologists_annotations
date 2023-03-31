@@ -250,16 +250,11 @@ def scattter(j,k,j_inds,k_inds,values_j,values_k,labels,file_id):
 
 def get_metric_ind(metric):
     order_dic = {"DAUC":1,"DC":2,"ADD":3,"IAUC":4,"IC":5,"AD":6}
-
     order = 0
-
     if "-nc" in metric:
         order += 0.5
         metric = metric.split("-")[0]
-
-    order = order_dic[metric]
-
-
+    order += order_dic[metric]
     return order
     
 def sort_lerf_from_morf(metrics,all_mat):
@@ -267,9 +262,7 @@ def sort_lerf_from_morf(metrics,all_mat):
     metrics_and_all_mat = zip(metrics,all_mat)
     metrics_and_all_mat = sorted(metrics_and_all_mat,key=key)
     metrics,all_mat = zip(*metrics_and_all_mat)
-    
     all_mat = np.stack(all_mat)
-
     return metrics,all_mat
 
 def make_krippen_bar_plot(array_krippen,array_krippen_err,metrics,multi_step_metrics,exp_id,filename_suff):
@@ -327,7 +320,7 @@ def krippendorf(metric_values_matrix_alpha,exp_id,metric,cumulative_suff,csv_kri
 
     alpha = krippendorff_alpha_paralel(metric_values_matrix_alpha)
     rng = np.random.default_rng(0)
-    res = bootstrap(metric_values_matrix_alpha, krippendorff_alpha_bootstrap, confidence_level=0.99,random_state=rng,method="bca" ,vectorized=True,n_resamples=50)
+    res = bootstrap(metric_values_matrix_alpha, krippendorff_alpha_bootstrap, confidence_level=0.99,random_state=rng,method="bca" ,vectorized=True,n_resamples=10)
     confinterv= res.confidence_interval
     csv_krippen += ","+str(alpha)+" ("+str(confinterv.low)+" "+str(confinterv.high)+")"
 

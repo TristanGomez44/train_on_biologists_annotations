@@ -2,7 +2,7 @@ from tkinter import Y
 from args import ArgReader
 import numpy as np
 import sqlite3 
-from metrics import krippendorff_alpha_paralel,krippendorff_alpha_bootstrap
+from metrics import krippendorff_alpha_paralel,krippendorff_alpha_bootstrap,get_sub_multi_step_metric_list,get_sub_single_step_metric_list,get_metrics_to_minimize
 import matplotlib.pyplot as plt 
 from scipy.stats._resampling import _bootstrap_iv,rng_integers,_percentile_of_score,ndtri,ndtr,BootstrapResult,ConfidenceInterval
 
@@ -15,6 +15,10 @@ from does_cumulative_increase_interrater_reliability import fmt_metric_values,pr
 
 from torch.nn.functional import cross_entropy
 from torch import from_numpy,arange,softmax
+
+from compute_saliency_metrics import get_db
+from does_cumulative_increase_interrater_reliability import get_background_func
+
 def filter_query_result(result,inds):
 
     result = list(filter(lambda x:x[0] != "",result))
@@ -177,20 +181,14 @@ def main(argv=None):
     else:
         accepted_models = None
 
-    single_step_metrics = ["IIC","AD","ADD"]
-    multi_step_metrics = ["DAUC","DC","IAUC","IC"]
-    metrics_to_minimize = ["DAUC","AD"]
+    single_step_metrics =  get_sub_single_step_metric_list() 
+    multi_step_metrics = get_sub_multi_step_metric_list()
+    metrics_to_minimize = get_metrics_to_minimize()
     metrics = multi_step_metrics+single_step_metrics
 
-    if args.background is None:
-        background_func = lambda x:"blur" if x in ["IAUC","IC","INSERTION_VAL_RATE"] else "black"
-    else:
-        background_func = lambda x:args.background
+    background_func = get_background_func(args.background)
 
-    db_path = f"../results/{exp_id}/saliency_metrics.db"
-   
-    con = sqlite3.connect(db_path) # change to 'sqlite:///your_filename.db'
-    cur = con.cursor()
+    _,cur = get_db(exp_id)
 
     csv_krippen = "cumulative,"+ ",".join(metrics) + "\n"
 

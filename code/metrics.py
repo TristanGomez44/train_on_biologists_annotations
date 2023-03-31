@@ -21,6 +21,21 @@ from saliency_maps_metrics.single_step_metrics import IIC_AD, ADD
 is_multi_step_dic = {"Deletion":True,"Insertion":True,"IIC_AD":False,"ADD":False}
 const_dic = {"Deletion":Deletion,"Insertion":Insertion,"IIC_AD":IIC_AD,"ADD":ADD}
 
+def get_correlation_metric_list():
+    return ["DC","IC"]
+
+def get_sub_multi_step_metric_list():
+    return ["DAUC","DC","IAUC","IC"]
+
+def get_sub_single_step_metric_list():
+    return ["AD","IIC","ADD"]
+
+def get_metrics_to_minimize():
+    return ["DAUC","AD"]
+
+def get_sub_metric_list():
+    return get_sub_multi_step_metric_list() + get_sub_single_step_metric_list()
+
 def get_sal_metric_dics():
     return is_multi_step_dic,const_dic
 
