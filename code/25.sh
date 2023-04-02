@@ -22,8 +22,8 @@ sbatch <<EOT
 #SBATCH --mail-type=fail,abort,end
 
 # Nom du fichier de log de Slurm pour le job
-#SBATCH -o $1.out
-#SBATCH -e $1.err
+#SBATCH -o $SLURM_JOB_ID_$1.out
+#SBATCH -e $SLURM_JOB_ID_$1.err
 
 source .env/bin/activate
 module load python/3.9.4
