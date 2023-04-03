@@ -495,10 +495,7 @@ def main(argv=None):
     args.cuda = args.cuda and torch.cuda.is_available()
 
     if args.class_nb is None:
-        args.class_nb = len(glob.glob(os.path.join("../data/",args.dataset_train,"*/")))
-        if args.class_nb == 0:
-            raise ValueError("Found 0 classes in",os.path.join(args.dataset_train,"*/"))
-
+        args.class_nb = load_data.get_class_nb(args.dataset_train)
 
     if args.redirect_out:
         sys.stdout = open("python.out", 'w')

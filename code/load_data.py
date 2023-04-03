@@ -1,3 +1,4 @@
+import glob,os
 import numpy as np
 import torch
 import args
@@ -5,6 +6,12 @@ from random import Random
 import fineGrainedDataset
 from torch.utils.data.sampler import Sampler
 
+def get_class_nb(dataset_train):
+    args.class_nb = len(glob.glob(os.path.join("../data/",dataset_train,"*/")))
+    if args.class_nb == 0:
+        raise ValueError("Found 0 classes in",os.path.join(dataset_train,"*/"))
+    return args.class_nb 
+    
 def get_img_size(args):
     if args.very_big_images:
         imgSize = 1792

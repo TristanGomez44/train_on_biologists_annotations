@@ -12,7 +12,7 @@ import torch.nn.functional as F
 
 from torch.autograd import Function
 
-from load_data import get_img_size 
+from load_data import get_img_size,get_class_nb
 
 class ReverseLayerF(Function):
 
@@ -320,6 +320,9 @@ def advNetBuilder(args):
 
 def netBuilder(args,gpu=None):
     ############### Visual Model #######################
+
+    if args.class_nb is None:
+        args.class_nb = get_class_nb(args.dataset_train)
 
     nbFeat = getResnetFeat(args.first_mod, args.resnet_chan)
 
