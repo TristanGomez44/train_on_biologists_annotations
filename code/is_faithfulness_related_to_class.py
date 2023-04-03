@@ -152,6 +152,21 @@ def sparsity_vs_metric(explanation_names,metric_values_matrix,sparsity,target_li
     plt.savefig(f"../vis/{exp_id}/relationship_sparsity_vs_{metric}_{model_id}.png")
     plt.close()      
 
+def metric_distr(explanation_names,metric_values_matrix,exp_id,model_id,metric):
+
+    fig, axs = plt.subplots(len(explanation_names),1,figsize=(20,10))
+    if len(explanation_names) == 1:
+        axs = np.array([axs])
+    
+    for i in range(len(explanation_names)):
+        name = explanation_names[i]
+        metric_val = metric_values_matrix[:,i]    
+        axs[i].hist(metric_val)
+        axs[i].set_title(name)
+
+    plt.savefig(f"../vis/{exp_id}/relationship_metric_distr_{metric}_{model_id}.png")
+    plt.close() 
+
 def main(argv=None):
 
     #Getting arguments from config file and command line
@@ -247,6 +262,8 @@ def main(argv=None):
                     sparsity = saliency_scores_list.max(axis=-1)/saliency_scores_list.mean(axis=-1)
                     sparsity_vs_metric(explanation_names,metric_values_matrix,sparsity,target_list,exp_id,args.model_id,metric,cmap)
          
+                    metric_distr(explanation_names,metric_values_matrix,exp_id,model_id,metric)
+
                     explanation_names_list.append(explanation_names)
                     inds_lists.append(tuple(inds))
 
