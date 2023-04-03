@@ -20,7 +20,7 @@ sbatch <<EOT
 #SBATCH --mail-user=tristan.gomez@univ-nantes.fr
 # Envoi des mails
 #SBATCH --mail-type=fail,abort,end
-
+#SBATCH --exclusive
 # Nom du fichier de log de Slurm pour le job
 #SBATCH -o $SLURM_JOB_ID_$1.out
 #SBATCH -e $SLURM_JOB_ID_$1.err
