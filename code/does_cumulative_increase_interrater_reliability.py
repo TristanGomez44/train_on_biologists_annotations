@@ -320,7 +320,7 @@ def krippendorf(metric_values_matrix_alpha,exp_id,metric,cumulative_suff,csv_kri
 
     alpha = krippendorff_alpha_paralel(metric_values_matrix_alpha)
     rng = np.random.default_rng(0)
-    res = bootstrap(metric_values_matrix_alpha, krippendorff_alpha_bootstrap, confidence_level=0.99,random_state=rng,method="bca" ,vectorized=True,n_resamples=10)
+    res = bootstrap(metric_values_matrix_alpha, krippendorff_alpha_bootstrap, confidence_level=0.99,random_state=rng,method="bca" ,vectorized=True,n_resamples=5000)
     confinterv= res.confidence_interval
     csv_krippen += ","+str(alpha)+" ("+str(confinterv.low)+" "+str(confinterv.high)+")"
 

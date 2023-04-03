@@ -44,7 +44,7 @@ def target_vs_metric(explanation_names,metric_values_matrix,target_list,exp_id,m
         for j in range(class_nb):
 
             mean = metric_val[target_list==j].mean()
-            res = bootstrap((metric_val[target_list==j],), np.mean, confidence_level=0.99,random_state=rng,method="bca")
+            res = bootstrap((metric_val[target_list==j],), np.mean, confidence_level=0.99,random_state=rng,method="bca",n_resamples=5000)
             low,high = res.confidence_interval.low,res.confidence_interval.high
             low = abs(low-mean)
             high = abs(high-mean)
