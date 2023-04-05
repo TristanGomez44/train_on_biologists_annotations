@@ -17,15 +17,15 @@ def get_att_maps(retDict):
 
     return attMaps
 
-def apply_sal_metr_masks(model,data,mask_prob=1,masking_data=None,sal_metr_bckgr=None):
+def apply_sal_metr_masks(model,data,mask_prob=1,masking_data=None,sal_metr_bckgr=None,sal_metr_non_cum=None):
 
     with torch.no_grad():
         retDict = model(data)
 
-    if sal_metr_bckgr is None:
-        metric_constr_kwargs = {}
-    else:
+    if not sal_metr_bckgr is None:
         metric_constr_kwargs = {"data_replace_method":sal_metr_bckgr}
+    else:  
+        metric_constr_kwargs = {}
 
     data_masked_list = []
     expl = get_att_maps(retDict)
@@ -36,7 +36,7 @@ def apply_sal_metr_masks(model,data,mask_prob=1,masking_data=None,sal_metr_bckgr
             metric_name = metric_list[metric_ind]
             is_masking_object_list.append(is_masking_object[metric_name])
             if is_multi_step[metric_name]:
-                metric = metric_dic[metric_name](**metric_constr_kwargs)
+                metric = metric_dic[metric_name](cumulative=not sal_metr_non_cum,**metric_constr_kwargs)
 
                 data_i = data[i:i+1]
                 if masking_data is None:
@@ -81,13 +81,13 @@ def apply_sal_metr_masks(model,data,mask_prob=1,masking_data=None,sal_metr_bckgr
         
 def apply_sal_metr_masks_and_update_dic(model,data,args,resDict,other_data):
 
-    data_masked,is_object_masked_list = apply_sal_metr_masks(model,data,args.sal_metr_mask_prob,other_data,args.sal_metr_bckgr)
+    data_masked,is_object_masked_list = apply_sal_metr_masks(model,data,args.sal_metr_mask_prob,other_data,args.sal_metr_bckgr,args.sal_metr_non_cum)
     resDict["is_object_masked_list"] = is_object_masked_list
     if args.nce_weight > 0 or args.adv_weight > 0 or args.loss_on_masked or args.compute_masked:
         resDict_masked = model(data_masked) 
         resDict.update({key+"_masked":resDict_masked[key] for key in resDict_masked})
     else:
-        data = data_masked
+        data = data_masked        
     return resDict,data,data_masked
         
     

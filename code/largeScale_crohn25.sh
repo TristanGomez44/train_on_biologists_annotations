@@ -14,6 +14,12 @@ case $1 in
  "noneRed_focal2")
     python trainVal.py -c model_crohn25.config --model_id noneRed_focal2 --epochs 100 --focal_weight 1 --nll_weight 0 --loss_on_masked True --sal_metr_mask True --max_worse_epoch_nb 10 
     ;;
+ "noneRed_focal2_nc")
+    python trainVal.py -c model_crohn25.config --model_id noneRed_focal2_nc --epochs 100 --focal_weight 1 --nll_weight 0 --loss_on_masked True --sal_metr_mask True --max_worse_epoch_nb 10 --sal_metr_non_cum True
+    ;;
+ "noneRed_focal2_test")
+    python trainVal.py -c model_crohn25.config --model_id noneRed_focal2_test --epochs 100 --focal_weight 1 --nll_weight 0 --loss_on_masked True --sal_metr_mask True --max_worse_epoch_nb 10  --val_batch_size 12 --sal_metr_non_cum True
+    ;;
  "noneRed_focal2_allblack")
     python trainVal.py -c model_crohn25.config --model_id noneRed_focal2_allblack --epochs 100 --focal_weight 1 --nll_weight 0 --loss_on_masked True --sal_metr_mask True --max_worse_epoch_nb 10 --sal_metr_bckgr black
     ;;

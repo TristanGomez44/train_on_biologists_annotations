@@ -116,7 +116,7 @@ def epochSeqTr(model, optim, loader, epoch, args, **kwargs):
         if args.sal_metr_mask or args.compute_masked:
             other_data = batch[2].to(data.device) if args.sal_metr_otherimg else None
             resDict,data,_ = sal_metr_data_aug.apply_sal_metr_masks_and_update_dic(model,data,args,resDict,other_data)
-                
+
         resDict.update(model(data))
         output = resDict["output"]
 
@@ -195,8 +195,8 @@ def epochImgEval(model, loader, epoch, args, mode="val",**kwargs):
         
         if args.sal_metr_mask or args.compute_masked:
             other_data = batch[2].to(data.device) if args.sal_metr_otherimg else None
-            resDict,data,_ = sal_metr_data_aug.apply_sal_metr_masks_and_update_dic(model,data,args,resDict,other_data)
-            
+            resDict,data,_= sal_metr_data_aug.apply_sal_metr_masks_and_update_dic(model,data,args,resDict,other_data)
+                        
         resDict.update(model(data))
         output = resDict["output"]
 
@@ -477,6 +477,7 @@ def main(argv=None):
     argreader.parser.add_argument('--sal_metr_otherimg',type=str2bool, help='To fill removed image areas with parts of another image.')
 
     argreader.parser.add_argument('--sal_metr_bckgr',type=str, help='The filling method to use for saliency metrics. Ignored if --sal_metr_otherimg is True.')
+    argreader.parser.add_argument('--sal_metr_non_cum',type=str2bool, help='To not accumulate pertubations when computing saliency metrics.')
 
     argreader = addInitArgs(argreader)
     argreader = addOptimArgs(argreader)
