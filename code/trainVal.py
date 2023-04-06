@@ -17,7 +17,7 @@ import optuna
 import sqlite3
 
 import utils
-from args import ArgReader,str2bool,addInitArgs,addValArgs,init_post_hoc_arg,addLossTermArgs
+from args import ArgReader,str2bool,addInitArgs,addValArgs,init_post_hoc_arg,addLossTermArgs,addSalMetrArgs
 import init_model
 from loss import Loss,agregate_losses
 import modelBuilder
@@ -286,7 +286,6 @@ def addOptimArgs(argreader):
 
     return argreader
 
-
 def run(args,trial):
 
     args.lr = trial.suggest_float("lr", 1e-6, 1e-2, log=True)
@@ -464,25 +463,16 @@ def main(argv=None):
 
     argreader.parser.add_argument('--trial_id', type=int, help='The trial ID. Useful for grad exp during test')
 
-    argreader.parser.add_argument('--sal_metr_mask', type=str2bool, help='To apply the masking of attention metrics during training.')
-
-    argreader.parser.add_argument('--sal_metr_mask_prob', type=float, help='The probability to apply saliency metrics masking.')
-    argreader.parser.add_argument('--sal_metr_mask_remove_masked_obj',type=str2bool, help='Set to True to remove terms masked by the DAUC and ADD metrics.')
-
     argreader.parser.add_argument('--compute_ece',type=str2bool, help='To compute ECE even if no focal loss is used.')
     argreader.parser.add_argument('--compute_masked',type=str2bool, help='To compute masked image even if not used in loss function.')
     
     argreader.parser.add_argument('--loss_on_masked',type=str2bool, help='To apply the focal loss on the output corresponding to masked data.')
     
-    argreader.parser.add_argument('--sal_metr_otherimg',type=str2bool, help='To fill removed image areas with parts of another image.')
-
-    argreader.parser.add_argument('--sal_metr_bckgr',type=str, help='The filling method to use for saliency metrics. Ignored if --sal_metr_otherimg is True.')
-    argreader.parser.add_argument('--sal_metr_non_cum',type=str2bool, help='To not accumulate pertubations when computing saliency metrics.')
-
     argreader = addInitArgs(argreader)
     argreader = addOptimArgs(argreader)
     argreader = addValArgs(argreader)
     argreader = addLossTermArgs(argreader)
+    argreader = addSalMetrArgs(argreader)
     argreader = init_post_hoc_arg(argreader)
 
     argreader = modelBuilder.addArgs(argreader)
