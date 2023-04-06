@@ -182,3 +182,12 @@ def addLossTermArgs(argreader):
                                   help='The weight of the adversarial loss term to ensure masked representations are indistinguishable from regular representations.')
 
     return argreader
+
+def addSalMetrArgs(argreader):
+    argreader.parser.add_argument('--sal_metr_otherimg',type=str2bool, help='To fill removed image areas with parts of another image.')
+    argreader.parser.add_argument('--sal_metr_bckgr',type=str, help='The filling method to use for saliency metrics. Ignored if --sal_metr_otherimg is True.')
+    argreader.parser.add_argument('--sal_metr_non_cum',type=str2bool, help='To not accumulate pertubations when computing saliency metrics.')
+    argreader.parser.add_argument('--sal_metr_mask', type=str2bool, help='To apply the masking of attention metrics during training.')
+    argreader.parser.add_argument('--sal_metr_mask_prob', type=float, help='The probability to apply saliency metrics masking.')
+    argreader.parser.add_argument('--sal_metr_mask_remove_masked_obj',type=str2bool, help='Set to True to remove terms masked by the DAUC and ADD metrics.')
+    return argreader
