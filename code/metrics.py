@@ -204,7 +204,7 @@ def expected_calibration_error(var_dic,metrDict):
     
     return metrDict
 
-def ece(logits, labels,n_bins=15):
+def ece(logits, labels,n_bins=15,return_conf_and_acc=False):
     bin_boundaries = torch.linspace(0, 1, n_bins + 1)
     bin_lowers = bin_boundaries[:-1]
     bin_uppers = bin_boundaries[1:]
@@ -214,6 +214,7 @@ def ece(logits, labels,n_bins=15):
     accuracies = predictions.eq(labels)
 
     ece = torch.zeros(1, device=logits.device)
+    conf_list,acc_list = [],[]
     for bin_lower, bin_upper in zip(bin_lowers, bin_uppers):
         # Calculated |confidence - accuracy| in each bin
         in_bin = confidences.gt(bin_lower.item()) * confidences.le(bin_upper.item())
@@ -223,7 +224,14 @@ def ece(logits, labels,n_bins=15):
             avg_confidence_in_bin = confidences[in_bin].mean()
             ece += torch.abs(avg_confidence_in_bin - accuracy_in_bin) * prop_in_bin
 
-    return ece.item()
+            acc_list.append(accuracy_in_bin)
+        else:
+            acc_list.append(0)
+
+    if return_conf_and_acc:
+        return ece.item(),bin_boundaries,acc_list
+    else:
+        return ece.item()
 
 def histedges_equalN(x,nbins):
     npt = len(x)
