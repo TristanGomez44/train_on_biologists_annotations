@@ -593,7 +593,7 @@ class AblationCAM(BaseCAM):
                                                                               self.ratio_channels_to_ablate)
                 number_channels_to_ablate = len(channels_to_ablate)
 
-                for i in tqdm.tqdm(range(0, number_channels_to_ablate, self.batch_size)):
+                for i in range(0, number_channels_to_ablate, self.batch_size):
                     if i + self.batch_size > number_channels_to_ablate:
                         batch_tensor = batch_tensor[:(number_channels_to_ablate - i)]
 
