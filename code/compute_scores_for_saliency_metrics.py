@@ -218,7 +218,7 @@ def main(argv=None):
         if result_file_exists and result_file_misses_supp_keys:
             print("Just adding missing supplementary keys...")
             result_dic = np.load(result_file_path,allow_pickle=True).item()
-            result_dic.update({"outputs":outputs,"target":target,"inds":inds})
+            result_dic.update({"outputs":outputs.cpu(),"target":target.cpu(),"inds":inds.cpu()})
             np.save(result_file_path,result_dic)
         else:
 
@@ -239,10 +239,10 @@ def main(argv=None):
 
             if is_multi_step_dic[args.attention_metric]:  
                 scores,saliency_scores = metric.compute_scores(*metric_args,**kwargs)
-                saved_dic = {"prediction_scores":scores,"saliency_scores":saliency_scores,"outputs":outputs,"target":target,"inds":inds}
+                saved_dic = {"prediction_scores":scores,"saliency_scores":saliency_scores,"outputs":outputs.cpu(),"target":target.cpu(),"inds":inds.cpu()}
             else:
                 scores,scores_masked = metric.compute_scores(*metric_args,**kwargs)
-                saved_dic = {"prediction_scores":scores,"prediction_scores_with_mask":scores_masked,"outputs":outputs,"target":target,"inds":inds}
+                saved_dic = {"prediction_scores":scores,"prediction_scores_with_mask":scores_masked,"outputs":outputs.cpu(),"target":target.cpu(),"inds":inds.cpu()}
             
             np.save(result_file_path,saved_dic)
     else:
