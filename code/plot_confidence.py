@@ -37,7 +37,7 @@ def main(argv=None):
     if args.class_nb is None:
         args.class_nb = get_class_nb(args.dataset_train)
 
-    res_path = f"../results/{args.exp_id}/conf_and_acc_list_{args.model_id}.npy"
+    res_path = f"../results/{args.exp_id}/output_and_target_{args.model_id}.npy"
 
     if not os.path.exists(res_path):
 
@@ -47,57 +47,62 @@ def main(argv=None):
         initialize_Net_And_EpochNumber(net, args.exp_id, args.model_id, args.cuda, "fine_tune",args.init_path,False)
 
         args.compute_masked = True
-        ece,conf_list,acc_list = compute_ece_hist_on_test_set(net, valLoader, args, mode="val",n_bins=args.n_bins)
-        res_dict = {"conf_list":conf_list,"acc_list":acc_list,"ece":ece}
+        output_notmasked,output_masked,target = compute_output_on_test_set(net, valLoader, args, mode="val")
+        
+        res_dict = {"output_notmasked":output_notmasked,"output_masked":output_masked,"target":target}
         np.save(res_path,res_dict)
     else:
         res_dict = np.load(res_path,allow_pickle=True).item()
-        conf_list,acc_list,ece = res_dict["conf_list"],res_dict["acc_list"],res_dict["ece"]
+        output_notmasked,output_masked,target = res_dict["output_notmasked"],res_dict["output_masked"],res_dict["target"]
 
-    conf_list = (conf_list[:-1] + conf_list[1:]) * 0.5
+    for output,suff in zip([output_notmasked,output_masked],["","_masked"]):
 
-    conf_list_and_acc_list = np.stack((conf_list,acc_list),axis=-1)
-    conf_list_and_acc_list = list(filter(lambda x:x[1] != 0,conf_list_and_acc_list))
-    conf_list_and_acc_list = np.array(conf_list_and_acc_list)
-    conf_list,acc_list = conf_list_and_acc_list[:,0],conf_list_and_acc_list[:,1]
+        ece_value,conf_list,acc_list = ece(output, target,n_bins=args.n_bins,return_conf_and_acc=True)
 
-    plt.figure()
-    plt.rc('axes', axisbelow=True)
-    plt.grid(linestyle='--')
-    width = conf_list[1]-conf_list[0]
+        conf_list = (conf_list[:-1] + conf_list[1:]) * 0.5
 
-    diff = np.abs(acc_list-conf_list)
-    underconf = -np.minimum(conf_list-acc_list,0)
-    overconf = np.minimum(acc_list-conf_list,0)
-    error = np.minimum(acc_list,conf_list)
+        conf_list_and_acc_list = np.stack((conf_list,acc_list),axis=-1)
+        conf_list_and_acc_list = list(filter(lambda x:x[1] != 0,conf_list_and_acc_list))
+        conf_list_and_acc_list = np.array(conf_list_and_acc_list)
+        conf_list,acc_list = conf_list_and_acc_list[:,0],conf_list_and_acc_list[:,1]
 
-    fontsize = 17
-    fig, ax = plt.subplots(nrows=1, ncols=1)
-    plt.bar(conf_list,error,edgecolor="black",color="darkblue",width=width,alpha=0.75)
-    plt.bar(conf_list,underconf,bottom=conf_list,edgecolor="black",color="firebrick",width=width,alpha=0.75,hatch="xxx")
-    plt.bar(conf_list,overconf,bottom=conf_list,edgecolor="black",color="firebrick",width=width,alpha=0.75,hatch="...")
-    plt.plot([0,1],[0,1],"--",color="gray",linewidth=4)
-    
-    x,y = 0.66,0.035
-    
-    width = 1-x-0.001
-    plt.text(x,y,"ECE="+str(round(ece*100,2)),fontsize=int(fontsize*1.4))
-    #rect = patches.Rectangle((x,y-0.009), width, 0.1, linewidth=1, edgecolor="none", facecolor="white",alpha=0.75)        
-    
-    rect = patches.FancyBboxPatch((x-0.006,y-0.014),width, 0.1,boxstyle="round,pad=0.0040,rounding_size=0.015",ec="none", fc="white",mutation_aspect=0.5,alpha=0.7)
-    
-    ax.add_patch(rect)
+        plt.figure()
+        plt.rc('axes', axisbelow=True)
+        plt.grid(linestyle='--')
+        width = conf_list[1]-conf_list[0]
 
-    plt.ylabel("Accuracy",fontsize=fontsize)
-    plt.xlabel("Confidence",fontsize=fontsize)
-    plt.xticks(fontsize=fontsize)
-    plt.yticks(fontsize=fontsize)
-    plt.tight_layout()
-    
-    plt.savefig(f"../vis/{args.exp_id}/confidence_vs_accuracy_{args.model_id}.png")
-    plt.close()
+        diff = np.abs(acc_list-conf_list)
+        underconf = -np.minimum(conf_list-acc_list,0)
+        overconf = np.minimum(acc_list-conf_list,0)
+        error = np.minimum(acc_list,conf_list)
 
-def compute_ece_hist_on_test_set(model, loader, args, mode="val",n_bins=15):
+        fontsize = 28
+        fig, ax = plt.subplots(nrows=1, ncols=1)
+        plt.bar(conf_list,error,edgecolor="black",color="darkblue",width=width,alpha=0.75)
+        plt.bar(conf_list,underconf,bottom=conf_list,edgecolor="black",color="firebrick",width=width,alpha=0.75,hatch="xxx")
+        plt.bar(conf_list,overconf,bottom=conf_list,edgecolor="black",color="firebrick",width=width,alpha=0.75,hatch="...")
+        plt.plot([0,1],[0,1],"--",color="gray",linewidth=4)
+        
+        x = 0.3 if ece_value >= 0.1 else 0.37
+        y = 0.038
+        
+        width = 1-x-0.004
+        plt.text(x,y,"ECE="+str(round(ece_value*100,2)),fontsize=int(fontsize*1.4))
+        #rect = patches.Rectangle((x,y-0.009), width, 0.1, linewidth=1, edgecolor="none", facecolor="white",alpha=0.75)        
+        
+        rect = patches.FancyBboxPatch((x-0.006,y-0.014),width, 0.14,boxstyle="round,pad=0.0040,rounding_size=0.015",ec="none", fc="white",mutation_aspect=0.5,alpha=0.7)
+        
+        ax.add_patch(rect)
+
+        plt.ylabel("Accuracy",fontsize=fontsize)
+        plt.xlabel("Confidence",fontsize=fontsize)
+        plt.xticks(fontsize=fontsize)
+        plt.yticks(fontsize=fontsize)
+        plt.tight_layout()
+        plt.savefig(f"../vis/{args.exp_id}/confidence_vs_accuracy_{args.model_id}{suff}.png")
+        plt.close()
+
+def compute_output_on_test_set(model, loader, args, mode="val"):
 
     model.eval()
 
@@ -120,9 +125,7 @@ def compute_ece_hist_on_test_set(model, loader, args, mode="val",n_bins=15):
 
         var_dic = all_cat_var_dic(var_dic,resDict,target,args,mode)
 
-    ece_values,conf_list,acc_list = ece(var_dic["output"], var_dic["target"],n_bins=n_bins,return_conf_and_acc=True)
-
-    return ece_values,np.array(conf_list),np.array(acc_list)
+    return var_dic["output"], var_dic["output_masked"],var_dic["target"]
 
 if __name__ == "__main__":
     main()
