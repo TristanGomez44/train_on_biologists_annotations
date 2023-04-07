@@ -10,7 +10,8 @@ inv_imgnet_norm = transforms.Compose([ transforms.Normalize(mean = [ 0., 0., 0. 
                                ])
 
 def save_image(img,path,**kwargs):
-    img = inv_imgnet_norm(img)
+    mask = (img!=0)
+    img = inv_imgnet_norm(img)*mask
     torchvision.utils.save_image(img,path,**kwargs)
 
 class Bunch(object):
