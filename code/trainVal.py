@@ -77,7 +77,7 @@ def get_adv_target(resDict):
     resDict["target_adv"] = torch.cat((target_adv,target_adv_masked),dim=0).to(resDict["output_adv"].device).long()
     return resDict
 
-def epochSeqTr(model, optim, loader, epoch, args, **kwargs):
+def training_epoch(model, optim, loader, epoch, args, **kwargs):
 
     model.train()
 
@@ -171,7 +171,7 @@ def epochSeqTr(model, optim, loader, epoch, args, **kwargs):
 
     return metrDict
 
-def epochImgEval(model, loader, epoch, args, mode="val",**kwargs):
+def evaluation(model, loader, epoch, args, mode="val",**kwargs):
 
     model.eval()
 
@@ -196,7 +196,7 @@ def epochImgEval(model, loader, epoch, args, mode="val",**kwargs):
         if args.sal_metr_mask or args.compute_masked:
             other_data = batch[2].to(data.device) if args.sal_metr_otherimg else None
             resDict,data,_= sal_metr_data_aug.apply_sal_metr_masks_and_update_dic(model,data,args,resDict,other_data)
-                        
+
         resDict.update(model(data))
         output = resDict["output"]
 
@@ -342,9 +342,6 @@ def train(args,trial):
     # Building the net
     net = modelBuilder.netBuilder(args)
 
-    trainFunc = epochSeqTr
-    valFunc = epochImgEval
-
     kwargsTr = {'loader': trainLoader, 'args': args}
     kwargsVal = kwargsTr.copy()
 
@@ -388,13 +385,13 @@ def train(args,trial):
             kwargsTr["epoch"], kwargsVal["epoch"] = epoch, epoch
             kwargsTr["model"], kwargsVal["model"] = net, net
 
-            trainFunc(**kwargsTr)
+            training_epoch(**kwargsTr)
             if not scheduler is None:
                 scheduler.step()
 
             if not args.no_val:
                 with torch.no_grad():
-                    metricVal = valFunc(**kwargsVal)
+                    metricVal = evaluation(**kwargsVal)
 
                 bestEpoch, bestMetricVal, worseEpochNb = update.updateBestModel(metricVal, bestMetricVal, args.exp_id,
                                                                             args.model_id, bestEpoch, epoch, net,
@@ -407,7 +404,7 @@ def train(args,trial):
     if trial is None:
         if args.run_test:
 
-            testFunc = valFunc
+            testFunc = evaluation
 
             kwargsTest = kwargsVal
             kwargsTest["mode"] = "test"
