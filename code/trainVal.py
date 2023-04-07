@@ -108,7 +108,7 @@ def training_epoch(model, optim, loader, epoch, args, **kwargs):
         if args.cuda:
             data, target = data.cuda(non_blocking=True), target.cuda(non_blocking=True)
 
-        resDict = {}
+        resDict = model(data)
 
         if args.master_net:
             resDict = master_net_inference(data,kwargs,resDict)
@@ -117,7 +117,6 @@ def training_epoch(model, optim, loader, epoch, args, **kwargs):
             other_data = batch[2].to(data.device) if args.sal_metr_otherimg else None
             resDict,data,_ = sal_metr_data_aug.apply_sal_metr_masks_and_update_dic(model,data,args,resDict,other_data)
 
-        resDict.update(model(data))
         output = resDict["output"]
 
         if args.adv_weight > 0: 
@@ -188,16 +187,14 @@ def evaluation(model, loader, epoch, args, mode="val",**kwargs):
         if (batch_idx % args.log_interval == 0):
             print("\t", batch_idx * len(data), "/", len(loader.dataset))
 
-        # Puting tensors on cuda
         if args.cuda: data, target = data.cuda(non_blocking=True), target.cuda(non_blocking=True)
 
-        resDict = {}
-        
+        resDict = model(data)
+
         if args.sal_metr_mask or args.compute_masked:
             other_data = batch[2].to(data.device) if args.sal_metr_otherimg else None
             resDict,data,_= sal_metr_data_aug.apply_sal_metr_masks_and_update_dic(model,data,args,resDict,other_data)
 
-        resDict.update(model(data))
         output = resDict["output"]
 
         if args.adv_weight > 0:  

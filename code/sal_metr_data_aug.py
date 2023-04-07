@@ -1,5 +1,7 @@
+import sys,utils
 import torch
 import torchvision 
+import numpy as np 
 
 from saliency_maps_metrics.multi_step_metrics import Deletion, Insertion
 from saliency_maps_metrics.single_step_metrics import IIC_AD, ADD
@@ -17,10 +19,7 @@ def get_att_maps(retDict):
 
     return attMaps
 
-def apply_sal_metr_masks(model,data,mask_prob=1,masking_data=None,sal_metr_bckgr=None,sal_metr_non_cum=None):
-
-    with torch.no_grad():
-        retDict = model(data)
+def apply_sal_metr_masks(data,retDict,mask_prob=1,masking_data=None,sal_metr_bckgr=None,sal_metr_non_cum=None):
 
     if not sal_metr_bckgr is None:
         metric_constr_kwargs = {"data_replace_method":sal_metr_bckgr}
@@ -30,10 +29,13 @@ def apply_sal_metr_masks(model,data,mask_prob=1,masking_data=None,sal_metr_bckgr
     data_masked_list = []
     expl = get_att_maps(retDict)
     is_masking_object_list = []
+    mask_list = []
+    is_iauc = torch.zeros(len(data)).to(data)
     for i in range(len(data)):
         if torch.rand(size=(1,)).item() <= mask_prob:
             metric_ind = torch.randint(0,len(metric_list),size=(1,)).item()
             metric_name = metric_list[metric_ind]
+            is_iauc[i] = 1*(metric_name=="IAUC")
             is_masking_object_list.append(is_masking_object[metric_name])
             if is_multi_step[metric_name]:
                 metric = metric_dic[metric_name](cumulative=not sal_metr_non_cum,**metric_constr_kwargs)
@@ -71,17 +73,19 @@ def apply_sal_metr_masks(model,data,mask_prob=1,masking_data=None,sal_metr_bckgr
                 mask = metric.compute_mask(expl[i:i+1],data.shape)
                 data_masked = metric.apply_mask(data_i,masking_data_i,mask)
                 data_masked_list.append(data_masked)
+            
+            mask_list.append(mask)
         else:
             data_masked_list.append(data[i:i+1])
             is_masking_object_list.append(False)
 
-    data_masked = torch.cat(data_masked_list,dim=0).to(data)
+    data_masked = torch.cat(data_masked_list,dim=0).to(data.device)
 
     return data_masked,is_masking_object_list
         
 def apply_sal_metr_masks_and_update_dic(model,data,args,resDict,other_data):
 
-    data_masked,is_object_masked_list = apply_sal_metr_masks(model,data,args.sal_metr_mask_prob,other_data,args.sal_metr_bckgr,args.sal_metr_non_cum)
+    data_masked,is_object_masked_list = apply_sal_metr_masks(data,resDict,args.sal_metr_mask_prob,other_data,args.sal_metr_bckgr,args.sal_metr_non_cum)
     resDict["is_object_masked_list"] = is_object_masked_list
     if args.nce_weight > 0 or args.adv_weight > 0 or args.loss_on_masked or args.compute_masked:
         resDict_masked = model(data_masked) 
