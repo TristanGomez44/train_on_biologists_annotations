@@ -519,7 +519,7 @@ class AblationCAM(BaseCAM):
                  use_cuda: bool = False,
                  reshape_transform: Callable = None,
                  ablation_layer: torch.nn.Module = AblationLayer(),
-                 batch_size: int = 32,
+                 batch_size: int = 220,
                  ratio_channels_to_ablate: float = 1.0) -> None:
 
         super(AblationCAM, self).__init__(model,
