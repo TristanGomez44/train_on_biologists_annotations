@@ -22,41 +22,56 @@ def main(argv=None):
 
     args = argreader.args
 
-    no_calibration_csv = np.genfromtxt(f"../results/{args.exp_id}/krippendorff_alpha_noneRed2_bNone.csv",dtype=str,
+    no_calibration_csv = np.genfromtxt(f"../results/{args.exp_id}/krippendorff_alpha_noneRed2_bNone.csv",dtype=str,delimiter=":")
+
+    header = np.array(no_calibration_csv[0].split(","))
+
     
-    delimiter=":")
     calibration_csv = np.genfromtxt(f"../results/{args.exp_id}/krippendorff_alpha_noneRed_focal2_bNone.csv",dtype=str,delimiter=":")
 
-    no_cal_cumulative = no_calibration_csv[1].split(",")[1]
-    cal_cumulative = calibration_csv[1].split(",")[1]
-    cal_non_cumulative = calibration_csv[2].split(",")[1]
-
-    plt.figure()
+    plt.figure(figsize=(7,5))
     plt.rc('axes', axisbelow=True)
     plt.grid(linestyle='--')
+    fontsize = 29
 
-    values = [no_cal_cumulative,cal_cumulative,cal_non_cumulative]
+    colors = ["blue","orange","green"]
 
-    fontsize = 17
+    width = 0.2
 
-    for i,value in enumerate(values):
+    for i,metric in enumerate(["DAUC","IAUC"]):
 
-        value = value.replace("(","").replace(")","")
-        mean,low,high = value.split(" ")
-        mean,low,high = float(mean),float(low),float(high)
-        low,high = mean-low,high-mean
+        col_ind = np.argwhere(header == metric)[0][0]
 
-        plt.bar(i,mean,edgecolor="black")
-        plt.errorbar(i,mean,np.array([low,high])[:,np.newaxis],fmt='none',color="black")
+        no_cal_cumulative = no_calibration_csv[1].split(",")[col_ind]
+        cal_cumulative = calibration_csv[1].split(",")[col_ind]
+        cal_non_cumulative = calibration_csv[2].split(",")[col_ind]
+
+        values = [no_cal_cumulative,cal_cumulative,cal_non_cumulative]
+        labels = ["Baseline","Calibrated","Calibrated+Non-cumulative"]
+
+        for j,(value,label,color) in enumerate(zip(values,labels,colors)):
+
+            value = value.replace("(","").replace(")","")
+            mean,low,high = value.split(" ")
+            mean,low,high = float(mean),float(low),float(high)
+            low,high = mean-low,high-mean
+
+            xpos = i+j/5-1/5
+            if i == 0:
+                plt.bar(xpos,mean,width=width,edgecolor="black",label=label,color=color)
+            else:
+                plt.bar(xpos,mean,width=width,edgecolor="black",color=color)
+            plt.errorbar(xpos,mean,np.array([low,high])[:,np.newaxis],fmt='none',color="black")
     
     plt.ylabel("Metrics reliability",fontsize=fontsize)
+    plt.legend(prop={'size': int(fontsize*0.65)})
+    #locs = [0,1,2,2.0001]
+    #labels = ["Baseline","Calibrated","Calibrated+","\nNon-cumulative"]
+    #plt.xticks(locs,labels,rotation=0,ha="center",fontsize=int(fontsize*0.7))
 
-    locs = [0,1,2,2.0001]
-    labels = ["Baseline","Calibrated","Calibrated+","\nNon-cumulative"]
+    plt.xticks([0,1],["Deletion","Insertion"],fontsize=fontsize)
 
-    plt.xticks(locs,labels,rotation=0,ha="center",fontsize=fontsize)
-
-    plt.yticks(fontsize=fontsize)
+    plt.yticks(np.arange(7)/10,fontsize=int(fontsize*0.85))
     plt.tight_layout()
     plt.savefig(f"../vis/{args.exp_id}/teaser_bar_plot.png")
     plt.close()
