@@ -9,8 +9,9 @@ inv_imgnet_norm = transforms.Compose([ transforms.Normalize(mean = [ 0., 0., 0. 
                                                      std = [ 1., 1., 1. ]),
                                ])
 
-def save_image(img,path,**kwargs):
-    mask = (img!=0)
+def save_image(img,path,mask=None,**kwargs):
+    if mask is None:
+        mask = (img!=0)
     img = inv_imgnet_norm(img)*mask
     torchvision.utils.save_image(img,path,**kwargs)
 
