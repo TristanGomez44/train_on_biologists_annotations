@@ -3,7 +3,6 @@ import scipy.stats
 import matplotlib.pyplot as plt 
 import torchvision 
 import torch
-from skimage.transform import resize
 import os
 import args
 import utils
@@ -95,8 +94,7 @@ def main(argv=None):
                 viz_map = viz_map * viz_map_pred_norm
 
             img = imgs[i:i+1]
-            img = utils.inv_imgnet_norm(img)
-
+            img = utils.inv_imgnet_norm(img)*(img!=0)
 
             viz_map = torch.nn.functional.interpolate(viz_map,(img.shape[2],img.shape[3]),mode="nearest")
 
