@@ -55,6 +55,20 @@ case $1 in
         python generate_representations.py -c model_crohn2.config --model_id noneRed_0.5attMetrMask_FT_0.0016simclr --resnet_bilinear False --big_images True  --stride_lay3 2 --stride_lay4 2 --transf saliency_metrics
         python generate_representations.py -c model_crohn2.config --model_id noneRed_0.5attMetrMask_FT_0.0016simclr --resnet_bilinear False --big_images True  --stride_lay3 2 --stride_lay4 2 --transf identity
     ;;
+    "cub_noneRed_focal2")
+        for ind in 1 2 3
+        do
+            python generate_representations.py -c model_cub25.config --model_id noneRed_focal2 --resnet_bilinear False --big_images True  --stride_lay3 2 --stride_lay4 2 --transf saliency_metrics --layer $ind
+            python generate_representations.py -c model_cub25.config --model_id noneRed_focal2 --resnet_bilinear False --big_images True  --stride_lay3 2 --stride_lay4 2 --transf identity --layer $ind
+        done
+    ;;
+    "crohn_noneRed_focal2")
+        for ind in 1 2 3
+        do
+            python generate_representations.py -c model_crohn25.config --model_id noneRed_focal2 --resnet_bilinear False --big_images True  --stride_lay3 2 --stride_lay4 2 --transf saliency_metrics --layer $ind
+            python generate_representations.py -c model_crohn25.config --model_id noneRed_focal2 --resnet_bilinear False --big_images True  --stride_lay3 2 --stride_lay4 2 --transf identity --layer $ind
+        done
+    ;;
 esac
 
 

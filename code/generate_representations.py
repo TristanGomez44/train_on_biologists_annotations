@@ -7,8 +7,7 @@ from init_model import preprocessAndLoadParams
 from compute_scores_for_saliency_metrics import getBatch,init_post_hoc_arg,get_other_img_inds
 from metrics import sample_img_inds
 import modelBuilder,load_data
-import sparse
-from args import ArgReader
+from args import ArgReader,addLossTermArgs
 from sal_metr_data_aug import apply_sal_metr_masks
 
 MIN_PATCH_SIZE = 10 
@@ -16,11 +15,11 @@ MAX_PATCH_SIZE = 100
 
 PATCH_NB = 10
 
-def apply_transf(data,transf,data_bckgr,sparse_conv=False,downsample_ratio=None,model=None):
+def apply_transf(data,transf,data_bckgr,model=None):
     if transf == "identity":
         return data
     elif transf == "saliency_metrics":
-        data,_ = apply_sal_metr_masks(model,data)
+        data,_ = apply_sal_metr_masks(data,model=model,metric_list=["DAUC"])
         return data
     else:
         
@@ -37,9 +36,6 @@ def apply_transf(data,transf,data_bckgr,sparse_conv=False,downsample_ratio=None,
             max_size = MAX_PATCH_SIZE
 
         xmax,ymax = data.shape[2],data.shape[3]
-        if sparse_conv:
-            xmax = xmax//downsample_ratio
-            ymax = ymax//downsample_ratio
 
         sizes = np.random.randint(min_size,max_size,size=(nb_patches))
         x = np.random.randint(0,xmax-1,size=(nb_patches))
@@ -56,11 +52,7 @@ def apply_transf(data,transf,data_bckgr,sparse_conv=False,downsample_ratio=None,
             kernel = kernel.unsqueeze(0).unsqueeze(0).expand(3,1,-1,-1)
             mask = torch.nn.functional.conv2d(mask,kernel,padding=kernel.size(-1)//2,groups=kernel.size(0))
 
-        if sparse_conv:
-            sparse._cur_active = mask
-            mask_imgsize = torch.nn.functional.interpolate(mask,data.shape[2:],mode="nearest")
-        else:
-            mask_imgsize = mask
+        mask_imgsize = mask
 
         if transf.find("black_patches") != -1:
             data = data*mask_imgsize
@@ -78,13 +70,14 @@ def main(argv=None):
 
     argreader.parser.add_argument('--transf', type=str,default="identity")
     argreader.parser.add_argument('--att_metrics_img_nb', type=int, help='The nb of images on which to compute the att metric.')
+    argreader.parser.add_argument('--layer', type=int, help='Layer at which to capture the features.',default=4)
    
     argreader.parser.add_argument('--class_map',action="store_true")
-    argreader.parser.add_argument('--sparse',action="store_true")
 
     argreader = addInitArgs(argreader)
     argreader = addValArgs(argreader)
     argreader = init_post_hoc_arg(argreader)
+    argreader = addLossTermArgs(argreader)
 
     argreader = modelBuilder.addArgs(argreader)
     argreader = load_data.addArgs(argreader)
@@ -100,14 +93,18 @@ def main(argv=None):
     net = modelBuilder.netBuilder(args,gpu=0)
     net = preprocessAndLoadParams(bestPath,args.cuda,net)
     
-    if args.sparse:
-        imgSize = load_data.get_img_size(args)
-        downsample_ratio = modelBuilder.getResnetDownSampleRatio(args.first_mod,args)
-        fea_nb = modelBuilder.getResnetFeat(args.first_mod, args.resnet_chan)
-        net = sparse.SparseEncoder(net, imgSize, downsample_ratio, fea_nb)
-        net.secondModel = net.sp_cnn.secondModel
-    else:
-        downsample_ratio = None
+    downsample_ratio = None
+
+    #if args.layer != 4:
+    #    for i in range(args.layer+1,5):
+    #        setattr(net.firstModel.featMod,"layer"+str(i),torch.nn.Identity())
+    #    net.secondModel.linLay = torch.nn.Identity()
+    
+    attMaps_buff = []
+    def save_output(_, __, feat_maps):
+        attMaps = torch.abs(feat_maps.cpu()).sum(dim=1,keepdim=True)
+        attMaps_buff.append(attMaps)
+    getattr(net.firstModel.featMod,"layer"+str(args.layer)).register_forward_hook(save_output)
 
     net.eval()
     
@@ -142,12 +139,20 @@ def main(argv=None):
             else:
                 data_bckgr = None
 
-            data_transf = apply_transf(data,args.transf,data_bckgr,args.sparse,downsample_ratio,net)
+            data_transf = apply_transf(data,args.transf,data_bckgr,net)
+            attMaps_buff = []
 
             resDic = net(data_transf)
 
             featList.append(resDic["feat_pooled"])
-            attMapList.append(torch.abs(resDic["feat"]).sum(dim=1,keepdim=True))
+
+            #attMapList.append(torch.abs(resDic["feat"]).sum(dim=1,keepdim=True))
+
+            attMaps = attMaps_buff[0]
+            attMapList.append(attMaps)
+            attMaps_buff = []
+
+
             imgList.append(data_transf)
 
             if args.class_map:
@@ -170,8 +175,9 @@ def main(argv=None):
     imgList = torch.cat(imgList,dim=0).cpu().numpy()
  
     model_id = args.model_id
-    if args.sparse:
-        model_id += "_spars"
+
+    if args.layer !=  4:
+        model_id += "-layer"+str(args.layer)
 
     if not args.class_map:
         np.save(f"../results/{args.exp_id}/img_repr_model{model_id}_transf{args.transf}.npy",featList)

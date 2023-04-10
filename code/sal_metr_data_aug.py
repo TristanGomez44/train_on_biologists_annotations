@@ -2,16 +2,18 @@ import sys,utils
 import torch
 import torchvision 
 import numpy as np 
+import matplotlib.pyplot as plt
 
 from saliency_maps_metrics.multi_step_metrics import Deletion, Insertion
 from saliency_maps_metrics.single_step_metrics import IIC_AD, ADD
 
 metric_dic = {"DAUC":Deletion, "IAUC":Insertion, "AD":IIC_AD, "ADD":ADD}
-metric_list = list(metric_dic.keys())
+default_metric_list = list(metric_dic.keys())
 is_multi_step = {"DAUC":True, "IAUC":True, "AD":False, "ADD":False}
 is_masking_object = {"DAUC":True,"IAUC":False,"AD":False,"ADD":True}
 
 def get_att_maps(retDict):
+  
     if not "attMaps" in retDict:
         attMaps = torch.abs(retDict["feat"].sum(dim=1,keepdim=True))
     else:
@@ -19,7 +21,15 @@ def get_att_maps(retDict):
 
     return attMaps
 
-def apply_sal_metr_masks(data,retDict,mask_prob=1,masking_data=None,sal_metr_bckgr=None,sal_metr_non_cum=None):
+def apply_sal_metr_masks(data,retDict=None,mask_prob=1,masking_data=None,sal_metr_bckgr=None,sal_metr_non_cum=None,model=None,metric_list=None):
+
+    assert (retDict is not None) or (model is not None)
+
+    if metric_list is None:
+        metric_list = default_metric_list
+
+    if retDict is None:
+        retDict = model(data)
 
     if not sal_metr_bckgr is None:
         metric_constr_kwargs = {"data_replace_method":sal_metr_bckgr}
@@ -80,7 +90,7 @@ def apply_sal_metr_masks(data,retDict,mask_prob=1,masking_data=None,sal_metr_bck
             is_masking_object_list.append(False)
 
     data_masked = torch.cat(data_masked_list,dim=0).to(data.device)
-
+    
     return data_masked,is_masking_object_list
         
 def apply_sal_metr_masks_and_update_dic(model,data,args,resDict,other_data):
