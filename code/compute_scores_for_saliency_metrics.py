@@ -214,7 +214,6 @@ def main(argv=None):
         if args.att_metrics_post_hoc == "gradcam_pp":
             torch.set_grad_enabled(True)
 
-        print(result_file_exists,result_file_misses_supp_keys)
         if result_file_exists and result_file_misses_supp_keys:
             print("Just adding missing supplementary keys...")
             result_dic = np.load(result_file_path,allow_pickle=True).item()
