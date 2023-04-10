@@ -8,8 +8,11 @@ import torch
 from args import ArgReader
 import modelBuilder
 import load_data
-from compute_scores_for_saliency_metrics import getAttMetrMod,applyPostHoc
-from trainVal import addInitArgs,preprocessAndLoadParams,init_post_hoc_arg
+from compute_scores_for_saliency_metrics import getAttMetrMod
+from metrics import applyPostHoc
+import init_model
+from args import addInitArgs,init_post_hoc_arg,addLossTermArgs
+from metrics import sample_img_inds
 
 def main(argv=None):
     # Getting arguments from config file and command line
@@ -22,6 +25,7 @@ def main(argv=None):
     argreader = modelBuilder.addArgs(argreader)
     argreader = load_data.addArgs(argreader)
     argreader = addInitArgs(argreader)
+    argreader = addLossTermArgs(argreader)
     # Reading the comand line arg
     argreader.getRemainingArgs()
 
@@ -34,13 +38,15 @@ def main(argv=None):
     bestEpoch = int(os.path.basename(bestPath).split("epoch")[1])
 
     net = modelBuilder.netBuilder(args)
-    net = preprocessAndLoadParams(bestPath,args.cuda,net)
+    net = init_model.preprocessAndLoadParams(bestPath,args.cuda,net)
     net.eval()
         
     attrFunc,kwargs = getAttMetrMod(net,testDataset,args)
 
-    if len(args.inds) == 0:
-        args.inds = np.arange(len(testDataset))
+    if args.inds is None:
+        #args.inds = np.arange(len(testDataset))
+        args.inds = sample_img_inds(args.img_nb_per_class,testDataset=testDataset)
+
     saliency_maps = []
 
     torch.set_grad_enabled(args.att_metrics_post_hoc == "gradcam_pp")
