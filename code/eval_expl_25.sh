@@ -14,7 +14,7 @@ fi
 
 if [ "$4" == "all" ];
 then
-    declare -a model_list=("noneRed2" "noneRed_focal2" "noneRed_onlyfocal" "noneRed_onlylossonmasked")
+    declare -a model_list=("noneRed2" "noneRed_focal2")
 else
     declare -a model_list=($4)
 fi
