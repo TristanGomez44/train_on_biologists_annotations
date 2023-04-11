@@ -19,7 +19,8 @@ from sklearn.manifold import  TSNE
 from skimage.transform import resize
 from scipy.stats import kendalltau
 import load_data
-
+from metrics import sample_img_inds
+from args import init_post_hoc_arg
 def compNorm(featPath):
 
     if os.path.exists(featPath):
@@ -41,13 +42,12 @@ def compNorm(featPath):
 
 def find_saliency_maps(viz_id,model_ids,exp_id,expl):
     mapPaths = []
-    suff = "" if viz_id == "" else "{}_".format(viz_id)
-    for j in range(len(model_ids)):
 
+    for j in range(len(model_ids)):
+        
         if expl[j] not in ["attMaps","norm"]:
-            paths = glob.glob(f"../results/{exp_id}/saliencymaps_{expl[j]}_{model_ids[j]}_epoch*_{suff}.npy")
+            paths = glob.glob(f"../results/{exp_id}/saliencymaps_{expl[j]}_{model_ids[j]}_epoch*_{viz_id}.npy")
         else:
-            print(f"../results/{exp_id}/{expl[j]}_{model_ids[j]}_epoch*.npy")
             paths = glob.glob(f"../results/{exp_id}/{expl[j]}_{model_ids[j]}_epoch*.npy")
 
         if len(paths) != 1:
@@ -57,6 +57,7 @@ def find_saliency_maps(viz_id,model_ids,exp_id,expl):
     return mapPaths 
 
 def select_images(args,class_index,inds,img_nb):
+
     _,testDataset = load_data.buildTestLoader(args,"test")
     maxInd = len(glob.glob(os.path.join("../data/",args.dataset_test,"*/*.*")))
 
@@ -74,13 +75,12 @@ def select_images(args,class_index,inds,img_nb):
 
             endInd = startInd + len(glob.glob("../data/{}/{}/*".format(args.dataset_test,className)))
 
-        else:
-            startInd = 0
-            endInd = maxInd
-
-        torch.manual_seed(1)
-        inds = torch.randperm(endInd-startInd)[:img_nb]+startInd
+            torch.manual_seed(1)
+            inds = torch.randperm(endInd-startInd)[:img_nb]+startInd
    
+        else:   
+            inds = sample_img_inds(img_nb,testDataset=testDataset)
+
     print("inds",inds)
 
     #In case there is not enough images
@@ -117,7 +117,7 @@ def showSalMaps(exp_id,img_nb,plot_id,nrows,class_index,inds,viz_id,args,
 
     gridImage = None
     args.normalize_data = False
-    args.val_batch_size = img_nb
+
     fnt = ImageFont.truetype("arial.ttf", 40)
     cmPlasma = plt.get_cmap('plasma')
     imgSize = 448
@@ -125,7 +125,7 @@ def showSalMaps(exp_id,img_nb,plot_id,nrows,class_index,inds,viz_id,args,
 
     mapPaths = find_saliency_maps(viz_id,model_ids,exp_id,expl)
     inds,imgBatch = select_images(args,class_index,inds,img_nb)
-    img_nb = min(len(inds),img_nb)
+    img_nb = len(inds)
     normDict = load_feature_norm(model_ids,mapPaths,pond_by_norm,only_norm,expl)
 
     for i in range(img_nb):
@@ -152,7 +152,6 @@ def showSalMaps(exp_id,img_nb,plot_id,nrows,class_index,inds,viz_id,args,
         for j in range(len(mapPaths)):
             
             all_attMaps = np.load(mapPaths[j],mmap_mode="r")
-            print(mapPaths[j],all_attMaps.shape,all_attMaps.min(),all_attMaps.max())
             attMap = all_attMaps[i] if direct_ind[j] else all_attMaps[inds[i]]
 
             if attMap.shape[0] != 1 and maps_inds[j] != -1:
@@ -225,12 +224,16 @@ def main(argv=None):
     argreader.parser.add_argument('--sparsity_factor',type=float,nargs="*",metavar="BOOL",help='Set this arg to modify the sparsity of attention maps',default=[])
 
     argreader = load_data.addArgs(argreader)
+    argreader = init_post_hoc_arg(argreader)
 
     #Reading the comand line arg
     argreader.getRemainingArgs()
 
     #Getting the args from command line and config file
     args = argreader.args
+
+    if len(args.model_ids) == 1 and len(args.expl) > 1:
+        args.model_ids = [args.model_ids[0] for _ in range(len(args.expl))]
 
     #Setting default values
     default_values = {"pond_by_norm":True,"only_norm":False,"interp":False,"direct_ind":False,"maps_inds":-1,
@@ -246,7 +249,7 @@ def main(argv=None):
 
         setattr(args,key,param)
 
-    showSalMaps(args.exp_id,args.img_nb,args.plot_id,args.nrows,args.class_index,args.inds,args.viz_id,args,
+    showSalMaps(args.exp_id,args.img_nb_per_class,args.plot_id,args.nrows,args.class_index,args.inds,args.viz_id,args,
                 args.model_ids,args.expl,args.maps_inds,args.pond_by_norm,args.only_norm,args.interp,args.direct_ind,
                 args.sparsity_factor)
 

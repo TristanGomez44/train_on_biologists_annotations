@@ -44,7 +44,6 @@ def main(argv=None):
     attrFunc,kwargs = getAttMetrMod(net,testDataset,args)
 
     if args.inds is None:
-        #args.inds = np.arange(len(testDataset))
         args.inds = sample_img_inds(args.img_nb_per_class,testDataset=testDataset)
 
     saliency_maps = []
