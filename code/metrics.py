@@ -361,14 +361,20 @@ def getBatch(testDataset,inds,args):
 
 def getExplanations(inds,data,predClassInds,attrFunc,kwargs,args):
     explanations = []
-    for i,data_i,predClassInd in zip(inds,data,predClassInds):
+
+    bs = args.val_batch_size
+    batch_nb = len(data)//bs + 1*(len(data)%args.val_batch_size>0)
+    all_expl = []
+    for i in range(batch_nb):
+        ind,data_i,predClassInd = inds[i*bs:(i+1)*bs],data[i*bs:(i+1)*bs],predClassInds[i*bs:(i+1)*bs]
         if args.att_metrics_post_hoc:
-            explanation = applyPostHoc(attrFunc,data_i.unsqueeze(0),predClassInd,kwargs,args)
+            explanations = applyPostHoc(attrFunc,data_i,predClassInd,kwargs,args)
         else:
-            explanation = attrFunc(i)
-        explanations.append(explanation)
-    explanations = torch.cat(explanations,dim=0)
-    return explanations 
+            explanations = attrFunc(ind)   
+        all_expl.append(explanations)
+    all_expl = torch.cat(all_expl,dim=0)
+
+    return all_expl 
 
 def add_validity_rate_multi_step(metric_name,all_score_list):
     if metric_name == "Deletion":

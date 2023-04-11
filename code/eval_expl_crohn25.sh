@@ -7,14 +7,14 @@ fi
 
 if [ "$2" == "all" ];
 then
-    declare -a expl_list=("gradcam" "gradcampp" "ablationcam" "scorecam")
+    declare -a expl_list=("am" "cam" "gradcam" "gradcampp" "ablationcam" "scorecam")
 else
     declare -a expl_list=($2)
 fi
 
 if [ "$3" == "all" ];
 then
-    declare -a model_list=("noneRed2" "noneRed_focal2" "noneRed_onlyfocal" "noneRed_onlylossonmasked")
+    declare -a model_list=("noneRed2" "noneRed_focal2")
 else
     declare -a model_list=($3)
 fi

@@ -15,6 +15,7 @@ from post_hoc_expl.scorecam import ScoreCam
 from post_hoc_expl.xgradcam import AblationCAM,XGradCAM
 from post_hoc_expl.rise import RISE
 from post_hoc_expl.gradcampp import LayerGradCampp
+from post_hoc_expl.baselines import AM,CAM
 from metrics import sample_img_inds,get_sal_metric_dics,getBatch,getExplanations
 from utils import normalize_tensor
 
@@ -36,7 +37,15 @@ def get_other_img_inds(inds):
     return other_img_inds
 
 def getAttMetrMod(net,testDataset,args):
-    if args.att_metrics_post_hoc == "gradcam":
+    if args.att_metrics_post_hoc == "am":
+        attrMod = AM(net)
+        attrFunc = attrMod.forward
+        kwargs = {}    
+    elif args.att_metrics_post_hoc == "cam":
+        attrMod = CAM(net)
+        attrFunc = attrMod.forward
+        kwargs = {}
+    elif args.att_metrics_post_hoc == "gradcam":
         netGradMod = modelBuilder.GradCamMod(net)
         attrMod = LayerGradCam(netGradMod.forward,netGradMod.layer4)
         attrFunc = attrMod.attribute
@@ -127,7 +136,14 @@ def get_attr_func(net,testDataset,args):
         attrFunc,kwargs = getAttMetrMod(net,testDataset,args)
     else:
         salMaps_dataset = loadSalMaps(args.exp_id,args.model_id)
-        attrFunc = lambda i:(salMaps_dataset[i,0:1]).unsqueeze(0)
+
+        def att_maps_attr_func(inds):
+            if not type(inds) is list:
+                inds = [inds]  
+            maps = salMaps_dataset[inds,0:1]
+            return maps
+
+        attrFunc = att_maps_attr_func
         kwargs = {}
     return attrFunc,kwargs
 
@@ -183,8 +199,7 @@ def main(argv=None):
     result_file_misses_supp_keys = result_file_exists and len(np.load(result_file_path,allow_pickle=True).item().keys()) < 5
 
     if args.do_again or (not result_file_exists) or result_file_misses_supp_keys:
-
-        args.val_batch_size = 1
+  
         _,testDataset = load_data.buildTestLoader(args, "test")
 
         bestPath = glob.glob(f"../models/{args.exp_id}/model{args.model_id}_best_epoch*")[0]
