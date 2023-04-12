@@ -10,7 +10,6 @@ import torch.nn.functional as F
 import time
 
 
-
 def min_max_normalisation(unorm_map):
     map_min = unorm_map.amin(dim=(1,2,3),keepdim=True)
     map_max = unorm_map.amax(dim=(1,2,3),keepdim=True)
@@ -99,7 +98,7 @@ class ScoreCam():
             #inp = None
             saliency_map += w.unsqueeze(-1).unsqueeze(-1).unsqueeze(-1) * target[:,i:i+1, :, :]
             
-        saliency_map = torch.maximum(saliency_map, 0)
+        saliency_map = torch.relu(saliency_map)
         saliency_map = min_max_normalisation(saliency_map)
         return saliency_map
 
