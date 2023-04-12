@@ -20,16 +20,16 @@
 #SBATCH --mail-type=fail,abort,end
 #SBATCH --exclusive
 # Nom du fichier de log de Slurm pour le job
-#SBATCH -o model_cars25.config.out
-#SBATCH -e model_cars25.config.err
+#SBATCH -o model_crohn25.config.out
+#SBATCH -e model_crohn25.config.err
 
 source .env/bin/activate
 module load python/3.9.4
 
 export CUDA_VISIBLE_DEVICES=0,1
 
-./largeScale_25.sh noneRed2_lr model_cars25.config
-./largeScale_25.sh noneRed_focal2_lr model_cars25.config
+./largeScale_25.sh noneRed2_lr model_crohn25.config
+./largeScale_25.sh noneRed_focal2_lr model_crohn25.config
 
-./eval_expl_25.sh model_cars25.config all all noneRed2_lr all default
-./eval_expl_25.sh model_cars25.config all all noneRed_focal2_lr all default
+./eval_expl_25.sh model_crohn25.config all all noneRed2_lr all default
+./eval_expl_25.sh model_crohn25.config all all noneRed_focal2_lr all default
