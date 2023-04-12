@@ -15,7 +15,7 @@ from post_hoc_expl.scorecam import ScoreCam
 from post_hoc_expl.xgradcam import AblationCAM,XGradCAM
 from post_hoc_expl.rise import RISE
 from post_hoc_expl.gradcampp import LayerGradCampp
-from post_hoc_expl.baselines import AM,CAM
+from post_hoc_expl.baselines import AM,CAM,RandomMap,TopFeatMap,RandomFeatMap
 from metrics import sample_img_inds,get_sal_metric_dics,getBatch,getExplanations
 from utils import normalize_tensor
 
@@ -37,8 +37,11 @@ def get_other_img_inds(inds):
     return other_img_inds
 
 def getAttMetrMod(net,testDataset,args):
-    if args.att_metrics_post_hoc == "am":
-        attrMod = AM(net)
+
+    baseline_dict = {"am":AM,"cam":CAM,"randommap":RandomMap,"topfeatmap":TopFeatMap,"randomfeatmap":RandomFeatMap}
+
+    if args.att_metrics_post_hoc in baseline_dict.keys():
+        attrMod = baseline_dict[args.att_metrics_post_hoc](net)
         attrFunc = attrMod.forward
         kwargs = {}    
     elif args.att_metrics_post_hoc == "cam":

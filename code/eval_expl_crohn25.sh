@@ -5,9 +5,10 @@ else
     declare -a metr_list=($1)
 fi
 
+
 if [ "$2" == "all" ];
 then
-    declare -a expl_list=("am" "cam" "gradcam" "gradcampp" "ablationcam" "scorecam")
+    declare -a expl_list=("randommap" "topfeatmap" "randomfeatmap" "am" "cam" "gradcam" "gradcampp" "ablationcam" "scorecam")
 else
     declare -a expl_list=($2)
 fi
