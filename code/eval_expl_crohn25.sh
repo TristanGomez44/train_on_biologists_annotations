@@ -36,20 +36,20 @@ fi
 
 for metric in "${metr_list[@]}"
 do
-    echo $metric
+    #echo $metric
     for expl in "${expl_list[@]}"
     do
-        echo ' '$expl
+        #echo ' '$expl
         for model in "${model_list[@]}"
         do     
-            echo '  '$model
+            #echo '  '$model
 
             for cum in "${cum_list[@]}"
             do  
-                echo '   '$cum 
+                #echo '   '$cum 
                 for method in  "${data_replace_method_list[@]}"
                 do       
-                    echo '    '$method
+                    #echo '    '$method
                     python compute_scores_for_saliency_metrics.py -c model_crohn25.config --attention_metric $metric --model_id $model --att_metrics_post_hoc $expl --cumulative $cum --data_replace_method $method
 
                     retVal=$?
