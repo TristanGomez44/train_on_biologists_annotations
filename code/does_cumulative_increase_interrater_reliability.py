@@ -11,7 +11,7 @@ import warnings
 from scipy.stats._warnings_errors import DegenerateDataWarning
 
 from scipy.stats import pearsonr,kendalltau
-
+import math
 def preprocc_matrix(metric_values_matrix,metric):
 
     if metric == "IIC":
@@ -185,7 +185,7 @@ def plot_bootstrap_distr(res,exp_id,metric,cumulative_suff,method):
     plt.close()
 
 def get_post_hoc_label_dic():
-    return {"ablationcam":"Ablation-CAM","gradcam":"Grad-CAM","gradcampp":"Grad-CAM++","scorecam":"Score-CAM"}
+    return {"randomfeatmap":"RandFeatMap","topfeatmap":"TopFeatMap","randommap":"RandomMap","cam":"CAM","am":"AM","ablationcam":"Ablation-CAM","gradcam":"Grad-CAM","gradcampp":"Grad-CAM++","scorecam":"Score-CAM"}
 
 def get_model_label_dic():
     return {"noneRed2":"ResNet50","noneRed_focal2":"ResNet50-FL","noneRed2_transf":"ViT-b16","noneRed_focal2_transf":"ViT-b16-FL"}
@@ -210,26 +210,27 @@ def make_comparison_matrix(res_mat,p_val_mat,exp_id,labels,filename,axs,subplot_
     ax.imshow(p_val_mat*0,cmap="Greys")
     for i in range(len(res_mat)):
         for j in range(len(res_mat)):
-            if i < j:
-                rad = 0.4 if p_val_mat[i,j] else 0.1
+            #if i < j:
+            rad = 0.4 if p_val_mat[i,j] else 0.1
 
-                circle = plt.Circle((i, j), rad+0.05, color="black")
+            circle = plt.Circle((i, j), rad+0.05, color="black")
+            ax.add_patch(circle)
+            if p_val_mat[i,j]:
+                circle = plt.Circle((i, j), rad, color=cmap(res_mat[i,j]*0.5+0.5))
                 ax.add_patch(circle)
-                if p_val_mat[i,j]:
-                    circle = plt.Circle((i, j), rad, color=cmap(res_mat[i,j]*0.5+0.5))
-                    ax.add_patch(circle)
 
-                    color = "white" if abs(res_mat[i,j]) > 0.6 else "black"
+                color = "white" if abs(res_mat[i,j]) > 0.6 else "black"
 
-                    ax.text(i,j+0.1,round(res_mat[i,j]*100),ha="center",fontsize=fontsize,color=color)                
+                ax.text(i,j+0.1,round(res_mat[i,j]*100),ha="center",fontsize=fontsize,color=color)                
 
-   
     labels = [label_dic[label] if label in label_dic else label for label in labels]
 
-    ax.set_yticks(np.arange(1,len(res_mat)),labels[:-1],fontsize=fontsize)
+    ax.set_yticks(np.arange(len(res_mat)),labels,fontsize=fontsize)
+    
     ax.set_xticks(np.arange(len(res_mat)-1),["" for _ in range(len(res_mat)-1)])
-    for i in range(len(res_mat)-1):
-        ax.text(i-0.2,i-0.5+1,labels[i+1],rotation=45,ha="left",fontsize=fontsize)
+    for i in range(len(res_mat)):
+        #ax.text(i-0.2,i-0.5+1,labels[i+1],rotation=45,ha="left",fontsize=fontsize)
+        ax.text(i-0.2,-0.5,labels[i],rotation=45,ha="left",fontsize=fontsize)
 
     if not label is None:
         if label in label_dic:
@@ -256,9 +257,13 @@ def get_metric_ind(metric):
         metric = metric.split("-")[0]
     order += order_dic[metric]
     return order
-    
-def sort_lerf_from_morf(metrics,all_mat):
-    key= lambda x:get_metric_ind(x[0])
+
+def get_method_ind(method):
+    order_dic = {"randommap":0,"randomfeatmap":1,"topfeatmap":2,"am":3,"cam":4,"gradcam":5,"gradcampp":6,"ablationcam":7,"scorecam":8}
+    return order_dic[method]
+
+def sort_rows(metrics,all_mat,key_func=get_metric_ind):
+    key= lambda x:key_func(x[0])
     metrics_and_all_mat = zip(metrics,all_mat)
     metrics_and_all_mat = sorted(metrics_and_all_mat,key=key)
     metrics,all_mat = zip(*metrics_and_all_mat)
@@ -304,6 +309,9 @@ def make_krippen_bar_plot(array_krippen,array_krippen_err,metrics,multi_step_met
     plt.close()
 
 def inter_method_reliability(metric_values_matrix,corr_func,exp_id,labels,filename_suff,axs,subplot_ind,cumulative_suff,subplot_name):
+
+    labels,metric_values_matrix = sort_rows(labels,metric_values_matrix,key_func=get_method_ind)
+
     method_nb = metric_values_matrix.shape[1]
     inter_method_corr_mat = np.zeros((method_nb,method_nb))
     signif_mat = np.empty((method_nb,method_nb))
@@ -314,13 +322,13 @@ def inter_method_reliability(metric_values_matrix,corr_func,exp_id,labels,filena
             values_j = metric_values_matrix[:,j]
             inter_method_corr_mat[i,j],signif_mat[i,j] = corr_func(values_i,values_j)
 
-    make_comparison_matrix(inter_method_corr_mat,signif_mat,exp_id,labels,f"ttest_intermethod_{filename_suff}.png",axs,1*(cumulative_suff=="-nc"),subplot_ind,subplot_name)
+    make_comparison_matrix(inter_method_corr_mat,signif_mat,exp_id,labels,f"ttest_intermethod_{filename_suff}.png",axs,1*(cumulative_suff=="-nc"),subplot_ind,subplot_name,fontsize=11)
 
 def krippendorf(metric_values_matrix_alpha,exp_id,metric,cumulative_suff,csv_krippen,array_krippen,array_krippen_err,metr_ind):
 
     alpha = krippendorff_alpha_paralel(metric_values_matrix_alpha)
     rng = np.random.default_rng(0)
-    res = bootstrap(metric_values_matrix_alpha, krippendorff_alpha_bootstrap, confidence_level=0.99,random_state=rng,method="bca" ,vectorized=True,n_resamples=5000)
+    res = bootstrap(metric_values_matrix_alpha, krippendorff_alpha_bootstrap, confidence_level=0.99,random_state=rng,method="bca" ,vectorized=True,n_resamples=5)
     confinterv= res.confidence_interval
     csv_krippen += ","+str(alpha)+" ("+str(confinterv.low)+" "+str(confinterv.high)+")"
 
@@ -338,14 +346,17 @@ def inner_reliability(metrics,multi_step_metrics,all_metric_values_matrix,all_me
     
     plot_nb= all_metric_values_matrix.shape[2]
 
-    fig, axs = plt.subplots(2,plot_nb//2,figsize=(20,10))
+    nb_rows = int(math.sqrt(plot_nb))
+    nb_cols = plot_nb//nb_rows + 1*(plot_nb%nb_rows>0)
+
+    fig, axs = plt.subplots(nb_rows,nb_cols,figsize=(30,20))
     
     all_mat = np.concatenate((all_metric_values_matrix_cum,all_metric_values_matrix),axis=0)
 
     metrics.remove("IIC")
     metrics_ = metrics + [metric+"-nc" for metric in multi_step_metrics]
 
-    metrics_,all_mat = sort_lerf_from_morf(metrics_,all_mat)
+    metrics_,all_mat = sort_rows(metrics_,all_mat)
 
     for i in range(all_metric_values_matrix.shape[2]):
 
@@ -356,7 +367,7 @@ def inner_reliability(metrics,multi_step_metrics,all_metric_values_matrix,all_me
             for k in range(all_mat.shape[0]):
                 inter_metric_corr_mat[j,k],signif_mat[j,k] = corr_func(all_mat[j,:,i],all_mat[k,:,i])
 
-        make_comparison_matrix(inter_metric_corr_mat,signif_mat,exp_id,metrics_,f"ttest_intermetric_{filename_suff}.png",axs,i//2,i%2,explanation_names[i],fontsize=12)
+        make_comparison_matrix(inter_metric_corr_mat,signif_mat,exp_id,metrics_,f"ttest_intermetric_{filename_suff}.png",axs,i//nb_cols,i%nb_cols,explanation_names[i],fontsize=14)
 
 def get_background_func(background):
     if background is None:
