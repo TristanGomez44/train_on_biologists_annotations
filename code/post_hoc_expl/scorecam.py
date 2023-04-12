@@ -2,11 +2,19 @@
 Created on Wed Apr 29 16:11:20 2020
 @author: Haofan Wang - github.com/haofanwang
 """
+from re import A
 from PIL import Image
 import numpy as np
 import torch
 import torch.nn.functional as F
 import time
+
+def min_max_normalisation(unorm_map):
+    map_min = unorm_map.min(dim=(1,2,3),keepdim=True)[0]
+    map_max = unorm_map.max(dim=(1,2,3),keepdim=True)[0]
+    norm_map = (unorm_map - map_min)/(map_max - map_min)
+    return norm_map 
+
 class CamExtractor():
     """
         Extracts cam features from the model
@@ -62,33 +70,36 @@ class ScoreCam():
         if target_class is None:
             target_class = np.argmax(model_output.data.cpu().numpy())
         # Get convolution outputs
-        target = conv_output[0]
-        # Create empty numpy array for cam
-        cam = np.ones(target.shape[1:], dtype=np.float32)
+        #target = conv_output[0]
+        target = conv_output
+        # Create empty numpy array for saliency_map
+        saliency_map = torch.ones((target.shape[0],1,target.shape[2],target.shape[3]))
         # Multiply each weight with its conv output and then, sum
-        for i in range(target.shape[0]):
+
+        batch_inds = torch.arange(target.shape[0])
+
+        for i in range(target.shape[1]):
 
             # Unsqueeze to 4D
 
-            saliency_map = torch.unsqueeze(torch.unsqueeze(target[i, :, :],0),0)
+            feature_map = target[:,i:i+1, :, :]
             # Upsampling to input size
-            saliency_map = F.interpolate(saliency_map, size=(448, 448), mode='nearest')
-            if saliency_map.max() == saliency_map.min():
+            feature_map = F.interpolate(feature_map, size=input_image.shape[2:], mode='nearest')
+            if feature_map.max() == feature_map.min():
                 continue
 
             # Scale between 0-1
-            norm_saliency_map = (saliency_map - saliency_map.min()) / (saliency_map.max() - saliency_map.min())
+            norm_feature_map = min_max_normalisation(feature_map)
             # Get the target score
 
-            w = F.softmax(self.model(input_image*norm_saliency_map)["output"].detach(),dim=1)[0][target_class]
+            w = F.softmax(self.model(input_image*norm_feature_map)["output"].detach(),dim=1)[batch_inds,target_class]
 
             #inp = None
-            cam += w.data.cpu().numpy() * target[i, :, :].data.cpu().numpy()
-            torch.cuda.empty_cache()
-
-        cam = np.maximum(cam, 0)
-        cam = (cam - np.min(cam)) / (np.max(cam) - np.min(cam))  # Normalize between 0-1
-        return torch.tensor(cam).unsqueeze(0).unsqueeze(0)
+            saliency_map += w.unsqueeze(-1).unsqueeze(-1).unsqueeze(-1) * target[:,i+1, :, :]
+            
+        saliency_map = torch.maximum(saliency_map, 0)
+        saliency_map = min_max_normalisation(saliency_map)
+        return saliency_map
 
 if __name__ == '__main__':
     # Get params
