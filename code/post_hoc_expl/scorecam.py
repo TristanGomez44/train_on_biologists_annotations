@@ -9,9 +9,11 @@ import torch
 import torch.nn.functional as F
 import time
 
+
+
 def min_max_normalisation(unorm_map):
-    map_min = unorm_map.min(dim=(1,2,3),keepdim=True)[0]
-    map_max = unorm_map.max(dim=(1,2,3),keepdim=True)[0]
+    map_min = unorm_map.amin(dim=(1,2,3),keepdim=True)
+    map_max = unorm_map.amax(dim=(1,2,3),keepdim=True)
     norm_map = (unorm_map - map_min)/(map_max - map_min)
     return norm_map 
 
@@ -73,7 +75,7 @@ class ScoreCam():
         #target = conv_output[0]
         target = conv_output
         # Create empty numpy array for saliency_map
-        saliency_map = torch.ones((target.shape[0],1,target.shape[2],target.shape[3]))
+        saliency_map = torch.ones((target.shape[0],1,target.shape[2],target.shape[3])).to(input_image.device)
         # Multiply each weight with its conv output and then, sum
 
         batch_inds = torch.arange(target.shape[0])
@@ -95,7 +97,7 @@ class ScoreCam():
             w = F.softmax(self.model(input_image*norm_feature_map)["output"].detach(),dim=1)[batch_inds,target_class]
 
             #inp = None
-            saliency_map += w.unsqueeze(-1).unsqueeze(-1).unsqueeze(-1) * target[:,i+1, :, :]
+            saliency_map += w.unsqueeze(-1).unsqueeze(-1).unsqueeze(-1) * target[:,i:i+1, :, :]
             
         saliency_map = torch.maximum(saliency_map, 0)
         saliency_map = min_max_normalisation(saliency_map)
