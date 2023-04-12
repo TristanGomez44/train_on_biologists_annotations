@@ -136,11 +136,12 @@ class ResNet(nn.Module):
         self.relu = nn.ReLU(inplace=True)
         self.maxpool = nn.MaxPool2d(kernel_size=3, stride=stride, padding=1)
 
+        self.downsample_ratio = (stride**2)*strideLay2*strideLay3*strideLay4
+
         if type(dilation) is int:
             dilation = [dilation,dilation,dilation]
         elif len(dilation) != 3:
             raise ValueError("dilation must be a list of 3 int or an int.")
-
 
         #All layers are built but they will not necessarily be used
         self.layer1 = self._make_layer(block, chan[0], layers[0], stride=1,norm_layer=norm_layer,dilation=1)
