@@ -263,7 +263,7 @@ def main(argv=None):
             
             np.save(result_file_path,saved_dic)
     else:
-        print("Already done:",result_file_path)
+        print("Already done")
         
 if __name__ == "__main__":
     main()
