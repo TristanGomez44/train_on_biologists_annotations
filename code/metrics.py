@@ -462,10 +462,6 @@ def ratio_metric(a,b):
 
 def krippendorff_alpha_bootstrap(*data,**kwargs):
 
-    #print("krippendorff_alpha_bootstrap",len(data))
-    #for i in range(len(data)):
-    #    print("\t",data[i].shape)
-
     data = np.stack(data)
     
     if len(data.shape) == 3:
@@ -475,7 +471,6 @@ def krippendorff_alpha_bootstrap(*data,**kwargs):
 
     res_list = []
 
-    #print("final shape",data.shape)
     for i in range(len(data)):
         res_list.append(krippendorff_alpha_paralel(data[i],**kwargs))
   
@@ -556,7 +551,6 @@ def krippendorff_alpha_paralel(data, metric=ratio_metric, missing_items=None,axi
     elif data.dtype == bool:
         metric = "binary_metric"
         data = data.astype("int")
-        print("binarymetr")
 
     if type(metric) is str:
         metric = metric_dict[metric]
@@ -581,26 +575,8 @@ def krippendorff_alpha_paralel(data, metric=ratio_metric, missing_items=None,axi
     
     # convert input data to a dict of items
     units = {}
-
-    #for d in data:
-    #    diter = enumerate(d)
-            
-    #    for it, g in diter:
-    #        try:
-    #            its = units[it]
-    #        except KeyError:
-    #            its = []
-    #            units[it] = its
-    #        its.append(g)
-
-    #print(data.shape)
-
-    #print("krippendorff_alpha_paralel",data.shape)
     units = {j:data[:,j] for j in range(data.shape[1])}
-
-
     units = dict((it, d) for it, d in units.items() if len(d) > 1)  # units with pairable values
-    #n = sum(len(pv) for pv in units.values())  # number of pairable values
 
     n = data.size
   
@@ -608,18 +584,7 @@ def krippendorff_alpha_paralel(data, metric=ratio_metric, missing_items=None,axi
 
     data_perm = data.transpose(1,0)
 
-
-    Do = metric(data_perm[:,:,np.newaxis],data_perm[:,np.newaxis,:]).sum()
-  
-    #for grades in units.values():
-        
-    #    Du = metric(grades[:,np.newaxis],grades[np.newaxis,:]).sum()
-
-        #Du = sum(np.sum(metric(gr, gri)) for gri in gr)
-        #Do += Du/float(len(grades)-1)
-    #    Do += Du
-
-    #Do /= n
+    Do = metric(data_perm[:,:,np.newaxis],data_perm[:,np.newaxis,:]).sum()  
     Do /= (n*(data.shape[0]-1))
 
     if Do == 0:
@@ -630,8 +595,6 @@ def krippendorff_alpha_paralel(data, metric=ratio_metric, missing_items=None,axi
     De /= float(n*(n-1))
 
     coeff = 1.-Do/De if (Do and De) else 1.
-
-    #print(data.mean(),coeff,Do,De)
 
     return coeff
 
