@@ -49,7 +49,7 @@ do
                 for method in  "${data_replace_method_list[@]}"
                 do       
                     echo '    '$method
-                    python compute_scores_for_saliency_metrics.py -c $1 --attention_metric $metric --model_id $model --att_metrics_post_hoc $expl --cumulative $cum --data_replace_method $method
+                    python compute_scores_for_saliency_metrics.py -c $1 --attention_metric $metric --model_id $model --att_metrics_post_hoc $expl --cumulative $cum --data_replace_method $method --big_images False
 
                     retVal=$?
                     if [ $retVal -ne 0 ]; then
