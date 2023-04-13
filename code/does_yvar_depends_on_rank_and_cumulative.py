@@ -19,6 +19,9 @@ from torch import from_numpy,arange,softmax
 
 from compute_saliency_metrics import get_db
 from is_faithfulness_related_to_class import filter_query_result
+import math
+
+from does_cumulative_increase_interrater_reliability import sort_rows,get_method_ind
 
 def make_comb(dim_nb,dim_ind=None,comb_list=None):
 
@@ -54,6 +57,12 @@ def add_missing(values,count,explanation_nb):
 
     return values,count 
 
+def sort_cols(methods,matrix):
+    matrix = matrix.transpose(1,0)
+    methods,matrix = sort_rows(methods,matrix,key_func=get_method_ind)
+    matrix = matrix.transpose(1,0)
+    return methods,matrix
+
 def ranking_distribution(metric_values_list,metrics_to_minimize,metric,cumulative_suff,label,expl_names,fig_rank,axs_rank,fig_globrank,axs_globrank):
 
     lab_dic = get_post_hoc_label_dic()
@@ -63,31 +72,38 @@ def ranking_distribution(metric_values_list,metrics_to_minimize,metric,cumulativ
         metric_values_matrix = -metric_values_matrix
     metric_values_matrix = metric_values_matrix.argsort(-1)+1
 
+    #expl_names,metric_values_matrix = sort_cols(expl_names,metric_values_matrix)
+
     explanation_nb = metric_values_matrix.shape[1]
+    row = 1*(cumulative_suff=="") 
 
     #Rank distribution
-    sizes,names = make_rank_hist(metric_values_matrix)
-    if fig_rank is None:
-        fig_rank, axs_rank = plt.subplots(2,1,figsize=(20,10))
+    if metric_values_matrix.shape[1] <= 4:
+        sizes,names = make_rank_hist(metric_values_matrix)
+        if fig_rank is None:
+            fig_rank, axs_rank = plt.subplots(2,1,figsize=(20,10))
+        x = np.arange(len(names))
+        
+        axs_rank[row].bar(x,sizes)
+        axs_rank[row].set_xticks(x,names,rotation=45,ha="right")
+        axs_rank[row].set_title(label)
+    else:
+        sizes,names = None,None
+    
+    if fig_globrank is None:
         fig_globrank,axs_globrank = plt.subplots(2,explanation_nb,figsize=(20,10))
-
-    x = np.arange(len(names))
-    row = 1*(cumulative_suff=="")
-    axs_rank[row].bar(x,sizes)
-    axs_rank[row].set_xticks(x,names,rotation=45,ha="right")
-    axs_rank[row].set_title(label)
 
     x = np.arange(explanation_nb)
     for i in range(explanation_nb): 
         values,count = np.unique(metric_values_matrix[:,i],return_counts=True)
         values,count = add_missing(values,count,explanation_nb)
-        values,count = zip(*sorted(zip(values,count),key=lambda x:x[0]))
+        values,count,expl_names = zip(*sorted(zip(values,count,expl_names),key=lambda x:get_method_ind(x[2])))
         count = np.array(count)
         freq = count/count.sum()
         axs_globrank[row,i].bar(x,freq)
         method_labels = [lab_dic[name] if name in lab_dic else name for name in expl_names]
-        axs_globrank[row,i].set_xticks(x,method_labels,rotation=45,ha="right")
-        axs_globrank[row,i].set_title(label+" - "+"Top "+str(i+1)+" method distribution")
+        axs_globrank[row,i].set_xticks(x,method_labels,rotation=65,ha="right")
+        axs_globrank[row,i].set_title(label+" "+str(i))
         axs_globrank[row,i].set_ylim(0,1.1)
 
     return fig_rank, axs_rank,fig_globrank,axs_globrank
@@ -95,8 +111,12 @@ def ranking_distribution(metric_values_list,metrics_to_minimize,metric,cumulativ
 #y_delta variance vs saliency rank
 def delta_variance_vs_saliency_rank(post_hoc_methods,output_list,saliency_scores_list,output_at_each_step_list,metric,corr_metrics,label,fig,axs):
     
+    plot_nb = len(post_hoc_methods)
+    nb_rows = int(math.sqrt(plot_nb))
+    nb_cols = plot_nb//nb_rows + 1*(plot_nb%nb_rows>0)
+    
     if fig is None:
-        fig,axs = plt.subplots(len(post_hoc_methods)//2,len(post_hoc_methods)//2,figsize=(20,10))
+        fig,axs = plt.subplots(nb_rows,nb_cols,figsize=(20,10))
 
     for i,post_hoc_method in enumerate(post_hoc_methods):
         output = fmt_value_str(output_list[i])
@@ -113,13 +133,13 @@ def delta_variance_vs_saliency_rank(post_hoc_methods,output_list,saliency_scores
         delta_output_std = delta_output.std(axis=0)
         
         if metric in corr_metrics:
-            axs[i//2,i%2].plot(saliency_scores.mean(axis=0),delta_output_std,label=label)
+            axs[i//nb_cols,i%nb_cols].plot(saliency_scores.mean(axis=0),delta_output_std,label=label)
         else:
-            axs[i//2,i%2].plot(delta_output_std,label=label)
-        axs[i//2,i%2].legend()
-        axs[i//2,i%2].set_ylabel("Score variation standard deviation")
-        axs[i//2,i%2].set_title(post_hoc_method)
-        axs[i//2,i%2].grid()
+            axs[i//nb_cols,i%nb_cols].plot(delta_output_std,label=label)
+        axs[i//nb_cols,i%nb_cols].legend()
+        axs[i//nb_cols,i%nb_cols].set_ylabel("Score variation standard deviation")
+        axs[i//nb_cols,i%nb_cols].set_title(post_hoc_method)
+        axs[i//nb_cols,i%nb_cols].grid()
     return fig,axs
 def main(argv=None):
 
@@ -143,7 +163,7 @@ def main(argv=None):
 
     corr_metrics = get_correlation_metric_list()
     metrics_to_minimize = get_metrics_to_minimize()
-    metrics = get_sub_multi_step_metric_list()
+    metrics = ["AD","ADD"]+get_sub_multi_step_metric_list()
     background_func = get_background_func(args.background)
 
     for metr_ind,metric in enumerate(metrics):
@@ -154,23 +174,32 @@ def main(argv=None):
         fig_globrank,axs_globrank = None,None
 
         for cumulative_suff in ["","-nc"]:
-            label="Cumulative" if cumulative_suff == "" else "Non-cumulative"
-            print("\t",label)
-            background = background_func(metric)
 
-            query = f'SELECT post_hoc_method,metric_value,outputs,saliency_scores,prediction_scores FROM metrics WHERE model_id=="{model_id}" and metric_label=="{metric+cumulative_suff}" and replace_method=="{background}"'
-            output = curr.execute(query).fetchall()
-            output = filter_query_result(output,[2,3,4])
+            if metric not in ["AD","ADD"] or cumulative_suff == "":
+                label="Cumulative" if cumulative_suff == "" else "Non-cumulative"
+                print("\t",label)
+                background = background_func(metric)
 
-            if len(output) > 0:
-                post_hoc_methods,metric_values_list,output_list,saliency_scores_list,output_at_each_step_list = zip(*output)
+                query = f'SELECT post_hoc_method,metric_value,outputs,saliency_scores,prediction_scores FROM metrics WHERE model_id=="{model_id}" and metric_label=="{metric+cumulative_suff}" and replace_method=="{background}" and post_hoc_method != ""'
+                output = curr.execute(query).fetchall()
+                if metric not in ["AD","ADD"]:
+                    output = filter_query_result(output,[2,3,4])
+                #else:
+                #    output = filter_query_result(output,[0])
 
-                fig_rank, axs_rank,fig_globrank,axs_globrank = ranking_distribution(metric_values_list,metrics_to_minimize,metric,cumulative_suff,label,post_hoc_methods,fig_rank, axs_rank,fig_globrank,axs_globrank)
+                if len(output) > 0:
+                    post_hoc_methods,metric_values_list,output_list,saliency_scores_list,output_at_each_step_list = zip(*output)
 
-                fig,axs = delta_variance_vs_saliency_rank(post_hoc_methods,output_list,saliency_scores_list,output_at_each_step_list,metric,corr_metrics,label,fig,axs)
+                    print(post_hoc_methods)
+
+                    fig_rank, axs_rank,fig_globrank,axs_globrank = ranking_distribution(metric_values_list,metrics_to_minimize,metric,cumulative_suff,label,post_hoc_methods,fig_rank, axs_rank,fig_globrank,axs_globrank)
+                    if metric not in ["AD","ADD"]:
+                        fig,axs = delta_variance_vs_saliency_rank(post_hoc_methods,output_list,saliency_scores_list,output_at_each_step_list,metric,corr_metrics,label,fig,axs)
         
-        fig.savefig(f"../vis/{exp_id}/yvar_vs_rank_{metric}.png")
-        fig_rank.savefig(f"../vis/{exp_id}/rank_{metric}.png")
+        if not fig is None:
+            fig.savefig(f"../vis/{exp_id}/yvar_vs_rank_{metric}.png")
+        if not fig_rank is None:
+            fig_rank.savefig(f"../vis/{exp_id}/rank_{metric}.png")
         fig_globrank.tight_layout()
         fig_globrank.savefig(f"../vis/{exp_id}/globrank_{metric}.png")
 
