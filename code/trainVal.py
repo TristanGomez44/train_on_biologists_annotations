@@ -399,7 +399,10 @@ def train(args,trial):
             epoch += 1
 
     if trial is None:
-        if args.run_test:
+
+        test_already_done = os.path.exists(f"../results/{args.exp_id}/metrics_{args.model_id}_test.csv")
+
+        if args.run_test and ((not test_already_done) or not args.not_test_again):
 
             testFunc = evaluation
 

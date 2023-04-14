@@ -154,7 +154,8 @@ def addValArgs(argreader):
                                   help='The number of epochs to wait if the validation performance does not improve.')
     argreader.parser.add_argument('--run_test', type=str2bool, metavar='NB',
                                   help='Evaluate the model on the test set')
-
+    argreader.parser.add_argument('--not_test_again',action="store_true", metavar='NB',
+                                  help='To not re-evaluate if test is already done')
     return argreader
 
 def init_post_hoc_arg(argreader):
