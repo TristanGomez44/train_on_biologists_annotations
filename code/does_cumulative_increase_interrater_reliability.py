@@ -328,7 +328,7 @@ def krippendorf(metric_values_matrix_alpha,exp_id,metric,cumulative_suff,csv_kri
 
     alpha = krippendorff_alpha_paralel(metric_values_matrix_alpha)
     rng = np.random.default_rng(0)
-    res = bootstrap(metric_values_matrix_alpha, krippendorff_alpha_bootstrap, confidence_level=0.99,random_state=rng,method="bca" ,vectorized=True,n_resamples=5)
+    res = bootstrap(metric_values_matrix_alpha, krippendorff_alpha_bootstrap, confidence_level=0.99,random_state=rng,method="bca" ,vectorized=True,n_resamples=5000)
     confinterv= res.confidence_interval
     csv_krippen += ","+str(alpha)+" ("+str(confinterv.low)+" "+str(confinterv.high)+")"
 
@@ -342,6 +342,7 @@ def krippendorf(metric_values_matrix_alpha,exp_id,metric,cumulative_suff,csv_kri
 def inner_reliability(metrics,multi_step_metrics,all_metric_values_matrix,all_metric_values_matrix_cum,corr_func,exp_id,filename_suff,explanation_names):
 
     all_metric_values_matrix = np.stack(all_metric_values_matrix)
+
     all_metric_values_matrix_cum = np.stack(all_metric_values_matrix_cum)
     
     plot_nb= all_metric_values_matrix.shape[2]
