@@ -259,7 +259,7 @@ def get_metric_ind(metric):
     return order
 
 def get_method_ind(method):
-    order_dic = {"randommap":0,"randomfeatmap":1,"topfeatmap":2,"am":3,"cam":4,"gradcam":5,"gradcampp":6,"ablationcam":7,"scorecam":8}
+    order_dic = {"randommap":0,"randomfeatmap":1,"topfeatmap":2,"am":3,"cam":4,"gradcam":5,"gradcampp":6,"ablationcam":7,"ablationcam2":8,"scorecam":9}
     return order_dic[method]
 
 def sort_rows(metrics,all_mat,key_func=get_metric_ind):
@@ -328,7 +328,7 @@ def krippendorf(metric_values_matrix_alpha,exp_id,metric,cumulative_suff,csv_kri
 
     alpha = krippendorff_alpha_paralel(metric_values_matrix_alpha)
     rng = np.random.default_rng(0)
-    res = bootstrap(metric_values_matrix_alpha, krippendorff_alpha_bootstrap, confidence_level=0.99,random_state=rng,method="bca" ,vectorized=True,n_resamples=5000)
+    res = bootstrap(metric_values_matrix_alpha, krippendorff_alpha_bootstrap, confidence_level=0.99,random_state=rng,method="bca" ,vectorized=True,n_resamples=5)
     confinterv= res.confidence_interval
     csv_krippen += ","+str(alpha)+" ("+str(confinterv.low)+" "+str(confinterv.high)+")"
 
