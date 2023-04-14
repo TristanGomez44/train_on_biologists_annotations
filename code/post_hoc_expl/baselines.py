@@ -24,7 +24,8 @@ class TopFeatMap(Module):
         retDict = self.model(x)
         feats = retDict["feat"]
 
-        feat_pooled = adaptive_avg_pool2d(feats,1).squeeze()
+        feat_pooled = adaptive_avg_pool2d(feats,1).squeeze(-1).squeeze(-1)
+        
         top_featmap_inds = feat_pooled.argmax(dim=1)
 
         inds = top_featmap_inds.unsqueeze(1).unsqueeze(1).unsqueeze(1)
