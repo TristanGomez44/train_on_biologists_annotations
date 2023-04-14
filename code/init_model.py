@@ -65,8 +65,9 @@ def initialize_Net_And_EpochNumber(net, exp_id, model_id, cuda, start_mode, init
 
     return startEpoch
 
-def preprocessAndLoadParams(init_path,cuda,net):
-    print("Init from",init_path)
+def preprocessAndLoadParams(init_path,cuda,net,verbose=True):
+    if verbose:
+        print("Init from",init_path)
     params = torch.load(init_path, map_location="cpu" if not cuda else None)
     params = addOrRemoveModule(params,net)
     res = net.load_state_dict(params, False)

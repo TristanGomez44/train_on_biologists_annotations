@@ -321,7 +321,7 @@ def sample_img_inds(nb_per_class,label_list=None,testDataset=None):
         chosen_inds.extend(chosen_class_inds)
     
     chosen_inds = torch.tensor(chosen_inds)
-    
+
     return chosen_inds 
 
 def applyPostHoc(attrFunc,data,targ,kwargs,args):

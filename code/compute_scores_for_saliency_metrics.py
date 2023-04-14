@@ -1,4 +1,4 @@
-import os
+import os,sys
 import glob
 
 import numpy as np
@@ -6,6 +6,8 @@ import torch
 import matplotlib.pyplot as plt
 plt.switch_backend('agg')
 from captum.attr import (IntegratedGradients,NoiseTunnel,LayerGradCam,GuidedBackprop)
+
+import hashlib
 
 from args import ArgReader,str2bool,addInitArgs,init_post_hoc_arg,addLossTermArgs
 import modelBuilder
@@ -16,6 +18,7 @@ from post_hoc_expl.xgradcam import AblationCAM,XGradCAM
 from post_hoc_expl.rise import RISE
 from post_hoc_expl.gradcampp import LayerGradCampp
 from post_hoc_expl.baselines import AM,CAM,RandomMap,TopFeatMap,RandomFeatMap
+from post_hoc_expl.ablationcam2 import AblationCAM2
 from metrics import sample_img_inds,get_sal_metric_dics,getBatch,getExplanations
 from utils import normalize_tensor
 
@@ -66,6 +69,11 @@ def getAttMetrMod(net,testDataset,args):
     elif args.att_metrics_post_hoc == "xgradcam":
         netGradMod = modelBuilder.GradCamMod(net)
         attrMod = XGradCAM(model=netGradMod,target_layers=netGradMod.layer4,use_cuda=args.cuda)
+        attrFunc = attrMod
+        kwargs = {}
+    elif args.att_metrics_post_hoc == "ablationcam2":
+        netGradMod = modelBuilder.GradCamMod(net)
+        attrMod = AblationCAM2(model=netGradMod,target_layers=netGradMod.layer4,use_cuda=args.cuda,batch_size=args.ablationcam_batchsize)
         attrFunc = attrMod
         kwargs = {}
     elif args.att_metrics_post_hoc == "ablationcam":
@@ -160,6 +168,8 @@ def main(argv=None):
     argreader.parser.add_argument('--data_replace_method', type=str, help='The pixel replacement method.')
     argreader.parser.add_argument('--cumulative', type=str2bool, help='To prevent acumulation of perturbation when computing metrics.',default=True)
 
+    argreader.parser.add_argument('--ablationcam_batchsize', type=int,default=2048)
+
     argreader = addInitArgs(argreader)
     argreader = init_post_hoc_arg(argreader)
     argreader = modelBuilder.addArgs(argreader)
@@ -208,7 +218,7 @@ def main(argv=None):
         bestPath = glob.glob(f"../models/{args.exp_id}/model{args.model_id}_best_epoch*")[0]
 
         net = modelBuilder.netBuilder(args)
-        net = preprocessAndLoadParams(bestPath,args.cuda,net)
+        net = preprocessAndLoadParams(bestPath,args.cuda,net,verbose=False)
         net.eval()
         net_lambda = lambda x:net(x)["output"]
         
@@ -226,7 +236,7 @@ def main(argv=None):
 
         torch.set_grad_enabled(False)
         outputs =  net_lambda(data)
-
+    
         predClassInds = outputs.argmax(dim=-1)
         
         if args.att_metrics_post_hoc == "gradcam_pp":
@@ -238,8 +248,18 @@ def main(argv=None):
             result_dic.update({"outputs":outputs.cpu(),"target":target.cpu(),"inds":inds.cpu()})
             np.save(result_file_path,result_dic)
         else:
-
-            explanations = getExplanations(inds,data,predClassInds,attrFunc,kwargs,args)
+            inds_string = "-".join([str(ind) for ind in inds])
+            hashed_inds = hashlib.sha1(inds_string.encode("utf-8")).hexdigest()[:16]
+            torch.save(inds,f"../results/{args.exp_id}/inds_{hashed_inds}.th")
+    
+            expl_path = f"../results/{args.exp_id}/explanations_{args.model_id}_{args.att_metrics_post_hoc}_{hashed_inds}.th"
+            if not os.path.exists(expl_path):
+                print("Computing explanations")
+                explanations = getExplanations(inds,data,predClassInds,attrFunc,kwargs,args)
+                torch.save(explanations.cpu(),expl_path)
+            else:
+                print("Already computed explanations")
+                explanations = torch.load(expl_path).to(data.device)
 
             torch.set_grad_enabled(False)   
     

@@ -7,7 +7,7 @@ fi
 
 if [ "$3" == "all" ];
 then
-    declare -a expl_list=("randommap" "topfeatmap" "randomfeatmap" "am" "cam" "gradcam" "gradcampp" "ablationcam" "scorecam")
+    declare -a expl_list=("randommap" "topfeatmap" "randomfeatmap" "am" "cam" "gradcam" "gradcampp" "ablationcam2" "scorecam")
 else
     declare -a expl_list=($3)
 fi
@@ -35,21 +35,21 @@ fi
 
 for metric in "${metr_list[@]}"
 do
-    echo $metric
+    #echo $metric
     for expl in "${expl_list[@]}"
     do
-        echo ' '$expl
+        #echo ' '$expl
         for model in "${model_list[@]}"
         do     
-            echo '  '$model
+            #echo '  '$model
 
             for cum in "${cum_list[@]}"
             do  
-                echo '   '$cum 
+                #echo '   '$cum 
                 for method in  "${data_replace_method_list[@]}"
                 do       
-                    echo '    '$method
-                    python compute_scores_for_saliency_metrics.py -c $1 --attention_metric $metric --model_id $model --att_metrics_post_hoc $expl --cumulative $cum --data_replace_method $method --big_images False
+                    #echo '    '$method
+                    python compute_scores_for_saliency_metrics.py -c $1 --attention_metric $metric --model_id $model --att_metrics_post_hoc $expl --cumulative $cum --data_replace_method $method --big_images False --ablationcam_batchsize $7 --val_batch_size 1
 
                     retVal=$?
                     if [ $retVal -ne 0 ]; then
