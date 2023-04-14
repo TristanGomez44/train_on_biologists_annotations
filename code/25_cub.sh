@@ -31,5 +31,5 @@ export CUDA_VISIBLE_DEVICES=0,1
 ./largeScale_25.sh noneRed2_lr model_cub25.config
 ./largeScale_25.sh noneRed_focal2_lr model_cub25.config
 
-./eval_expl_25.sh model_cub25.config all all noneRed2_lr all default
-./eval_expl_25.sh model_cub25.config all all noneRed_focal2_lr all default
+./eval_expl_25.sh model_cub25.config all all noneRed2_lr all default 2048
+./eval_expl_25.sh model_cub25.config all all noneRed_focal2_lr all default 2048

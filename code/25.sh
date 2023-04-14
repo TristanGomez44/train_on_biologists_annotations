@@ -33,8 +33,8 @@ export CUDA_VISIBLE_DEVICES=0,1
 ./largeScale_25.sh noneRed2 $1
 ./largeScale_25.sh noneRed_focal2 $1
 
-./eval_expl_25.sh $1 all all noneRed2 all default
-./eval_expl_25.sh $1 all all noneRed_focal2 all default
+./eval_expl_25.sh $1 all all noneRed2 all default 2048
+./eval_expl_25.sh $1 all all noneRed_focal2 all default 2048
 
 exit 0
 EOT
