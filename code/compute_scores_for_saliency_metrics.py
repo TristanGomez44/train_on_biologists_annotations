@@ -14,7 +14,7 @@ import modelBuilder
 import load_data
 from init_model import preprocessAndLoadParams
 from post_hoc_expl.scorecam import ScoreCam
-from post_hoc_expl.xgradcam import AblationCAM,XGradCAM
+from post_hoc_expl.xgradcam import AblationCAM,XGradCAM,AblationCAM_NoUpScale
 from post_hoc_expl.rise import RISE
 from post_hoc_expl.gradcampp import LayerGradCampp
 from post_hoc_expl.baselines import AM,CAM,RandomMap,TopFeatMap,RandomFeatMap
@@ -71,14 +71,19 @@ def getAttMetrMod(net,testDataset,args):
         attrMod = XGradCAM(model=netGradMod,target_layers=netGradMod.layer4,use_cuda=args.cuda)
         attrFunc = attrMod
         kwargs = {}
+    elif args.att_metrics_post_hoc == "ablationcam":
+        netGradMod = modelBuilder.GradCamMod(net)
+        attrMod = AblationCAM(model=netGradMod,target_layers=netGradMod.layer4,use_cuda=args.cuda,batch_size=args.ablationcam_batchsize)
+        attrFunc = attrMod
+        kwargs = {}
     elif args.att_metrics_post_hoc == "ablationcam2":
         netGradMod = modelBuilder.GradCamMod(net)
         attrMod = AblationCAM2(model=netGradMod,target_layers=netGradMod.layer4,use_cuda=args.cuda,batch_size=args.ablationcam_batchsize)
         attrFunc = attrMod
         kwargs = {}
-    elif args.att_metrics_post_hoc == "ablationcam":
+    elif args.att_metrics_post_hoc == "ablationcamnous":
         netGradMod = modelBuilder.GradCamMod(net)
-        attrMod = AblationCAM(model=netGradMod,target_layers=netGradMod.layer4,use_cuda=args.cuda)
+        attrMod = AblationCAM_NoUpScale(model=netGradMod,target_layers=netGradMod.layer4,use_cuda=args.cuda,batch_size=args.ablationcam_batchsize)
         attrFunc = attrMod
         kwargs = {}
     elif args.att_metrics_post_hoc == "scorecam":
@@ -260,6 +265,8 @@ def main(argv=None):
             else:
                 print("Already computed explanations")
                 explanations = torch.load(expl_path).to(data.device)
+
+            print(explanations.shape,data.shape)
 
             torch.set_grad_enabled(False)   
     

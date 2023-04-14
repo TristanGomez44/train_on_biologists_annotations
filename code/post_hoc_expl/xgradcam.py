@@ -624,3 +624,9 @@ class AblationCAM(BaseCAM):
     def __call__(self, input_tensor: torch.Tensor, targets: List[torch.nn.Module] = None, aug_smooth: bool = False, eigen_smooth: bool = False) -> np.ndarray:
         explanation = super().__call__(input_tensor, targets, aug_smooth, eigen_smooth)
         return torch.tensor(explanation)
+
+class AblationCAM_NoUpScale(AblationCAM):
+    def __call__(self,input_tensor,targets):
+        saliency_maps = super().__call__(input_tensor,targets)
+        saliency_maps = torch.nn.functional.interpolate(saliency_maps.unsqueeze(0),scale_factor=1/self.model.net.firstModel.featMod.downsample_ratio)[0]
+        return saliency_maps
