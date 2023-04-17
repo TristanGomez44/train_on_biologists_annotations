@@ -1,4 +1,3 @@
-from tkinter import Y
 import sys
 from args import ArgReader
 import numpy as np
@@ -259,7 +258,7 @@ def get_metric_ind(metric):
     return order
 
 def get_method_ind(method):
-    order_dic = {"randommap":0,"randomfeatmap":1,"topfeatmap":2,"am":3,"cam":4,"gradcam":5,"gradcampp":6,"ablationcam":7,"ablationcam2":8,"scorecam":9}
+    order_dic = {"randommap":0,"randomfeatmap":1,"topfeatmap":2,"am":3,"cam":4,"gradcam":5,"gradcampp":6,"ablationcam":7,"ablationcam2":8,"ablationcamnous":9,"scorecam":10}
     return order_dic[method]
 
 def sort_rows(metrics,all_mat,key_func=get_metric_ind):
