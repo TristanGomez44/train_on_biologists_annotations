@@ -32,7 +32,15 @@ def make_db(col_list,db_path):
 def apply_softmax(array,temperature):
     tensor = torch.from_numpy(array)
     tensor = torch.softmax(tensor.double()/temperature,dim=-1)
-    tensor = tensor.max(dim=-1)[0]
+
+    if len(tensor.shape) == 3:
+        inds = tensor[:,0].argmax(dim=-1,keepdim=True).unsqueeze(1)
+        inds = inds.expand(-1,tensor.shape[1],-1)
+        tensor = tensor.gather(2,inds).squeeze(-1)
+    else:
+        inds = tensor.argmax(dim=-1,keepdim=True)
+        tensor = tensor.gather(1,inds).squeeze(-1)        
+
     array = tensor.numpy()
     return array
 

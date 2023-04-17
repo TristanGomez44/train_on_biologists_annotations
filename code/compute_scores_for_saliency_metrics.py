@@ -163,6 +163,21 @@ def get_attr_func(net,testDataset,args):
         kwargs = {}
     return attrFunc,kwargs
 
+def compute_or_load_explanations(inds,args,data,predClassInds,attrFunc,kwargs):
+    inds_string = "-".join([str(ind) for ind in inds])
+    hashed_inds = hashlib.sha1(inds_string.encode("utf-8")).hexdigest()[:16]
+    torch.save(inds,f"../results/{args.exp_id}/inds_{hashed_inds}.th")
+
+    expl_path = f"../results/{args.exp_id}/explanations_{args.model_id}_{args.att_metrics_post_hoc}_{hashed_inds}.th"
+    if not os.path.exists(expl_path):
+        print("Computing explanations")
+        explanations = getExplanations(inds,data,predClassInds,attrFunc,kwargs,args)
+        torch.save(explanations.cpu(),expl_path)
+    else:
+        print("Already computed explanations")
+        explanations = torch.load(expl_path).to(data.device)
+    return explanations
+
 def main(argv=None):
     # Getting arguments from config file and command line
     # Building the arg reader
@@ -253,19 +268,7 @@ def main(argv=None):
             result_dic.update({"outputs":outputs.cpu(),"target":target.cpu(),"inds":inds.cpu()})
             np.save(result_file_path,result_dic)
         else:
-            inds_string = "-".join([str(ind) for ind in inds])
-            hashed_inds = hashlib.sha1(inds_string.encode("utf-8")).hexdigest()[:16]
-            torch.save(inds,f"../results/{args.exp_id}/inds_{hashed_inds}.th")
-    
-            expl_path = f"../results/{args.exp_id}/explanations_{args.model_id}_{args.att_metrics_post_hoc}_{hashed_inds}.th"
-            if not os.path.exists(expl_path):
-                print("Computing explanations")
-                explanations = getExplanations(inds,data,predClassInds,attrFunc,kwargs,args)
-                torch.save(explanations.cpu(),expl_path)
-            else:
-                print("Already computed explanations")
-                explanations = torch.load(expl_path).to(data.device)
-
+            explanations = compute_or_load_explanations(inds,args,data,predClassInds,attrFunc,kwargs)
             print(explanations.shape,data.shape)
 
             torch.set_grad_enabled(False)   
