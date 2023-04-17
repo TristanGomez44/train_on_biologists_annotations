@@ -1,21 +1,11 @@
-from tkinter import Y
 from args import ArgReader
 import numpy as np
-import sqlite3 
-from metrics import krippendorff_alpha_paralel,krippendorff_alpha_bootstrap,get_sub_multi_step_metric_list,get_sub_single_step_metric_list,get_metrics_to_minimize
+from metrics import get_sub_multi_step_metric_list,get_sub_single_step_metric_list,get_metrics_to_minimize
 import matplotlib.pyplot as plt 
-from scipy.stats._resampling import _bootstrap_iv,rng_integers,_percentile_of_score,ndtri,ndtr,BootstrapResult,ConfidenceInterval
-
-import warnings
-from scipy.stats._warnings_errors import DegenerateDataWarning
-
-from scipy.stats import pearsonr,kendalltau,bootstrap
-
-from does_cumulative_increase_interrater_reliability import fmt_metric_values,preprocc_matrix,fmt_value_str
-
+from scipy.stats import bootstrap
+from does_cumulative_increase_interrater_reliability import fmt_metric_values,fmt_value_str
 from torch.nn.functional import cross_entropy
 from torch import from_numpy,arange,softmax
-
 from compute_saliency_metrics import get_db
 from does_cumulative_increase_interrater_reliability import get_background_func
 
