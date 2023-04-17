@@ -1,26 +1,13 @@
-import sys
-from tkinter import Y
-from args import ArgReader
-import numpy as np
-import sqlite3 
-from metrics import krippendorff_alpha_paralel,krippendorff_alpha_bootstrap,get_sub_multi_step_metric_list,get_correlation_metric_list,get_metrics_to_minimize
-import matplotlib.pyplot as plt 
-from scipy.stats._resampling import _bootstrap_iv,rng_integers,_percentile_of_score,ndtri,ndtr,BootstrapResult,ConfidenceInterval
-
-import warnings
-from scipy.stats._warnings_errors import DegenerateDataWarning
-
-from scipy.stats import pearsonr,kendalltau,bootstrap
-
-from does_cumulative_increase_interrater_reliability import fmt_metric_values,preprocc_matrix,fmt_value_str,get_background_func,get_post_hoc_label_dic
-
-from torch.nn.functional import cross_entropy
-from torch import from_numpy,arange,softmax
-
-from compute_saliency_metrics import get_db
-from is_faithfulness_related_to_class import filter_query_result
 import math
 
+import numpy as np
+import matplotlib.pyplot as plt 
+
+from metrics import get_sub_multi_step_metric_list,get_correlation_metric_list,get_metrics_to_minimize
+from args import ArgReader
+from does_cumulative_increase_interrater_reliability import fmt_metric_values,fmt_value_str,get_background_func,get_post_hoc_label_dic
+from compute_saliency_metrics import get_db
+from is_faithfulness_related_to_class import filter_query_result
 from does_cumulative_increase_interrater_reliability import sort_rows,get_method_ind
 
 def make_comb(dim_nb,dim_ind=None,comb_list=None):
@@ -190,18 +177,16 @@ def main(argv=None):
                 if len(output) > 0:
                     post_hoc_methods,metric_values_list,output_list,saliency_scores_list,output_at_each_step_list = zip(*output)
 
-                    print(post_hoc_methods)
-
                     fig_rank, axs_rank,fig_globrank,axs_globrank = ranking_distribution(metric_values_list,metrics_to_minimize,metric,cumulative_suff,label,post_hoc_methods,fig_rank, axs_rank,fig_globrank,axs_globrank)
                     if metric not in ["AD","ADD"]:
                         fig,axs = delta_variance_vs_saliency_rank(post_hoc_methods,output_list,saliency_scores_list,output_at_each_step_list,metric,corr_metrics,label,fig,axs)
         
         if not fig is None:
-            fig.savefig(f"../vis/{exp_id}/yvar_vs_rank_{metric}.png")
+            fig.savefig(f"../vis/{exp_id}/yvar_vs_rank_{metric}_{model_id}.png")
         if not fig_rank is None:
-            fig_rank.savefig(f"../vis/{exp_id}/rank_{metric}.png")
+            fig_rank.savefig(f"../vis/{exp_id}/rank_{metric}_{model_id}.png")
         fig_globrank.tight_layout()
-        fig_globrank.savefig(f"../vis/{exp_id}/globrank_{metric}.png")
+        fig_globrank.savefig(f"../vis/{exp_id}/globrank_{metric}_{model_id}.png")
 
 if __name__ == "__main__":
     main()
