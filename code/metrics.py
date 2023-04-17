@@ -1,3 +1,4 @@
+from re import I
 import sys
 import torch
 import torch.nn.functional as F
@@ -20,6 +21,12 @@ from saliency_maps_metrics.single_step_metrics import IIC_AD, ADD
 
 is_multi_step_dic = {"Deletion":True,"Insertion":True,"IIC_AD":False,"ADD":False}
 const_dic = {"Deletion":Deletion,"Insertion":Insertion,"IIC_AD":IIC_AD,"ADD":ADD}
+
+def get_ylim(metric):
+    if metric in ["DC","IC","ADD"]:
+        return (-1,1)
+    else:
+        return (0,1)
 
 def get_correlation_metric_list():
     return ["DC","IC"]
