@@ -188,8 +188,6 @@ def main(argv=None):
     argreader.parser.add_argument('--data_replace_method', type=str, help='The pixel replacement method.')
     argreader.parser.add_argument('--cumulative', type=str2bool, help='To prevent acumulation of perturbation when computing metrics.',default=True)
 
-    argreader.parser.add_argument('--ablationcam_batchsize', type=int,default=2048)
-
     argreader = addInitArgs(argreader)
     argreader = init_post_hoc_arg(argreader)
     argreader = modelBuilder.addArgs(argreader)

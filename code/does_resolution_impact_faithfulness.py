@@ -213,7 +213,7 @@ def main(argv=None):
         ax.set_title(sub_metric.upper(),fontsize=fontsize)
 
     plt.tight_layout()
-    plt.savefig(f"../vis/{args.exp_id}/resolution_vs_faithfulness_{args.model_id}.png")
+    plt.savefig(f"../vis/{args.exp_id}/resolution_vs_faithfulness_{args.model_id}_{args.att_metrics_post_hoc}.png")
     plt.close()
 
 if __name__ == "__main__":

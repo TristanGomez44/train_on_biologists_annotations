@@ -161,6 +161,7 @@ def addValArgs(argreader):
 def init_post_hoc_arg(argreader):
     argreader.parser.add_argument('--att_metrics_post_hoc', type=str, help='The post-hoc method to use instead of the model ')
     argreader.parser.add_argument('--img_nb_per_class', type=int, help='The nb of images on which to compute the att metric.')    
+    argreader.parser.add_argument('--ablationcam_batchsize', type=int,default=2048)
     return argreader
 
 
