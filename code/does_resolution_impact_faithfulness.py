@@ -1,6 +1,4 @@
-from ast import arg
-from re import S
-import sys,os
+import os
 import glob
 import math 
 
@@ -13,11 +11,34 @@ from args import ArgReader,init_post_hoc_arg,addLossTermArgs
 import modelBuilder
 import load_data
 from init_model import preprocessAndLoadParams
-from compute_scores_for_saliency_metrics import get_attr_func,get_other_img_inds,compute_or_load_explanations
-from metrics import get_sub_multi_step_metric_list,get_sal_metric_dics,sample_img_inds,getBatch,getExplanations,get_ylim
+from compute_scores_for_saliency_metrics import get_attr_func,compute_or_load_explanations
+from metrics import get_sal_metric_dics,sample_img_inds,getBatch
 from saliency_maps_metrics.multi_step_metrics import compute_auc_metric
 from compute_saliency_metrics import apply_softmax
 import utils 
+
+def get_data_inds_and_explanations(net,net_lambda,testDataset,args):
+    attrFunc,kwargs = get_attr_func(net,testDataset,args)
+
+    inds = sample_img_inds(args.img_nb_per_class,testDataset=testDataset)
+
+    data,_ = getBatch(testDataset,inds,args)
+
+    torch.set_grad_enabled(False)
+    outputs = net_lambda(data)
+    predClassInds = outputs.argmax(dim=-1)
+
+    explanations = compute_or_load_explanations(inds,args,data,predClassInds,attrFunc,kwargs)
+
+    return data,explanations,predClassInds,outputs
+
+def load_model(args):
+    bestPath = glob.glob(f"../models/{args.exp_id}/model{args.model_id}_best_epoch*")[0]
+    net = modelBuilder.netBuilder(args)
+    net = preprocessAndLoadParams(bestPath,args.cuda,net,verbose=False)
+    net.eval()
+    net_lambda = lambda x:net(x)["output"]
+    return net,net_lambda
 
 def save_data_masked(data_masked,result_file_path):
     img_nb = len(data_masked)
@@ -93,25 +114,14 @@ def main(argv=None):
 
     _,testDataset = load_data.buildTestLoader(args, "test")
 
-    bestPath = glob.glob(f"../models/{args.exp_id}/model{args.model_id}_best_epoch*")[0]
+    net,net_lambda = load_model(args)
 
-    net = modelBuilder.netBuilder(args)
-    net = preprocessAndLoadParams(bestPath,args.cuda,net,verbose=False)
-    net.eval()
-    net_lambda = lambda x:net(x)["output"]
-    
-    attrFunc,kwargs = get_attr_func(net,testDataset,args)
+    data,explanations,predClassInds,_ = get_data_inds_and_explanations(net,net_lambda,testDataset,args)
 
-    inds = sample_img_inds(args.img_nb_per_class,testDataset=testDataset)
+    if "ablationcam" in args.att_metrics_post_hoc:
+        #Reloading model to remove hook put by ablationcam module
+        net,net_lambda = load_model(args)
 
-    data,_ = getBatch(testDataset,inds,args)
-    
-    torch.set_grad_enabled(False)
-    outputs = net_lambda(data)
-    predClassInds = outputs.argmax(dim=-1)
-
-    explanations = compute_or_load_explanations(inds,args,data,predClassInds,attrFunc,kwargs)
-    
     ratio = net.firstModel.featMod.downsample_ratio
     powers = np.arange(math.log(ratio,2)+1)
     scale_factors = np.power(2,powers).astype(int)
@@ -146,6 +156,7 @@ def main(argv=None):
             metric_args = [net_lambda,data,explanations_resc,predClassInds]
             kwargs = {"save_all_class_scores":True,"return_data":True}
 
+            print("Compute or load scores")
             scores1,scores2 = compute_or_load_scores(metric,metric_name,metric_args,args,formated_attention_metric,metric.data_replace_method,post_hoc_suff,factor,is_multi_step_dic,kwargs)
 
             scores1 = apply_softmax(scores1,args.temperature)
