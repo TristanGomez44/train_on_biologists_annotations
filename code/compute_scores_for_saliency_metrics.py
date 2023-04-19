@@ -166,7 +166,6 @@ def get_attr_func(net,testDataset,args):
 def compute_or_load_explanations(inds,args,data,predClassInds,attrFunc,kwargs):
     inds_string = "-".join([str(ind) for ind in inds])
     hashed_inds = hashlib.sha1(inds_string.encode("utf-8")).hexdigest()[:16]
-    torch.save(inds,f"../results/{args.exp_id}/inds_{hashed_inds}.th")
 
     expl_path = f"../results/{args.exp_id}/explanations_{args.model_id}_{args.att_metrics_post_hoc}_{hashed_inds}.th"
     if not os.path.exists(expl_path):
