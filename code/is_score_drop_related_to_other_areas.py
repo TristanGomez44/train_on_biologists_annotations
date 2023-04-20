@@ -13,6 +13,10 @@ import load_data
 from saliency_maps_metrics.multi_step_metrics import Deletion
 from does_resolution_impact_faithfulness import load_model,get_data_inds_and_explanations
 
+def get_chosen_location(explanations,pixel_rank):
+    rank_of_each_area = (-explanations.view(explanations.shape[0],-1)).argsort(dim=-1)+1
+    chosen_location_inds = torch.argwhere(rank_of_each_area==pixel_rank)[:,1]
+    return chosen_location_inds
 
 def load_or_compute_scores(net,data,chosen_location_inds,masks,predicted_classes,result_path):
     
@@ -47,7 +51,7 @@ def make_dist_to_diff_dic(all_dists,all_diff):
         distance_to_diff_dic[dist].append(all_diff[i].item())
     return distance_to_diff_dic
 
-def make_global_salrank_figure(all_dists,all_diff,exp_id,model_id,att_metrics_post_hoc):
+def make_global_salrank_figure(all_dists,all_diff,exp_id,model_id,att_metrics_post_hoc,pixel_rank):
 
     distance_to_diff_dic = make_dist_to_diff_dic(all_dists,all_diff)
 
@@ -58,7 +62,7 @@ def make_global_salrank_figure(all_dists,all_diff,exp_id,model_id,att_metrics_po
         axs[i].hist(distance_to_diff_dic[dist])
         axs[i].set_ylabel(dist)
 
-    fig.savefig(f"../vis/{exp_id}/relative_diff_vs_dists_glob_salrank_{model_id}_{att_metrics_post_hoc}.png")
+    fig.savefig(f"../vis/{exp_id}/relative_diff_vs_dists_glob_salrank_{model_id}_{att_metrics_post_hoc}_pr{pixel_rank}.png")
 
 def median_plot(distance_to_diff_dic,file_path):
 
@@ -230,7 +234,7 @@ def main(argv=None):
     argreader = modelBuilder.addArgs(argreader)
     argreader = init_post_hoc_arg(argreader)
     argreader = addLossTermArgs(argreader)
-    argreader.parser.add_argument('--mask_nb', type=int,default=100)
+    argreader.parser.add_argument('--pixel_rank', type=int,default=1)
     #Reading the comand line arg
     argreader.getRemainingArgs()
    
@@ -241,7 +245,7 @@ def main(argv=None):
     _,testDataset = load_data.buildTestLoader(args, "test")
     data,explanations,predicted_classes,scores = get_data_inds_and_explanations(net,net_lambda,testDataset,args)
 
-    debug_ind = 101
+    debug_ind = 150
 
     fig_global_scatter,ax_global_scatter = plt.subplots(1,1,figsize=(7,5))
     fig_global_scatter_sal,ax_global_scatter_sal = plt.subplots(1,1,figsize=(7,5))
@@ -250,7 +254,7 @@ def main(argv=None):
     masks,row_list,col_list = get_masks(explanations.shape[2],data.device)
     row_list,col_list = row_list.to(explanations.device),col_list.to(explanations.device)
 
-    chosen_location_inds = explanations.view(explanations.shape[0],-1).argsort(dim=-1)[:,-1]
+    chosen_location_inds = get_chosen_location(explanations,args.pixel_rank)
 
     all_rows = torch.arange(explanations.shape[2]).unsqueeze(0).unsqueeze(0).unsqueeze(-1).to(explanations.device)
     all_rows = all_rows.expand(-1,-1,-1,explanations.shape[3])
@@ -260,7 +264,7 @@ def main(argv=None):
     
     all_dists, all_diff = [],{"scores":[],"saliency":[],"saliency_rank":[]}
 
-    result_file_path = f"../results/{args.exp_id}/relative_diff_vs_dists_{args.model_id}_{args.att_metrics_post_hoc}.npy"
+    result_file_path = f"../results/{args.exp_id}/relative_diff_vs_dists_{args.model_id}_{args.att_metrics_post_hoc}_pr{args.pixel_rank}.npy"
     all_scores,all_saliency,all_saliency_rank = load_or_compute_scores(net,data,chosen_location_inds,masks,predicted_classes,result_file_path)
 
     for i in range(len(data)):
@@ -295,18 +299,18 @@ def main(argv=None):
         all_diff[key] = torch.cat(all_diff[key],dim=0)
     ax_global_scatter_sal.set_ylim(0,2.5)
 
-    fig_global_scatter.savefig(f"../vis/{args.exp_id}/relative_diff_vs_dists_glob_{args.model_id}_{args.att_metrics_post_hoc}.png")
-    fig_global_scatter_sal.savefig(f"../vis/{args.exp_id}/relative_diff_vs_dists_glob_sal_{args.model_id}_{args.att_metrics_post_hoc}.png")
-    fig_global_scatter_salrank.savefig(f"../vis/{args.exp_id}/relative_diff_vs_dists_glob_salrank_onefig_{args.model_id}_{args.att_metrics_post_hoc}.png")
+    fig_global_scatter.savefig(f"../vis/{args.exp_id}/relative_diff_vs_dists_glob_{args.model_id}_{args.att_metrics_post_hoc}_pr{args.pixel_rank}.png")
+    fig_global_scatter_sal.savefig(f"../vis/{args.exp_id}/relative_diff_vs_dists_glob_sal_{args.model_id}_{args.att_metrics_post_hoc}_pr{args.pixel_rank}.png")
+    fig_global_scatter_salrank.savefig(f"../vis/{args.exp_id}/relative_diff_vs_dists_glob_salrank_onefig_{args.model_id}_{args.att_metrics_post_hoc}_pr{args.pixel_rank}.png")
 
-    make_global_salrank_figure(all_dists,all_diff["saliency_rank"],args.exp_id,args.model_id,args.att_metrics_post_hoc)
+    make_global_salrank_figure(all_dists,all_diff["saliency_rank"],args.exp_id,args.model_id,args.att_metrics_post_hoc,args.pixel_rank)
 
     ylim_dic = {"scores":(0,0.175),"saliency":(0,1.2),"saliency_rank":(0,80)}
     nb_bins_dic = {"scores":50,"saliency":50,"saliency_rank":10}
 
     for key in all_diff.keys():
         distance_to_diff_dic = make_dist_to_diff_dic(all_dists,all_diff[key]) 
-        result_file_path = f"../vis/{args.exp_id}/relative_diff_vs_dists_{key}_median_{args.model_id}_{args.att_metrics_post_hoc}.png"
+        result_file_path = f"../vis/{args.exp_id}/relative_diff_vs_dists_{key}_median_{args.model_id}_{args.att_metrics_post_hoc}_pr{args.pixel_rank}.png"
         median_plot(distance_to_diff_dic,result_file_path)
         density_plot(distance_to_diff_dic,all_diff[key],result_file_path.replace("median","heatmap"),ylim=ylim_dic[key],nb_bins=nb_bins_dic[key])
 
