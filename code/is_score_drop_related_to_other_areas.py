@@ -64,7 +64,7 @@ def make_global_salrank_figure(all_dists,all_diff,exp_id,model_id,att_metrics_po
 
     fig.savefig(f"../vis/{exp_id}/relative_diff_vs_dists_glob_salrank_{model_id}_{att_metrics_post_hoc}_pr{pixel_rank}.png")
 
-def median_plot(distance_to_diff_dic,file_path):
+def median_plot(distance_to_diff_dic,file_path,ylim):
 
     dists = list(sorted(list(distance_to_diff_dic.keys())))
     fig_median,ax_median = plt.subplots(1,1)
@@ -75,6 +75,7 @@ def median_plot(distance_to_diff_dic,file_path):
         q1_list.append(np.quantile(distance_to_diff_dic[dist],0.25))
         q2_list.append(np.quantile(distance_to_diff_dic[dist],0.75))
     
+    ax_median.set_ylim(ylim)
     ax_median.plot(dists,median_list)
     ax_median.fill_between(dists,q1_list,q2_list,alpha=0.25)
     fig_median.savefig(file_path)
@@ -306,12 +307,12 @@ def main(argv=None):
     make_global_salrank_figure(all_dists,all_diff["saliency_rank"],args.exp_id,args.model_id,args.att_metrics_post_hoc,args.pixel_rank)
 
     ylim_dic = {"scores":(0,0.175),"saliency":(0,1.2),"saliency_rank":(0,80)}
-    nb_bins_dic = {"scores":50,"saliency":50,"saliency_rank":10}
+    nb_bins_dic = {"scores":50,"saliency":50,"saliency_rank":50}
 
     for key in all_diff.keys():
         distance_to_diff_dic = make_dist_to_diff_dic(all_dists,all_diff[key]) 
-        result_file_path = f"../vis/{args.exp_id}/relative_diff_vs_dists_{key}_median_{args.model_id}_{args.att_metrics_post_hoc}_pr{args.pixel_rank}.png"
-        median_plot(distance_to_diff_dic,result_file_path)
+        result_file_path = f"../vis/{args.exp_id}/relative_diff_vs_dists_{key}_median_{args.model_id}_{args.att_metrics_post_hoc}_pr{args.pixel_rank}.png"  
+        median_plot(distance_to_diff_dic,result_file_path,ylim=ylim_dic[key])
         density_plot(distance_to_diff_dic,all_diff[key],result_file_path.replace("median","heatmap"),ylim=ylim_dic[key],nb_bins=nb_bins_dic[key])
 
 if __name__ == "__main__":
