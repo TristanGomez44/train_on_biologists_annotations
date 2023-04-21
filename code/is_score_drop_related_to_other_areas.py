@@ -20,7 +20,6 @@ def get_chosen_location(explanations,pixel_rank):
 
 def load_or_compute_scores(net,data,chosen_location_inds,masks,predicted_classes,result_path):
     
-    
     if not os.path.exists(result_path):
         all_scores,all_saliency,all_saliency_rank = [],[],[]
         for i in range(len(data)):
@@ -244,7 +243,7 @@ def main(argv=None):
 
     net,net_lambda = load_model(args)
     _,testDataset = load_data.buildTestLoader(args, "test")
-    data,explanations,predicted_classes,scores = get_data_inds_and_explanations(net,net_lambda,testDataset,args)
+    data,explanations,predicted_classes,scores,_ = get_data_inds_and_explanations(net,net_lambda,testDataset,args)
 
     debug_ind = 150
 
