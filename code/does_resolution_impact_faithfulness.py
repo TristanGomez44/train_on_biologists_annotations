@@ -17,6 +17,80 @@ from saliency_maps_metrics.multi_step_metrics import compute_auc_metric
 from compute_saliency_metrics import apply_softmax
 import utils 
 
+def get_ylabel(is_auc,metric_name,is_cumulative):
+
+    if metric_name == "Deletion":
+        label = "D"
+    else:
+        label = "I"
+    
+    if is_auc:
+        label += "AUC"
+    else:
+        label += "C"
+    
+    if not is_cumulative:
+        label += "-NC"
+
+    return label
+
+def compute_var(scores1,metric_name):
+    if len(scores1.shape) == 2:
+        if metric_name == "Deletion":
+            var_scores1 = scores1[:,:-1] - scores1[:,1:] 
+        else:
+            var_scores1 = scores1[:,1:] - scores1[:,:-1]
+        var_scores1 = var_scores1.mean(axis=0)
+    else:
+        if metric_name == "Deletion":
+            var_scores1 = scores1[:-1] - scores1[1:] 
+        else:
+            var_scores1 = scores1[1:] - scores1[:-1]
+    return var_scores1
+
+def plot_scores(is_auc,metric_name,is_cumulative,factor_ind,factor,axs,scores1,scores2):
+    row = get_subplot_row(is_auc,metric_name,is_cumulative)
+    col = factor_ind
+    ax = axs[row,col]
+    
+    label = get_ylabel(is_auc,metric_name,is_cumulative)
+
+    if col == 0:    
+        ax.set_ylabel(label)
+    if row == axs.shape[0]-1:
+        ax.set_xlabel(factor)
+    
+    if not is_auc:
+        ax.set_xlim(0,1)
+
+    if is_auc:
+        lower_y_lim = 0
+        upper_y_lim = 1.2
+    else:
+        lower_y_lim = -0.15
+        upper_y_lim = 0.15
+
+    ax.set_ylim(lower_y_lim,upper_y_lim)
+    
+    if len(scores2.shape) == 2:
+        scores2 = scores2.mean(axis=0)
+
+    if is_auc:
+        if len(scores1.shape)==2: 
+            scores1 = scores1.mean(axis=0)
+
+        ax.plot(scores1[1:])
+        ax.plot([0,len(scores1)-1],[scores1[0],scores1[0]],"--",color="black")
+    else:  
+        var_scores1 = compute_var(scores1,metric_name)
+        ax.scatter(scores2,var_scores1)
+
+def get_subplot_row(is_auc,metric_name,is_cumulative):
+    row = 4*is_auc
+    row += 2*(metric_name == "Insertion")
+    row += 1*is_cumulative
+    return row
+
 def get_data_inds_and_explanations(net,net_lambda,testDataset,args):
     attrFunc,kwargs = get_attr_func(net,testDataset,args)
 
@@ -30,21 +104,22 @@ def get_data_inds_and_explanations(net,net_lambda,testDataset,args):
 
     explanations = compute_or_load_explanations(inds,args,data,predClassInds,attrFunc,kwargs)
 
-    return data,explanations,predClassInds,outputs
+    return data,explanations,predClassInds,outputs,inds
 
 def load_model(args):
     bestPath = glob.glob(f"../models/{args.exp_id}/model{args.model_id}_best_epoch*")[0]
     net = modelBuilder.netBuilder(args)
     net = preprocessAndLoadParams(bestPath,args.cuda,net,verbose=False)
     net.eval()
-    net_lambda = lambda x:net(x)["output"]
+    def net_lambda(x):
+        return net(x)["output"]
     return net,net_lambda
 
 def save_data_masked(data_masked,result_file_path):
-    img_nb = len(data_masked)
-    step_size = img_nb//10
+    step_size = 1
     inds = np.arange(0,len(data_masked),step_size)
     data_masked = data_masked[inds]
+    print(data_masked.shape)
     utils.save_image(data_masked,result_file_path.replace("results","vis").replace(".npy",".png"))
 
 def get_row_and_col(sub_metric):
@@ -98,6 +173,8 @@ def main(argv=None):
     argreader = modelBuilder.addArgs(argreader)
     argreader = init_post_hoc_arg(argreader)
     argreader = addLossTermArgs(argreader)
+    argreader.parser.add_argument('--img_to_show_scores_nb', type=int,default=2)
+
     #Reading the comand line arg
     argreader.getRemainingArgs()
 
@@ -116,7 +193,7 @@ def main(argv=None):
 
     net,net_lambda = load_model(args)
 
-    data,explanations,predClassInds,_ = get_data_inds_and_explanations(net,net_lambda,testDataset,args)
+    data,explanations,predClassInds,_,_ = get_data_inds_and_explanations(net,net_lambda,testDataset,args)
 
     if "ablationcam" in args.att_metrics_post_hoc:
         #Reloading model to remove hook put by ablationcam module
@@ -130,16 +207,27 @@ def main(argv=None):
 
     global_dict = {}
 
+    image_inds_to_show_score = torch.arange(0,len(data),len(data)//args.img_to_show_scores_nb)
+    fig_dict,axs_dict = {},{}
+    for ind in image_inds_to_show_score:
+        fig,axs = plt.subplots(8,len(scale_factors),figsize=(15,15))    
+        fig_dict[ind.item()] = fig
+        axs_dict[ind.item()] = axs
+    
+    fig,axs = plt.subplots(8,len(scale_factors),figsize=(15,15))      
+    fig_dict["mean"] = fig
+    axs_dict["mean"] = axs   
+
     for metric_name,is_cumulative in zip(metric_list,is_cumulative_list):
         print(metric_name,is_cumulative)
 
         formated_attention_metric = metric_name
         #Constructing metric
 
+        metric_constr_arg_dict = {}
+
         if is_multi_step_dic[metric_name]:
-            metric_constr_arg_dict = {"max_step_nb":explanations.shape[2]*explanations.shape[3]}
-        else:
-            metric_constr_arg_dict = {}
+            metric_constr_arg_dict.update({"max_step_nb":explanations.shape[2]*explanations.shape[3],"batch_size":args.val_batch_size})
 
         if is_multi_step_dic[metric_name]:
             metric_constr_arg_dict.update({"cumulative":is_cumulative})
@@ -148,7 +236,7 @@ def main(argv=None):
 
         metric = const_dic[metric_name](**metric_constr_arg_dict)
         
-        for factor in scale_factors:
+        for factor_ind,factor in enumerate(scale_factors):
             print("\t",factor)
 
             explanations_resc = torch.nn.functional.interpolate(explanations,scale_factor=factor,mode="bicubic")            
@@ -156,7 +244,6 @@ def main(argv=None):
             metric_args = [net_lambda,data,explanations_resc,predClassInds]
             kwargs = {"save_all_class_scores":True,"return_data":True}
 
-            print("Compute or load scores")
             scores1,scores2 = compute_or_load_scores(metric,metric_name,metric_args,args,formated_attention_metric,metric.data_replace_method,post_hoc_suff,factor,is_multi_step_dic,kwargs)
 
             scores1 = apply_softmax(scores1,args.temperature)
@@ -165,6 +252,16 @@ def main(argv=None):
                 auc_metric = compute_auc_metric(scores1)        
                 calibration_metric = metric.compute_calibration_metric(scores1, scores2)
                 result_dic = metric.make_result_dic(auc_metric,calibration_metric)
+
+                for ind in image_inds_to_show_score:
+                    fig,axs = fig_dict[ind.item()],axs_dict[ind.item()]          
+                    plot_scores(False,metric_name,is_cumulative,factor_ind,factor,axs,scores1[ind],scores2[ind])
+                    plot_scores(True,metric_name,is_cumulative,factor_ind,factor,axs,scores1[ind],scores2[ind])
+
+                axs = axs_dict["mean"]
+                plot_scores(False,metric_name,is_cumulative,factor_ind,factor,axs,scores1,scores2)
+                plot_scores(True,metric_name,is_cumulative,factor_ind,factor,axs,scores1,scores2)
+                
             else:
                 scores2 = apply_softmax(scores2,args.temperature)
                 result_dic = metric.compute_metric(scores1,scores2)
@@ -179,8 +276,6 @@ def main(argv=None):
                 mean = result_dic[sub_metric].mean()
                 res = bootstrap((result_dic[sub_metric],), np.mean, confidence_level=0.99,random_state=rng,method="bca",n_resamples=5000)
                 low,high = res.confidence_interval.low,res.confidence_interval.high
-                #low = abs(low-mean)
-                #high = abs(high-mean)
 
                 global_dict[sub_metric_and_cum_suff]["mean"][factor] = mean
                 global_dict[sub_metric_and_cum_suff]["conf_interv_low"][factor] = low
@@ -189,14 +284,11 @@ def main(argv=None):
     plot_nb = len(global_dict.keys())
     nb_rows = int(math.sqrt(plot_nb))
     nb_cols = plot_nb//nb_rows + 1*(plot_nb%nb_rows>0)
-    #nb_rows = 2
-    #nb_cols = plot_nb 
+
     fig, axs = plt.subplots(nb_rows,nb_cols,figsize=(15,10))
     fontsize = 17
     for i,sub_metric in enumerate(list(global_dict)):
         ax = axs[i//nb_cols,i%nb_cols]
-        #row_ind,col_ind = get_row_and_col(sub_metric)
-        #ax = axs[row_ind,col_ind]
 
         sub_metric_stats = global_dict[sub_metric]
 
@@ -208,9 +300,6 @@ def main(argv=None):
 
         ax.fill_between(np.arange(len(factors)),conf_interv_low,conf_inter_high,alpha=0.5)
 
-        #ax.set_ylabel("Value",fontsize=fontsize)
-        #ax.set_ylim(get_ylim(sub_metric.upper().replace("-NC","")))
-
         ylow = min(conf_interv_low)-0.1*abs(min(conf_interv_low))   
         yhigh = max(conf_inter_high)+0.1*abs(max(conf_inter_high))
         ax.set_ylim(ylow,yhigh)
@@ -218,7 +307,6 @@ def main(argv=None):
         ax.set_xlabel("Factor",fontsize=fontsize)
         ax.set_xticks(np.arange(len(factors)))
         ax.set_xticklabels(factors,fontsize=fontsize)
-        #ax.set_yticks(fontsize=fontsize)
         ax.tick_params(axis='both', which='minor', labelsize=fontsize)
         ax.tick_params(axis='both', which='major', labelsize=fontsize)
         ax.set_title(sub_metric.upper(),fontsize=fontsize)
@@ -226,6 +314,15 @@ def main(argv=None):
     plt.tight_layout()
     plt.savefig(f"../vis/{args.exp_id}/resolution_vs_faithfulness_{args.model_id}_{args.att_metrics_post_hoc}.png")
     plt.close()
+
+    for i,ind in enumerate(image_inds_to_show_score):
+        fig,axs = fig_dict[ind.item()],axs_dict[ind.item()]  
+        fig.tight_layout() 
+        fig.savefig(f"../vis/{args.exp_id}/resolution_vs_faithfulness_{args.model_id}_{args.att_metrics_post_hoc}_img{i}.png")
+
+    fig = fig_dict["mean"]
+    fig.tight_layout() 
+    fig.savefig(f"../vis/{args.exp_id}/resolution_vs_faithfulness_{args.model_id}_{args.att_metrics_post_hoc}_imgAll.png")
 
 if __name__ == "__main__":
     main()
