@@ -38,16 +38,16 @@ class FineGrainedDataset(Dataset):
         self.resize = resize
         self.image_id = []
         self.other_image_batch = other_image_batch
-        classes = [d.name for d in os.scandir(self.root) if d.is_dir()]
+        self.classes = [d.name for d in os.scandir(self.root) if d.is_dir()]
 
-        self.num_classes = len(classes)
+        self.num_classes = len(self.classes)
 
         if root.find("emb") != -1:
-            classes.sort(key = lambda x:formatData.labelDict[x])
+            self.classes.sort(key = lambda x:formatData.labelDict[x])
         else:
-            classes.sort()
+            self.classes.sort()
 
-        class_to_idx = {cls_name: i for i, cls_name in enumerate(classes)}
+        class_to_idx = {cls_name: i for i, cls_name in enumerate(self.classes)}
 
         instances = []
         id = 0
