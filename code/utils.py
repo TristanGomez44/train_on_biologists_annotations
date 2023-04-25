@@ -2,6 +2,7 @@
 import os
 import torchvision
 from torchvision import transforms 
+import torch 
 
 inv_imgnet_norm = transforms.Compose([ transforms.Normalize(mean = [ 0., 0., 0. ],
                                                      std = [ 1/0.229, 1/0.224, 1/0.225 ]),
@@ -9,10 +10,35 @@ inv_imgnet_norm = transforms.Compose([ transforms.Normalize(mean = [ 0., 0., 0. 
                                                      std = [ 1., 1., 1. ]),
                                ])
 
-def save_image(img,path,mask=None,**kwargs):
+def make_grid(img,row_nb):
+    assert len(img) % row_nb == 0
+    col_nb = len(img)//row_nb 
+    img = img.reshape(row_nb,col_nb,img.shape[1],img.shape[2],img.shape[3])
+
+    grid = []
+    for i in range(row_nb):
+        row = []
+        for j in range(col_nb):
+            row.append(img[i,j])
+        
+        row = torch.cat(row,dim=2)
+        print("\t",row.shape)
+        grid.append(row)
+
+    grid = torch.cat(grid,dim=1)
+    print(grid.shape)
+    grid = grid.unsqueeze(0)
+
+    return grid
+
+def save_image(img,path,mask=None,row_nb=None,**kwargs):
     if mask is None:
         mask = (img!=0)
     img = inv_imgnet_norm(img)*mask
+
+    if not row_nb is None:
+        img = make_grid(img,row_nb)
+
     torchvision.utils.save_image(img,path,**kwargs)
 
 class Bunch(object):
