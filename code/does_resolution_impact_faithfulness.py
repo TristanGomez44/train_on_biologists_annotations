@@ -115,12 +115,15 @@ def load_model(args):
         return net(x)["output"]
     return net,net_lambda
 
-def save_data_masked(data_masked,result_file_path):
-    step_size = 1
-    inds = np.arange(0,len(data_masked),step_size)
-    data_masked = data_masked[inds]
+def save_data_masked(data_masked,result_file_path,step_number=196):
     print(data_masked.shape)
-    utils.save_image(data_masked,result_file_path.replace("results","vis").replace(".npy",".png"))
+    data_masked = data_masked.reshape(data_masked.shape[0]//step_number,step_number,data_masked.shape[1],data_masked.shape[2],data_masked.shape[3])
+
+    for i in range(len(data_masked)):
+        inds = np.arange(step_number)
+        data_masked_i = data_masked[i,inds]
+        print(data_masked.shape)
+        utils.save_image(data_masked_i,result_file_path.replace("results","vis").replace(".npy","_"+str(i)+".png"))
 
 def get_row_and_col(sub_metric):
     
@@ -157,7 +160,7 @@ def compute_or_load_scores(metric,metric_name,metric_args,args,formated_attentio
             else:
                 scores1,scores2,data_masked = metric.compute_scores(*metric_args,**kwargs)
             np.save(result_file_path,{"scores1":scores1,"scores2":scores2})
-            save_data_masked(data_masked,result_file_path)
+            #save_data_masked(data_masked,result_file_path,step_number=scores1.shape[1]-1)
         else:
             pickle_dict = np.load(result_file_path,allow_pickle=True).item()
             scores1,scores2 = pickle_dict["scores1"],pickle_dict["scores2"]
@@ -238,7 +241,7 @@ def main(argv=None):
         
         for factor_ind,factor in enumerate(scale_factors):
             print("\t",factor)
-
+            
             explanations_resc = torch.nn.functional.interpolate(explanations,scale_factor=factor,mode="bicubic")            
         
             metric_args = [net_lambda,data,explanations_resc,predClassInds]
@@ -246,7 +249,10 @@ def main(argv=None):
 
             scores1,scores2 = compute_or_load_scores(metric,metric_name,metric_args,args,formated_attention_metric,metric.data_replace_method,post_hoc_suff,factor,is_multi_step_dic,kwargs)
 
-            scores1 = apply_softmax(scores1,args.temperature)
+            if not is_cumulative:
+                scores1 = apply_softmax(scores1,args.temperature,loop_mode=True)
+            else:
+                scores1 = apply_softmax(scores1,args.temperature)
 
             if is_multi_step_dic[metric_name]:
                 auc_metric = compute_auc_metric(scores1)        
