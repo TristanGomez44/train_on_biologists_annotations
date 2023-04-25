@@ -4,7 +4,6 @@ import math
 import numpy as np
 import torch
 import torch.nn.functional as F
-import torchvision
 import matplotlib.pyplot as plt
 import matplotlib.cm as cm
 from matplotlib import colors
@@ -15,6 +14,47 @@ import load_data
 from saliency_maps_metrics.multi_step_metrics import Insertion
 from does_resolution_impact_faithfulness import get_data_inds_and_explanations,load_model
 import utils
+
+def make_multi_bar_plot_viz(output_list,outputs_on_unmodified_image,scale_factors,nb_pert,labels,result_path):
+
+    #output_list = output_list.sort(dim=-1)[0].mean(dim=2).cpu()
+    output_list = output_list.mean(dim=2).cpu()
+
+    outputs_on_unmodified_image = outputs_on_unmodified_image.mean(dim=1).cpu()
+
+    cmap = plt.get_cmap("Set1")
+
+    x = np.arange(nb_pert+1)
+
+    fig,axs = plt.subplots(len(scale_factors),1,figsize=(15,15))   
+    for i in range(len(scale_factors)):
+        ax = axs[i]
+        
+        for j in range(output_list.shape[-1]):
+            
+            height = torch.cat((outputs_on_unmodified_image[j:j+1],output_list[i,:,j]),dim=0)
+
+            if j == 0:
+                total_height = torch.zeros(nb_pert+1)
+            else:
+                total_height = torch.cat((outputs_on_unmodified_image[:j].sum().unsqueeze(0),output_list[i,:,:j].sum(dim=-1)),dim=0)
+
+            if i ==0:
+                ax.bar(x,height,bottom=total_height,color=cmap(j/9),label=labels[j])
+            else:
+                ax.bar(x,height,bottom=total_height,color=cmap(j/9))
+
+    fig.legend()
+    fig.savefig(result_path)
+
+def print_min_max_mean(output):
+    print(output.shape)
+    output = output.view(output.shape[0],output.shape[1],-1)
+    
+    print(output.min(dim=-1)[0])
+    print(output.mean(dim=-1)[0])
+    print(output.max(dim=-1)[0])
+
 def compute_or_load_scores(args,scale_factors,perturb_props,explanations,data,net_lambda):
 
         result_file_path = f"../results/{args.exp_id}/blur_and_pert_vs_conf_{args.model_id}_{args.att_metrics_post_hoc}.npy"
@@ -42,7 +82,7 @@ def compute_or_load_scores(args,scale_factors,perturb_props,explanations,data,ne
 
                 for perturbation_prop in perturb_props:
                     
-                    perturbation_nb = int(total_pixel_nb*perturbation_prop)
+                    perturbation_nb = max(1,int(total_pixel_nb*perturbation_prop))
 
                     batch_img = []
                     for i in range(len(data)):
@@ -116,18 +156,17 @@ def main(argv=None):
     if "ablationcam" in args.att_metrics_post_hoc:
         net,net_lambda = load_model(args)
 
-    outputs = torch.softmax(outputs,dim=-1)[batch_inds,predClassInds]
+    outputs = torch.softmax(outputs,dim=-1)
 
     kernel_size = args.kernel_size
 
     data_blurred = blur_data(data,kernel_size)
     outputs_blurred = net_lambda(data_blurred)
-    outputs_blurred = torch.softmax(outputs_blurred,dim=-1)[batch_inds,predClassInds]
+    outputs_blurred = torch.softmax(outputs_blurred,dim=-1)
 
     ratio = net.firstModel.featMod.downsample_ratio
     powers = np.arange(math.log(ratio,2)+1)
     scale_factors = np.power(2,powers).astype(int)
-    #scale_factors = scale_factors[:4]
 
     log = int(math.log(1/args.max_pert_prop,2))
     log_list = np.arange(log,log+args.nb_pert)
@@ -135,6 +174,9 @@ def main(argv=None):
 
     output_list = compute_or_load_scores(args,scale_factors,perturb_props,explanations,data,net_lambda)
     output_list = torch.softmax(output_list,dim=-1)
+
+    labels = testDataset.classes
+    make_multi_bar_plot_viz(output_list,outputs,scale_factors,args.nb_pert,labels,f"../vis/{args.exp_id}/blur_and_pert_vs_conf_multibar_{args.model_id}_{args.att_metrics_post_hoc}.png")
 
     val_matrix = torch.zeros(len(scale_factors),args.nb_pert)
     batch_inds = torch.arange(len(data))
