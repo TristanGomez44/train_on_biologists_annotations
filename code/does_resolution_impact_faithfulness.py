@@ -221,7 +221,11 @@ def main(argv=None):
     fig_dict["mean"] = fig
     axs_dict["mean"] = axs   
 
-    for metric_name,is_cumulative in zip(metric_list,is_cumulative_list):
+    fig_scores1,axs_scores1 = plt.subplots(len(metric_list),len(scale_factors),figsize=(15,15))  
+    fig_baseline,axs_baseline = plt.subplots(len(metric_list),len(scale_factors),figsize=(15,15))  
+    fig_pred_class,axs_pred_class = plt.subplots(len(metric_list),len(scale_factors),figsize=(15,15))  
+
+    for metric_ind,(metric_name,is_cumulative) in enumerate(zip(metric_list,is_cumulative_list)):
         print(metric_name,is_cumulative)
 
         formated_attention_metric = metric_name
@@ -248,11 +252,28 @@ def main(argv=None):
             kwargs = {"save_all_class_scores":True,"return_data":True}
 
             scores1,scores2 = compute_or_load_scores(metric,metric_name,metric_args,args,formated_attention_metric,metric.data_replace_method,post_hoc_suff,factor,is_multi_step_dic,kwargs)
+            bef = (scores1.min(),scores1.mean(),scores1.max())
+            
+            for j in range(len(scores1)):
+                axs_pred_class[metric_ind,factor_ind].set_ylabel(metric_name+"_"+str(is_cumulative))
+                if is_multi_step_dic[metric_name]:
+                    axs_pred_class[metric_ind,factor_ind].scatter(np.arange(scores1.shape[1]),scores1[j].argmax(axis=-1),alpha=0.005,color="blue")
 
             if not is_cumulative:
-                scores1 = apply_softmax(scores1,args.temperature,loop_mode=True)
+                print(scores1.shape)
+                baseline = apply_softmax(scores1,args.temperature,loop_mode=False)
+                scores1 = apply_softmax(scores1,args.temperature,loop_mode=True)    
             else:
                 scores1 = apply_softmax(scores1,args.temperature)
+            
+            for j in range(len(scores1)):
+                axs_scores1[metric_ind,factor_ind].plot(scores1[j],alpha=0.1,color="blue")
+                axs_scores1[metric_ind,factor_ind].set_ylabel(metric_name+"_"+str(is_cumulative))
+                if not is_cumulative:
+                    axs_baseline[metric_ind,factor_ind].plot(baseline[j],alpha=0.1,color="blue")
+                axs_baseline[metric_ind,factor_ind].set_ylabel(metric_name+"_"+str(is_cumulative))
+
+            #print(bef,scores1.min(),scores1.mean(),scores1.max())
 
             if is_multi_step_dic[metric_name]:
                 auc_metric = compute_auc_metric(scores1)        
@@ -286,6 +307,15 @@ def main(argv=None):
                 global_dict[sub_metric_and_cum_suff]["mean"][factor] = mean
                 global_dict[sub_metric_and_cum_suff]["conf_interv_low"][factor] = low
                 global_dict[sub_metric_and_cum_suff]["conf_interv_high"][factor] = high
+
+    fig_pred_class.tight_layout()
+    fig_pred_class.savefig(f"../vis/{args.exp_id}/resolution_vs_faithfulness_pred_class_{args.model_id}_{args.att_metrics_post_hoc}.png")   
+
+    fig_scores1.tight_layout()
+    fig_scores1.savefig(f"../vis/{args.exp_id}/resolution_vs_faithfulness_scores1_{args.model_id}_{args.att_metrics_post_hoc}.png")
+
+    fig_baseline.tight_layout()
+    fig_baseline.savefig(f"../vis/{args.exp_id}/resolution_vs_faithfulness_baseline_{args.model_id}_{args.att_metrics_post_hoc}.png")
 
     plot_nb = len(global_dict.keys())
     nb_rows = int(math.sqrt(plot_nb))
