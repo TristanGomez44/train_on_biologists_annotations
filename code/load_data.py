@@ -172,4 +172,10 @@ def addArgs(argreader):
     argreader.parser.add_argument('--patch_res', type=int, metavar='S',
                                   help='The resolution of the black patch mask')
 
+    argreader.parser.add_argument('--train_csv', type=str, metavar='S',
+                                  help='Path to the csv containing train images path')
+    
+    argreader.parser.add_argument('--split', type=int, metavar='S',
+                                  help='Split index. Should be between 0 and 4.')
+
     return argreader

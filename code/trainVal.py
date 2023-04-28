@@ -26,6 +26,7 @@ import metrics
 import sal_metr_data_aug
 import update
 import multi_obj_epoch_selection
+from crohn_loader import get_train_valid_loader_consensus
 
 def remove_excess_examples(data,target,accumulated_size,batch_size):
     if accumulated_size + data.size(0) > batch_size:
@@ -330,12 +331,10 @@ def train(args,trial):
 
     save_git_status(args)
 
-    if not args.only_test:
-        trainLoader,_ = load_data.buildTrainLoader(args)
-    else:
-        trainLoader = None
-    valLoader,_ = load_data.buildTestLoader(args,"val")
-    
+    trainLoader = get_train_valid_loader_consensus(args.train_csv, batch_size=args.batch_size,random_seed=args.seed,subset='train')[args.split]
+    valLoader = get_train_valid_loader_consensus(args.train_csv, batch_size=args.batch_size,random_seed=args.seed,subset='valid')[args.split]
+    testLoader = valLoader
+
     # Building the net
     net = modelBuilder.netBuilder(args)
 
