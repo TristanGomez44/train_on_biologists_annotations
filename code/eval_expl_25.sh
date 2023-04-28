@@ -7,7 +7,7 @@ fi
 
 if [ "$3" == "all" ];
 then
-    declare -a expl_list=("randommap" "topfeatmap" "randomfeatmap" "am" "cam" "gradcam" "gradcampp" "ablationcamnous" "scorecam")
+    declare -a expl_list=("randommap" "topfeatmap" "randomfeatmap" "am" "cam" "gradcam" "gradcampp" "ablationcam" "ablationcamnous" "scorecam")
 else
     declare -a expl_list=($3)
 fi
