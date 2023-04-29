@@ -117,8 +117,9 @@ def exctract_blast_img(path,dest_fold,img_ind,mask,empty_list,var_thres):
         img_path = paths[img_ind]
         img_name = os.path.basename(img_path)
         dest_path = os.path.join(dest_fold,img_name)
-        os.makedirs(dest_fold,exist_ok=True)
-        shutil.copyfile(img_path,dest_path)
+        if not os.path.exists(dest_path):
+            os.makedirs(dest_fold,exist_ok=True)
+            shutil.copyfile(img_path,dest_path)
 
     return empty_list
 
