@@ -98,9 +98,8 @@ def training_epoch(model, optim, loader, epoch, args, **kwargs):
         if batch_idx % args.log_interval == 0:
             processedImgNb = batch_idx * len(batch[0])
             print("\t", processedImgNb, "/", len(loader.dataset))
-
+        
         data, target = batch[0], batch[1]
-
         #Removing excess samples (if training is done by accumulating gradients)
         data,target,accumulated_size = remove_excess_examples(data,target,accumulated_size,args.batch_size)
 
@@ -184,7 +183,6 @@ def evaluation(model, loader, epoch, args, mode="val",**kwargs):
     var_dic = {}
     for batch_idx, batch in enumerate(loader):
         data, target = batch[:2]
-
         if (batch_idx % args.log_interval == 0):
             print("\t", batch_idx * len(data), "/", len(loader.dataset))
 
@@ -332,7 +330,7 @@ def train(args,trial):
     save_git_status(args)
 
     trainLoader = get_train_valid_loader_consensus(args.train_csv, batch_size=args.batch_size,random_seed=args.seed,subset='train')[args.split]
-    valLoader = get_train_valid_loader_consensus(args.train_csv, batch_size=args.batch_size,random_seed=args.seed,subset='valid')[args.split]
+    valLoader = get_train_valid_loader_consensus(args.train_csv, batch_size=args.val_batch_size,random_seed=args.seed,subset='valid')[args.split]
     testLoader = valLoader
 
     # Building the net
