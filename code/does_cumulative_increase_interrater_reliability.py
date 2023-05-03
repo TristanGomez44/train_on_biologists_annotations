@@ -261,12 +261,27 @@ def get_method_ind(method):
     order_dic = {"randommap":0,"randomfeatmap":1,"topfeatmap":2,"am":3,"cam":4,"gradcam":5,"gradcampp":6,"ablationcam":7,"ablationcam2":8,"ablationcamnous":9,"scorecam":10}
     return order_dic[method]
 
-def sort_rows(metrics,all_mat,key_func=get_metric_ind):
+def sort_rows_inner_reliability(metrics,all_mat,key_func=get_metric_ind):
+    print("bef",all_mat.shape)
     key= lambda x:key_func(x[0])
     metrics_and_all_mat = zip(metrics,all_mat)
     metrics_and_all_mat = sorted(metrics_and_all_mat,key=key)
     metrics,all_mat = zip(*metrics_and_all_mat)
     all_mat = np.stack(all_mat)
+    print("aft",all_mat.shape)
+    return metrics,all_mat
+
+
+def sort_rows(metrics,all_mat,key_func=get_metric_ind):
+    print("bef",all_mat.shape)
+    key= lambda x:key_func(x[0])
+    all_mat = all_mat.transpose(1,0)
+    metrics_and_all_mat = zip(metrics,all_mat)
+    metrics_and_all_mat = sorted(metrics_and_all_mat,key=key)
+    metrics,all_mat = zip(*metrics_and_all_mat)
+    all_mat = np.stack(all_mat)
+    all_mat = all_mat.transpose(1,0)
+    print("aft",all_mat.shape)
     return metrics,all_mat
 
 def make_krippen_bar_plot(array_krippen,array_krippen_err,metrics,multi_step_metrics,exp_id,filename_suff):
@@ -323,6 +338,30 @@ def inter_method_reliability(metric_values_matrix,corr_func,exp_id,labels,filena
 
     make_comparison_matrix(inter_method_corr_mat,signif_mat,exp_id,labels,f"ttest_intermethod_{filename_suff}.png",axs,1*(cumulative_suff=="-nc"),subplot_ind,subplot_name,fontsize=11)
 
+def scatter_plot(metric_values_matrix,exp_id,labels,filename_suff,axs,subplot_ind,fig,cumulative_suff,subplot_name):
+
+    labels,metric_values_matrix = sort_rows(labels,metric_values_matrix,key_func=get_method_ind)
+
+    method_nb = metric_values_matrix.shape[1]
+    inter_method_corr_mat = np.zeros((method_nb,method_nb))
+    signif_mat = np.empty((method_nb,method_nb))
+
+    random_map_col = np.argwhere(np.array(labels)=="randommap")[0][0]
+    gradcam_col = np.argwhere(np.array(labels)=="gradcam")[0][0]
+
+    values_x = metric_values_matrix[:,random_map_col]       
+    values_y = metric_values_matrix[:,gradcam_col]
+     
+    ax = axs[1*(cumulative_suff=="-nc"),subplot_ind]
+    ax.scatter(values_x,values_y)
+    ax.set_ylabel("GradCAM",fontsize=11)
+    ax.set_xlabel("RandomMap",fontsize=11)
+    ax.set_title(subplot_name)
+
+    fig.savefig(f"../vis/{exp_id}/ttest_intermethod_scatter_{filename_suff}.png")
+
+    #make_comparison_matrix(inter_method_corr_mat,signif_mat,exp_id,labels,f"ttest_intermethod_{filename_suff}.png",axs,1*(cumulative_suff=="-nc"),subplot_ind,subplot_name,fontsize=11)
+
 def krippendorf(metric_values_matrix_alpha,exp_id,metric,cumulative_suff,csv_krippen,array_krippen,array_krippen_err,metr_ind):
 
     alpha = krippendorff_alpha_paralel(metric_values_matrix_alpha)
@@ -356,7 +395,7 @@ def inner_reliability(metrics,multi_step_metrics,all_metric_values_matrix,all_me
     metrics.remove("IIC")
     metrics_ = metrics + [metric+"-nc" for metric in multi_step_metrics]
 
-    metrics_,all_mat = sort_rows(metrics_,all_mat)
+    metrics_,all_mat = sort_rows_inner_reliability(metrics_,all_mat)
 
     for i in range(all_metric_values_matrix.shape[2]):
 
@@ -441,6 +480,7 @@ def main(argv=None):
         filename_suff = f"{model_id}_b{args.background}"
 
     fig, axs = plt.subplots(2,len(metrics),figsize=(35,15))
+    fig_scatter, axs_scatter = plt.subplots(2,len(metrics),figsize=(35,15))
 
     for cumulative_suff in ["","-nc"]:
 
@@ -485,6 +525,8 @@ def main(argv=None):
                 if metric != "IIC":
                     #Inter-method reliability
                     inter_method_reliability(metric_values_matrix,corr_func,exp_id,explanation_names,filename_suff,axs,metr_ind,cumulative_suff,metric)
+
+                    scatter_plot(metric_values_matrix,exp_id,explanation_names,filename_suff,axs_scatter,metr_ind,fig_scatter,cumulative_suff,metric)
 
                     if cumulative_suff == "-nc":
                         all_metric_values_matrix.append(metric_values_matrix)
