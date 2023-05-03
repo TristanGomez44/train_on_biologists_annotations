@@ -29,24 +29,16 @@ def make_db(col_list,db_path):
 
     con.commit()
 
-def apply_softmax(array,temperature,loop_mode=False):
+def apply_softmax(array,inds,temperature=1):
     tensor = torch.from_numpy(array)
     tensor = torch.softmax(tensor.double()/temperature,dim=-1)
-
+    inds = inds.cpu()
     if len(tensor.shape) == 3:
-        if loop_mode:
-            result_tensor = torch.zeros(tensor.shape[0],tensor.shape[1])
-            for i in range(tensor.shape[0]):
-                class_index = tensor[i,0].argmax()
-                for j in range(tensor.shape[1]):
-                    result_tensor[i,j] = tensor[i,j,class_index]
-            tensor = result_tensor
-        else:
-            inds = tensor[:,0].argmax(dim=-1,keepdim=True).unsqueeze(1)
-            inds = inds.expand(-1,tensor.shape[1],-1)
-            tensor = tensor.gather(2,inds).squeeze(-1)
+        inds = inds.unsqueeze(-1).unsqueeze(-1)
+        inds = inds.expand(-1,tensor.shape[1],-1)
+        tensor = tensor.gather(2,inds).squeeze(-1)
     else:
-        inds = tensor.argmax(dim=-1,keepdim=True)
+        inds = inds.unsqueeze(-1)
         tensor = tensor.gather(1,inds).squeeze(-1)        
 
     array = tensor.numpy()

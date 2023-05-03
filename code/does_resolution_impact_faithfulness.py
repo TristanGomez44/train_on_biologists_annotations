@@ -67,8 +67,8 @@ def plot_scores(is_auc,metric_name,is_cumulative,factor_ind,factor,axs,scores1,s
         lower_y_lim = 0
         upper_y_lim = 1.2
     else:
-        lower_y_lim = -0.15
-        upper_y_lim = 0.15
+        lower_y_lim = -0.033
+        upper_y_lim = 0.033
 
     ax.set_ylim(lower_y_lim,upper_y_lim)
     
@@ -222,7 +222,6 @@ def main(argv=None):
     axs_dict["mean"] = axs   
 
     fig_scores1,axs_scores1 = plt.subplots(len(metric_list),len(scale_factors),figsize=(15,15))  
-    fig_baseline,axs_baseline = plt.subplots(len(metric_list),len(scale_factors),figsize=(15,15))  
     fig_pred_class,axs_pred_class = plt.subplots(len(metric_list),len(scale_factors),figsize=(15,15))  
 
     for metric_ind,(metric_name,is_cumulative) in enumerate(zip(metric_list,is_cumulative_list)):
@@ -252,28 +251,20 @@ def main(argv=None):
             kwargs = {"save_all_class_scores":True,"return_data":True}
 
             scores1,scores2 = compute_or_load_scores(metric,metric_name,metric_args,args,formated_attention_metric,metric.data_replace_method,post_hoc_suff,factor,is_multi_step_dic,kwargs)
-            bef = (scores1.min(),scores1.mean(),scores1.max())
-            
+
             for j in range(len(scores1)):
                 axs_pred_class[metric_ind,factor_ind].set_ylabel(metric_name+"_"+str(is_cumulative))
                 if is_multi_step_dic[metric_name]:
                     axs_pred_class[metric_ind,factor_ind].scatter(np.arange(scores1.shape[1]),scores1[j].argmax(axis=-1),alpha=0.005,color="blue")
 
             if not is_cumulative:
-                print(scores1.shape)
-                baseline = apply_softmax(scores1,args.temperature,loop_mode=False)
-                scores1 = apply_softmax(scores1,args.temperature,loop_mode=True)    
+                scores1 = apply_softmax(scores1,predClassInds,args.temperature)
             else:
-                scores1 = apply_softmax(scores1,args.temperature)
+                scores1 = apply_softmax(scores1,predClassInds,args.temperature)
             
             for j in range(len(scores1)):
                 axs_scores1[metric_ind,factor_ind].plot(scores1[j],alpha=0.1,color="blue")
                 axs_scores1[metric_ind,factor_ind].set_ylabel(metric_name+"_"+str(is_cumulative))
-                if not is_cumulative:
-                    axs_baseline[metric_ind,factor_ind].plot(baseline[j],alpha=0.1,color="blue")
-                axs_baseline[metric_ind,factor_ind].set_ylabel(metric_name+"_"+str(is_cumulative))
-
-            #print(bef,scores1.min(),scores1.mean(),scores1.max())
 
             if is_multi_step_dic[metric_name]:
                 auc_metric = compute_auc_metric(scores1)        
@@ -290,7 +281,7 @@ def main(argv=None):
                 plot_scores(True,metric_name,is_cumulative,factor_ind,factor,axs,scores1,scores2)
                 
             else:
-                scores2 = apply_softmax(scores2,args.temperature)
+                scores2 = apply_softmax(scores2,predClassInds,args.temperature)
                 result_dic = metric.compute_metric(scores1,scores2)
 
             for sub_metric in result_dic:
@@ -313,9 +304,6 @@ def main(argv=None):
 
     fig_scores1.tight_layout()
     fig_scores1.savefig(f"../vis/{args.exp_id}/resolution_vs_faithfulness_scores1_{args.model_id}_{args.att_metrics_post_hoc}.png")
-
-    fig_baseline.tight_layout()
-    fig_baseline.savefig(f"../vis/{args.exp_id}/resolution_vs_faithfulness_baseline_{args.model_id}_{args.att_metrics_post_hoc}.png")
 
     plot_nb = len(global_dict.keys())
     nb_rows = int(math.sqrt(plot_nb))
