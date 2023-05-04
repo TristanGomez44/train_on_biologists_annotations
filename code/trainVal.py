@@ -146,6 +146,11 @@ def training_epoch(model, optim, loader, epoch, args, **kwargs):
     if not args.optuna:
         torch.save(model.state_dict(), "../models/{}/model{}_epoch{}".format(args.exp_id, args.model_id, epoch))
         
+        if args.focal_weight == 0 and not args.compute_ece:
+            previous_epoch_model = "../models/{}/model{}_epoch{}".format(args.exp_id, args.model_id, epoch-1)
+            if os.path.exists(previous_epoch_model):
+                os.remove(previous_epoch_model)
+
     if args.nce_weight > 0 or args.adv_weight > 0: 
         metrDict = metrics.separability_metric(var_dic["feat_pooled"].detach().cpu(),var_dic["feat_pooled_masked"].detach().cpu(),var_dic["target"],metrDict,args.seed,args.img_nb_per_class)
         with torch.no_grad():
