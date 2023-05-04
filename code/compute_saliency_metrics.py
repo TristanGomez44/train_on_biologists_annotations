@@ -32,7 +32,9 @@ def make_db(col_list,db_path):
 def apply_softmax(array,inds,temperature=1):
     tensor = torch.from_numpy(array)
     tensor = torch.softmax(tensor.double()/temperature,dim=-1)
+    
     inds = inds.cpu()
+
     if len(tensor.shape) == 3:
         inds = inds.unsqueeze(-1).unsqueeze(-1)
         inds = inds.expand(-1,tensor.shape[1],-1)
@@ -176,9 +178,11 @@ def main(argv=None):
             if is_multi_step_dic[metric_name]:
                 all_score_list,all_sal_score_list = scores_dic["prediction_scores"],scores_dic["saliency_scores"]
                 all_score_list = fix_type(all_score_list)
+
+                predClassInds = scores_dic["outputs"].argmax(dim=-1)
                 
                 if len(all_score_list.shape) == 3:
-                    all_score_list = apply_softmax(all_score_list,args.temperature)
+                    all_score_list = apply_softmax(all_score_list,predClassInds,args.temperature)
                     if args.temperature != 1:
                         model_id += "T"+str(args.temperature)
 
@@ -197,10 +201,12 @@ def main(argv=None):
                 all_score_list,all_score_masked_list = scores_dic["prediction_scores"],scores_dic["prediction_scores_with_mask"]
                 all_score_list = fix_type(all_score_list)
                 all_score_masked_list = fix_type(all_score_masked_list)
+
+                predClassInds = scores_dic["outputs"].argmax(dim=-1)
                 
                 if len(all_score_list.shape) == 2:
-                    all_score_list = apply_softmax(all_score_list,args.temperature)
-                    all_score_masked_list = apply_softmax(all_score_masked_list,args.temperature)
+                    all_score_list = apply_softmax(all_score_list,predClassInds,args.temperature)
+                    all_score_masked_list = apply_softmax(all_score_masked_list,predClassInds,args.temperature)
                     if args.temperature != 1:
                         model_id += "T"+str(args.temperature)
 
