@@ -26,6 +26,7 @@ import metrics
 import sal_metr_data_aug
 import update
 import multi_obj_epoch_selection
+from crohn_loader import get_train_valid_loader_consensus
 
 def remove_excess_examples(data,target,accumulated_size,batch_size):
     if accumulated_size + data.size(0) > batch_size:
@@ -97,9 +98,8 @@ def training_epoch(model, optim, loader, epoch, args, **kwargs):
         if batch_idx % args.log_interval == 0:
             processedImgNb = batch_idx * len(batch[0])
             print("\t", processedImgNb, "/", len(loader.dataset))
-
+        
         data, target = batch[0], batch[1]
-
         #Removing excess samples (if training is done by accumulating gradients)
         data,target,accumulated_size = remove_excess_examples(data,target,accumulated_size,args.batch_size)
 
@@ -146,11 +146,6 @@ def training_epoch(model, optim, loader, epoch, args, **kwargs):
     if not args.optuna:
         torch.save(model.state_dict(), "../models/{}/model{}_epoch{}".format(args.exp_id, args.model_id, epoch))
         
-        if args.focal_weight == 0 and not args.compute_ece:
-            previous_epoch_model = "../models/{}/model{}_epoch{}".format(args.exp_id, args.model_id, epoch-1)
-            if os.path.exists(previous_epoch_model):
-                os.remove(previous_epoch_model)
-
     if args.nce_weight > 0 or args.adv_weight > 0: 
         metrDict = metrics.separability_metric(var_dic["feat_pooled"].detach().cpu(),var_dic["feat_pooled_masked"].detach().cpu(),var_dic["target"],metrDict,args.seed,args.img_nb_per_class)
         with torch.no_grad():
@@ -183,7 +178,6 @@ def evaluation(model, loader, epoch, args, mode="val",**kwargs):
     var_dic = {}
     for batch_idx, batch in enumerate(loader):
         data, target = batch[:2]
-
         if (batch_idx % args.log_interval == 0):
             print("\t", batch_idx * len(data), "/", len(loader.dataset))
 
@@ -330,12 +324,10 @@ def train(args,trial):
 
     save_git_status(args)
 
-    if not args.only_test:
-        trainLoader,_ = load_data.buildTrainLoader(args)
-    else:
-        trainLoader = None
-    valLoader,_ = load_data.buildTestLoader(args,"val")
-    
+    trainLoader = get_train_valid_loader_consensus(args.train_csv, batch_size=args.batch_size,random_seed=args.seed,subset='train')[args.split]
+    valLoader = get_train_valid_loader_consensus(args.train_csv, batch_size=args.val_batch_size,random_seed=args.seed,subset='valid')[args.split]
+    testLoader = valLoader
+
     # Building the net
     net = modelBuilder.netBuilder(args)
 
