@@ -3,7 +3,7 @@ from torch import nn
 import matplotlib.pyplot as plt
 plt.switch_backend('agg')
 
-from models import resnet,transformer,vgg
+from models import resnet,transformer
 
 import args
 EPS = 0.000001
@@ -39,8 +39,6 @@ def buildFeatModel(featModelName, **kwargs):
     '''
     if "resnet"in featModelName:
         featModel = getattr(resnet, featModelName)(**kwargs)
-    elif "vgg"in featModelName:
-        featModel = getattr(vgg, featModelName)(**kwargs)        
     elif "vit" in featModelName:
         featModel = getattr(transformer, featModelName)(weights="IMAGENET1K_V1",**kwargs)
     else:
@@ -134,7 +132,7 @@ class CNN2D(FirstModel):
         # N x C x H x L
         retDict = self.featMod(x)
 
-        if "feat" in retDict and ("feat_pooled" not in retDict):
+        if "feat" in retDict:
             retDict["feat_pooled"] = self.avgpool(retDict["feat"]).squeeze(-1).squeeze(-1)
 
         return retDict
@@ -271,6 +269,7 @@ class LinearSecondModel(SecondModel):
             retDict["projection"] = self.nce_proj_layer(x)
 
         output = self.linLay(x)/self.temperature
+
         retDict["output"]=output
 
         return retDict
@@ -285,8 +284,6 @@ def getResnetFeat(backbone_name, backbone_inplanes):
         nbFeat = backbone_inplanes * 2 ** (4 - 1)
     elif backbone_name.find("resnet18") != -1:
         nbFeat = backbone_inplanes * 2 ** (4 - 1)
-    elif "vgg" in backbone_name:
-        nbFeat = 4096     
     elif backbone_name == "convnext_small":
         nbFeat = 768
     elif backbone_name == "convnext_base":
@@ -342,8 +339,6 @@ def netBuilder(args,gpu=None):
         CNNconst = CNN2D
         if "vit" in args.first_mod:
             kwargs = {"image_size":get_img_size(args)}
-        elif "vgg" in args.first_mod:
-            kwargs = {}
         else:
             kwargs = {"chan":args.resnet_chan, "stride":args.resnet_stride,\
                         "strideLay2":args.stride_lay2,"strideLay3":args.stride_lay3,\
