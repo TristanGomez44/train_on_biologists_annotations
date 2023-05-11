@@ -7,7 +7,6 @@ import matplotlib.pyplot as plt
 from PIL import Image,ImageEnhance,ImageFile,UnidentifiedImageError
 ImageFile.LOAD_TRUNCATED_IMAGES = True
 from skimage import transform
-import cv2
 import subprocess
 
 def make_frame_and_plane_dict(root):
@@ -35,33 +34,6 @@ def make_frame_and_plane_dict(root):
                 dic[name] = {"frame_to_use":int(original_frame_ind),"focal_plane":"F0"}
 
     return dic         
-
-def fix_annot_files(fold):
-
-    csv = np.genfromtxt(fold[:-1]+".csv",delimiter=",",dtype=str)
-    new_csv = []
-
-    for row in csv[1:]:
-
-        name = row[0].replace(".jpeg","")
-
-        pattern = fold+"/"+name+"_RUN*.jpeg"
-
-        matches = glob.glob(pattern)
-
-        if len(matches) != 1:
-            raise ValueError("Wrong matching path number",matches,pattern,row)
-        
-        fullname = os.path.basename(matches[0])
-
-        new_row = [fullname]
-        new_row += list(row[1:])
-
-        new_csv.append(new_row)
-
-    header = ",".join(csv[0])
-    np.savetxt(fold[:-1]+"_fixed.csv",new_csv,header=header,delimiter=",",fmt='%s')
-
 
 def str_to_float(var):
     if type(var) is str:
@@ -136,40 +108,9 @@ def get_focal_plane(path):
     focal_plane = int(focal_plane.replace("F",""))
     return focal_plane
 
-def find_sharpest_focal_plan(path,img_ind):
-
-    try:
-        focal_plane_list = sorted(glob.glob(os.path.join(path,"F*/")),key=get_focal_plane)
-    except ValueError:
-        print(os.path.join(path,"/*/"),path)
-        sys.exit(0)
-
-    fold,well_id = path.split("/")[-2].split("-")
-    
-    sharpest_focal_plane = None
-    highest_sharpness_value = 0
-    for focal_plane in focal_plane_list:
-        img_path = os.path.join(path,focal_plane,fold+"_WELL"+well_id+"_RUN"+str(img_ind)+".jpeg")
-        if os.path.exists(img_path):
-            img = Image.open(img_path)
-            img = np.asarray(img, dtype=np.int32)
-            gy, gx = np.gradient(img)
-            gnorm = np.sqrt(gx**2 + gy**2)
-            sharpness = np.average(gnorm)
-        
-            if sharpness > highest_sharpness_value:
-                highest_sharpness_value = sharpness 
-                sharpest_focal_plane = focal_plane
-    
-    sharpest_focal_plane = sharpest_focal_plane.split("/")[-2]
-
-    return "F0",sharpest_focal_plane
 
 def exctract_blast_img(path,dest_fold,img_ind,mask,empty_list,var_thres,frame_and_plane_dicts):
-    
-    #img_name = os.path.basename(paths[0])#.split("_RUN")[0]+".jpeg"
-    #if not os.path.exists(dest_path):
-    
+     
     orig_img_ind = img_ind
 
     fold_name = path.split("/")[-2]
@@ -182,27 +123,18 @@ def exctract_blast_img(path,dest_fold,img_ind,mask,empty_list,var_thres,frame_an
 
         if "focal_plane" in dic:
             focal_plane = dic["focal_plane"]
-            #print("\t",path)
-            sharpest_focal_plane = find_sharpest_focal_plan(path,img_ind)
         else:
-            focal_plane,sharpest_focal_plane = find_sharpest_focal_plan(path,img_ind)
+            focal_plane = "F0"
 
     else:
         focal_plane = "F0"
         paths = sorted(glob.glob(os.path.join(path,focal_plane,"*.*")),key=get_img_ind)
         img_ind = prevent_empty_well_image(paths,img_ind,mask,thres=var_thres)
-        if not img_ind is None:
-            focal_plane,sharpest_focal_plane = find_sharpest_focal_plan(path,img_ind)
-        else:
-            focal_plane,sharpest_focal_plane = "F0",None
+        focal_plane = "F0"
 
-    #if focal_plane != "F0":
-    #    paths = sorted(glob.glob(os.path.join(path,focal_plane,"*.*")),key=get_img_ind)
-    
     if img_ind is None:
         empty_list.append(path)
     else:
-        #img_path = paths[img_ind]
         try:
             img_path = glob.glob(os.path.join(path,focal_plane,"*_RUN"+str(img_ind)+".jpeg"))[0]
         except IndexError:
@@ -215,126 +147,11 @@ def exctract_blast_img(path,dest_fold,img_ind,mask,empty_list,var_thres,frame_an
             os.makedirs(dest_fold,exist_ok=True)
             shutil.copyfile(img_path,dest_path)
 
-    return empty_list,sharpest_focal_plane
+    return empty_list
 
-def main():
-
-    data_root = "/media/E144069X/DL4IVF/DL4IVF/"
-    dest_dataset_root = "../data/dl4ivf_grade_dataset/"
-
-    var_thres = 20
-    h,w,r = 500,500,200
-    x = np.arange(w)[np.newaxis]
-    y = np.arange(h)[:,np.newaxis]
-    center_x,center_y = w//2,h//2
-    mask = (np.sqrt((x-center_x)**2+(y-center_y)**2) > r)
-    
-    #Make dataset
-    #if not os.path.exists(dest_dataset_root+"/blast_and_grade_annot"):
-
-    os.makedirs(dest_dataset_root,exist_ok=True)
-
-    print("Reading csv")
-    annot_root = "../data/"
-    early_csv = pd.read_csv(os.path.join(annot_root,"export 2011-2016.csv"),sep=",",low_memory=False)
-    late_csv = pd.read_csv(os.path.join(annot_root,"EXPORT 2017-2019.csv"),sep=";",low_memory=False)
-
-    frame_and_plane_dict = make_frame_and_plane_dict(dest_dataset_root)
-
-    print("Gathering folder paths")
-    paths = glob.glob(os.path.join(data_root,"./*/"))
-    nbVids = len(paths)
-
-    grade_annot_csv = []
-    grade_annot_list,blast_annot_list,no_annot_list = 0,0,0
-    grade_diff_count = 0
-    uncomplete_folders = []
-
-    empty_list = []
-
-    sharpest_focal_plane_list = []
-
-    for i,path in enumerate(paths):
-
-        if i %500==0:
-            print(i,"/",len(paths))
-
-        slideId,wellId = path.split("/")[-2].split("-")
-        wellId = int(wellId)
-
-        year = int(slideId.split(".")[0].replace("D",""))
-
-        if year < 2017:
-            csv = early_csv
-        else:
-            csv = late_csv
-
-        bool_array = (csv["Slide ID"] ==  slideId) & (csv["Well"] ==  wellId)
-
-        if bool_array.sum() > 0:
-
-            rows = csv[bool_array]
-            row = rows.iloc[0]
-
-            te = row["TE - Value"]
-            icm = row["ICM - Value"]
-            is_blasto = str(row["tB"]) != "nan"
-            is_expanded_blasto = str(row["tEB"]) != "nan"
-            row_csv = [slideId+"-"+str(wellId),is_blasto,is_expanded_blasto,te,icm]
-            grade_annot_csv.append(row_csv)
-
-            if str(te) != "nan" and str(icm) != "nan":    
-                dest_fold = os.path.join(dest_dataset_root,"blast_and_grade_annot/")
-                
-                te_time = str_to_float(row["TE - Time"])
-                icm_time = str_to_float(row["ICM - Time"])
-
-                time = (te_time + icm_time)/2
-                #print("grade",te_time,icm_time)
-                grade_annot_list += time
-
-            elif is_blasto and is_expanded_blasto:
-                dest_fold = os.path.join(dest_dataset_root,"blast_and_no_grade_annot/")
-                time = str_to_float(row["tEB"])
-                #print("blast",time)
-                blast_annot_list += time
-
-            #elif str(te) == "nan" and str(icm) == "nan" and (not is_blasto) and (not is_expanded_blasto):
-            #    no_annot_list += 1
-            #    dest_fold = os.path.join(dest_dataset_root,"no_blast_and_no_grade_annot/")
-            #    time = -1
-            #    print("noannot",time)
-            #    no_annot_list += time
-
-            else:
-                time = None 
-
-            if time is not None:
-                img_nb = get_img_nb(path)
-                if img_nb > 0:
-                    img_ind = int(img_nb*get_prop(row,time)) - 1
-                    img_ind = max(img_ind,0)
-                    empty_list,sharpest_focal_plane = exctract_blast_img(path,dest_fold,img_ind,mask,empty_list,var_thres,frame_and_plane_dict)
-                    sharpest_focal_plane_list.append(sharpest_focal_plane)
-                else:
-                    uncomplete_folders.append(path)
-
-    np.savetxt("../data/uncomplete_folders.csv", uncomplete_folders, fmt='%s',delimiter=",")
-
-    grade_annot_csv = np.array(grade_annot_csv)
-    np.savetxt("../data/grade_annot.csv", grade_annot_csv, fmt='%s',delimiter=",",header="video,is_blasto,is_expanded_blasto,te,icm")
-
-    empty_list = np.array(empty_list)
-    np.savetxt("../data/empty_list.csv", empty_list, fmt='%s',delimiter=",")
- 
-    sharpest_focal_plane_list = np.array(sharpest_focal_plane_list)
-    np.savetxt("../data/sharpest_focal_plane.csv", sharpest_focal_plane_list, fmt='%s',delimiter=",")
-
-    #else:
-    #    print("Dataset already exists")
-
+def fix_contrast(dest_dataset_root,h,w,mask,var_thres):
     light_thres = 100
- 
+
     #Fix contrast 
     folds = [dest_dataset_root+"/blast_and_grade_annot/",dest_dataset_root+"/blast_and_no_grade_annot/"]
     for j,fold in enumerate(folds):
@@ -376,7 +193,7 @@ def main():
                 img = enhancer.enhance(factor)
 
                 enhancer = ImageEnhance.Brightness(img)
-                min_fact,max_fact = 1,2.5
+                min_fact,max_fact = 1,4
                 factor = min_fact*(1-interp)+max_fact*interp
                 img = enhancer.enhance(factor)
                 
@@ -384,7 +201,6 @@ def main():
 
             if np.array(img).shape[0] != h:
                 img = np.array(img)
-                old_shape = img.shape
                 img = transform.resize(img,(h,w),order=3)
                 img = (255*img).astype("uint8")
                 img = Image.fromarray(img)
@@ -413,18 +229,19 @@ def main():
                 img.save(dest_dataset_root+"/embryo/"+str(round(var))+"_"+filename)  
 
         
-        no_embryo_hist_list = np.stack(no_embryo_hist_list,axis=0).mean(axis=0)
-        embryo_hist_list = np.stack(embryo_hist_list,axis=0).mean(axis=0)
+        if len(no_embryo_hist_list) > 0:
+            no_embryo_hist_list = np.stack(no_embryo_hist_list,axis=0).mean(axis=0)
+            plt.figure()
+            plt.bar(np.arange(len(no_embryo_hist_list)),no_embryo_hist_list)
+            plt.savefig(new_fold+"/no_emb_hist.png")
+            plt.close()
 
-        plt.figure()
-        plt.bar(np.arange(len(no_embryo_hist_list)),no_embryo_hist_list)
-        plt.savefig(new_fold+"/no_emb_hist.png")
-        plt.close()
-
-        plt.figure()
-        plt.bar(np.arange(len(embryo_hist_list)),embryo_hist_list)
-        plt.savefig(new_fold+"/emb_hist.png")
-        plt.close()        
+        if len(embryo_hist_list) > 0:
+            embryo_hist_list = np.stack(embryo_hist_list,axis=0).mean(axis=0)
+            plt.figure()
+            plt.bar(np.arange(len(embryo_hist_list)),embryo_hist_list)
+            plt.savefig(new_fold+"/emb_hist.png")
+            plt.close()        
 
         plt.figure()
         plt.hist(mean_list)
@@ -438,9 +255,111 @@ def main():
         
     subprocess.run(["sudo","chown","-R","E144069X",dest_dataset_root])
 
+def process_video(path,early_csv,late_csv,grade_annot_csv,dest_dataset_root,grade_annot_list,blast_annot_list,mask,empty_list,var_thres,frame_and_plane_dict,uncomplete_folders):
+        
+        slideId,wellId = path.split("/")[-2].split("-")
+        wellId = int(wellId)
+
+        year = int(slideId.split(".")[0].replace("D",""))
+
+        if year < 2017:
+            csv = early_csv
+        else:
+            csv = late_csv
+
+        bool_array = (csv["Slide ID"] ==  slideId) & (csv["Well"] ==  wellId)
+
+        if bool_array.sum() > 0:
+
+            rows = csv[bool_array]
+            row = rows.iloc[0]
+
+            te = row["TE - Value"]
+            icm = row["ICM - Value"]
+            is_blasto = str(row["tB"]) != "nan"
+            is_expanded_blasto = str(row["tEB"]) != "nan"
+            row_csv = [slideId+"-"+str(wellId),is_blasto,is_expanded_blasto,te,icm]
+            grade_annot_csv.append(row_csv)
+
+            if str(te) != "nan" and str(icm) != "nan":    
+                dest_fold = os.path.join(dest_dataset_root,"blast_and_grade_annot/")
+                
+                te_time = str_to_float(row["TE - Time"])
+                icm_time = str_to_float(row["ICM - Time"])
+
+                time = (te_time + icm_time)/2
+                grade_annot_list += time
+
+            elif is_blasto and is_expanded_blasto:
+                dest_fold = os.path.join(dest_dataset_root,"blast_and_no_grade_annot/")
+                time = str_to_float(row["tEB"])
+                blast_annot_list += time
+
+            else:
+                time = None 
+
+            if time is not None:
+                img_nb = get_img_nb(path)
+                if img_nb > 0:
+                    img_ind = int(img_nb*get_prop(row,time)) - 1
+                    img_ind = max(img_ind,0)
+                    empty_list = exctract_blast_img(path,dest_fold,img_ind,mask,empty_list,var_thres,frame_and_plane_dict)
+                else:
+                    uncomplete_folders.append(path)
+
+        return grade_annot_csv,grade_annot_list,blast_annot_list,empty_list,uncomplete_folders
+
+def main():
+
+    data_root = "/media/E144069X/DL4IVF/DL4IVF/"
+    dest_dataset_root = "../data/dl4ivf_grade_dataset/"
+
+    var_thres = 20
+    h,w,r = 500,500,200
+    x = np.arange(w)[np.newaxis]
+    y = np.arange(h)[:,np.newaxis]
+    center_x,center_y = w//2,h//2
+    mask = (np.sqrt((x-center_x)**2+(y-center_y)**2) > r)
+    
+    #Make dataset
+    if not os.path.exists(dest_dataset_root+"/blast_and_grade_annot"):
+        os.makedirs(dest_dataset_root,exist_ok=True)
+
+        print("Reading csv")
+        annot_root = "../data/"
+        early_csv = pd.read_csv(os.path.join(annot_root,"export 2011-2016.csv"),sep=",",low_memory=False)
+        late_csv = pd.read_csv(os.path.join(annot_root,"EXPORT 2017-2019.csv"),sep=";",low_memory=False)
+
+        frame_and_plane_dict = make_frame_and_plane_dict(dest_dataset_root)
+
+        print("Gathering folder paths")
+        paths = glob.glob(os.path.join(data_root,"./*/"))
+
+        grade_annot_csv = []
+        grade_annot_list,blast_annot_list = 0,0
+        uncomplete_folders = []
+
+        empty_list = []
+
+        for i,path in enumerate(paths):
+
+            if i %500==0:
+                print(i,"/",len(paths))
+
+            grade_annot_csv,grade_annot_list,blast_annot_list,empty_list,uncomplete_folders = process_video(path,early_csv,late_csv,grade_annot_csv,dest_dataset_root,grade_annot_list,blast_annot_list,mask,empty_list,var_thres,frame_and_plane_dict,uncomplete_folders)
+
+        grade_annot_csv = np.array(grade_annot_csv)
+        np.savetxt("../data/grade_annot.csv", grade_annot_csv, fmt='%s',delimiter=",",header="video,is_blasto,is_expanded_blasto,te,icm")
+
+        np.savetxt("../data/uncomplete_folders.csv", uncomplete_folders, fmt='%s',delimiter=",")
+
+        empty_list = np.array(empty_list)
+        np.savetxt("../data/empty_list.csv", empty_list, fmt='%s',delimiter=",")
+        
+    else:
+        print("Dataset already exists")
+
+    fix_contrast(dest_dataset_root,h,w,mask,var_thres)
+
 if __name__ == "__main__":
     main()
-    #dest_dataset_root = "../data/dl4ivf_grade_dataset/"
-    #fix_annot_files(dest_dataset_root+"/blast_and_grade_annot/")
-    #fix_annot_files(dest_dataset_root+"/blast_and_no_grade_annot/")
-
