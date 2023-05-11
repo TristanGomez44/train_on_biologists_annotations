@@ -1,5 +1,6 @@
 import glob, os, sys, shutil
 
+import math
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt 
@@ -8,6 +9,32 @@ ImageFile.LOAD_TRUNCATED_IMAGES = True
 from skimage import transform
 import cv2
 import subprocess
+
+def make_frame_and_plane_dict(root):
+
+    dic = {}
+    for filename in ["blast_and_grade_annot_framefocal.csv","blast_and_no_grade_annot_framefocal.csv"]:
+        df = pd.read_csv(root+"/"+filename,delimiter=",")
+
+        for _, row in df.iterrows():
+            name,original_frame_ind = row["# names"].split("_RUN")
+            name = name.replace("_WELL","-")
+
+            if not math.isnan(row["frame_to_use"]):
+
+                if name in dic:
+                    raise ValueError("Video is already in dictionnary.",filename,name)
+
+                dic[name] = {"frame_to_use":int(row["frame_to_use"])}
+
+                #Check if focal_plane value is NaN, i.e. empty.
+                if type(row["focal_plane"]) is not float:
+                    dic[name]["focal_plane"] = row["focal_plane"]
+            else:
+                original_frame_ind = original_frame_ind.replace(".jpeg","")
+                dic[name] = {"frame_to_use":int(original_frame_ind),"focal_plane":"F0"}
+
+    return dic         
 
 def fix_annot_files(fold):
 
@@ -23,7 +50,7 @@ def fix_annot_files(fold):
         matches = glob.glob(pattern)
 
         if len(matches) != 1:
-            raise ValueError("Wrong matching path number",matches,pattern)
+            raise ValueError("Wrong matching path number",matches,pattern,row)
         
         fullname = os.path.basename(matches[0])
 
@@ -90,7 +117,7 @@ def prevent_empty_well_image(image_paths,img_ind,mask,thres=20):
 
     if (img is None) or std < thres:
 
-        while (img is None or std < thres) and img_ind >= 0:
+        while (img is None or std < thres) and img_ind > 0:
             img = safe_open(image_paths[img_ind])
             if img is None:
                 img_ind -= 1 
@@ -104,24 +131,91 @@ def prevent_empty_well_image(image_paths,img_ind,mask,thres=20):
  
     return img_ind
 
-def exctract_blast_img(path,dest_fold,img_ind,mask,empty_list,var_thres):
-    paths = sorted(glob.glob(os.path.join(path,"F0","*.*")),key=get_img_ind)
+def get_focal_plane(path):
+    focal_plane = path.split("/")[-2]
+    focal_plane = int(focal_plane.replace("F",""))
+    return focal_plane
+
+def find_sharpest_focal_plan(path,img_ind):
+
+    try:
+        focal_plane_list = sorted(glob.glob(os.path.join(path,"F*/")),key=get_focal_plane)
+    except ValueError:
+        print(os.path.join(path,"/*/"),path)
+        sys.exit(0)
+
+    fold,well_id = path.split("/")[-2].split("-")
+    
+    sharpest_focal_plane = None
+    highest_sharpness_value = 0
+    for focal_plane in focal_plane_list:
+        img_path = os.path.join(path,focal_plane,fold+"_WELL"+well_id+"_RUN"+str(img_ind)+".jpeg")
+        if os.path.exists(img_path):
+            img = Image.open(img_path)
+            img = np.asarray(img, dtype=np.int32)
+            gy, gx = np.gradient(img)
+            gnorm = np.sqrt(gx**2 + gy**2)
+            sharpness = np.average(gnorm)
+        
+            if sharpness > highest_sharpness_value:
+                highest_sharpness_value = sharpness 
+                sharpest_focal_plane = focal_plane
+    
+    sharpest_focal_plane = sharpest_focal_plane.split("/")[-2]
+
+    return "F0",sharpest_focal_plane
+
+def exctract_blast_img(path,dest_fold,img_ind,mask,empty_list,var_thres,frame_and_plane_dicts):
     
     #img_name = os.path.basename(paths[0])#.split("_RUN")[0]+".jpeg"
     #if not os.path.exists(dest_path):
-    img_ind = prevent_empty_well_image(paths,img_ind,mask,thres=var_thres)
+    
+    orig_img_ind = img_ind
 
+    fold_name = path.split("/")[-2]
+
+    if fold_name in frame_and_plane_dicts:
+
+        dic = frame_and_plane_dicts[fold_name]
+
+        img_ind = dic["frame_to_use"]
+
+        if "focal_plane" in dic:
+            focal_plane = dic["focal_plane"]
+            #print("\t",path)
+            sharpest_focal_plane = find_sharpest_focal_plan(path,img_ind)
+        else:
+            focal_plane,sharpest_focal_plane = find_sharpest_focal_plan(path,img_ind)
+
+    else:
+        focal_plane = "F0"
+        paths = sorted(glob.glob(os.path.join(path,focal_plane,"*.*")),key=get_img_ind)
+        img_ind = prevent_empty_well_image(paths,img_ind,mask,thres=var_thres)
+        if not img_ind is None:
+            focal_plane,sharpest_focal_plane = find_sharpest_focal_plan(path,img_ind)
+        else:
+            focal_plane,sharpest_focal_plane = "F0",None
+
+    #if focal_plane != "F0":
+    #    paths = sorted(glob.glob(os.path.join(path,focal_plane,"*.*")),key=get_img_ind)
+    
     if img_ind is None:
         empty_list.append(path)
     else:
-        img_path = paths[img_ind]
+        #img_path = paths[img_ind]
+        try:
+            img_path = glob.glob(os.path.join(path,focal_plane,"*_RUN"+str(img_ind)+".jpeg"))[0]
+        except IndexError:
+            print(os.path.join(path,focal_plane,"*_RUN"+str(img_ind)+".jpeg"),orig_img_ind)
+            sys.exit(0)
+
         img_name = os.path.basename(img_path)
         dest_path = os.path.join(dest_fold,img_name)
         if not os.path.exists(dest_path):
             os.makedirs(dest_fold,exist_ok=True)
             shutil.copyfile(img_path,dest_path)
 
-    return empty_list
+    return empty_list,sharpest_focal_plane
 
 def main():
 
@@ -145,6 +239,8 @@ def main():
     early_csv = pd.read_csv(os.path.join(annot_root,"export 2011-2016.csv"),sep=",",low_memory=False)
     late_csv = pd.read_csv(os.path.join(annot_root,"EXPORT 2017-2019.csv"),sep=";",low_memory=False)
 
+    frame_and_plane_dict = make_frame_and_plane_dict(dest_dataset_root)
+
     print("Gathering folder paths")
     paths = glob.glob(os.path.join(data_root,"./*/"))
     nbVids = len(paths)
@@ -155,6 +251,8 @@ def main():
     uncomplete_folders = []
 
     empty_list = []
+
+    sharpest_focal_plane_list = []
 
     for i,path in enumerate(paths):
 
@@ -215,7 +313,9 @@ def main():
                 img_nb = get_img_nb(path)
                 if img_nb > 0:
                     img_ind = int(img_nb*get_prop(row,time)) - 1
-                    empty_list = exctract_blast_img(path,dest_fold,img_ind,mask,empty_list,var_thres)
+                    img_ind = max(img_ind,0)
+                    empty_list,sharpest_focal_plane = exctract_blast_img(path,dest_fold,img_ind,mask,empty_list,var_thres,frame_and_plane_dict)
+                    sharpest_focal_plane_list.append(sharpest_focal_plane)
                 else:
                     uncomplete_folders.append(path)
 
@@ -227,6 +327,9 @@ def main():
     empty_list = np.array(empty_list)
     np.savetxt("../data/empty_list.csv", empty_list, fmt='%s',delimiter=",")
  
+    sharpest_focal_plane_list = np.array(sharpest_focal_plane_list)
+    np.savetxt("../data/sharpest_focal_plane.csv", sharpest_focal_plane_list, fmt='%s',delimiter=",")
+
     #else:
     #    print("Dataset already exists")
 
@@ -336,8 +439,8 @@ def main():
     subprocess.run(["sudo","chown","-R","E144069X",dest_dataset_root])
 
 if __name__ == "__main__":
-    #main()
-    dest_dataset_root = "../data/dl4ivf_grade_dataset/"
-    fix_annot_files(dest_dataset_root+"/blast_and_grade_annot/")
-    fix_annot_files(dest_dataset_root+"/blast_and_no_grade_annot/")
+    main()
+    #dest_dataset_root = "../data/dl4ivf_grade_dataset/"
+    #fix_annot_files(dest_dataset_root+"/blast_and_grade_annot/")
+    #fix_annot_files(dest_dataset_root+"/blast_and_no_grade_annot/")
 
