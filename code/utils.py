@@ -22,20 +22,20 @@ def make_grid(img,row_nb):
             row.append(img[i,j])
         
         row = torch.cat(row,dim=2)
-        print("\t",row.shape)
         grid.append(row)
 
     grid = torch.cat(grid,dim=1)
-    print(grid.shape)
     grid = grid.unsqueeze(0)
 
     return grid
 
 def save_image(img,path,mask=None,row_nb=None,**kwargs):
-    if mask is None:
-        mask = (img!=0)
-    img = inv_imgnet_norm(img)*mask
-
+    
+    if img.shape[1] == 3:
+        if mask is None:
+            mask = (img!=0)
+        img = inv_imgnet_norm(img)*mask
+    
     if not row_nb is None:
         img = make_grid(img,row_nb)
 
