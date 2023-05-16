@@ -240,37 +240,26 @@ class SecondModel(nn.Module):
 
 class LinearSecondModel(SecondModel):
 
-    def __init__(self, nbFeat, nbClass, dropout,bias=True,adv_layer=False,nce_proj_layer=False,temperature=1):
+    def __init__(self, nbFeat, nb_class_dic, dropout,bias=True):
 
-        super().__init__(nbFeat, nbClass)
+        super().__init__(nbFeat, 1)
         self.dropout = nn.Dropout(p=dropout)
-        self.linLay = nn.Linear(self.nbFeat, self.nbClass,bias=bias)
-
-        if adv_layer:
-            self.adv_layer = get_mlp(nbFeat)
-        else:
-            self.adv_layer = None
         
-        if nce_proj_layer:
-            self.nce_proj_layer = get_mlp(nbFeat)
-        else:
-            self.nce_proj_layer = None
-
-        self.temperature = temperature
-
+        self.lin_lay_icm = nn.Linear(self.nbFeat, nb_class_dic["icm"],bias=bias)
+        self.lin_lay_te = nn.Linear(self.nbFeat, nb_class_dic["te"],bias=bias)
+        self.lin_lay_exp = nn.Linear(self.nbFeat, nb_class_dic["exp"],bias=bias)
+        
     def forward(self, retDict):
         x = retDict["feat_pooled"]
         x = self.dropout(x)
 
-        if self.adv_layer:
-            retDict["output_adv"] = self.adv_layer(ReverseLayerF.apply(x,1))
+        output_icm = self.lin_lay_icm(x)
+        output_te = self.lin_lay_te(x)
+        output_exp = self.lin_lay_exp(x)
 
-        if self.nce_proj_layer:
-            retDict["projection"] = self.nce_proj_layer(x)
-
-        output = self.linLay(x)/self.temperature
-
-        retDict["output"]=output
+        retDict["output_icm"] = output_icm
+        retDict["output_te"] = output_te
+        retDict["output_exp"] = output_exp
 
         return retDict
 
@@ -321,9 +310,6 @@ def advNetBuilder(args):
 def netBuilder(args,gpu=None):
     ############### Visual Model #######################
 
-    if args.class_nb is None:
-        args.class_nb = get_class_nb(args.dataset_train)
-
     nbFeat = getResnetFeat(args.first_mod, args.resnet_chan)
 
     if args.resnet_bilinear:
@@ -348,7 +334,8 @@ def netBuilder(args,gpu=None):
 
     ############### Second Model #######################
     if args.second_mod == "linear":
-        secondModel = LinearSecondModel(nbFeat, args.class_nb, args.dropout,args.lin_lay_bias,args.adv_weight>0,args.nce_proj_layer,args.temperature)
+        nb_class_dic = {"icm":args.icm_te_class_nb,"te":args.icm_te_class_nb,"exp":args.grade_class_nb}
+        secondModel = LinearSecondModel(nbFeat, nb_class_dic, args.dropout,args.lin_lay_bias)
     else:
         raise ValueError("Unknown second model type : ", args.second_mod)
 

@@ -61,41 +61,12 @@ def updateMetrDict(metrDict,metrDictSample):
 
     return metrDict
 
-def binaryToMetrics(output,target,resDict,comp_spars=False):
-    ''' Computes metrics over a batch of targets and predictions
+def binaryToMetrics(target_dic,resDict):
 
-    Args:
-    - output (list): the batch of outputs
-    - target (list): the batch of ground truth class
-    - transition_matrix (torch.tensor) : this matrix contains at row i and column j the empirical probability to go from state i to j
-
-    '''
-
-    acc = compAccuracy(output,target)
-    metDict = {"Accuracy":acc}
-
-    for key in resDict.keys():
-        if key.find("output_") != -1:
-            suff = key.split("_")[-1]
-
-            if not "adv" in key:
-                metDict["Accuracy_{}".format(suff)] = compAccuracy(resDict[key],target)
-
-    if "output_adv" in resDict:
-        sigm_output_adv = torch.softmax(resDict["output_adv"].detach(),dim=1).cpu().numpy()[:,1]
-        target_adv = resDict["target_adv"].detach().cpu().numpy()
-        metDict["AuC_adv"] = roc_auc_score(target_adv,sigm_output_adv)*len(sigm_output_adv)*0.5
-        metDict["Accuracy_adv"] = compAccuracy(resDict["output_adv"],resDict["target_adv"])*0.5
-
-    if comp_spars:
-        if "attMaps" in resDict.keys() :
-            feat = resDict["feat"].clone() if "feat" in resDict else None
-            spar = compAttMapSparsity(resDict["attMaps"].clone(),feat)
-            metDict["Sparsity"] = spar
-        else:
-            norm = torch.sqrt(torch.pow(resDict["feat"],2).sum(dim=1,keepdim=True))
-            spar = compSparsity(norm)
-            metDict["Sparsity"] = spar 
+    metDict = {}
+    for key in target_dic.keys():
+        suff = key.split("_")[-1]
+        metDict["Accuracy_{}".format(suff)] = compAccuracy(resDict["output_"+key],target_dic[key])
 
     return metDict
 

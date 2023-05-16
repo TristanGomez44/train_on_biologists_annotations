@@ -3,7 +3,7 @@ import numpy as np
 import torch
 import args
 from random import Random
-import fineGrainedDataset
+import grade_dataset
 from torch.utils.data.sampler import Sampler
 
 def get_class_nb(dataset_train):
@@ -13,22 +13,21 @@ def get_class_nb(dataset_train):
     return args.class_nb 
     
 def get_img_size(args):
-    if args.very_big_images:
-        imgSize = 1792
-    elif args.big_images:
-        imgSize = 448
-    else:
+    if "vit" in args.first_mod:
         imgSize = 224
+    elif args.debug:
+        imgSize = 32,32
+    elif args.big_images:
+        imgSize = 512,384
+    else:
+        imgSize = 256,192
     return imgSize
 
 def buildTrainLoader(args,shuffle=True):
 
     imgSize = get_img_size(args)
 
-    train_dataset = fineGrainedDataset.FineGrainedDataset(args.dataset_train, "train",(imgSize,imgSize),\
-                                            sqResizing=args.sq_resizing,\
-                                            cropRatio=args.crop_ratio,brightness=args.brightness,\
-                                            saturation=args.saturation,other_image_batch=args.sal_metr_otherimg)
+    train_dataset = grade_dataset.GradeDataset(args.dataset_train, True,imgSize)
 
     totalLength = len(train_dataset)
 
@@ -46,9 +45,6 @@ def buildTrainLoader(args,shuffle=True):
         train_dataset, _ = torch.utils.data.random_split(train_dataset, [int(totalLength * train_prop),
                                                                      totalLength - int(totalLength * train_prop)])
 
-        train_dataset.num_classes = train_dataset.dataset.num_classes
-        train_dataset.image_label = train_dataset.dataset.image_label
-
     bsz = args.batch_size
     bsz = bsz if bsz < args.max_batch_size_single_pass else args.max_batch_size_single_pass
 
@@ -60,12 +56,8 @@ def buildTrainLoader(args,shuffle=True):
     return trainLoader, train_dataset
 
 def buildTestLoader(args, mode):
-    datasetName = getattr(args, "dataset_{}".format(mode))
     imgSize = get_img_size(args)
-    test_dataset = fineGrainedDataset.FineGrainedDataset(datasetName, mode,(imgSize,imgSize),\
-                                                        sqResizing=args.sq_resizing,\
-                                                        cropRatio=args.crop_ratio,brightness=args.brightness,\
-                                                        saturation=args.saturation,other_image_batch=args.sal_metr_otherimg)
+    test_dataset = grade_dataset.GradeDataset(args.dataset_train, mode=="val",imgSize)
 
     if mode == "val" and args.dataset_train == args.dataset_val:
         np.random.seed(1)
@@ -123,9 +115,9 @@ def addArgs(argreader):
     argreader.parser.add_argument('--shuffle_test_set', type=args.str2bool, metavar='BOOL',
                                   help='To shuffle the test set.')
 
-
-    argreader.parser.add_argument('--class_nb', type=int, metavar='S',
-                                  help='The number of class of to model')
+    argreader.parser.add_argument('--icm_te_class_nb', type=int, metavar='S',
+                                  help='The number of class for the ICM and TE')
+    argreader.parser.add_argument('--grade_class_nb', type=int, metavar='S',help='The number of class for the blastocyst expansion.')
 
     argreader.parser.add_argument('--old_preprocess', type=args.str2bool, metavar='S',
                                   help='To use the old images pre-processor.')

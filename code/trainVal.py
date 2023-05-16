@@ -27,20 +27,22 @@ import sal_metr_data_aug
 import update
 import multi_obj_epoch_selection
 
-def remove_excess_examples(data,target,accumulated_size,batch_size):
+def remove_excess_examples(data,target_dic,accumulated_size,batch_size):
     if accumulated_size + data.size(0) > batch_size:
 
         if batch_size-accumulated_size < 2*torch.cuda.device_count():
             data = data[:2*torch.cuda.device_count()]
-            target = target[:2*torch.cuda.device_count()]
+            for key in target_dic:
+                target_dic[key] = target_dic[key][:2*torch.cuda.device_count()]
         else:
             data = data[:batch_size-accumulated_size]
-            target = target[:batch_size-accumulated_size]
+            for key in target_dic:
+                target_dic[key] = target_dic[key][:batch_size-accumulated_size]
         accumulated_size = batch_size
     else:
         accumulated_size += data.size(0)
 
-    return data,target,accumulated_size
+    return data,target_dic,accumulated_size
 
 def master_net_inference(data,kwargs,resDict):
     with torch.no_grad():
@@ -98,15 +100,17 @@ def training_epoch(model, optim, loader, epoch, args, **kwargs):
             processedImgNb = batch_idx * len(batch[0])
             print("\t", processedImgNb, "/", len(loader.dataset))
 
-        data, target = batch[0], batch[1]
+        data, target_dic = batch[0], batch[1]
 
         #Removing excess samples (if training is done by accumulating gradients)
-        data,target,accumulated_size = remove_excess_examples(data,target,accumulated_size,args.batch_size)
+        data,target_dic,accumulated_size = remove_excess_examples(data,target_dic,accumulated_size,args.batch_size)
 
         acc_nb += 1
 
         if args.cuda:
-            data, target = data.cuda(non_blocking=True), target.cuda(non_blocking=True)
+            data = data.cuda(non_blocking=True)
+            for key in target_dic:
+                target_dic[key] = target_dic[key].cuda(non_blocking=True)
 
         resDict = model(data)
 
@@ -117,12 +121,7 @@ def training_epoch(model, optim, loader, epoch, args, **kwargs):
             other_data = batch[2].to(data.device) if args.sal_metr_otherimg else None
             resDict,data,_ = sal_metr_data_aug.apply_sal_metr_masks_and_update_dic(model,data,args,resDict,other_data)
 
-        output = resDict["output"]
-
-        if args.adv_weight > 0: 
-            resDict = get_adv_target(resDict)
-   
-        loss_dic = kwargs["lossFunc"](output, target, resDict)
+        loss_dic = kwargs["lossFunc"](target_dic, resDict)
         loss_dic = agregate_losses(loss_dic)
         loss = loss_dic["loss"]/len(data)
         loss.backward()
@@ -131,35 +130,26 @@ def training_epoch(model, optim, loader, epoch, args, **kwargs):
             model,optim,accumulated_size,acc_nb = optim_step(model,optim,acc_nb)
 
         # Metrics
-        metDictSample = metrics.binaryToMetrics(output, target,resDict)
+        metDictSample = metrics.binaryToMetrics(target_dic,resDict)
         metDictSample = metrics.add_losses_to_dic(metDictSample,loss_dic)
         metrDict = metrics.updateMetrDict(metrDict, metDictSample)
 
-        var_dic = update.all_cat_var_dic(var_dic,resDict,target,args,"train")
+        var_dic = update.all_cat_var_dic(var_dic,resDict,"train")
             
         validBatch += 1
         totalImgNb += len(data)
 
-        if validBatch > 5 and args.debug:
+        if validBatch > 1 and args.debug:
             break
     
+        print(metrDict)
+
     if not args.optuna:
         torch.save(model.state_dict(), "../models/{}/model{}_epoch{}".format(args.exp_id, args.model_id, epoch))
         
-        if args.focal_weight == 0 and not args.compute_ece:
-            previous_epoch_model = "../models/{}/model{}_epoch{}".format(args.exp_id, args.model_id, epoch-1)
-            if os.path.exists(previous_epoch_model):
-                os.remove(previous_epoch_model)
-
-    if args.nce_weight > 0 or args.adv_weight > 0: 
-        metrDict = metrics.separability_metric(var_dic["feat_pooled"].detach().cpu(),var_dic["feat_pooled_masked"].detach().cpu(),var_dic["target"],metrDict,args.seed,args.img_nb_per_class)
-        with torch.no_grad():
-            metrDict = metrics.saliency_metric_validity(loader.dataset,model,args,metrDict)
-    if args.focal_weight > 0 or args.compute_ece:
-        metrDict = metrics.expected_calibration_error(var_dic, metrDict)
-    
-    if args.nce_weight_sched:
-        metrDict["nce_weight"] = args.nce_weight
+        previous_epoch_model = "../models/{}/model{}_epoch{}".format(args.exp_id, args.model_id, epoch-1)
+        if os.path.exists(previous_epoch_model):
+            os.remove(previous_epoch_model)
 
     if args.optuna:
         optuna_suff = "_trial"+str(args.trial_id)
@@ -182,12 +172,15 @@ def evaluation(model, loader, epoch, args, mode="val",**kwargs):
     totalImgNb = 0
     var_dic = {}
     for batch_idx, batch in enumerate(loader):
-        data, target = batch[:2]
+        data, target_dic = batch[:2]
 
         if (batch_idx % args.log_interval == 0):
             print("\t", batch_idx * len(data), "/", len(loader.dataset))
 
-        if args.cuda: data, target = data.cuda(non_blocking=True), target.cuda(non_blocking=True)
+        if args.cuda:
+            data = data.cuda(non_blocking=True)
+            for key in target_dic:
+                target_dic[key] = target_dic[key].cuda(non_blocking=True)
 
         resDict = model(data)
 
@@ -195,36 +188,25 @@ def evaluation(model, loader, epoch, args, mode="val",**kwargs):
             other_data = batch[2].to(data.device) if args.sal_metr_otherimg else None
             resDict,data,_= sal_metr_data_aug.apply_sal_metr_masks_and_update_dic(model,data,args,resDict,other_data)
 
-        output = resDict["output"]
-
-        if args.adv_weight > 0:  
-            resDict = get_adv_target(resDict)
-
-        loss_dic = kwargs["lossFunc"](output, target, resDict)
+        loss_dic = kwargs["lossFunc"](target_dic, resDict)
         loss_dic = agregate_losses(loss_dic)
 
         # Metrics
-        metDictSample = metrics.binaryToMetrics(output, target,resDict,comp_spars=(mode=="test"))
+        metDictSample = metrics.binaryToMetrics(target_dic,resDict)
         metDictSample = metrics.add_losses_to_dic(metDictSample,loss_dic)
         metrDict = metrics.updateMetrDict(metrDict, metDictSample)
 
-        var_dic = update.all_cat_var_dic(var_dic,resDict,target,args,mode)
+        var_dic = update.all_cat_var_dic(var_dic,args,mode)
 
         validBatch += 1
         totalImgNb += len(data)
 
-        if validBatch  >= 2 and args.debug:
+        if validBatch > 1 and args.debug:
             break
 
     if mode == "test":
         update.save_maps(var_dic, args.exp_id, args.model_id, epoch, mode)
 
-    if args.nce_weight > 0 or args.adv_weight > 0: 
-        metrDict = metrics.separability_metric(var_dic["feat_pooled"].cpu(),var_dic["feat_pooled_masked"].cpu(),var_dic["target"],metrDict,args.seed,args.img_nb_per_class)
-        metrDict = metrics.saliency_metric_validity(loader.dataset,model,args,metrDict)
-    if args.focal_weight > 0 or args.compute_ece:
-        metrDict = metrics.expected_calibration_error(var_dic, metrDict)
-    
     if args.optuna:
         optuna_suff = "_trial"+str(args.trial_id)
     else:
@@ -235,7 +217,7 @@ def evaluation(model, loader, epoch, args, mode="val",**kwargs):
 
     writeSummaries(metrDict, totalImgNb, epoch, mode, args.model_id+optuna_suff, args.exp_id)
 
-    return metrDict["Accuracy"]
+    return metrDict["Accuracy_exp"]
 
 def writeSummaries(metrDict, totalImgNb, epoch, mode, model_id, exp_id):
  
@@ -413,12 +395,7 @@ def train(args,trial):
 
             kwargsTest['loader'] = testLoader
 
-            if args.focal_weight > 0 or args.compute_ece and not args.optuna:
-                val_metrics_path = f"../results/{args.exp_id}/metrics_{args.model_id}_val.csv"
-                bestEpoch = multi_obj_epoch_selection.acc_and_ece_selection(val_metrics_path)
-                best_path = f"../models/{args.exp_id}/model{args.model_id}_epoch{bestEpoch}"
-            else:
-                best_path = f"../models/{args.exp_id}/model{args.model_id}_best_epoch{bestEpoch}"
+            best_path = f"../models/{args.exp_id}/model{args.model_id}_best_epoch{bestEpoch}"
                 
             net = init_model.preprocessAndLoadParams(best_path,args.cuda,net)
 
@@ -480,10 +457,13 @@ def main(argv=None):
 
     args = argreader.args
 
-    args.cuda = args.cuda and torch.cuda.is_available()
+    if os.path.exists("/home/E144069X"):
+        print("Debugging on laptop.")
+        args.debug = True
+        args.batch_size=2
+        args.val_batch_size=2
 
-    if args.class_nb is None:
-        args.class_nb = load_data.get_class_nb(args.dataset_train)
+    args.cuda = args.cuda and torch.cuda.is_available()
 
     if args.redirect_out:
         sys.stdout = open("python.out", 'w')

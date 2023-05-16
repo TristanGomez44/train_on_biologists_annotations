@@ -9,73 +9,21 @@ class Loss(torch.nn.Module):
         super(Loss, self).__init__()
         self.reduction = reduction
         self.args= args
-    def forward(self,output,target,resDict):
-        return computeLoss(self.args,output, target, resDict,reduction=self.reduction)
+    def forward(self,target_dic,resDict):
+        return computeLoss(self.args, target_dic, resDict,reduction=self.reduction)
 
-def computeLoss(args, output, target, resDict,reduction="mean"):
+def computeLoss(args,target_dic, resDict,reduction="mean"):
     loss_dic = {}
 
-    if args.sal_metr_mask and args.sal_metr_mask_remove_masked_obj and "is_object_masked_list" in resDict:
-        obj_is_masked = torch.tensor(resDict["is_object_masked_list"])
-        inds = torch.where(~obj_is_masked)
-        output,target = output[inds],target[inds]
-        resDict["master_net_pred"] = resDict["master_net_pred"][inds]
-
     loss = 0
-
-    if args.master_net and ("master_net_pred" in resDict):
-        loss_kl = F.kl_div(F.log_softmax(output/args.kl_temp, dim=1),F.softmax(resDict["master_net_pred"]/args.kl_temp, dim=1),reduction=reduction)
-        loss_ce = F.cross_entropy(output, target,reduction=reduction)
+    for target_name,target in target_dic.items():
         
-        loss_dic["loss_kl"] = loss_kl.data.unsqueeze(0)
-        loss_dic["loss_ce"] = loss_ce.data.unsqueeze(0)
+        output = resDict["output_"+target_name][target != -1]
+        target = target[target != -1]
 
-        loss = (loss_kl*args.kl_interp*args.kl_temp*args.kl_temp+loss_ce*(1-args.kl_interp)).data.unsqueeze(0)
-        loss_dic["loss"] = loss
-        loss = args.nll_weight*loss
-
-    else:      
-
-        if args.nll_weight > 0:
-            loss_ce = F.cross_entropy(output, target,reduction=reduction)
-            loss_dic["loss_ce"] = loss_ce.data.unsqueeze(0)
-            loss += args.nll_weight*loss_ce
-
-    if args.nce_weight > 0 and (("feat_pooled_masked" in resDict) or ("projection_masked" in resDict)):
-        if args.nce_proj_layer:
-            feat = resDict["projection"]
-            feat_masked = resDict["projection_masked"]
-        else:
-            feat = resDict["feat_pooled"]
-            feat_masked = resDict["feat_pooled_masked"]
-
-        all_feat = torch.cat((feat,feat_masked),dim=0)
-        nce_loss = info_nce_loss(all_feat,reduction=reduction,normalisation=args.nce_norm)
-        loss_dic["loss_nce"] = nce_loss.data.unsqueeze(0)
-        loss += args.nce_weight * nce_loss
-    
-    if args.focal_weight > 0:
-        focal_loss = adaptive_focal_loss(output, target,reduction)
-        loss_dic["focal_loss"] = focal_loss.data.unsqueeze(0)
-        loss += args.focal_weight * focal_loss            
-
-    if args.loss_on_masked:
-        if args.focal_weight > 0:
-            loss_func = adaptive_focal_loss
-            weight = args.focal_weight
-        else:
-            loss_func = F.cross_entropy
-            weight = args.nll_weight
-
-        loss_func = adaptive_focal_loss if args.focal_weight > 0 else F.cross_entropy
-        loss_masked = loss_func(resDict["output_masked"], target,reduction=reduction)
-        loss_dic["loss_masked"] = loss_masked.data.unsqueeze(0)
-        loss += weight * loss_masked 
-
-    if args.adv_weight > 0:
-        loss_adv_ce = F.cross_entropy(resDict["output_adv"], resDict["target_adv"],reduction=reduction)
-        loss_dic["loss_adv_ce"]= loss_adv_ce.data.unsqueeze(0)
-        loss += args.adv_weight * loss_adv_ce
+        loss_ce = F.cross_entropy(output, target,reduction=reduction)
+        loss_dic[f"loss_{target_name}"] = loss_ce.data.unsqueeze(0)
+        loss += args.nll_weight*loss_ce/len(target_dic.keys())
 
     loss_dic["loss"] = loss.unsqueeze(0)
 
