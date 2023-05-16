@@ -14,18 +14,25 @@ import sqlite3 ,csv as csvLib,os,sys
 def get_db(exp_id):
     db_path = f"../results/{exp_id}/saliency_metrics.db"
     if not os.path.exists(db_path):
-        col_list = get_header()
-        make_db(col_list,db_path)
+        header = get_header()
+        make_db(header,db_path)
     con = sqlite3.connect(db_path) # change to 'sqlite:///your_filename.db'
     cur = con.cursor()
     return con,cur 
 
-def make_db(col_list,db_path):
+def make_db(header,db_path):
 
     con = sqlite3.connect(db_path) # change to 'sqlite:///your_filename.db'
     cur = con.cursor()
-    header = ",".join(col_list)
-    cur.execute(f"CREATE TABLE metrics ({header},UNIQUE({header}) ON CONFLICT IGNORE);") # use your column names here
+
+    header = ",".join(header)
+    print("header",header)
+
+    unique_cols = get_unique_columns()
+    unique_cols = ",".join(unique_cols)
+    print("unique_cols",unique_cols)
+
+    cur.execute(f"CREATE TABLE metrics ({header},UNIQUE({unique_cols}) ON CONFLICT IGNORE);")
 
     con.commit()
 
@@ -77,8 +84,35 @@ def write_db(cur,**kwargs):
 
     value_list = [str(kwargs[col_index_to_value_dic[ind]]) for ind in inds]
 
-    question_marks = ",".join(['?' for _ in range(len(inds))])
-    cur.execute(f"INSERT INTO metrics ({header}) VALUES ({question_marks});", value_list)
+    #Testing if row already exists
+    query = f'SELECT metric_value,inds FROM metrics WHERE model_id=="{kwargs["model_id"]}" and metric_label=="{kwargs["metric_label"]}" and replace_method=="{kwargs["replace_method"]}" and post_hoc_method=="{kwargs["post_hoc_method"]}"'
+    metric_value,inds = zip(*cur.execute(query).fetchall())
+
+    if len(metric_value) > 0:
+        
+        consistent = True
+        for key,value in zip(["metric_value","inds"],[metric_value[0],inds[0]]):
+            if value != str(kwargs[key]):
+                print(f"Row already exists but with a different {key}. Old value: {value}, new value: {kwargs[key]}")
+                consistent=False 
+            if not consistent:
+                raise ValueError("One or more inconsistent values have been found.")
+
+    else:       
+        question_marks = ",".join(['?' for _ in range(len(inds))])
+        cur.execute(f"INSERT INTO metrics ({header}) VALUES ({question_marks});", value_list)
+
+def get_unique_columns():
+    col_index_to_value_dic = get_col_index_to_value_dic()
+    inds = sorted(list(col_index_to_value_dic.keys()))
+
+    column_names = []
+
+    for ind in inds:
+        if col_index_to_value_dic[ind] in ["metric_label","replace_method","model_id","post_hoc_method"]:
+            column_names.append(col_index_to_value_dic[ind])
+    
+    return column_names
 
 def get_header():
     col_index_to_value_dic = get_col_index_to_value_dic()
