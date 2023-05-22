@@ -210,7 +210,7 @@ def evaluation(model, loader, epoch, args, mode="val",**kwargs):
         metDictSample = metrics.add_losses_to_dic(metDictSample,loss_dic)
         metrDict = metrics.updateMetrDict(metrDict, metDictSample)
 
-        var_dic = update.all_cat_var_dic(var_dic,args,mode)
+        var_dic = update.all_cat_var_dic(var_dic,resDict,mode)
 
         validBatch += 1
         
