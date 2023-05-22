@@ -5,12 +5,14 @@ import numpy as np
 import torchvision.transforms as transforms
 from torch.utils.data import Dataset
 
+NO_ANNOT = -1
+
 def preproc_annot(x):
     if x.isdigit():
         return int(x)
     else:
-        return -1
-
+        return NO_ANNOT
+  
 def make_annot_dict(dataset_path,is_train):
 
     if is_train:
@@ -24,7 +26,16 @@ def make_annot_dict(dataset_path,is_train):
     dic = {}
 
     for row in annot_csv[1:]:
-        dic[row[0]] = {"exp":preproc_annot(row[1]),"icm":preproc_annot(row[2]),"te":preproc_annot(row[3])}
+        sub_dic = {"exp":preproc_annot(row[1]),"icm":preproc_annot(row[2]),"te":preproc_annot(row[3])}
+        #Verify dic 
+        annot_nb = 0 
+        for key in sub_dic:
+            if sub_dic[key] != NO_ANNOT:
+                annot_nb += 1 
+        
+        assert annot_nb>0,f"Image {row[0]} from dataset {annot_filename} has no annotation: found {annot_nb} annotation for {len(sub_dic.keys())} keys."
+
+        dic[row[0]] = sub_dic
 
     return dic 
 

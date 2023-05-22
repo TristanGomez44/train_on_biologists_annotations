@@ -3,12 +3,21 @@ import os
 import torchvision
 from torchvision import transforms 
 import torch 
+from grade_dataset import NO_ANNOT
 
 inv_imgnet_norm = transforms.Compose([ transforms.Normalize(mean = [ 0., 0., 0. ],
                                                      std = [ 1/0.229, 1/0.224, 1/0.225 ]),
                                 transforms.Normalize(mean = [ -0.485, -0.456, -0.406 ],
                                                      std = [ 1., 1., 1. ]),
                                ])
+
+def _remove_no_annot(tensor,reference):
+    return tensor[reference!=NO_ANNOT]
+
+def remove_no_annot(output,target):
+    output = _remove_no_annot(output,reference=target)
+    target = _remove_no_annot(target,reference=target)
+    return output,target
 
 def make_grid(img,row_nb):
     assert len(img) % row_nb == 0

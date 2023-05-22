@@ -4,26 +4,34 @@ import sys
 import torch
 from torch.nn import functional as F
 
+from utils import remove_no_annot,_remove_no_annot
+from grade_dataset import NO_ANNOT 
+
 class Loss(torch.nn.Module):
-    def __init__(self,args,reduction="mean"):
+    def __init__(self,args,reduction="sum"):
         super(Loss, self).__init__()
         self.reduction = reduction
         self.args= args
     def forward(self,target_dic,resDict):
         return computeLoss(self.args, target_dic, resDict,reduction=self.reduction)
 
-def computeLoss(args,target_dic, resDict,reduction="mean"):
+def computeLoss(args,target_dic, resDict,reduction="sum"):
     loss_dic = {}
 
     loss = 0
-    for target_name,target in target_dic.items():
-        
-        output = resDict["output_"+target_name][target != -1]
-        target = target[target != -1]
 
-        loss_ce = F.cross_entropy(output, target,reduction=reduction)
-        loss_dic[f"loss_{target_name}"] = loss_ce.data.unsqueeze(0)
-        loss += args.nll_weight*loss_ce/len(target_dic.keys())
+    annot_nb_list = [target_dic[key] != NO_ANNOT for key in target_dic]
+    annot_nb_list = torch.stack(annot_nb_list,axis=0).sum(axis=0)
+
+    for target_name,target in target_dic.items():
+        annot_nb_list_onlyannot = _remove_no_annot(annot_nb_list,target)
+ 
+        output,target = remove_no_annot(resDict["output_"+target_name],target)
+      
+        loss_ce = F.cross_entropy(output, target,reduction="none")
+        loss_dic[f"loss_{target_name}"] = loss_ce.data.sum().unsqueeze(0)
+
+        loss += args.nll_weight*(loss_ce/annot_nb_list_onlyannot).sum()
 
     loss_dic["loss"] = loss.unsqueeze(0)
 

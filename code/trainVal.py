@@ -16,7 +16,7 @@ plt.switch_backend('agg')
 import optuna
 import sqlite3
 
-import utils
+from utils import _remove_no_annot
 from args import ArgReader,str2bool,addInitArgs,addValArgs,init_post_hoc_arg,addLossTermArgs,addSalMetrArgs
 import init_model
 from loss import Loss,agregate_losses
@@ -79,6 +79,14 @@ def get_adv_target(resDict):
     resDict["target_adv"] = torch.cat((target_adv,target_adv_masked),dim=0).to(resDict["output_adv"].device).long()
     return resDict
 
+def increment_valid_example_dic(target_dic,valid_example_nb_dic):
+    for key in target_dic:
+        if not key in valid_example_nb_dic:
+            valid_example_nb_dic[key] = 0
+        target = target_dic[key]
+        valid_example_nb_dic[key] += len(_remove_no_annot(target,reference=target))
+    return valid_example_nb_dic
+    
 def training_epoch(model, optim, loader, epoch, args, **kwargs):
 
     model.train()
@@ -87,10 +95,11 @@ def training_epoch(model, optim, loader, epoch, args, **kwargs):
 
     metrDict = None
     validBatch = 0
-    totalImgNb = 0
 
     accumulated_size = 0
     acc_nb = 0
+    valid_example_nb_dic = {}
+    total_example_nb = 0 
 
     var_dic = {}
     for batch_idx, batch in enumerate(loader):
@@ -101,6 +110,9 @@ def training_epoch(model, optim, loader, epoch, args, **kwargs):
             print("\t", processedImgNb, "/", len(loader.dataset))
 
         data, target_dic = batch[0], batch[1]
+
+        valid_example_nb_dic = increment_valid_example_dic(target_dic,valid_example_nb_dic)
+        total_example_nb += len(data)
 
         #Removing excess samples (if training is done by accumulating gradients)
         data,target_dic,accumulated_size = remove_excess_examples(data,target_dic,accumulated_size,args.batch_size)
@@ -130,20 +142,17 @@ def training_epoch(model, optim, loader, epoch, args, **kwargs):
             model,optim,accumulated_size,acc_nb = optim_step(model,optim,acc_nb)
 
         # Metrics
-        metDictSample = metrics.binaryToMetrics(target_dic,resDict)
+        metDictSample = metrics.compute_metrics(target_dic,resDict)
         metDictSample = metrics.add_losses_to_dic(metDictSample,loss_dic)
         metrDict = metrics.updateMetrDict(metrDict, metDictSample)
 
         var_dic = update.all_cat_var_dic(var_dic,resDict,"train")
             
         validBatch += 1
-        totalImgNb += len(data)
 
         if validBatch > 1 and args.debug:
             break
     
-        print(metrDict)
-
     if not args.optuna:
         torch.save(model.state_dict(), "../models/{}/model{}_epoch{}".format(args.exp_id, args.model_id, epoch))
         
@@ -156,7 +165,7 @@ def training_epoch(model, optim, loader, epoch, args, **kwargs):
     else:
         optuna_suff = ""
 
-    writeSummaries(metrDict, totalImgNb, epoch, "train", args.model_id+optuna_suff, args.exp_id)
+    writeSummaries(metrDict, valid_example_nb_dic,total_example_nb,epoch, "train", args.model_id+optuna_suff, args.exp_id)
 
     return metrDict
 
@@ -169,11 +178,16 @@ def evaluation(model, loader, epoch, args, mode="val",**kwargs):
     metrDict = None
 
     validBatch = 0
-    totalImgNb = 0
     var_dic = {}
+    valid_example_nb_dic = {}
+    total_example_nb = 0
+
     for batch_idx, batch in enumerate(loader):
         data, target_dic = batch[:2]
 
+        valid_example_nb_dic = increment_valid_example_dic(target_dic,valid_example_nb_dic)
+        total_example_nb += len(data)
+        
         if (batch_idx % args.log_interval == 0):
             print("\t", batch_idx * len(data), "/", len(loader.dataset))
 
@@ -192,15 +206,14 @@ def evaluation(model, loader, epoch, args, mode="val",**kwargs):
         loss_dic = agregate_losses(loss_dic)
 
         # Metrics
-        metDictSample = metrics.binaryToMetrics(target_dic,resDict)
+        metDictSample = metrics.compute_metrics(target_dic,resDict)
         metDictSample = metrics.add_losses_to_dic(metDictSample,loss_dic)
         metrDict = metrics.updateMetrDict(metrDict, metDictSample)
 
         var_dic = update.all_cat_var_dic(var_dic,args,mode)
 
         validBatch += 1
-        totalImgNb += len(data)
-
+        
         if validBatch > 1 and args.debug:
             break
 
@@ -212,18 +225,18 @@ def evaluation(model, loader, epoch, args, mode="val",**kwargs):
     else:
         optuna_suff = ""
 
-    if mode == "test":
-        metrDict["temperature"] = args.temperature
-
-    writeSummaries(metrDict, totalImgNb, epoch, mode, args.model_id+optuna_suff, args.exp_id)
+    writeSummaries(metrDict, valid_example_nb_dic,total_example_nb, epoch, mode, args.model_id+optuna_suff, args.exp_id)
 
     return metrDict["Accuracy_exp"]
 
-def writeSummaries(metrDict, totalImgNb, epoch, mode, model_id, exp_id):
+def writeSummaries(metrDict, valid_example_nb_dic,total_example_nb, epoch, mode, model_id, exp_id):
  
     for metric in metrDict.keys():
-        if (metric not in ["nce_weight","temperature"]) and metric.find("Sep") == -1 and metric.find("_val_rate") == -1 and metric.find("ECE") == -1:
-            metrDict[metric] /= totalImgNb
+        if metric == "loss":
+            metrDict[metric] /= total_example_nb
+        else:
+            key = metric.split("_")[-1]
+            metrDict[metric] /= valid_example_nb_dic[key]
 
     header_list = ["epoch"]
     header_list += [metric.lower().replace(" ", "_") for metric in metrDict.keys()]
@@ -460,8 +473,8 @@ def main(argv=None):
     if os.path.exists("/home/E144069X"):
         print("Debugging on laptop.")
         args.debug = True
-        args.batch_size=2
-        args.val_batch_size=2
+        args.batch_size=4
+        args.val_batch_size=4
 
     args.cuda = args.cuda and torch.cuda.is_available()
 

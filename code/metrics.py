@@ -9,6 +9,8 @@ import numpy as np
 from sklearn.metrics import roc_auc_score
 from sklearn import svm
  
+from utils import remove_no_annot
+
 #Keys for ECE metric 
 COUNT = 'count'
 CONF = 'conf'
@@ -61,12 +63,12 @@ def updateMetrDict(metrDict,metrDictSample):
 
     return metrDict
 
-def binaryToMetrics(target_dic,resDict):
+def compute_metrics(target_dic,resDict):
 
     metDict = {}
     for key in target_dic.keys():
-        suff = key.split("_")[-1]
-        metDict["Accuracy_{}".format(suff)] = compAccuracy(resDict["output_"+key],target_dic[key])
+        output,target = remove_no_annot(resDict["output_"+key],target_dic[key])
+        metDict["Accuracy_{}".format(key)] = compAccuracy(output,target)
 
     return metDict
 
