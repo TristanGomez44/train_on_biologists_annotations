@@ -117,4 +117,3 @@ def _vision_transformer(
 if __name__== "__main__":
     dummy = torch.zeros(1,3,224,224)
     transf = vit_b_16(weights="IMAGENET1K_V1")
-    output = transf(dummy)["feat_pooled"]

@@ -13,7 +13,7 @@ def get_class_nb(dataset_train):
     return args.class_nb 
     
 def get_img_size(args):
-    if "vit" in args.first_mod:
+    if "vit" in args.first_mod or "dit" in args.first_mod:
         imgSize = 224
     elif args.debug:
         imgSize = 32,32
