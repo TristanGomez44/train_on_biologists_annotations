@@ -47,9 +47,10 @@ def get_transform(size, phase='train'):
         kwargs={"size":(size[0], size[1])}
 
     if phase == 'train':
-        transf = [transforms.Resize(**kwargs),
+        transf = [transforms.RandomResizedCrop(size,scale=(0.9,1),ratio=(1,1)),
                     transforms.RandomVerticalFlip(0.5),
-                    transforms.RandomHorizontalFlip(0.5)]
+                    transforms.RandomHorizontalFlip(0.5),
+                    transforms.RandomRotation(degrees=180)]
     else:
         transf = [transforms.Resize(**kwargs)]
 
@@ -71,7 +72,7 @@ class GradeDataset(Dataset):
         self.image_list = sorted(self.annot_dict.keys())
 
         self.image_fold = os.path.join(dataset_path,"Images")
-        self.transf = get_transform(size, phase='train')
+        self.transf = get_transform(size, phase='train' if is_train else "eval")
 
     def __getitem__(self, item):
 
