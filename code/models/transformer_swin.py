@@ -150,7 +150,9 @@ class WindowAttention(nn.Module):
 
         # cosine attention
         attn = (F.normalize(q, dim=-1) @ F.normalize(k, dim=-1).transpose(-2, -1))
-        logit_scale = torch.clamp(self.logit_scale, max=torch.log(torch.tensor(1. / 0.01))).exp()
+
+        max_value= torch.log(torch.tensor(1. / 0.01)).to(self.logit_scale.device)
+        logit_scale = torch.clamp(self.logit_scale, max=max_value).exp()
         attn = attn * logit_scale
 
         relative_position_bias_table = self.cpb_mlp(self.relative_coords_table).view(-1, self.num_heads)
@@ -601,7 +603,6 @@ class SwinTransformerV2(nn.Module):
         if self.ape:
             x = x + self.absolute_pos_embed
         x = self.pos_drop(x)
-
         for layer in self.layers:
             x = layer(x)
 
@@ -636,18 +637,38 @@ def swin_b_16():
                                 num_heads= [ 4, 8, 16, 32 ],
                                 window_size=12)
 
-    weights = torch.load("swinv2_base_patch4_window12_192_22k.pth")
+    weights = torch.load("swinv2_base_patch4_window12_192_22k.pth",map_location="cpu")
 
     model.load_state_dict(weights["model"])
 
     return model
+
+
+def swin_b_8():
+    model = SwinTransformerV2(img_size=256,
+                                in_chans=3,
+                                num_classes=1000,
+                                embed_dim=128,
+                                depths=[ 2, 2, 18, 2 ],
+                                num_heads= [ 4, 8, 16, 32 ],
+                                window_size=8,
+                                drop_path_rate=0.5)
+
+    weights = torch.load("swinv2_base_patch4_window8_256.pth",map_location="cpu")
+
+    model.load_state_dict(weights["model"])
+
+    return model
+
 if __name__ == "__main__":
 
-    transf = swin_b_16()
+    for const,dummy_data_size in zip([swin_b_8,swin_b_16],[256,192]):
+        print(const,dummy_data_size)
+        transf = const()
 
-    dummy = torch.zeros(1,3,192,192)
+        dummy = torch.zeros(2,3,dummy_data_size,dummy_data_size)
 
-    retDict = transf(dummy)
+        retDict = transf(dummy)
 
-    print(retDict["feat_pooled"].shape)
-    print(retDict["feat"].shape)
+        print(retDict["feat_pooled"].shape)
+        print(retDict["feat"].shape)
