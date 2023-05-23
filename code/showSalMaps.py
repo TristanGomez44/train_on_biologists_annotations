@@ -83,9 +83,6 @@ def select_images(args,class_index,inds,img_nb):
 
     print("inds",inds)
 
-    #In case there is not enough images
-    img_nb = min(len(inds),img_nb)
-
     imgBatch = torch.cat([testDataset[ind][0].unsqueeze(0) for ind in inds],dim=0)
     return inds,imgBatch 
 
@@ -120,13 +117,14 @@ def showSalMaps(exp_id,img_nb,plot_id,nrows,class_index,inds,viz_id,args,
 
     fnt = ImageFont.truetype("arial.ttf", 40)
     cmPlasma = plt.get_cmap('plasma')
-    imgSize = 448
-    ptsImage = torch.zeros((3,imgSize,imgSize))
 
     mapPaths = find_saliency_maps(viz_id,model_ids,exp_id,expl)
     inds,imgBatch = select_images(args,class_index,inds,img_nb)
     img_nb = len(inds)
     normDict = load_feature_norm(model_ids,mapPaths,pond_by_norm,only_norm,expl)
+
+    imgSize = imgBatch[0:1].shape[2:]
+    ptsImage = torch.zeros((3,imgSize[0],imgSize[1]))
 
     for i in range(img_nb):
 
