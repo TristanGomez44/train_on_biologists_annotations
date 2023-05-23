@@ -3,7 +3,7 @@ from torch import nn
 import matplotlib.pyplot as plt
 plt.switch_backend('agg')
 
-from models import resnet,transformer,transformer_dino
+from models import resnet,transformer,transformer_dino,transformer_swin
 
 import args
 EPS = 0.000001
@@ -43,6 +43,8 @@ def buildFeatModel(featModelName, **kwargs):
         featModel = getattr(transformer, featModelName)(weights="IMAGENET1K_V1",**kwargs)
     elif "dit" in featModelName:
         featModel = getattr(transformer_dino, featModelName)()
+    elif "swin" in featModelName:
+        featModel = getattr(transformer_swin, featModelName)()    
     else:
         raise ValueError("Unknown model type : ", featModelName)
 
@@ -281,6 +283,8 @@ def getResnetFeat(backbone_name, backbone_inplanes):
         nbFeat = 1024
     elif "vit" in backbone_name or "dit" in backbone_name:
         nbFeat = 768
+    elif "swin" in backbone_name:
+        nbFeat = 1024        
     else:
         raise ValueError("Unkown backbone : {}".format(backbone_name))
     return nbFeat

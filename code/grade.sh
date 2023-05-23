@@ -1,4 +1,7 @@
 case $1 in
+  "noneRed2_lr_swin_debug")
+    python trainVal.py -c grade.config --model_id noneRed2_swin --epochs 100  --max_worse_epoch_nb 10 --first_mod swin_b_16  --big_images False --epochs 1 --debug True  
+    ;;
   "noneRed2_lr_dino_debug")
     python trainVal.py -c grade.config --model_id noneRed2_dino --epochs 100  --max_worse_epoch_nb 10 --first_mod dit_b_16  --big_images False --epochs 1 --debug True  
     ;;
