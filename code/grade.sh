@@ -6,7 +6,7 @@ case $1 in
     python trainVal.py -c grade.config --model_id noneRed2_swin_authordataaug_sched --first_mod swin_b_16  --big_images False --batch_size 64 --val_batch_size 128 --swa True
     ;;
   "noneRed2_lr_swin_one_feat_per_head")
-    python trainVal.py -c grade.config --model_id noneRed2_swin_one_feat_per_head --first_mod swin_b_16  --big_images False --batch_size 64 --val_batch_size 128 --swa True --one_feat_per_head True
+    python trainVal.py -c grade.config --model_id noneRed2_swin_one_feat_per_head --first_mod swin_b_16  --big_images False --batch_size 64 --val_batch_size 128 --one_feat_per_head True
     ;;
   "debug")
     python trainVal.py -c grade.config --model_id noneRed2_lr_r18 --epochs 15 --first_mod resnet18  --big_images False --swa_start_epoch 10 --start_mode scratch --one_feat_per_head True
