@@ -27,7 +27,6 @@ def getOptim_and_Scheduler(lastEpoch,net,args):
     def warmup_lambda_func(epoch):
         alpha = epoch/args.warmup_epochs
         lr = (alpha*args.lr+(1-alpha)*args.warmup_lr)/args.lr
-        print(epoch,alpha,alpha*args.lr,(1-alpha)*args.warmup_lr,lr)
         return lr
     
     warmup_scheduler = torch.optim.lr_scheduler.LambdaLR(optim, lr_lambda=warmup_lambda_func)
