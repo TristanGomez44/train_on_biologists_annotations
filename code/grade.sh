@@ -3,7 +3,7 @@ case $1 in
     python trainVal.py -c grade.config --model_id noneRed2_swin --epochs 100  --max_worse_epoch_nb 10 --first_mod swin_b_16  --big_images False --batch_size 64 --val_batch_size 128
     ;;
   "noneRed2_lr_swin_authordataaug_sched")
-    python trainVal.py -c grade.config --model_id noneRed2_swin_authordataaug_sched --epochs 100 --first_mod swin_b_16  --big_images False --batch_size 64 --val_batch_size 128
+    python trainVal.py -c grade.config --model_id noneRed2_swin_authordataaug_sched --first_mod swin_b_16  --big_images False --batch_size 64 --val_batch_size 128
     ;;
   "noneRed2_lr_r18")
     python trainVal.py -c grade.config --model_id noneRed2_lr_r18 --epochs 15 --first_mod resnet18  --big_images False --swa_start_epoch 10 --start_mode scratch
