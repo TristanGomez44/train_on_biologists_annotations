@@ -244,7 +244,7 @@ class SecondModel(nn.Module):
 
 class LinearSecondModel(SecondModel):
 
-    def __init__(self, nbFeat, nb_class_dic, dropout,bias=True):
+    def __init__(self, nbFeat, nb_class_dic, dropout,bias=True,one_feat_per_head=False):
 
         super().__init__(nbFeat, 1)
         self.dropout = nn.Dropout(p=dropout)
@@ -253,13 +253,30 @@ class LinearSecondModel(SecondModel):
         self.lin_lay_te = nn.Linear(self.nbFeat, nb_class_dic["te"],bias=bias)
         self.lin_lay_exp = nn.Linear(self.nbFeat, nb_class_dic["exp"],bias=bias)
         
+        self.one_feat_per_head = one_feat_per_head
+        if self.one_feat_per_head:
+            self.lin_feat_per_head = nn.Linear(self.nbFeat, self.nbFeat*3,bias=bias)
+
     def forward(self, retDict):
         x = retDict["feat_pooled"]
         x = self.dropout(x)
 
-        output_icm = self.lin_lay_icm(x)
-        output_te = self.lin_lay_te(x)
-        output_exp = self.lin_lay_exp(x)
+        if self.one_feat_per_head:
+            print("ONE FEAT PER HEAD",x.shape)
+            x = self.lin_feat_per_head(x)
+            print("postlin",x.shape)
+            x = x.reshape(x.shape[0],3,-1)
+            print("reshape",x.shape)
+            
+            retDict["feat_pooled_per_head"] = x
+
+            output_icm = self.lin_lay_icm(x[:,0])
+            output_te = self.lin_lay_te(x[:,1])
+            output_exp = self.lin_lay_exp(x[:,2])
+        else:
+            output_icm = self.lin_lay_icm(x)
+            output_te = self.lin_lay_te(x)
+            output_exp = self.lin_lay_exp(x)
 
         retDict["output_icm"] = output_icm
         retDict["output_te"] = output_te
@@ -341,7 +358,7 @@ def netBuilder(args,gpu=None):
     ############### Second Model #######################
     if args.second_mod == "linear":
         nb_class_dic = {"icm":args.icm_te_class_nb,"te":args.icm_te_class_nb,"exp":args.grade_class_nb}
-        secondModel = LinearSecondModel(nbFeat, nb_class_dic, args.dropout,args.lin_lay_bias)
+        secondModel = LinearSecondModel(nbFeat, nb_class_dic, args.dropout,args.lin_lay_bias,args.one_feat_per_head)
     else:
         raise ValueError("Unknown second model type : ", args.second_mod)
 
@@ -415,6 +432,8 @@ def addArgs(argreader):
     argreader.parser.add_argument('--nce_proj_layer', type=args.str2bool, help='To add a projection layer when running NCE training.')
 
     argreader.parser.add_argument('--temperature', type=float, help='Temperature applied to output')
-
+    
+    argreader.parser.add_argument('--one_feat_per_head', type=args.str2bool, metavar='M',
+                                  help='To compute one feature per prediction head. Is useful for example-based explanations.')       
 
     return argreader

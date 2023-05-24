@@ -5,13 +5,15 @@ plt.switch_backend('agg')
 import os,glob 
 import utils
 
-def updateBestModel(metricVal,bestMetricVal,exp_id,model_id,bestEpoch,epoch,net,isBetter,worseEpochNb):
+def updateBestModel(metricVal,bestMetricVal,exp_id,model_id,bestEpoch,epoch,net,isBetter,worseEpochNb,args):
 
     if isBetter(metricVal,bestMetricVal):
         if os.path.exists("../models/{}/model{}_best_epoch{}".format(exp_id,model_id,bestEpoch)):
             os.remove("../models/{}/model{}_best_epoch{}".format(exp_id,model_id,bestEpoch))
 
-        torch.save(net.state_dict(), "../models/{}/model{}_best_epoch{}".format(exp_id,model_id, epoch))
+        state_dic = net.module.state_dict() if args.swa else net.state_dict()
+
+        torch.save(state_dic, "../models/{}/model{}_best_epoch{}".format(exp_id,model_id, epoch))
         bestEpoch = epoch
         bestMetricVal = metricVal
         worseEpochNb = 0
@@ -38,15 +40,18 @@ def all_cat_var_dic(var_dic,resDict,mode):
         if "feat" in resDict:
             norm = torch.sqrt(torch.pow(resDict["feat"],2).sum(dim=1,keepdim=True))
             var_dic = cat_var_dic(var_dic,"norm",norm)
-
+    
         if "attMaps" in resDict:
             var_dic = cat_var_dic(var_dic,"attMaps",resDict["attMaps"])
         
+        if "feat_pooled_per_head" in resDict:
+            var_dic = cat_var_dic(var_dic,"feat_pooled_per_head",resDict["feat_pooled_per_head"])
+
     return var_dic
 
 def cat_var_dic(var_dic,tensor_name,tensor):
     
-    assert tensor.ndim in [1,2,4]
+    assert tensor.ndim <= 4
 
     if tensor.ndim == 4:
         preproc_func = preproc_maps 
@@ -74,7 +79,7 @@ def preproc_vect(vect):
     return vect.detach().cpu()
 
 def save_maps(intermVarDict,exp_id,model_id,epoch,mode="val"):
-    for key in ["attMaps","norm"]:
+    for key in ["attMaps","norm","feat_pooled_per_head"]:
         if key in intermVarDict:
             saveMap(intermVarDict[key],exp_id,model_id,epoch,mode,key=key)
 

@@ -257,6 +257,8 @@ def addOptimArgs(argreader):
     argreader.parser.add_argument('--use_scheduler', type=str2bool, metavar='M',
                                   help='To use a learning rate scheduler')
     
+    argreader.parser.add_argument('--swa', type=str2bool, metavar='M',
+                                  help='To run the swa/lr scheduler of the blastocyst dataset authors.') 
     argreader.parser.add_argument('--swa_start_epoch', type=int, metavar='M',
                                   help='Epoch at which swa starts.')   
     argreader.parser.add_argument('--swa_lr', type=float, metavar='M',
@@ -359,9 +361,10 @@ def train(args,trial):
         lossFunc = torch.nn.DataParallel(lossFunc)
 
     kwargsTr["lossFunc"],kwargsVal["lossFunc"] = lossFunc,lossFunc
-    print("Init lr",scheduler.get_last_lr())
+    if scheduler is not None:
+        print("Init lr",scheduler.get_last_lr())
 
-    swa_net = torch.optim.swa_utils.AveragedModel(net)
+    swa_net = torch.optim.swa_utils.AveragedModel(net) if args.swa else None
 
     if not args.only_test:
 
@@ -371,36 +374,41 @@ def train(args,trial):
         while epoch < args.epochs + 1 and worseEpochNb < args.max_worse_epoch_nb:
             
             kwargsTr["epoch"], kwargsVal["epoch"] = epoch, epoch
-            kwargsTr["model"], kwargsVal["model"] = net, swa_net
+            kwargsTr["model"] = net
+            kwargsVal["model"] = swa_net if args.swa else net
 
             #Training
             training_epoch(**kwargsTr)
 
             #Save most recent model 
             if not args.optuna:
-                torch.save(swa_net.state_dict(), f"../models/{args.exp_id}/model{args.model_id}_epoch{epoch}")
+                print(net)
+                state_dic = net.module.state_dict() if args.swa else net.state_dict()
+                torch.save(state_dic, f"../models/{args.exp_id}/model{args.model_id}_epoch{epoch}")
                 previous_epoch_model = f"../models/{args.exp_id}/model{args.model_id}_epoch{epoch-1}"
                 if os.path.exists(previous_epoch_model):
                     os.remove(previous_epoch_model)
 
             #Updating LR and SWA model
             epoch += 1
-            if epoch <= args.swa_start_epoch + 1:
-                scheduler.step()
-            else:
-                print("SWA update")
-                swa_net.update_parameters(net)
-                torch.optim.swa_utils.update_bn(trainLoader, swa_net)
-            print(scheduler.get_last_lr())
+            if args.swa:
+                if epoch <= args.swa_start_epoch + 1:
+                    scheduler.step()
+                else:
+                    print("SWA update")
+                    swa_net.update_parameters(net)
+                    torch.optim.swa_utils.update_bn(trainLoader, swa_net)
+                print(scheduler.get_last_lr())
 
             #Validation
             if not args.no_val:
                 with torch.no_grad():
                     metricVal = evaluation(**kwargsVal)
 
+                net_to_update = swa_net if args.swa else net
                 bestEpoch, bestMetricVal, worseEpochNb = update.updateBestModel(metricVal, bestMetricVal, args.exp_id,
-                                                                            args.model_id, bestEpoch, epoch, swa_net,
-                                                                            isBetter, worseEpochNb)
+                                                                            args.model_id, bestEpoch, epoch,net_to_update,
+                                                                            isBetter, worseEpochNb,args)
                 if trial is not None:
                     trial.report(metricVal, epoch)
 

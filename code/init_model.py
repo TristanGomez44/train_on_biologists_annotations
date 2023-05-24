@@ -2,8 +2,6 @@ import glob,os,configparser
 import torch
 import utils
 
-
-
 def getOptim_and_Scheduler(lastEpoch,net,args):
 
     if args.optim != "AMSGrad":
@@ -22,21 +20,20 @@ def getOptim_and_Scheduler(lastEpoch,net,args):
 
     optim = optimConst(net.parameters(), **kwargs)
 
-    print("lr",[group['lr'] for group in optim.param_groups])
-
-    def warmup_lambda_func(epoch):
-        alpha = epoch/args.warmup_epochs
-        lr = (alpha*args.lr+(1-alpha)*args.warmup_lr)/args.lr
-        return lr
+    if args.swa:
+        def warmup_lambda_func(epoch):
+            alpha = epoch/args.warmup_epochs
+            lr = (alpha*args.lr+(1-alpha)*args.warmup_lr)/args.lr
+            return lr
     
-    warmup_scheduler = torch.optim.lr_scheduler.LambdaLR(optim, lr_lambda=warmup_lambda_func)
-    cosine_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optim, args.swa_start_epoch-args.warmup_epochs,args.swa_lr)
-    scheduler = torch.optim.lr_scheduler.SequentialLR(optim, [warmup_scheduler,cosine_scheduler],milestones=[args.warmup_epochs])
+        warmup_scheduler = torch.optim.lr_scheduler.LambdaLR(optim, lr_lambda=warmup_lambda_func)
+        cosine_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optim, args.swa_start_epoch-args.warmup_epochs,args.swa_lr)
+        scheduler = torch.optim.lr_scheduler.SequentialLR(optim, [warmup_scheduler,cosine_scheduler],milestones=[args.warmup_epochs])
 
-    print("lastEpoch",lastEpoch)
-    for _ in range(lastEpoch-1):
-        print("scheduler.step()")
-        scheduler.step()
+        for _ in range(lastEpoch-1):
+            scheduler.step()
+    else:
+        scheduler = None
 
     return optim, scheduler
 
@@ -74,25 +71,35 @@ def initialize_Net_And_EpochNumber(net, exp_id, model_id, cuda, start_mode, init
 
     return startEpoch
 
+def removeExcessModule(params):
+    new_params = {}
+    for key in params:
+        new_key = key.replace("module.module.","module.")
+        new_params[new_key] = params[key]
+    return new_params
+
 def preprocessAndLoadParams(init_path,cuda,net,verbose=True):
     if verbose:
         print("Init from",init_path)
     params = torch.load(init_path, map_location="cpu" if not cuda else None)
     params = addOrRemoveModule(params,net)
+    params = removeExcessModule(params)
     res = net.load_state_dict(params, False)
 
-    # Depending on the pytorch version the load_state_dict() method can return the list of missing and unexpected parameters keys or nothing
-    if not res is None:
-        missingKeys, unexpectedKeys = res
-        if len(missingKeys) > 0:
-            print("missing keys")
-            for key in missingKeys:
-                print(key)
-        if len(unexpectedKeys) > 0:
-            print("unexpected keys")
-            for key in unexpectedKeys:
-                print(key)
+    missingKeys, unexpectedKeys = res
+    if len(missingKeys) > 0:
+        print("missing keys")
+        for key in missingKeys:
+            print(key)
+    if len(unexpectedKeys) > 0:
+        print("unexpected keys")
+        for key in unexpectedKeys:
+            print(key)
+        if len(unexpectedKeys)==1 and "n_averaged" in unexpectedKeys[0]:
+            unexpectedKeys = []
 
+    assert len(missingKeys) == 0 and len(unexpectedKeys)==0,"Some keys were missing/unexpected. See message above."
+        
     return net
 
 def addOrRemoveModule(params,net):
