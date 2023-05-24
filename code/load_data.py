@@ -15,8 +15,10 @@ def get_class_nb(dataset_train):
 def get_img_size(args):
     if "vit" in args.first_mod or "dit" in args.first_mod:
         imgSize = 224
-    elif "swin" in args.first_mod:
+    elif args.first_mod=="swin_b_16":
         imgSize = 192
+    elif args.first_mod=="swin_b_8":
+        imgSize = 224
     elif args.debug:
         imgSize = 32,32
     elif args.big_images:

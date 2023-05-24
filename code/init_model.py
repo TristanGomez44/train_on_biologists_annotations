@@ -2,32 +2,42 @@ import glob,os,configparser
 import torch
 import utils
 
-def getOptim_and_Scheduler(optimStr, lr,momentum,weightDecay,useScheduler,lastEpoch,net,step_size=2,gamma=0.9):
 
-    if optimStr != "AMSGrad":
-        optimConst = getattr(torch.optim, optimStr)
-        if optimStr == "SGD":
-            kwargs = {'lr':lr,'momentum': momentum,"weight_decay":weightDecay}
-        elif optimStr == "Adam":
-            kwargs = {'lr':lr,"weight_decay":weightDecay}
-        elif optimStr == "AdamW":
-            kwargs = {'lr':lr,"weight_decay":weightDecay}
+
+def getOptim_and_Scheduler(lastEpoch,net,args):
+
+    if args.optim != "AMSGrad":
+        optimConst = getattr(torch.optim, args.optim)
+        if args.optim == "SGD":
+            kwargs = {'lr':args.lr,'momentum': args.momentum,"weight_decay":args.weight_decay}
+        elif args.optim == "Adam":
+            kwargs = {'lr':args.lr,"weight_decay":args.weight_decay}
+        elif args.optim == "AdamW":
+            kwargs = {'lr':args.lr,"weight_decay":args.weight_decay}
         else:
-            raise ValueError("Unknown optimisation algorithm : {}".format(optimStr))
+            raise ValueError("Unknown optimisation algorithm : {}".format(args.optim))
     else:
         optimConst = torch.optim.Adam
-        kwargs = {'lr':lr,'amsgrad': True,"weight_decay":weightDecay}
+        kwargs = {'lr':args.lr,'amsgrad': True,"weight_decay":args.weight_decay}
 
     optim = optimConst(net.parameters(), **kwargs)
 
-    if useScheduler:
-        scheduler = torch.optim.lr_scheduler.StepLR(optim, step_size=step_size, gamma=gamma)
-        for _ in range(lastEpoch-1):
-            scheduler.step()
-        
-        print("StepLR:",step_size,gamma,scheduler.get_last_lr())
-    else:
-        scheduler = None
+    print("lr",[group['lr'] for group in optim.param_groups])
+
+    def warmup_lambda_func(epoch):
+        alpha = epoch/args.warmup_epochs
+        lr = (alpha*args.lr+(1-alpha)*args.warmup_lr)/args.lr
+        print(epoch,alpha,alpha*args.lr,(1-alpha)*args.warmup_lr,lr)
+        return lr
+    
+    warmup_scheduler = torch.optim.lr_scheduler.LambdaLR(optim, lr_lambda=warmup_lambda_func)
+    cosine_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optim, args.swa_start_epoch-args.warmup_epochs,args.swa_lr)
+    scheduler = torch.optim.lr_scheduler.SequentialLR(optim, [warmup_scheduler,cosine_scheduler],milestones=[args.warmup_epochs])
+
+    print("lastEpoch",lastEpoch)
+    for _ in range(lastEpoch-1):
+        print("scheduler.step()")
+        scheduler.step()
 
     return optim, scheduler
 

@@ -645,7 +645,7 @@ def swin_b_16():
 
 
 def swin_b_8():
-    model = SwinTransformerV2(img_size=256,
+    model = SwinTransformerV2(img_size=224,
                                 in_chans=3,
                                 num_classes=1000,
                                 embed_dim=128,
