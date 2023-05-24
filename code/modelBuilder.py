@@ -262,11 +262,8 @@ class LinearSecondModel(SecondModel):
         x = self.dropout(x)
 
         if self.one_feat_per_head:
-            print("ONE FEAT PER HEAD",x.shape)
             x = self.lin_feat_per_head(x)
-            print("postlin",x.shape)
             x = x.reshape(x.shape[0],3,-1)
-            print("reshape",x.shape)
             
             retDict["feat_pooled_per_head"] = x
 

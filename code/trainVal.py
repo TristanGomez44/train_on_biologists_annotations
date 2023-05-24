@@ -382,7 +382,6 @@ def train(args,trial):
 
             #Save most recent model 
             if not args.optuna:
-                print(net)
                 state_dic = net.module.state_dict() if args.swa else net.state_dict()
                 torch.save(state_dic, f"../models/{args.exp_id}/model{args.model_id}_epoch{epoch}")
                 previous_epoch_model = f"../models/{args.exp_id}/model{args.model_id}_epoch{epoch-1}"
