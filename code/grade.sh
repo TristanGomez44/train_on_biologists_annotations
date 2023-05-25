@@ -5,11 +5,11 @@ case $1 in
   "noneRed2_lr_swin_authordataaug_sched")
     python trainVal.py -c grade.config --model_id noneRed2_swin_authordataaug_sched --first_mod swin_b_16  --big_images False --batch_size 64 --val_batch_size 128 --swa True
     ;;
-  "noneRed2_lr_swin_one_feat_per_head")
-    python trainVal.py -c grade.config --model_id noneRed2_swin_one_feat_per_head --first_mod swin_b_16  --big_images False --batch_size 64 --val_batch_size 128 --one_feat_per_head True
+  "noneRed2_lr_swin_one_feat_per_head_relu")
+    python trainVal.py -c grade.config --model_id noneRed2_swin_one_feat_per_head_relu --first_mod swin_b_16  --big_images False --batch_size 64 --val_batch_size 128 --one_feat_per_head True
     ;;
   "debug")
-    python trainVal.py -c grade.config --model_id noneRed2_lr_r18 --epochs 15 --first_mod resnet18  --big_images False --swa_start_epoch 10 --start_mode scratch --one_feat_per_head True
+    python trainVal.py -c grade.config --model_id noneRed2_lr_r18 --epochs 15 --first_mod resnet18  --big_images False --start_mode scratch --one_feat_per_head True
     ;;
   "noneRed2_lr_transf16")
     python trainVal.py -c grade.config --model_id noneRed2_transf16 --epochs 100  --max_worse_epoch_nb 10 --first_mod dit_b_16 --big_images False

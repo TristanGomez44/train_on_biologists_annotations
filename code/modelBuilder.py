@@ -256,13 +256,17 @@ class LinearSecondModel(SecondModel):
         self.one_feat_per_head = one_feat_per_head
         if self.one_feat_per_head:
             self.lin_feat_per_head = nn.Linear(self.nbFeat, self.nbFeat*3,bias=bias)
+            self.act = torch.nn.GELU()
+            self.norm = torch.nn.LayerNorm(self.nbFeat)
 
     def forward(self, retDict):
         x = retDict["feat_pooled"]
-        x = self.dropout(x)
 
         if self.one_feat_per_head:
+            x = self.norm(x)
             x = self.lin_feat_per_head(x)
+            x = self.act(x)
+            x = self.dropout(x)
             x = x.reshape(x.shape[0],3,-1)
             
             retDict["feat_pooled_per_head"] = x
@@ -271,6 +275,7 @@ class LinearSecondModel(SecondModel):
             output_te = self.lin_lay_te(x[:,1])
             output_exp = self.lin_lay_exp(x[:,2])
         else:
+            x = self.dropout(x)
             output_icm = self.lin_lay_icm(x)
             output_te = self.lin_lay_te(x)
             output_exp = self.lin_lay_exp(x)
