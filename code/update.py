@@ -5,6 +5,40 @@ plt.switch_backend('agg')
 import os,glob 
 import utils
 
+def ssl_updates(args,optim,epoch):
+    args.teach_momentum = schedule(epoch,args.start_teach_momentum,args.end_teach_momentum,args.epochs,mode="cosine")
+    args.teach_temp = schedule(epoch,args.start_teach_temp,args.end_teach_temp,args.teach_temp_sched_epochs,mode="linear")
+    args.weight_decay = schedule(epoch,args.start_weight_decay,args.end_weight_decay,args.epochs,mode="cosine")
+    for i, param_group in enumerate(optim.param_groups):
+        if i == 0:  # only the first group is regularized
+            param_group["weight_decay"] = args.weight_decay
+    return args,optim 
+
+def update_center(center,teacher_dict,momentum):
+    out1,out2 = teacher_dict["output1"],teacher_dict["output2"]
+    out = torch.cat([out1,out2],dim=0)
+    center = momentum*center+(1-momentum)*out.mean(dim=0,keepdim=True)
+    return center 
+
+def update_teacher(teacher_net,student_net,momentum):
+    for teach_params, student_params in zip(teacher_net.parameters(), student_net.parameters()):       
+        teach_params.data = momentum*teach_params.data+(1-momentum)*student_params.data
+    return teacher_net
+
+def schedule(epoch,start_value,end_value_temp,epoch_nb,mode="linear"):
+
+    progress = (epoch-1)/(epoch_nb-1)
+
+    if epoch <= epoch_nb:
+        if mode == "linear":
+            return start_value+(end_value_temp-start_value)*progress
+        elif mode == "cosine":
+            return end_value_temp + 0.5 * (start_value - end_value_temp) * (1 + np.cos(np.pi * progress))
+        else:
+            raise ValueError("Unkown schedule mode:",mode)
+    else:
+        return end_value_temp
+    
 def updateBestModel(metricVal,bestMetricVal,exp_id,model_id,bestEpoch,epoch,net,isBetter,worseEpochNb,args):
 
     if isBetter(metricVal,bestMetricVal):
@@ -85,16 +119,3 @@ def save_maps(intermVarDict,exp_id,model_id,epoch,mode="val"):
 
 def saveMap(fullMap,exp_id,model_id,epoch,mode,key="attMaps"):
     np.save(f"../results/{exp_id}/{key}_{model_id}_epoch{epoch}_{mode}.npy",fullMap.numpy())
-
-class NCEWeightUpdater():
-
-    def __init__(self,args,epoch_nb=150):
-        self.args = args
-        self.epoch_nb = epoch_nb
-
-    def compute_nce_weight(self,epoch):
-        if epoch < self.epoch_nb:
-            self.nce_weight = (epoch*1.0/self.epoch_nb)
-        else:
-            self.nce_weight = 1
-        return self.nce_weight

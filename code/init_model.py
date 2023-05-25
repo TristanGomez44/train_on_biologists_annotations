@@ -4,6 +4,9 @@ import utils
 
 def getOptim_and_Scheduler(lastEpoch,net,args):
 
+    if args.ssl:
+        args.lr = args.ref_lr*args.batch_size/args.ref_batch_size
+
     if args.optim != "AMSGrad":
         optimConst = getattr(torch.optim, args.optim)
         if args.optim == "SGD":
@@ -20,15 +23,16 @@ def getOptim_and_Scheduler(lastEpoch,net,args):
 
     optim = optimConst(net.parameters(), **kwargs)
 
-    if args.swa:
+    if args.swa or args.ssl:
         def warmup_lambda_func(epoch):
-            alpha = epoch/args.warmup_epochs
+            alpha = epoch/(args.warmup_epochs-1)
             lr = (alpha*args.lr+(1-alpha)*args.warmup_lr)/args.lr
             return lr
     
         warmup_scheduler = torch.optim.lr_scheduler.LambdaLR(optim, lr_lambda=warmup_lambda_func)
-        cosine_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optim, args.swa_start_epoch-args.warmup_epochs,args.swa_lr)
-        scheduler = torch.optim.lr_scheduler.SequentialLR(optim, [warmup_scheduler,cosine_scheduler],milestones=[args.warmup_epochs])
+
+        cosine_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optim, args.end_cosine_sched_epoch-args.warmup_epochs,args.final_lr)
+        scheduler = torch.optim.lr_scheduler.SequentialLR(optim, [warmup_scheduler,cosine_scheduler],milestones=[args.warmup_epochs-1])
 
         for _ in range(lastEpoch-1):
             scheduler.step()

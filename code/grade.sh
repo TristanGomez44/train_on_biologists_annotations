@@ -11,6 +11,9 @@ case $1 in
   "debug")
     python trainVal.py -c grade.config --model_id noneRed2_lr_r18 --epochs 15 --first_mod resnet18  --big_images False --start_mode scratch --one_feat_per_head True
     ;;
+  "debug_ssl")
+    /home/E144069X/miniconda3/envs/myenv2/bin/python3 trainVal.py -c ssl.config --model_id noneRed2_lr_r18_ssl --epochs 15 --first_mod resnet18  --big_images False --start_mode scratch --one_feat_per_head True --ssl True --teach_temp_sched_epochs 3 --epochs 6 --dataset_path /media/E144069X/DL4IVF/DL4IVF/ --warmup_epochs 3 --end_cosine_sched_epoch 6
+    ;;
   "noneRed2_lr_transf16")
     python trainVal.py -c grade.config --model_id noneRed2_transf16 --epochs 100  --max_worse_epoch_nb 10 --first_mod dit_b_16 --big_images False
     ;;

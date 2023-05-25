@@ -1,7 +1,6 @@
 import os
 import sys
 import glob
-import time
 
 from shutil import copyfile
 import gc
@@ -9,8 +8,6 @@ import subprocess
 
 import numpy as np
 import torch
-import torch.nn as nn
-from torch.nn import functional as F
 import matplotlib.pyplot as plt
 plt.switch_backend('agg')
 import optuna
@@ -19,39 +16,40 @@ import sqlite3
 from utils import _remove_no_annot
 from args import ArgReader,str2bool,addInitArgs,addValArgs,init_post_hoc_arg,addLossTermArgs,addSalMetrArgs
 import init_model
-from loss import Loss,agregate_losses
+from loss import SupervisedLoss,SelfSuperVisedLoss,agregate_losses
 import modelBuilder
 import load_data
 import metrics
 import sal_metr_data_aug
 import update
-import multi_obj_epoch_selection
+import utils 
 
-def remove_excess_examples(data,target_dic,accumulated_size,batch_size):
-    if accumulated_size + data.size(0) > batch_size:
+def to_cuda(batch):
+    for elem in batch:
+        if type(elem) is torch.Tensor:
+            elem = elem.cuda(non_blocking=True)
+        elif type(elem) is dict:
+            for key in elem:
+                elem[key] = elem[key].cuda(non_blocking=True)
+    return batch 
 
-        if batch_size-accumulated_size < 2*torch.cuda.device_count():
-            data = data[:2*torch.cuda.device_count()]
-            for key in target_dic:
-                target_dic[key] = target_dic[key][:2*torch.cuda.device_count()]
-        else:
-            data = data[:batch_size-accumulated_size]
-            for key in target_dic:
-                target_dic[key] = target_dic[key][:batch_size-accumulated_size]
+def _remove_excess_examples(tensor,end_ind):
+    return tensor[:end_ind]
+
+def remove_excess_examples(batch,accumulated_size,batch_size):
+    if accumulated_size + batch[0].size(0) > batch_size:
+        end_ind = max(batch_size-accumulated_size,2*torch.cuda.device_count())
+        for elem in batch:
+            if type(elem) is torch.Tensor:
+                elem = _remove_excess_examples(elem,end_ind)
+            elif type(elem) is dict:
+                for key in elem:
+                    elem[key] = _remove_excess_examples(elem[key],end_ind)
         accumulated_size = batch_size
     else:
-        accumulated_size += data.size(0)
+        accumulated_size += batch[0].size(0)
 
-    return data,target_dic,accumulated_size
-
-def master_net_inference(data,kwargs,resDict):
-    with torch.no_grad():
-        mastDict = kwargs["master_net"](data)
-        resDict["master_net_output"] = mastDict["output"]
-        resDict["master_net_features"] = mastDict["features"]
-        if "attMaps" in mastDict:
-            resDict["master_net_attMaps"] = mastDict["attMaps"]
-    return resDict
+    return batch,accumulated_size
 
 def optim_step(model,optim,acc_nb):
     #Scale gradients (required when using gradient accumulation)
@@ -65,20 +63,6 @@ def optim_step(model,optim,acc_nb):
 
     return model,optim,accumulated_size,acc_nb
 
-def adv_mlp_optim_step(loss_dic,kwargs):
-    loss_dic["loss_adv_ce"].backward()
-    kwargs["optim_adv_mlp"].step()
-    kwargs["optim_adv_mlp"].zero_grad()
-    loss_dic["loss_adv_ce"] = loss_dic["loss_adv_ce"].data
-    return loss_dic,kwargs
-
-def get_adv_target(resDict):
-    resDict["output_adv"] = torch.cat((resDict["output_adv"],resDict["output_adv_masked"]),dim=0)
-    target_adv = torch.zeros(len(resDict["feat_pooled"]))
-    target_adv_masked = torch.ones(len(resDict["feat_pooled_masked"]))
-    resDict["target_adv"] = torch.cat((target_adv,target_adv_masked),dim=0).to(resDict["output_adv"].device).long()
-    return resDict
-
 def increment_valid_example_dic(target_dic,valid_example_nb_dic):
     for key in target_dic:
         if not key in valid_example_nb_dic:
@@ -86,7 +70,59 @@ def increment_valid_example_dic(target_dic,valid_example_nb_dic):
         target = target_dic[key]
         valid_example_nb_dic[key] += len(_remove_no_annot(target,reference=target))
     return valid_example_nb_dic
-    
+
+def add_suff(dic,suff):
+    new_dic = {}
+    for key in dic:
+        new_dic[key+suff] = dic[key]
+    return new_dic
+
+def inference(model,data1,data2,model_temp):
+    student_dict = {}
+    for i,data in enumerate([data1,data2]):
+        student_dict_i = model(data) 
+        student_dict_i = add_suff(student_dict_i,str(i+1))
+        student_dict.update(student_dict_i)
+    student_dict["temp"] = model_temp
+    return student_dict
+
+def teacher_inference(model,data1,data2,model_temp):
+    teacher_dict = inference(model,data1,data2,model_temp)
+    teacher_dict["center"] = model.center
+    return teacher_dict
+
+def compute_loss(loss_func,loss_args,backpropagate=True):
+    loss_dic = loss_func(*loss_args)
+    loss_dic = agregate_losses(loss_dic)
+    loss = loss_dic["loss"]/len(loss_args[0])
+    if backpropagate:
+        loss.backward()
+    return loss_dic 
+
+def self_supervised_step(model,batch,args,kwargs,is_train=True):
+    data1,data2 = batch[0],batch[1]
+    utils.save_image(data1,f"../vis/data1_{is_train}.png")
+    utils.save_image(data2,f"../vis/data2_{is_train}.png")
+    student_dict = inference(model,data1,data2,args.student_temp)
+    with torch.no_grad():
+        teacher_dict = inference(kwargs["teacher_net"],data1,data2,args.teach_temp)
+        teacher_dict["center"] = kwargs["teacher_net"].center
+
+    loss_dic = compute_loss(kwargs["loss_func"],[student_dict,teacher_dict],backpropagate=is_train)
+    kwargs["teacher_net"] = update.update_teacher(kwargs["teacher_net"],model,args.teach_momentum)
+    kwargs["teacher_net"].center = update.update_center(kwargs["teacher_net"].center,teacher_dict,args.teach_center_momentum)
+    metDictSample = {}     
+    output_dict = {"feat":student_dict["feat1"]}       
+    return model,loss_dic,metDictSample,output_dict
+
+def supervised_step(model,batch,kwargs,valid_example_nb_dic,is_train=True):
+    data, target_dic = batch[0], batch[1]
+    valid_example_nb_dic = increment_valid_example_dic(target_dic,valid_example_nb_dic)
+    output_dict = model(data)
+    loss_dic = compute_loss(kwargs["loss_func"],[target_dic,output_dict],backpropagate=is_train)
+    metDictSample = metrics.compute_metrics(target_dic,output_dict)
+    return model,loss_dic,metDictSample,output_dict,valid_example_nb_dic
+
 def training_epoch(model, optim, loader, epoch, args, **kwargs):
 
     model.train()
@@ -109,44 +145,27 @@ def training_epoch(model, optim, loader, epoch, args, **kwargs):
             processedImgNb = batch_idx * len(batch[0])
             print("\t", processedImgNb, "/", len(loader.dataset))
 
-        data, target_dic = batch[0], batch[1]
+        if args.cuda:
+            batch = to_cuda(batch)
 
-        valid_example_nb_dic = increment_valid_example_dic(target_dic,valid_example_nb_dic)
-        total_example_nb += len(data)
-
-        #Removing excess samples (if training is done by accumulating gradients)
-        data,target_dic,accumulated_size = remove_excess_examples(data,target_dic,accumulated_size,args.batch_size)
+        batch,accumulated_size = remove_excess_examples(batch,accumulated_size,args.batch_size)
 
         acc_nb += 1
+        total_example_nb += len(batch[0])
 
-        if args.cuda:
-            data = data.cuda(non_blocking=True)
-            for key in target_dic:
-                target_dic[key] = target_dic[key].cuda(non_blocking=True)
-
-        resDict = model(data)
-
-        if args.master_net:
-            resDict = master_net_inference(data,kwargs,resDict)
-
-        if args.sal_metr_mask or args.compute_masked:
-            other_data = batch[2].to(data.device) if args.sal_metr_otherimg else None
-            resDict,data,_ = sal_metr_data_aug.apply_sal_metr_masks_and_update_dic(model,data,args,resDict,other_data)
-
-        loss_dic = kwargs["lossFunc"](target_dic, resDict)
-        loss_dic = agregate_losses(loss_dic)
-        loss = loss_dic["loss"]/len(data)
-        loss.backward()
+        if args.ssl:
+            model,loss_dic,metDictSample,output_dict = self_supervised_step(model,batch,args,kwargs,is_train=True)
+        else:
+            model,loss_dic,metDictSample,output_dict,valid_example_nb_dic = supervised_step(model,batch,kwargs,valid_example_nb_dic,is_train=True)
 
         if accumulated_size == args.batch_size:
             model,optim,accumulated_size,acc_nb = optim_step(model,optim,acc_nb)
 
         # Metrics
-        metDictSample = metrics.compute_metrics(target_dic,resDict)
         metDictSample = metrics.add_losses_to_dic(metDictSample,loss_dic)
         metrDict = metrics.updateMetrDict(metrDict, metDictSample)
 
-        var_dic = update.all_cat_var_dic(var_dic,resDict,"train")
+        var_dic = update.all_cat_var_dic(var_dic,output_dict,"train")
             
         validBatch += 1
 
@@ -169,44 +188,36 @@ def evaluation(model, loader, epoch, args, mode="val",**kwargs):
     print("Epoch", epoch, " : {}".format(mode))
 
     metrDict = None
-
     validBatch = 0
-    var_dic = {}
+
     valid_example_nb_dic = {}
-    total_example_nb = 0
+    total_example_nb = 0  
 
+    var_dic = {}
     for batch_idx, batch in enumerate(loader):
-        data, target_dic = batch[:2]
 
-        valid_example_nb_dic = increment_valid_example_dic(target_dic,valid_example_nb_dic)
-        total_example_nb += len(data)
-        
-        if (batch_idx % args.log_interval == 0):
-            print("\t", batch_idx * len(data), "/", len(loader.dataset))
+        if batch_idx % args.log_interval == 0:
+            processedImgNb = batch_idx * len(batch[0])
+            print("\t", processedImgNb, "/", len(loader.dataset))
 
         if args.cuda:
-            data = data.cuda(non_blocking=True)
-            for key in target_dic:
-                target_dic[key] = target_dic[key].cuda(non_blocking=True)
+            batch = to_cuda(batch)
 
-        resDict = model(data)
+        total_example_nb += len(batch[0])
 
-        if args.sal_metr_mask or args.compute_masked:
-            other_data = batch[2].to(data.device) if args.sal_metr_otherimg else None
-            resDict,data,_= sal_metr_data_aug.apply_sal_metr_masks_and_update_dic(model,data,args,resDict,other_data)
-
-        loss_dic = kwargs["lossFunc"](target_dic, resDict)
-        loss_dic = agregate_losses(loss_dic)
+        if args.ssl:
+            model,loss_dic,metDictSample,output_dict = self_supervised_step(model,batch,args,kwargs,is_train=False)
+        else:
+            model,loss_dic,metDictSample,output_dict,valid_example_nb_dic = supervised_step(model,batch,kwargs,valid_example_nb_dic,is_train=False)
 
         # Metrics
-        metDictSample = metrics.compute_metrics(target_dic,resDict)
         metDictSample = metrics.add_losses_to_dic(metDictSample,loss_dic)
         metrDict = metrics.updateMetrDict(metrDict, metDictSample)
 
-        var_dic = update.all_cat_var_dic(var_dic,resDict,mode)
-
+        var_dic = update.all_cat_var_dic(var_dic,output_dict,"train")
+            
         validBatch += 1
-        
+
         if validBatch > 0 and args.debug:
             break
 
@@ -220,7 +231,10 @@ def evaluation(model, loader, epoch, args, mode="val",**kwargs):
 
     writeSummaries(metrDict, valid_example_nb_dic,total_example_nb, epoch, mode, args.model_id+optuna_suff, args.exp_id)
 
-    return metrDict["Accuracy_exp"]
+    if args.ssl:
+        return metrDict["loss"]
+    else:
+        return metrDict["Accuracy_exp"]
 
 def writeSummaries(metrDict, valid_example_nb_dic,total_example_nb, epoch, mode, model_id, exp_id):
  
@@ -259,14 +273,17 @@ def addOptimArgs(argreader):
     
     argreader.parser.add_argument('--swa', type=str2bool, metavar='M',
                                   help='To run the swa/lr scheduler of the blastocyst dataset authors.') 
-    argreader.parser.add_argument('--swa_start_epoch', type=int, metavar='M',
-                                  help='Epoch at which swa starts.')   
-    argreader.parser.add_argument('--swa_lr', type=float, metavar='M',
-                                  help='learning rate for swa.')   
+    
+    argreader.parser.add_argument('--end_cosine_sched_epoch', type=int, metavar='M',
+                                  help='Epoch at which cosine annealing end and lr becomes constant.')   
+    argreader.parser.add_argument('--end_lr', type=float, metavar='M',
+                                  help='Learning rate at the end of optimization.')   
     argreader.parser.add_argument('--warmup_lr', type=float, metavar='M',
                                   help='Initial lr during warmup.')       
     argreader.parser.add_argument('--warmup_epochs', type=int, metavar='M',
                                   help='Warmup length.')       
+    argreader.parser.add_argument('--final_lr', type=float, metavar='M',
+                                  help='Ending value for weight decay')
 
     argreader.parser.add_argument('--always_sched', type=str2bool, metavar='M',
                                   help='To always use a learning rate scheduler when optimizing hyper params')
@@ -280,6 +297,46 @@ def addOptimArgs(argreader):
 
     argreader.parser.add_argument('--bil_clus_soft_sched', type=str2bool, metavar='BOOL',
                                   help='Added schedule to increase temperature of the softmax of the bilinear cluster model.')
+
+    return argreader
+
+def addSSLArgs(argreader):
+
+    argreader.parser.add_argument('--ssl', type=str2bool, metavar='BOOL',
+                                  help='To use self-supervised learning')
+
+    argreader.parser.add_argument('--start_teach_temp', type=float, metavar='M',
+                                  help='Starting temperature for the softmax of the teacher model.')
+    
+    argreader.parser.add_argument('--end_teach_temp', type=float, metavar='M',
+                                  help='Ending temperature for the softmax of the teacher model.')
+    
+    argreader.parser.add_argument('--teach_temp_sched_epochs', type=int, metavar='M',
+                                  help='Number of epochs over which the temperature of the softmax of the teacher model is increased.')
+  
+    argreader.parser.add_argument('--student_temp', type=float, metavar='M',
+                                  help='Temperature for the softmax of the student model.')
+
+    argreader.parser.add_argument('--start_teach_momentum', type=float, metavar='M',
+                                  help='Starting momentum for the softmax of the teacher model.')
+
+    argreader.parser.add_argument('--end_teach_momentum', type=float, metavar='M',
+                                  help='Ending momentum for the softmax of the teacher model.')
+
+    argreader.parser.add_argument('--teach_center_momentum', type=float, metavar='M',
+                                  help='Momentum for the center update.')
+
+    argreader.parser.add_argument('--start_weight_decay', type=float, metavar='M',
+                                  help='Starting value for weight decay')
+  
+    argreader.parser.add_argument('--end_weight_decay', type=float, metavar='M',
+                                  help='Ending value for weight decay')
+    
+    argreader.parser.add_argument('--ref_batch_size', type=int, metavar='M',
+                                  help='Reference batch size to automatically compute the learning rate')
+
+    argreader.parser.add_argument('--ref_lr', type=float, metavar='M',
+                                  help='Learning rate at reference batch size.')
 
     return argreader
 
@@ -336,13 +393,18 @@ def train(args,trial):
         trainLoader = None
     valLoader,_ = load_data.buildTestLoader(args,"val")
     
+    kwargsTr = {'loader': trainLoader, 'args': args}
+    kwargsVal = {'loader':valLoader,'args': args}
+
     # Building the net
     net = modelBuilder.netBuilder(args)
 
-    kwargsTr = {'loader': trainLoader, 'args': args}
-    kwargsVal = kwargsTr.copy()
-
-    kwargsVal['loader'] = valLoader
+    if args.ssl:
+        teach_net = modelBuilder.netBuilder(args)
+        teach_net.center = torch.zeros(1, teach_net.secondModel.nbFeat).to("cuda" if args.cuda else "cpu")
+        teach_net.eval()
+        kwargsTr["teacher_net"] = teach_net
+        kwargsVal["teacher_net"] = teach_net
 
     startEpoch = init_model.initialize_Net_And_EpochNumber(net, args.exp_id, args.model_id, args.cuda, args.start_mode,
                                                 args.init_path,args.optuna)
@@ -355,12 +417,11 @@ def train(args,trial):
     bestMetricVal = -np.inf
     isBetter = lambda x, y: x > y
 
-    lossFunc = Loss(args,reduction="sum")
-
+    loss_func = SelfSuperVisedLoss if args.ssl else SupervisedLoss
     if args.multi_gpu:
-        lossFunc = torch.nn.DataParallel(lossFunc)
+        loss_func = torch.nn.DataParallel(loss_func)
 
-    kwargsTr["lossFunc"],kwargsVal["lossFunc"] = lossFunc,lossFunc
+    kwargsTr["loss_func"],kwargsVal["loss_func"] = loss_func(),loss_func()
     if scheduler is not None:
         print("Init lr",scheduler.get_last_lr())
 
@@ -370,9 +431,12 @@ def train(args,trial):
 
         actual_bs = args.batch_size if args.batch_size < args.max_batch_size_single_pass else args.max_batch_size_single_pass
         args.batch_per_epoch = len(trainLoader.dataset)//actual_bs if len(trainLoader.dataset) > actual_bs else 1
+   
+        if args.ssl:
+            args,kwargsTr["optim"] = update.ssl_updates(args,kwargsTr["optim"],epoch)
 
         while epoch < args.epochs + 1 and worseEpochNb < args.max_worse_epoch_nb:
-            
+        
             kwargsTr["epoch"], kwargsVal["epoch"] = epoch, epoch
             kwargsTr["model"] = net
             kwargsVal["model"] = swa_net if args.swa else net
@@ -388,7 +452,7 @@ def train(args,trial):
                 if os.path.exists(previous_epoch_model):
                     os.remove(previous_epoch_model)
 
-            #Updating LR and SWA model
+            #SWA updates
             epoch += 1
             if args.swa:
                 if epoch <= args.swa_start_epoch + 1:
@@ -397,7 +461,6 @@ def train(args,trial):
                     print("SWA update")
                     swa_net.update_parameters(net)
                     torch.optim.swa_utils.update_bn(trainLoader, swa_net)
-                print(scheduler.get_last_lr())
 
             #Validation
             if not args.no_val:
@@ -410,6 +473,15 @@ def train(args,trial):
                                                                             isBetter, worseEpochNb,args)
                 if trial is not None:
                     trial.report(metricVal, epoch)
+
+            #SSL updates 
+            if args.ssl:
+                print("LR",scheduler.get_last_lr())
+                print("Weight decay",kwargsTr["optim"].param_groups[0]["weight_decay"])
+                print("Teach momentum",args.teach_momentum)
+                print("Teach temp",args.teach_temp)
+                args,kwargsTr["optim"] = update.ssl_updates(args,kwargsTr["optim"],epoch)
+                scheduler.step()
 
     if trial is None:
 
@@ -468,13 +540,9 @@ def main(argv=None):
 
     argreader.parser.add_argument('--trial_id', type=int, help='The trial ID. Useful for grad exp during test')
 
-    argreader.parser.add_argument('--compute_ece',type=str2bool, help='To compute ECE even if no focal loss is used.')
-    argreader.parser.add_argument('--compute_masked',type=str2bool, help='To compute masked image even if not used in loss function.')
-    
-    argreader.parser.add_argument('--loss_on_masked',type=str2bool, help='To apply the focal loss on the output corresponding to masked data.')
-    
     argreader = addInitArgs(argreader)
     argreader = addOptimArgs(argreader)
+    argreader = addSSLArgs(argreader)
     argreader = addValArgs(argreader)
     argreader = addLossTermArgs(argreader)
     argreader = addSalMetrArgs(argreader)

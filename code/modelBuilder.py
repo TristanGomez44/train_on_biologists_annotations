@@ -14,20 +14,6 @@ from torch.autograd import Function
 
 from load_data import get_img_size,get_class_nb
 
-class ReverseLayerF(Function):
-
-    @staticmethod
-    def forward(ctx, x, alpha):
-        ctx.alpha = alpha
-
-        return x.view_as(x)
-
-    @staticmethod
-    def backward(ctx, grad_output):
-        output = grad_output.neg() * ctx.alpha
-
-        return output, None
-
 def buildFeatModel(featModelName, **kwargs):
     ''' Build a visual feature model
 
@@ -242,9 +228,40 @@ class SecondModel(nn.Module):
     def forward(self, x):
         raise NotImplementedError
 
+class DINOHead(torch.nn.Module):
+
+    def __init__(self,dimension,norm_last_layer=False,bottleneck_dim=256):
+        super().__init__()
+        layers = []
+
+        layers.append(nn.Linear(dimension, dimension))
+        layers.append(nn.GELU())
+        layers.append(nn.Linear(dimension, dimension))
+        layers.append(nn.GELU())
+        layers.append(nn.Linear(dimension, bottleneck_dim))
+
+        self.mlp = nn.Sequential(*layers)
+        self.apply(self._init_weights)
+        self.last_layer = nn.utils.weight_norm(nn.Linear(bottleneck_dim, dimension, bias=False))
+        self.last_layer.weight_g.data.fill_(1)
+        if norm_last_layer:
+            self.last_layer.weight_g.requires_grad = False
+
+    def _init_weights(self, m):
+        if isinstance(m, nn.Linear):
+            nn.init.trunc_normal_(m.weight, std=.02)
+            if isinstance(m, nn.Linear) and m.bias is not None:
+                nn.init.constant_(m.bias, 0)
+
+    def forward(self, x):
+        x = self.mlp(x)
+        x = nn.functional.normalize(x, dim=-1, p=2)
+        x = self.last_layer(x)
+        return x
+    
 class LinearSecondModel(SecondModel):
 
-    def __init__(self, nbFeat, nb_class_dic, dropout,bias=True,one_feat_per_head=False):
+    def __init__(self, nbFeat, nb_class_dic, dropout,bias=True,one_feat_per_head=False,ssl=False):
 
         super().__init__(nbFeat, 1)
         self.dropout = nn.Dropout(p=dropout)
@@ -258,31 +275,39 @@ class LinearSecondModel(SecondModel):
             self.lin_feat_per_head = nn.Linear(self.nbFeat, self.nbFeat*3,bias=bias)
             self.act = torch.nn.GELU()
             self.norm = torch.nn.LayerNorm(self.nbFeat)
+        
+        self.ssl = ssl
+        if self.ssl:
+            self.ssl_head = DINOHead(self.nbFeat)
 
     def forward(self, retDict):
         x = retDict["feat_pooled"]
 
-        if self.one_feat_per_head:
-            x = self.norm(x)
-            x = self.lin_feat_per_head(x)
-            x = self.act(x)
-            x = self.dropout(x)
-            x = x.reshape(x.shape[0],3,-1)
-            
-            retDict["feat_pooled_per_head"] = x
-
-            output_icm = self.lin_lay_icm(x[:,0])
-            output_te = self.lin_lay_te(x[:,1])
-            output_exp = self.lin_lay_exp(x[:,2])
+        if self.ssl:
+            x = self.ssl_head(x)
+            retDict["output"] = x
         else:
-            x = self.dropout(x)
-            output_icm = self.lin_lay_icm(x)
-            output_te = self.lin_lay_te(x)
-            output_exp = self.lin_lay_exp(x)
+            if self.one_feat_per_head:
+                x = self.norm(x)
+                x = self.lin_feat_per_head(x)
+                x = self.act(x)
+                x = self.dropout(x)
+                x = x.reshape(x.shape[0],3,-1)
+                
+                retDict["feat_pooled_per_head"] = x
 
-        retDict["output_icm"] = output_icm
-        retDict["output_te"] = output_te
-        retDict["output_exp"] = output_exp
+                output_icm = self.lin_lay_icm(x[:,0])
+                output_te = self.lin_lay_te(x[:,1])
+                output_exp = self.lin_lay_exp(x[:,2])
+            else:
+                x = self.dropout(x)
+                output_icm = self.lin_lay_icm(x)
+                output_te = self.lin_lay_te(x)
+                output_exp = self.lin_lay_exp(x)
+
+            retDict["output_icm"] = output_icm
+            retDict["output_te"] = output_te
+            retDict["output_exp"] = output_exp
 
         return retDict
 
@@ -360,7 +385,7 @@ def netBuilder(args,gpu=None):
     ############### Second Model #######################
     if args.second_mod == "linear":
         nb_class_dic = {"icm":args.icm_te_class_nb,"te":args.icm_te_class_nb,"exp":args.grade_class_nb}
-        secondModel = LinearSecondModel(nbFeat, nb_class_dic, args.dropout,args.lin_lay_bias,args.one_feat_per_head)
+        secondModel = LinearSecondModel(nbFeat, nb_class_dic, args.dropout,args.lin_lay_bias,args.one_feat_per_head,args.ssl)
     else:
         raise ValueError("Unknown second model type : ", args.second_mod)
 
@@ -368,7 +393,7 @@ def netBuilder(args,gpu=None):
 
     net = Model(firstModel, secondModel)
 
-    if args.cuda and torch.cuda.is_available():
+    if args.cuda:
         net.cuda()
         if args.multi_gpu:
             net = DataParallelModel(net)
