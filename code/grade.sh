@@ -2,8 +2,14 @@ case $1 in
   "noneRed2_lr_swin")
     python trainVal.py -c grade.config --model_id noneRed2_swin --epochs 100  --max_worse_epoch_nb 10 --first_mod swin_b_16  --big_images False --batch_size 64 --val_batch_size 128
     ;;
+  "noneRed2_lr_r50")
+    python trainVal.py -c grade.config --model_id noneRed2_lr_r50 --first_mod resnet50 --big_images False --batch_size 64 --val_batch_size 512
+    ;;
+  "noneRed2_r50")
+    python trainVal.py -c grade.config --model_id noneRed2_r50 --first_mod resnet50 --big_images True --batch_size 64 --val_batch_size 512
+    ;;
   "noneRed2_lr_swin_ssl")
-    python trainVal.py -c grade.config --model_id noneRed2_swin --epochs 100  --max_worse_epoch_nb 10 --first_mod swin_b_16  --big_images False --batch_size 64 --val_batch_size 128 --ssl True
+    python trainVal.py -c ssl.config --model_id noneRed2_swin --epochs 100  --max_worse_epoch_nb 10 --first_mod swin_b_16  --big_images False --batch_size 64 --val_batch_size 128 --ssl True
     ;;
   "noneRed2_lr_swin_authordataaug_sched")
     python trainVal.py -c grade.config --model_id noneRed2_swin_authordataaug_sched --first_mod swin_b_16  --big_images False --batch_size 64 --val_batch_size 128 --swa True
