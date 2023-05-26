@@ -453,9 +453,8 @@ def train(args,trial):
                     os.remove(previous_epoch_model)
 
             #SWA updates
-            epoch += 1
             if args.swa:
-                if epoch <= args.swa_start_epoch + 1:
+                if epoch <= args.swa_start_epoch:
                     scheduler.step()
                 else:
                     print("SWA update")
@@ -464,15 +463,16 @@ def train(args,trial):
 
             #Validation
             if not args.no_val:
-                with torch.no_grad():
-                    metricVal = evaluation(**kwargsVal)
+                if epoch% args.val_freq == 0:
+                    with torch.no_grad():
+                        metricVal = evaluation(**kwargsVal)
 
-                net_to_update = swa_net if args.swa else net
-                bestEpoch, bestMetricVal, worseEpochNb = update.updateBestModel(metricVal, bestMetricVal, args.exp_id,
-                                                                            args.model_id, bestEpoch, epoch,net_to_update,
-                                                                            isBetter, worseEpochNb,args)
-                if trial is not None:
-                    trial.report(metricVal, epoch)
+                    net_to_update = swa_net if args.swa else net
+                    bestEpoch, bestMetricVal, worseEpochNb = update.updateBestModel(metricVal, bestMetricVal, args.exp_id,
+                                                                                args.model_id, bestEpoch, epoch,net_to_update,
+                                                                                isBetter, worseEpochNb,args)
+                    if trial is not None:
+                        trial.report(metricVal, epoch)
 
             #SSL updates 
             if args.ssl:
@@ -482,6 +482,8 @@ def train(args,trial):
                 print("Teach temp",args.teach_temp)
                 args,kwargsTr["optim"] = update.ssl_updates(args,kwargsTr["optim"],epoch)
                 scheduler.step()
+
+            epoch += 1
 
     if trial is None:
 
@@ -528,6 +530,7 @@ def main(argv=None):
 
     argreader.parser.add_argument('--no_val', type=str2bool, help='To not compute the validation')
     argreader.parser.add_argument('--only_test', type=str2bool, help='To only compute the test')
+    argreader.parser.add_argument('--val_freq', type=int, help='Frequency at which to run a validation.')
 
     argreader.parser.add_argument('--do_test_again', type=str2bool, help='Does the test evaluation even if it has already been done')
 
