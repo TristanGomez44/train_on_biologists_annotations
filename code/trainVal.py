@@ -407,7 +407,7 @@ def train(args,trial):
         kwargsVal["teacher_net"] = teach_net
 
     startEpoch = init_model.initialize_Net_And_EpochNumber(net, args.exp_id, args.model_id, args.cuda, args.start_mode,
-                                                args.init_path,args.optuna)
+                                                args.init_path,args.optuna,ssl=args.ssl)
 
     kwargsTr["optim"],scheduler = init_model.getOptim_and_Scheduler(startEpoch,net,args)
 
@@ -417,11 +417,11 @@ def train(args,trial):
     bestMetricVal = -np.inf
     isBetter = lambda x, y: x > y
 
-    loss_func = SelfSuperVisedLoss if args.ssl else SupervisedLoss
+    loss_func = SelfSuperVisedLoss() if args.ssl else SupervisedLoss()
     if args.multi_gpu:
         loss_func = torch.nn.DataParallel(loss_func)
 
-    kwargsTr["loss_func"],kwargsVal["loss_func"] = loss_func(),loss_func()
+    kwargsTr["loss_func"],kwargsVal["loss_func"] = loss_func,loss_func
     if scheduler is not None:
         print("Init lr",scheduler.get_last_lr())
 
@@ -502,7 +502,7 @@ def train(args,trial):
 
             best_path = f"../models/{args.exp_id}/model{args.model_id}_best_epoch{bestEpoch}"
                 
-            net = init_model.preprocessAndLoadParams(best_path,args.cuda,net)
+            net = init_model.preprocessAndLoadParams(best_path,args.cuda,net,ssl=args.ssl)
 
             kwargsTest["model"] = net
             kwargsTest["epoch"] = bestEpoch
