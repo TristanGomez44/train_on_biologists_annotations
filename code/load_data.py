@@ -39,10 +39,7 @@ def buildTrainLoader(args,shuffle=True):
 
         totalLength = len(train_dataset)
 
-        if args.prop_set_int_fmt:
-            train_prop = args.train_prop / 100
-        else:
-            train_prop = args.train_prop
+        train_prop = args.train_prop
 
         np.random.seed(1)
         torch.manual_seed(1)
@@ -77,10 +74,7 @@ def buildTestLoader(args, mode):
             if args.cuda:
                 torch.cuda.manual_seed(1)
 
-            if args.prop_set_int_fmt:
-                train_prop = args.train_prop / 100
-            else:
-                train_prop = args.train_prop
+            train_prop = args.train_prop
 
             totalLength = len(test_dataset)
             _, test_dataset = torch.utils.data.random_split(test_dataset, [int(totalLength * train_prop),
