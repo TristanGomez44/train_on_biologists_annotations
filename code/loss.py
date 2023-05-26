@@ -4,18 +4,56 @@ import sys
 import torch
 from torch.nn import functional as F
 
-from utils import remove_no_annot,_remove_no_annot
+from utils import remove_no_annot,_remove_no_annot,make_class_nb_dic
 from grade_dataset import NO_ANNOT 
 
+def agregate_losses(loss_dic):
+    for loss_name in loss_dic:
+        loss_dic[loss_name] = loss_dic[loss_name].sum()
+    return loss_dic
+
 class SupervisedLoss(torch.nn.Module):
+    def __init__(self,regression=False,args=None):
+        super().__init__()
+
+        self.regression = regression
+        self.class_nb_targ_dic= make_class_nb_dic(args)
+        self.plcc_weight = args.plcc_weight
+        self.rank_weight = args.rank_weight
+
     def forward(self,target_dic,output_dict):
-        return supervised_loss(target_dic, output_dict)
+        return supervised_loss(target_dic, output_dict,self.regression,self.class_nb_targ_dic,self.plcc_weight,self.rank_weight)
 
-class SelfSuperVisedLoss(torch.nn.Module):
-    def forward(self,student_dict,teacher_dict):
-        return self_supervised_loss(student_dict,teacher_dict)
+def plcc_loss(y_pred, y):
+    y_pred = y_pred.squeeze(1)
+    sigma_hat, m_hat = torch.std_mean(y_pred, unbiased=False)
+    y_pred = (y_pred - m_hat) / (sigma_hat + 1e-8)
+    sigma, m = torch.std_mean(y, unbiased=False)
+    y = (y - m) / (sigma + 1e-8)
+    loss0 = torch.nn.functional.mse_loss(y_pred, y) / 4
+    rho = torch.mean(y_pred * y)
+    loss1 = torch.nn.functional.mse_loss(rho * y_pred, y) / 4
+    return ((loss0 + loss1) / 2).float()
 
-def supervised_loss(target_dic, output_dict):
+def rank_loss(y_pred, y):
+    ranking_loss = torch.nn.functional.relu(
+        (y_pred - y_pred.t()) * torch.sign((y.t() - y))
+    )
+    scale = 1 + torch.max(ranking_loss)
+    return (
+        torch.sum(ranking_loss) / y_pred.shape[0] / (y_pred.shape[0] - 1) / scale
+    ).float()
+
+def regression_loss(output,target,class_nb,plcc_weight,rank_weight):
+
+    output = torch.sigmoid(output)
+    target = (target+1)/(class_nb+1)
+
+    p_loss, r_loss = plcc_loss(output, target), rank_loss(output, target)
+    loss = plcc_weight*p_loss + rank_weight*r_loss
+    return loss
+
+def supervised_loss(target_dic, output_dict,regression,class_nb_targ_dic,plcc_weight,rank_weight):
     loss_dic = {}
 
     loss = 0
@@ -27,11 +65,16 @@ def supervised_loss(target_dic, output_dict):
         annot_nb_list_onlyannot = _remove_no_annot(annot_nb_list,target)
  
         output,target = remove_no_annot(output_dict["output_"+target_name],target)
-      
-        loss_ce = F.cross_entropy(output, target,reduction="none")
-        loss_dic[f"loss_{target_name}"] = loss_ce.data.sum().unsqueeze(0)
 
-        loss += (loss_ce/annot_nb_list_onlyannot).sum()
+        if regression:
+            class_nb = class_nb_targ_dic[target_name]
+            sub_loss = regression_loss(output,target,class_nb,plcc_weight,rank_weight)
+        else:
+            sub_loss = F.cross_entropy(output, target,reduction="none")
+        
+        loss_dic[f"loss_{target_name}"] = sub_loss.data.sum().unsqueeze(0)
+
+        loss += (sub_loss/annot_nb_list_onlyannot).sum()
 
     loss_dic["loss"] = loss.unsqueeze(0)
 
@@ -43,6 +86,11 @@ def cross_entropy(teacher_output,student_output,teacher_temp,student_temp,center
     student_log_output = F.log_softmax(student_output/student_temp,dim=1)
     return - (teacher_output * student_log_output).sum(dim=1).sum()
 
+class SelfSuperVisedLoss(torch.nn.Module):
+    def forward(self,student_dict,teacher_dict):
+        return self_supervised_loss(student_dict,teacher_dict)
+
+
 def self_supervised_loss(student_dict,teacher_dict):
 
     student_temp = student_dict["temp"]
@@ -52,9 +100,4 @@ def self_supervised_loss(student_dict,teacher_dict):
     loss = cross_entropy(teacher_dict["output1"],student_dict["output2"],teacher_temp,student_temp,center)/2
     loss += cross_entropy(teacher_dict["output2"],student_dict["output1"],teacher_temp,student_temp,center)/2
     loss_dic = {"loss":loss.unsqueeze(0)}
-    return loss_dic
-
-def agregate_losses(loss_dic):
-    for loss_name in loss_dic:
-        loss_dic[loss_name] = loss_dic[loss_name].sum()
     return loss_dic

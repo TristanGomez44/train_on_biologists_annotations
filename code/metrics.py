@@ -63,12 +63,18 @@ def updateMetrDict(metrDict,metrDictSample):
 
     return metrDict
 
-def compute_metrics(target_dic,resDict):
+def compute_metrics(target_dic,resDict,class_nb_dic=None):
 
     metDict = {}
     for key in target_dic.keys():
         output,target = remove_no_annot(resDict["output_"+key],target_dic[key])
-        metDict["Accuracy_{}".format(key)] = compAccuracy(output,target)
+
+        if output.shape[-1]==1:
+            class_nb = class_nb_dic[key]
+        else:
+            class_nb = None
+
+        metDict["Accuracy_{}".format(key)] = compAccuracy(output,target,class_nb=class_nb)
 
     return metDict
 
@@ -115,8 +121,13 @@ def saliency_metric_validity(testDataset,model,args,metDict,img_nb=20):
 
     return metDict
         
-def compAccuracy(output,target):
-    pred = output.argmax(dim=-1)
+def compAccuracy(output,target,class_nb=None):
+
+    if output.shape[-1]==1:
+        output = torch.sigmoid(output).squeeze(1)
+        pred = torch.round(output*class_nb).long()
+    else:
+        pred = output.argmax(dim=-1)
     acc = (pred == target).float().sum()
     return acc.item()
 

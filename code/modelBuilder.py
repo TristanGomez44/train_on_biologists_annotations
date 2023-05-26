@@ -13,6 +13,7 @@ import torch.nn.functional as F
 from torch.autograd import Function
 
 from load_data import get_img_size,get_class_nb
+import utils 
 
 def buildFeatModel(featModelName, **kwargs):
     ''' Build a visual feature model
@@ -261,15 +262,16 @@ class DINOHead(torch.nn.Module):
     
 class LinearSecondModel(SecondModel):
 
-    def __init__(self, nbFeat, nb_class_dic, dropout,bias=True,one_feat_per_head=False,ssl=False):
+    def __init__(self, nbFeat, nb_class_dic, dropout,bias=True,one_feat_per_head=False,ssl=False,regression=False):
 
         super().__init__(nbFeat, 1)
         self.dropout = nn.Dropout(p=dropout)
         
-        self.lin_lay_icm = nn.Linear(self.nbFeat, nb_class_dic["icm"],bias=bias)
-        self.lin_lay_te = nn.Linear(self.nbFeat, nb_class_dic["te"],bias=bias)
-        self.lin_lay_exp = nn.Linear(self.nbFeat, nb_class_dic["exp"],bias=bias)
-        
+        for task in ["icm","te","exp"]:
+            output_dim = 1 if regression else nb_class_dic[task]
+            layer = nn.Linear(self.nbFeat, output_dim,bias=bias)
+            setattr(self,"lin_lay_"+task,layer)
+ 
         self.one_feat_per_head = one_feat_per_head
         if self.one_feat_per_head:
             self.lin_feat_per_head = nn.Linear(self.nbFeat, self.nbFeat*3,bias=bias)
@@ -384,8 +386,8 @@ def netBuilder(args,gpu=None):
 
     ############### Second Model #######################
     if args.second_mod == "linear":
-        nb_class_dic = {"icm":args.icm_te_class_nb,"te":args.icm_te_class_nb,"exp":args.grade_class_nb}
-        secondModel = LinearSecondModel(nbFeat, nb_class_dic, args.dropout,args.lin_lay_bias,args.one_feat_per_head,args.ssl)
+        nb_class_dic = utils.make_class_nb_dic(args)
+        secondModel = LinearSecondModel(nbFeat, nb_class_dic, args.dropout,args.lin_lay_bias,args.one_feat_per_head,args.ssl,args.regression)
     else:
         raise ValueError("Unknown second model type : ", args.second_mod)
 

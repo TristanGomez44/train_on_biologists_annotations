@@ -115,12 +115,12 @@ def self_supervised_step(model,batch,args,kwargs,is_train=True):
     output_dict = {"feat":student_dict["feat1"]}       
     return model,loss_dic,metDictSample,output_dict
 
-def supervised_step(model,batch,kwargs,valid_example_nb_dic,is_train=True):
+def supervised_step(model,batch,kwargs,valid_example_nb_dic,is_train=True,class_nb_dic=None):
     data, target_dic = batch[0], batch[1]
     valid_example_nb_dic = increment_valid_example_dic(target_dic,valid_example_nb_dic)
     output_dict = model(data)
     loss_dic = compute_loss(kwargs["loss_func"],[target_dic,output_dict],backpropagate=is_train)
-    metDictSample = metrics.compute_metrics(target_dic,output_dict)
+    metDictSample = metrics.compute_metrics(target_dic,output_dict,class_nb_dic=class_nb_dic)
     return model,loss_dic,metDictSample,output_dict,valid_example_nb_dic
 
 def training_epoch(model, optim, loader, epoch, args, **kwargs):
@@ -156,7 +156,7 @@ def training_epoch(model, optim, loader, epoch, args, **kwargs):
         if args.ssl:
             model,loss_dic,metDictSample,output_dict = self_supervised_step(model,batch,args,kwargs,is_train=True)
         else:
-            model,loss_dic,metDictSample,output_dict,valid_example_nb_dic = supervised_step(model,batch,kwargs,valid_example_nb_dic,is_train=True)
+            model,loss_dic,metDictSample,output_dict,valid_example_nb_dic = supervised_step(model,batch,kwargs,valid_example_nb_dic,is_train=True,class_nb_dic=kwargs["class_nb_dic"])
 
         if accumulated_size == args.batch_size:
             model,optim,accumulated_size,acc_nb = optim_step(model,optim,acc_nb)
@@ -208,7 +208,7 @@ def evaluation(model, loader, epoch, args, mode="val",**kwargs):
         if args.ssl:
             model,loss_dic,metDictSample,output_dict = self_supervised_step(model,batch,args,kwargs,is_train=False)
         else:
-            model,loss_dic,metDictSample,output_dict,valid_example_nb_dic = supervised_step(model,batch,kwargs,valid_example_nb_dic,is_train=False)
+            model,loss_dic,metDictSample,output_dict,valid_example_nb_dic = supervised_step(model,batch,kwargs,valid_example_nb_dic,is_train=False,class_nb_dic=kwargs["class_nb_dic"])
 
         # Metrics
         metDictSample = metrics.add_losses_to_dic(metDictSample,loss_dic)
@@ -300,6 +300,14 @@ def addOptimArgs(argreader):
 
     return argreader
 
+def addRegressionArgs(argreader):
+    argreader.parser.add_argument('--regression', type=str2bool, metavar='BOOL',
+                                  help='To use self-supervised learning')
+    argreader.parser.add_argument('--rank_weight', type=float, metavar='float',
+                                  help='Weight of the rank loss term')
+    argreader.parser.add_argument('--plcc_weight', type=float, metavar='float',
+                                  help='Weight of the pearson linear correlation coeff. loss term.')
+    return argreader
 def addSSLArgs(argreader):
 
     argreader.parser.add_argument('--ssl', type=str2bool, metavar='BOOL',
@@ -406,6 +414,11 @@ def train(args,trial):
         kwargsTr["teacher_net"] = teach_net
         kwargsVal["teacher_net"] = teach_net
 
+    if args.regression:
+        class_nb_dic = utils.make_class_nb_dic(args)
+        kwargsTr["class_nb_dic"] = class_nb_dic
+        kwargsVal["class_nb_dic"] = class_nb_dic
+
     startEpoch = init_model.initialize_Net_And_EpochNumber(net, args.exp_id, args.model_id, args.cuda, args.start_mode,
                                                 args.init_path,args.optuna,ssl=args.ssl)
 
@@ -417,7 +430,7 @@ def train(args,trial):
     bestMetricVal = -np.inf
     isBetter = lambda x, y: x > y
 
-    loss_func = SelfSuperVisedLoss() if args.ssl else SupervisedLoss()
+    loss_func = SelfSuperVisedLoss() if args.ssl else SupervisedLoss(regression=args.regression,args=args)
     if args.multi_gpu:
         loss_func = torch.nn.DataParallel(loss_func)
 
@@ -546,6 +559,7 @@ def main(argv=None):
     argreader = addInitArgs(argreader)
     argreader = addOptimArgs(argreader)
     argreader = addSSLArgs(argreader)
+    argreader = addRegressionArgs(argreader)
     argreader = addValArgs(argreader)
     argreader = addLossTermArgs(argreader)
     argreader = addSalMetrArgs(argreader)
