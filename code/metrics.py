@@ -74,53 +74,12 @@ def compute_metrics(target_dic,resDict,class_nb_dic=None):
         else:
             class_nb = None
 
+        print(key)
+
         metDict["Accuracy_{}".format(key)] = compAccuracy(output,target,class_nb=class_nb)
 
     return metDict
-
-def separability_metric(feat_pooled,feat_pooled_masked,label_list,metDict,seed,nb_per_class):
-
-    kept_inds = sample_img_inds(nb_per_class,label_list=label_list) 
-
-    feat_pooled,feat_pooled_masked = feat_pooled[kept_inds],feat_pooled_masked[kept_inds]
-
-    sep_dict = run_separability_analysis(feat_pooled,feat_pooled_masked,False,seed)
-    separability_auc,separability_acc = sep_dict["val_auc"].mean(),sep_dict["val_acc"].mean()
-    metDict["Sep_AuC"] = separability_auc
-    metDict["Sep_Acc"] = separability_acc
-
-    return metDict
-
-def saliency_metric_validity(testDataset,model,args,metDict,img_nb=20):
-
-    nb_per_class = int(round(float(img_nb)/testDataset.num_classes))
-    if nb_per_class == 0:
-        nb_per_class = 1
-
-    kept_inds = sample_img_inds(nb_per_class,testDataset=testDataset) 
-    data,_ = getBatch(testDataset,kept_inds,args)
-    net_lambda = lambda x:torch.softmax(model(x)["output"],dim=-1)
-    
-    resDict = model(data)
-    predClassInds = resDict["output"].argmax(dim=-1)
-
-    if "attMaps" in resDict:
-        explanations = resDict["attMaps"]
-    else:
-        explanations = torch.sqrt(torch.pow(resDict["feat"],2).sum(dim=1,keepdim=True))
-    
-    is_multi_step_dic,const_dic = get_sal_metric_dics()
-    
-    for metric_name in const_dic:
- 
-        if not is_multi_step_dic[metric_name]:
-            metric = const_dic[metric_name]()
-            scores,scores_masked = metric.compute_scores(net_lambda,data,explanations,predClassInds)
-            val_rate = add_validity_rate_single_step(metric_name,scores,scores_masked) 
-            metDict[metric_name+"_val_rate"] = val_rate
-
-    return metDict
-        
+       
 def compAccuracy(output,target,class_nb=None):
 
     if output.shape[-1]==1:
@@ -128,6 +87,12 @@ def compAccuracy(output,target,class_nb=None):
         pred = torch.round(output*class_nb).long()
     else:
         pred = output.argmax(dim=-1)
+    
+    for _pred,_target in zip(pred,target):
+        print(_pred.item(),_target.item())
+    sys.exit(0)
+
+
     acc = (pred == target).float().sum()
     return acc.item()
 
