@@ -214,15 +214,15 @@ def evaluation(model, loader, epoch, args, mode="val",**kwargs):
         metDictSample = metrics.add_losses_to_dic(metDictSample,loss_dic)
         metrDict = metrics.updateMetrDict(metrDict, metDictSample)
 
-        var_dic = update.all_cat_var_dic(var_dic,output_dict,"train")
+        var_dic = update.all_cat_var_dic(var_dic,output_dict,mode)
             
         validBatch += 1
 
         if validBatch > 0 and args.debug:
             break
 
-    if mode == "test":
-        update.save_maps(var_dic, args.exp_id, args.model_id, epoch, mode)
+    if mode in ["test","val"]:
+        update.save_variables(var_dic, args.exp_id, args.model_id, epoch, mode)
 
     if args.optuna:
         optuna_suff = "_trial"+str(args.trial_id)

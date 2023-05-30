@@ -81,6 +81,12 @@ def all_cat_var_dic(var_dic,resDict,mode):
         if "feat_pooled_per_head" in resDict:
             var_dic = cat_var_dic(var_dic,"feat_pooled_per_head",resDict["feat_pooled_per_head"])
 
+    if mode in ["val","test"]:
+
+        for output_name in resDict:
+            if "output" in output_name:
+                var_dic = cat_var_dic(var_dic,output_name,resDict[output_name])
+
     return var_dic
 
 def cat_var_dic(var_dic,tensor_name,tensor):
@@ -112,10 +118,16 @@ def preproc_maps(maps):
 def preproc_vect(vect):
     return vect.detach().cpu()
 
-def save_maps(intermVarDict,exp_id,model_id,epoch,mode="val"):
-    for key in ["attMaps","norm","feat_pooled_per_head"]:
-        if key in intermVarDict:
-            saveMap(intermVarDict[key],exp_id,model_id,epoch,mode,key=key)
+def save_variables(intermVarDict,exp_id,model_id,epoch,mode="val"):
 
-def saveMap(fullMap,exp_id,model_id,epoch,mode,key="attMaps"):
+    key_list = ["attMaps","norm","feat_pooled_per_head"]
+    for key in intermVarDict:
+        if "output" in key:
+            key_list.append(key)
+
+    for key in key_list:
+        if key in intermVarDict:
+            save_variable(intermVarDict[key],exp_id,model_id,epoch,mode,key=key)
+
+def save_variable(fullMap,exp_id,model_id,epoch,mode,key="attMaps"):
     np.save(f"../results/{exp_id}/{key}_{model_id}_epoch{epoch}_{mode}.npy",fullMap.numpy())
