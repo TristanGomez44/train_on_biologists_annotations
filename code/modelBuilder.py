@@ -262,15 +262,28 @@ class DINOHead(torch.nn.Module):
     
 class LinearSecondModel(SecondModel):
 
-    def __init__(self, nbFeat, nb_class_dic, dropout,bias=True,one_feat_per_head=False,ssl=False,regression=False):
+    def __init__(self, nbFeat, nb_class_dic, dropout,bias=True,one_feat_per_head=False,ssl=False,regression=False,regression_to_classif=False,init_range_for_reg_to_class_centroid=20,keys=["exp","icm","te"]):
 
         super().__init__(nbFeat, 1)
         self.dropout = nn.Dropout(p=dropout)
         
-        for task in ["icm","te","exp"]:
-            output_dim = 1 if regression else nb_class_dic[task]
-            layer = nn.Linear(self.nbFeat, output_dim,bias=bias)
-            setattr(self,"lin_lay_"+task,layer)
+        self.keys = keys
+
+        self.regression_to_classif = regression_to_classif
+        init_range = init_range_for_reg_to_class_centroid
+        for task in self.keys:
+            if regression_to_classif:
+                layer = nn.Linear(self.nbFeat, 1,bias=bias)
+                setattr(self,"lin_lay_"+task,layer)
+                class_nb = nb_class_dic[task]
+                centroids = 2*(torch.arange(class_nb)/(class_nb-1)-0.5)*init_range
+                centroids = nn.Parameter(centroids,requires_grad=True)
+                setattr(self,"centroids_"+task,centroids)
+
+            else:
+                output_dim = 1 if regression else nb_class_dic[task]
+                layer = nn.Linear(self.nbFeat, output_dim,bias=bias)
+                setattr(self,"lin_lay_"+task,layer)
  
         self.one_feat_per_head = one_feat_per_head
         if self.one_feat_per_head:
@@ -282,6 +295,24 @@ class LinearSecondModel(SecondModel):
         if self.ssl:
             self.ssl_head = DINOHead(self.nbFeat)
 
+    def get_feat(self,x,key_ind):
+        return x[:,key_ind] if self.one_feat_per_head else x
+
+    def get_output(self,x):
+        output_dic = {}
+        for i,key in enumerate(self.keys):
+
+            x_ = self.get_feat(x,i)
+            if self.regression_to_classif:
+                scalar_output = getattr(self,"lin_lay_"+key)(x_)
+                centroids = getattr(self,"centroids_"+key)
+                output_dic["output_"+key] = -torch.abs(scalar_output-centroids)
+
+            else:
+                output_dic["output_"+key] = getattr(self,"lin_lay_"+key)(x_)
+
+        return output_dic
+    
     def forward(self, retDict):
         x = retDict["feat_pooled"]
 
@@ -298,18 +329,11 @@ class LinearSecondModel(SecondModel):
                 
                 retDict["feat_pooled_per_head"] = x
 
-                output_icm = self.lin_lay_icm(x[:,0])
-                output_te = self.lin_lay_te(x[:,1])
-                output_exp = self.lin_lay_exp(x[:,2])
             else:
                 x = self.dropout(x)
-                output_icm = self.lin_lay_icm(x)
-                output_te = self.lin_lay_te(x)
-                output_exp = self.lin_lay_exp(x)
-
-            retDict["output_icm"] = output_icm
-            retDict["output_te"] = output_te
-            retDict["output_exp"] = output_exp
+            
+            output_dic = self.get_output(x)
+            retDict.update(output_dic)
 
         return retDict
 
@@ -387,7 +411,7 @@ def netBuilder(args,gpu=None):
     ############### Second Model #######################
     if args.second_mod == "linear":
         nb_class_dic = utils.make_class_nb_dic(args)
-        secondModel = LinearSecondModel(nbFeat, nb_class_dic, args.dropout,args.lin_lay_bias,args.one_feat_per_head,args.ssl,args.regression)
+        secondModel = LinearSecondModel(nbFeat, nb_class_dic, args.dropout,args.lin_lay_bias,args.one_feat_per_head,args.ssl,args.regression,args.regression_to_classif,args.init_range_for_reg_to_class_centroid)
     else:
         raise ValueError("Unknown second model type : ", args.second_mod)
 
@@ -464,5 +488,10 @@ def addArgs(argreader):
     
     argreader.parser.add_argument('--one_feat_per_head', type=args.str2bool, metavar='M',
                                   help='To compute one feature per prediction head. Is useful for example-based explanations.')       
+    
+    argreader.parser.add_argument('--regression_to_classif', type=args.str2bool, metavar='M',
+                                  help='To compute a single scalar that is used to compute the class logits.')       
+    argreader.parser.add_argument('--init_range_for_reg_to_class_centroid', type=float, metavar='M',
+                                  help='The range to use to init the reg to class centroids.')       
 
     return argreader
