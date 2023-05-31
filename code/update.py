@@ -75,14 +75,11 @@ def all_cat_var_dic(var_dic,resDict,mode):
             norm = torch.sqrt(torch.pow(resDict["feat"],2).sum(dim=1,keepdim=True))
             var_dic = cat_var_dic(var_dic,"norm",norm)
     
-        if "attMaps" in resDict:
-            var_dic = cat_var_dic(var_dic,"attMaps",resDict["attMaps"])
+        for key in ["attMaps","feat_pooled","feat_pooled_per_head"]:
+            if key in resDict:
+                var_dic = cat_var_dic(var_dic,key,resDict[key])
         
-        if "feat_pooled_per_head" in resDict:
-            var_dic = cat_var_dic(var_dic,"feat_pooled_per_head",resDict["feat_pooled_per_head"])
-
     if mode in ["val","test"]:
-
         for output_name in resDict:
             if "output" in output_name:
                 var_dic = cat_var_dic(var_dic,output_name,resDict[output_name])
@@ -120,13 +117,14 @@ def preproc_vect(vect):
 
 def save_variables(intermVarDict,exp_id,model_id,epoch,mode="val"):
 
-    key_list = ["attMaps","norm","feat_pooled_per_head"]
+    key_list = ["attMaps","norm","feat_pooled_per_head","feat_pooled"]
     for key in intermVarDict:
         if "output" in key:
             key_list.append(key)
 
     for key in key_list:
         if key in intermVarDict:
+            print("savevar",key)
             save_variable(intermVarDict[key],exp_id,model_id,epoch,mode,key=key)
 
 def save_variable(fullMap,exp_id,model_id,epoch,mode,key="attMaps"):
