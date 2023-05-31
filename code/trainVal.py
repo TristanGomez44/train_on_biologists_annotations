@@ -416,8 +416,11 @@ def train(args,trial):
 
     if args.regression:
         class_nb_dic = utils.make_class_nb_dic(args)
-        kwargsTr["class_nb_dic"] = class_nb_dic
-        kwargsVal["class_nb_dic"] = class_nb_dic
+    else:
+        class_nb_dic = None
+
+    kwargsTr["class_nb_dic"] = class_nb_dic
+    kwargsVal["class_nb_dic"] = class_nb_dic
 
     startEpoch = init_model.initialize_Net_And_EpochNumber(net, args.exp_id, args.model_id, args.cuda, args.start_mode,
                                                 args.init_path,args.optuna,ssl=args.ssl)
