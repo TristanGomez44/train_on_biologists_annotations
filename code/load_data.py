@@ -116,7 +116,7 @@ def addArgs(argreader):
 
     argreader.parser.add_argument('--icm_te_class_nb', type=int, metavar='S',
                                   help='The number of class for the ICM and TE')
-    argreader.parser.add_argument('--grade_class_nb', type=int, metavar='S',help='The number of class for the blastocyst expansion.')
+    argreader.parser.add_argument('--exp_class_nb', type=int, metavar='S',help='The number of class for the blastocyst expansion.')
 
     argreader.parser.add_argument('--old_preprocess', type=args.str2bool, metavar='S',
                                   help='To use the old images pre-processor.')

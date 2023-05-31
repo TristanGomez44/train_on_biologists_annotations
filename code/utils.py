@@ -12,7 +12,7 @@ inv_imgnet_norm = transforms.Compose([ transforms.Normalize(mean = [ 0., 0., 0. 
                                ])
 
 def make_class_nb_dic(args):
-    return {"icm":args.icm_te_class_nb,"te":args.icm_te_class_nb,"exp":args.grade_class_nb}
+    return {"icm":args.icm_te_class_nb,"te":args.icm_te_class_nb,"exp":args.exp_class_nb}
 
 def _remove_no_annot(tensor,reference):
     return tensor[reference!=NO_ANNOT]
