@@ -74,8 +74,6 @@ def compute_metrics(target_dic,resDict,class_nb_dic=None):
         else:
             class_nb = None
 
-        print(key)
-
         metDict["Accuracy_{}".format(key)] = compAccuracy(output,target,class_nb=class_nb)
 
     return metDict
@@ -88,11 +86,6 @@ def compAccuracy(output,target,class_nb=None):
     else:
         pred = output.argmax(dim=-1)
     
-    for _pred,_target in zip(pred,target):
-        print(_pred.item(),_target.item())
-    sys.exit(0)
-
-
     acc = (pred == target).float().sum()
     return acc.item()
 
