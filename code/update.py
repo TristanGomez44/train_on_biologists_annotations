@@ -68,7 +68,7 @@ def updateSeedAndNote(args):
         args.note += ";s{} at {}".format(args.seed, startEpoch)
     return args
 
-def all_cat_var_dic(var_dic,resDict,mode):
+def all_cat_var_dic(var_dic,resDict,mode,save_output_during_validation=False):
     # Other variables produced by the net
     if mode == "test":
         if "feat" in resDict:
@@ -79,7 +79,7 @@ def all_cat_var_dic(var_dic,resDict,mode):
             if key in resDict:
                 var_dic = cat_var_dic(var_dic,key,resDict[key])
         
-    if mode in ["val","test"]:
+    if (mode == "val" and save_output_during_validation) or mode =="test":
         for output_name in resDict:
             if "output" in output_name:
                 var_dic = cat_var_dic(var_dic,output_name,resDict[output_name])
