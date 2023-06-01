@@ -24,6 +24,36 @@ import sal_metr_data_aug
 import update
 import utils 
 
+def log_gradient_norms(exp_id,model_id,model,epoch,batch_idx):
+
+    grad_dict = {}
+
+    named_layers = dict(model.named_modules())
+
+    for layer_name in named_layers:
+        layer = named_layers[layer_name]
+
+        for param in ["weight","bias"]:
+            if hasattr(layer,param):
+                param_tensor = getattr(layer,param)
+                if param_tensor is not None:
+                    grad_dict[layer_name+"."+param] = param_tensor.grad.data.abs().mean().item()
+
+    param_names = sorted(grad_dict.keys())
+
+    csv_path = f"../results/{exp_id}/gradnorm_{model_id}.csv"
+
+    if not os.path.exists(csv_path):
+        with open(csv_path,"w") as file:
+            header = ["epoch","batch_idx"]+param_names
+            header = ",".join(header)
+            print(header,file=file)
+
+    with open(csv_path,"a") as file:
+        row = [str(epoch),str(batch_idx)]+[str(grad_dict[param_name]) for param_name in grad_dict]
+        row = ",".join(row)
+        print(row,file=file)
+
 def to_cuda(batch):
     for elem in batch:
         if type(elem) is torch.Tensor:
@@ -158,6 +188,9 @@ def training_epoch(model, optim, loader, epoch, args, **kwargs):
         else:
             model,loss_dic,metDictSample,output_dict,valid_example_nb_dic = supervised_step(model,batch,kwargs,valid_example_nb_dic,is_train=True,class_nb_dic=kwargs["class_nb_dic"])
 
+        if args.log_gradient_norm_frequ is not None and batch_idx%args.log_gradient_norm_frequ==0:
+            log_gradient_norms(args.exp_id,args.model_id,model,epoch,batch_idx)
+
         if accumulated_size == args.batch_size:
             model,optim,accumulated_size,acc_nb = optim_step(model,optim,acc_nb)
 
@@ -165,7 +198,7 @@ def training_epoch(model, optim, loader, epoch, args, **kwargs):
         metDictSample = metrics.add_losses_to_dic(metDictSample,loss_dic)
         metrDict = metrics.updateMetrDict(metrDict, metDictSample)
 
-        var_dic = update.all_cat_var_dic(var_dic,output_dict,"train")
+        var_dic = update.all_cat_var_dic(var_dic,output_dict,"train",args.save_output_during_validation)
             
         validBatch += 1
 
@@ -214,7 +247,7 @@ def evaluation(model, loader, epoch, args, mode="val",**kwargs):
         metDictSample = metrics.add_losses_to_dic(metDictSample,loss_dic)
         metrDict = metrics.updateMetrDict(metrDict, metDictSample)
 
-        var_dic = update.all_cat_var_dic(var_dic,output_dict,mode)
+        var_dic = update.all_cat_var_dic(var_dic,output_dict,mode,args.save_output_during_validation)
             
         validBatch += 1
 
@@ -558,6 +591,10 @@ def main(argv=None):
     argreader.parser.add_argument('--max_batch_size', type=int, help='To maximum batch size to test.')
 
     argreader.parser.add_argument('--trial_id', type=int, help='The trial ID. Useful for grad exp during test')
+
+    argreader.parser.add_argument('--log_gradient_norm_frequ', type=int, help='The step frequency at which to save gradient norm.')
+
+    argreader.parser.add_argument('--save_output_during_validation', type=str2bool, help='To save model output during validation.')
 
     argreader = addInitArgs(argreader)
     argreader = addOptimArgs(argreader)
