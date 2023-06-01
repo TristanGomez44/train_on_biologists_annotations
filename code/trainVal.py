@@ -24,7 +24,7 @@ import sal_metr_data_aug
 import update
 import utils 
 
-def log_gradient_norms(exp_id,model_id,model,epoch,batch_idx):
+def log_gradient_norms(exp_id,model_id,model,epoch,batch_idx,stat_list=["mean","std"]):
 
     grad_dict = {}
 
@@ -37,22 +37,29 @@ def log_gradient_norms(exp_id,model_id,model,epoch,batch_idx):
             if hasattr(layer,param):
                 param_tensor = getattr(layer,param)
                 if param_tensor is not None:
-                    grad_dict[layer_name+"."+param] = param_tensor.grad.data.abs().mean().item()
+                    grad = param_tensor.grad.data.abs()
+
+                    key = layer_name+"."+param
+                    grad_dict[key] = {}
+
+                    for stat in stat_list:
+                        grad_dict[key][stat] = getattr(grad,stat)().item()
 
     param_names = sorted(grad_dict.keys())
+    
+    for stat in stat_list:
+        csv_path = f"../results/{exp_id}/gradnorm_{stat}_{model_id}.csv"
 
-    csv_path = f"../results/{exp_id}/gradnorm_{model_id}.csv"
+        if not os.path.exists(csv_path):
+            with open(csv_path,"w") as file:
+                header = ["epoch","batch_idx"]+param_names
+                header = ",".join(header)
+                print(header,file=file)
 
-    if not os.path.exists(csv_path):
-        with open(csv_path,"w") as file:
-            header = ["epoch","batch_idx"]+param_names
-            header = ",".join(header)
-            print(header,file=file)
-
-    with open(csv_path,"a") as file:
-        row = [str(epoch),str(batch_idx)]+[str(grad_dict[param_name]) for param_name in grad_dict]
-        row = ",".join(row)
-        print(row,file=file)
+        with open(csv_path,"a") as file:
+            row = [str(epoch),str(batch_idx)]+[str(grad_dict[param_name][stat]) for param_name in grad_dict]
+            row = ",".join(row)
+            print(row,file=file)
 
 def to_cuda(batch):
     for elem in batch:
