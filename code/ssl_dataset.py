@@ -15,7 +15,7 @@ class SSLDataset(Dataset):
     def __init__(self,dataset_path,mode,train_prop,val_prop,img_size,img_ext="jpeg") -> None:
         super().__init__()
 
-        video_pattern = os.path.join(dataset_path,"D*")
+        video_pattern = os.path.join(dataset_path,"D*/")
         self.video_paths = sorted(glob.glob(video_pattern))
 
         np.random.seed(0)
@@ -42,6 +42,7 @@ class SSLDataset(Dataset):
         video_path = self.video_paths[i]
         all_focal_plane_paths = sorted(glob.glob(video_path+"/F*"),key=get_focal_plane_value)
         focal_plane_ind = torch.randint(0,high=len(all_focal_plane_paths)-1,size=(1,)).item()
+
         focal_plane = all_focal_plane_paths[focal_plane_ind]
         all_img_paths = sorted(glob.glob(focal_plane+"/*."+self.img_ext),key=get_frame_ind)
         frame_ind = torch.randint(0,high=len(os.listdir(video_path))-1,size=(1,)).item()
@@ -51,11 +52,7 @@ class SSLDataset(Dataset):
             img_list = []
             for ind in [focal_plane_ind,focal_plane_ind+1]:
                 focal_plane = all_focal_plane_paths[ind]
-                try:
-                    img_path = sorted(glob.glob(focal_plane+"/*."+self.img_ext),key=get_frame_ind)[frame_ind]
-                except:
-                    print("Index error",focal_plane+"/*."+self.img_ext,focal_plane,frame_ind,len(all_focal_plane_paths),len(all_img_paths))
-                    sys.exit()
+                img_path = sorted(glob.glob(focal_plane+"/*."+self.img_ext),key=get_frame_ind)[frame_ind]
                 #Open image and convert to color using PIL
                 img = Image.open(img_path)
                 img = convert_to_rgb(img)
