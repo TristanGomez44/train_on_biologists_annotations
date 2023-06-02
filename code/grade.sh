@@ -5,6 +5,9 @@ case $1 in
   "noneRed2_lr_swin_reg_to_class")
     python trainVal.py -c grade.config --model_id noneRed2_swin_reg_to_class --epochs 100  --max_worse_epoch_nb 10 --first_mod swin_b_16  --big_images False --batch_size 64 --val_batch_size 128 --regression_to_classif True
     ;;
+  "noneRed2_lr_swin_reg_to_class2")
+    python trainVal.py -c grade.config --model_id noneRed2_swin_reg_to_class2 --epochs 100 --first_mod swin_b_16  --big_images False --batch_size 64 --val_batch_size 128 --regression_to_classif True --log_gradient_norm_frequ 1
+    ;;
   "noneRed2_lr_swin2_worse10")
     python trainVal.py -c grade.config --model_id noneRed2_swin2_worse10 --epochs 100  --max_worse_epoch_nb 10 --first_mod swin_b_16  --big_images False --batch_size 64 --val_batch_size 128 --log_gradient_norm_frequ 1
     ;;
@@ -28,6 +31,9 @@ case $1 in
     ;;
   "noneRed2_lr_swin_one_feat_per_head_relu")
     python trainVal.py -c grade.config --model_id noneRed2_swin_one_feat_per_head_relu --first_mod swin_b_16  --big_images False --batch_size 64 --val_batch_size 128 --one_feat_per_head True
+    ;;
+  "noneRed2_lr_swin_one_feat_per_head_relu2")
+    python trainVal.py -c grade.config --model_id noneRed2_swin_one_feat_per_head_relu2 --first_mod swin_b_16  --big_images False --batch_size 64 --val_batch_size 128 --one_feat_per_head True --log_gradient_norm_frequ 1
     ;;
   "debug")
     python trainVal.py -c grade.config --model_id noneRed2_lr_r18 --epochs 15 --first_mod resnet18  --big_images False --start_mode scratch --one_feat_per_head True --regression_to_classif True --log_gradient_norm_frequ 1
