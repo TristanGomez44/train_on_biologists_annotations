@@ -8,6 +8,9 @@ case $1 in
   "noneRed2_lr_swin_reg_to_class2")
     python trainVal.py -c grade.config --model_id noneRed2_swin_reg_to_class2 --epochs 100 --first_mod swin_b_16  --big_images False --batch_size 64 --val_batch_size 128 --regression_to_classif True --log_gradient_norm_frequ 1
     ;;
+  "noneRed2_lr_swin_reg_to_class3")
+    python trainVal.py -c grade.config --model_id noneRed2_swin_reg_to_class3 --epochs 100 --first_mod swin_b_16  --big_images False --batch_size 64 --val_batch_size 128 --regression_to_classif True --log_gradient_norm_frequ 1 --save_output_during_validation True
+    ;;
   "noneRed2_lr_swin2_worse10")
     python trainVal.py -c grade.config --model_id noneRed2_swin2_worse10 --epochs 100  --max_worse_epoch_nb 10 --first_mod swin_b_16  --big_images False --batch_size 64 --val_batch_size 128 --log_gradient_norm_frequ 1
     ;;

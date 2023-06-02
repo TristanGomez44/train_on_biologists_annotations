@@ -80,10 +80,10 @@ def all_cat_var_dic(var_dic,resDict,mode,save_output_during_validation=False):
                 var_dic = cat_var_dic(var_dic,key,resDict[key])
         
     if (mode == "val" and save_output_during_validation) or mode =="test":
-        for output_name in resDict:
-            if "output" in output_name:
-                var_dic = cat_var_dic(var_dic,output_name,resDict[output_name])
-
+        for var_name in resDict:
+            if "output" in var_name or "centroid" in var_name:
+                var_dic = cat_var_dic(var_dic,var_name,resDict[var_name])
+     
     return var_dic
 
 def cat_var_dic(var_dic,tensor_name,tensor):
@@ -119,7 +119,7 @@ def save_variables(intermVarDict,exp_id,model_id,epoch,mode="val"):
 
     key_list = ["attMaps","norm","feat_pooled_per_head","feat_pooled"]
     for key in intermVarDict:
-        if "output" in key:
+        if "output" in key or "centroid" in key:
             key_list.append(key)
 
     for key in key_list:

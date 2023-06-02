@@ -306,6 +306,7 @@ class LinearSecondModel(SecondModel):
             if self.regression_to_classif:
                 scalar_output = getattr(self,"lin_lay_"+key)(x_)
                 centroids = getattr(self,"centroids_"+key)
+                output_dic["scalar_output_"+key] = scalar_output
                 output_dic["output_"+key] = -torch.abs(scalar_output-centroids)
 
             else:
@@ -331,6 +332,10 @@ class LinearSecondModel(SecondModel):
 
             else:
                 x = self.dropout(x)
+
+                if self.regression_to_classif:
+                    for key in self.keys:  
+                        retDict["centroid_"+key] = getattr(self,"centroids_"+key)
             
             output_dic = self.get_output(x)
             retDict.update(output_dic)
