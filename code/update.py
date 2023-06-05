@@ -81,9 +81,11 @@ def all_cat_var_dic(var_dic,resDict,mode,save_output_during_validation=False):
         
     if (mode == "val" and save_output_during_validation) or mode =="test":
         for var_name in resDict:
-            if "output" in var_name or "centroid" in var_name:
+            if "output" in var_name:
                 var_dic = cat_var_dic(var_dic,var_name,resDict[var_name])
-     
+            elif "centroid" in var_name and (not var_name in var_dic):
+                var_dic = cat_var_dic(var_dic,var_name,resDict[var_name]) 
+                
     return var_dic
 
 def cat_var_dic(var_dic,tensor_name,tensor):
