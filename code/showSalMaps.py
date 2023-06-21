@@ -18,7 +18,7 @@ from sklearn import svm ,neural_network,tree,neighbors
 from sklearn.manifold import  TSNE
 from skimage.transform import resize
 from scipy.stats import kendalltau
-import load_data
+import load_data,trainVal
 from metrics import sample_img_inds
 from args import init_post_hoc_arg
 def compNorm(featPath):
@@ -180,9 +180,10 @@ def showSalMaps(exp_id,img_nb,plot_id,nrows,class_index,inds,viz_id,args,
                 attMap = np.transpose(attMap,(1,2,0))
 
             ptsImageCopy = ptsImage.clone()
-            interpOrder = 1 if interp[j] else 0
+            interpOrder = 3 if interp[j] else 0
             ptsImageCopy = torch.tensor(resize(attMap, (ptsImageCopy.shape[1],ptsImageCopy.shape[2]),\
                                             anti_aliasing=True,mode="constant",order=interpOrder))
+
             ptsImageCopy = ptsImageCopy.permute(2,0,1).float().unsqueeze(0)
             
             img_gray = img.mean(dim=1,keepdim=True)
@@ -221,6 +222,7 @@ def main(argv=None):
     argreader.parser.add_argument('--expl',type=str,nargs="*",metavar="BOOL",help='The explanation type',default=[])
     argreader.parser.add_argument('--sparsity_factor',type=float,nargs="*",metavar="BOOL",help='Set this arg to modify the sparsity of attention maps',default=[])
 
+    argreader = trainVal.addSSLArgs(argreader)
     argreader = load_data.addArgs(argreader)
     argreader = init_post_hoc_arg(argreader)
 

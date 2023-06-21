@@ -15,15 +15,16 @@ def agregate_losses(loss_dic):
 class SupervisedLoss(torch.nn.Module):
     def __init__(self,regression=False,args=None):
         super().__init__()
-
         self.regression = regression
         self.class_nb_targ_dic= make_class_nb_dic(args)
         self.plcc_weight = args.plcc_weight
         self.rank_weight = args.rank_weight
         self.task_to_train = args.task_to_train
+        self.map_sim_term_weight= args.map_sim_term_weight
+        print(args.map_sim_term_weight)
 
     def forward(self,target_dic,output_dict):
-        return supervised_loss(target_dic, output_dict,self.regression,self.class_nb_targ_dic,self.plcc_weight,self.rank_weight,self.task_to_train)
+        return supervised_loss(target_dic, output_dict,self.regression,self.class_nb_targ_dic,self.plcc_weight,self.rank_weight,self.task_to_train,map_sim_term_weight=self.map_sim_term_weight)
 
 def plcc_loss(y_pred, y):
     y_pred = y_pred.squeeze(1)
@@ -53,7 +54,15 @@ def regression_loss(output,target,class_nb,plcc_weight,rank_weight):
     loss = plcc_weight*p_loss + rank_weight*r_loss
     return loss
 
-def supervised_loss(target_dic, output_dict,regression,class_nb_targ_dic,plcc_weight,rank_weight,task_to_train,kl_temp=1,kl_interp=0.5):
+def feat_norm(feat_maps):
+    norm = torch.abs(feat_maps).sum(dim=1,keepdim=True).float()
+    norm_min = norm.min(dim=2,keepdim=True)[0].min(dim=3,keepdim=True)[0]
+    norm_max = norm.max(dim=2,keepdim=True)[0].max(dim=3,keepdim=True)[0]
+    norm = (norm-norm_min)
+    norm = norm/(norm_max-norm_min)
+    return norm
+
+def supervised_loss(target_dic, output_dict,regression,class_nb_targ_dic,plcc_weight,rank_weight,task_to_train,kl_temp=1,kl_interp=0.5,map_sim_term_weight=0):
     loss_dic = {}
 
     loss = 0
@@ -62,10 +71,11 @@ def supervised_loss(target_dic, output_dict,regression,class_nb_targ_dic,plcc_we
     annot_nb_list = torch.stack(annot_nb_list,axis=0).sum(axis=0)
 
     for target_name,target in target_dic.items():
+
         if task_to_train=="all" or target_name==task_to_train:
             annot_nb_list_onlyannot = _remove_no_annot(annot_nb_list,target)
     
-            if "master_output_"+target_name:
+            if "master_output_"+target_name in output_dict:
                 output,target_onlyannot = remove_no_annot(output_dict["output_"+target_name],target)
                 master_output,target_onlyannot = remove_no_annot(output_dict["master_output_"+target_name],target)
 
@@ -74,17 +84,20 @@ def supervised_loss(target_dic, output_dict,regression,class_nb_targ_dic,plcc_we
                 loss = (kl*kl_interp*kl_temp*kl_temp+ce*(1-kl_interp))
 
             else:
-                output,target = remove_no_annot(output_dict["output_"+target_name],target)
-                
+                output,target = remove_no_annot(output_dict["output_"+target_name],target)     
                 if regression:
                     class_nb = class_nb_targ_dic[target_name]
                     sub_loss = regression_loss(output,target,class_nb,plcc_weight,rank_weight)
                 else:
                     sub_loss = F.cross_entropy(output, target,reduction="none")
-                
                 loss_dic[f"loss_{target_name}"] = sub_loss.data.sum().unsqueeze(0)
-
                 loss += (sub_loss/annot_nb_list_onlyannot).sum()
+
+    if map_sim_term_weight>0:
+        icm_map,te_map,exp_map = feat_norm(output_dict["feat_icm"]),feat_norm(output_dict["feat_te"]),feat_norm(output_dict["feat_exp"])
+        sim_term = (icm_map*te_map).mean(dim=(1,2,3))+(icm_map*exp_map).mean(dim=(1,2,3))+(te_map*exp_map).mean(dim=(1,2,3))
+        sim_term = (sim_term/3).sum()
+        loss += map_sim_term_weight*sim_term
 
     loss_dic["loss"] = loss.unsqueeze(0)
 

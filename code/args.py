@@ -182,7 +182,8 @@ def addLossTermArgs(argreader):
                                   help='The weight of the focal loss term.')
     argreader.parser.add_argument('--adv_weight', type=float, metavar='FLOAT',
                                   help='The weight of the adversarial loss term to ensure masked representations are indistinguishable from regular representations.')
-
+    argreader.parser.add_argument('--map_sim_term_weight', type=float, metavar='FLOAT',
+                                  help='Weight of the map similarity term.')
     argreader.parser.add_argument('--task_to_train', type=str, metavar='FLOAT',
                                   help='The task to train. Set to "all" to train all tasks. Task can take value among [icmc,te,exp].')
 

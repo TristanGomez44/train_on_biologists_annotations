@@ -20,7 +20,6 @@ from loss import SupervisedLoss,SelfSuperVisedLoss,agregate_losses
 import modelBuilder
 import load_data
 import metrics
-import sal_metr_data_aug
 import update
 import utils 
 
@@ -131,7 +130,7 @@ def teacher_inference(model,data1,data2,model_temp):
 def compute_loss(loss_func,loss_args,backpropagate=True):
     loss_dic = loss_func(*loss_args)
     loss_dic = agregate_losses(loss_dic)
-    loss = loss_dic["loss"]/len(loss_args[0])
+    loss = loss_dic["loss"]/len(list(loss_args[0].values())[0])
     if backpropagate:
         loss.backward()
     return loss_dic 

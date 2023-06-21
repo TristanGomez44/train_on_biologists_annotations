@@ -2,9 +2,9 @@ import torch
 from torch import nn
 import matplotlib.pyplot as plt
 plt.switch_backend('agg')
-
+import numpy as np
 from models import resnet,transformer,transformer_dino,transformer_swin
-
+import load_data
 import args
 EPS = 0.000001
 
@@ -262,12 +262,12 @@ class DINOHead(torch.nn.Module):
     
 class LinearSecondModel(SecondModel):
 
-    def __init__(self, nbFeat, nb_class_dic, dropout,bias=True,one_feat_per_head=False,ssl=False,regression=False,regression_to_classif=False,init_range_for_reg_to_class_centroid=20,keys=["exp","icm","te"]):
+    def __init__(self, nbFeat, nb_class_dic, dropout,bias=True,one_feat_per_head=False,ssl=False,regression=False,regression_to_classif=False,init_range_for_reg_to_class_centroid=20,keys=["exp","icm","te"],args=None):
 
         super().__init__(nbFeat, 1)
         self.dropout = nn.Dropout(p=dropout)
         
-        self.keys = keys
+        self.keys = np.array(keys)
 
         self.regression_to_classif = regression_to_classif
         init_range = init_range_for_reg_to_class_centroid
@@ -287,9 +287,11 @@ class LinearSecondModel(SecondModel):
  
         self.one_feat_per_head = one_feat_per_head
         if self.one_feat_per_head:
-            self.lin_feat_per_head = nn.Linear(self.nbFeat, self.nbFeat*3,bias=bias)
+            self.conv1x1_feat_per_head = nn.Conv2d(self.nbFeat, self.nbFeat*3,1,bias=bias)
             self.act = torch.nn.GELU()
-            self.norm = torch.nn.LayerNorm(self.nbFeat)
+            ratio = getResnetDownSampleRatio(args)
+            img_size = load_data.get_img_size(args)
+            self.norm = torch.nn.LayerNorm((self.nbFeat,img_size[0]//ratio,img_size[1]//ratio))
         
         self.ssl = ssl
         if self.ssl:
@@ -315,22 +317,29 @@ class LinearSecondModel(SecondModel):
         return output_dic
     
     def forward(self, retDict):
-        x = retDict["feat_pooled"]
 
         if self.ssl:
+            x = retDict["feat_pooled"]
             x = self.ssl_head(x)
             retDict["output"] = x
         else:
             if self.one_feat_per_head:
+                x = retDict["feat"]
                 x = self.norm(x)
-                x = self.lin_feat_per_head(x)
+                x = self.conv1x1_feat_per_head(x)
                 x = self.act(x)
+                x = x.reshape(x.shape[0],len(self.keys),x.shape[1]//len(self.keys),x.shape[2],x.shape[3])
+
+                for i,key in enumerate(self.keys):
+                    retDict["feat_"+key] = x[:,i]
+
+                x = x.mean(dim=(3,4))
+                x = x.view(x.shape[0],-1)
                 x = self.dropout(x)
-                x = x.reshape(x.shape[0],3,-1)
-                
-                retDict["feat_pooled_per_head"] = x
+                x = x.view(x.shape[0],len(self.keys),x.shape[1]//len(self.keys))
 
             else:
+                x = retDict["feat_pooled"]
                 x = self.dropout(x)
 
                 if self.regression_to_classif:
@@ -416,7 +425,7 @@ def netBuilder(args,gpu=None):
     ############### Second Model #######################
     if args.second_mod == "linear":
         nb_class_dic = utils.make_class_nb_dic(args)
-        secondModel = LinearSecondModel(nbFeat, nb_class_dic, args.dropout,args.lin_lay_bias,args.one_feat_per_head,args.ssl,args.regression,args.regression_to_classif,args.init_range_for_reg_to_class_centroid)
+        secondModel = LinearSecondModel(nbFeat, nb_class_dic, args.dropout,args.lin_lay_bias,args.one_feat_per_head,args.ssl,args.regression,args.regression_to_classif,args.init_range_for_reg_to_class_centroid,args=args)
     else:
         raise ValueError("Unknown second model type : ", args.second_mod)
 
