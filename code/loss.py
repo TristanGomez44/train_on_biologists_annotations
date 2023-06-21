@@ -20,9 +20,10 @@ class SupervisedLoss(torch.nn.Module):
         self.class_nb_targ_dic= make_class_nb_dic(args)
         self.plcc_weight = args.plcc_weight
         self.rank_weight = args.rank_weight
+        self.task_to_train = args.task_to_train
 
     def forward(self,target_dic,output_dict):
-        return supervised_loss(target_dic, output_dict,self.regression,self.class_nb_targ_dic,self.plcc_weight,self.rank_weight)
+        return supervised_loss(target_dic, output_dict,self.regression,self.class_nb_targ_dic,self.plcc_weight,self.rank_weight,self.task_to_train)
 
 def plcc_loss(y_pred, y):
     y_pred = y_pred.squeeze(1)
@@ -52,7 +53,7 @@ def regression_loss(output,target,class_nb,plcc_weight,rank_weight):
     loss = plcc_weight*p_loss + rank_weight*r_loss
     return loss
 
-def supervised_loss(target_dic, output_dict,regression,class_nb_targ_dic,plcc_weight,rank_weight):
+def supervised_loss(target_dic, output_dict,regression,class_nb_targ_dic,plcc_weight,rank_weight,task_to_train,kl_temp=1,kl_interp=0.5):
     loss_dic = {}
 
     loss = 0
@@ -61,19 +62,29 @@ def supervised_loss(target_dic, output_dict,regression,class_nb_targ_dic,plcc_we
     annot_nb_list = torch.stack(annot_nb_list,axis=0).sum(axis=0)
 
     for target_name,target in target_dic.items():
-        annot_nb_list_onlyannot = _remove_no_annot(annot_nb_list,target)
- 
-        output,target = remove_no_annot(output_dict["output_"+target_name],target)
+        if task_to_train=="all" or target_name==task_to_train:
+            annot_nb_list_onlyannot = _remove_no_annot(annot_nb_list,target)
+    
+            if "master_output_"+target_name:
+                output,target_onlyannot = remove_no_annot(output_dict["output_"+target_name],target)
+                master_output,target_onlyannot = remove_no_annot(output_dict["master_output_"+target_name],target)
 
-        if regression:
-            class_nb = class_nb_targ_dic[target_name]
-            sub_loss = regression_loss(output,target,class_nb,plcc_weight,rank_weight)
-        else:
-            sub_loss = F.cross_entropy(output, target,reduction="none")
-        
-        loss_dic[f"loss_{target_name}"] = sub_loss.data.sum().unsqueeze(0)
+                kl = F.kl_div(F.log_softmax(output/kl_temp, dim=1),F.softmax(master_output/kl_temp, dim=1),reduction="none")
+                ce = F.cross_entropy(output, target_onlyannot,reduction="none")
+                loss = (kl*kl_interp*kl_temp*kl_temp+ce*(1-kl_interp))
 
-        loss += (sub_loss/annot_nb_list_onlyannot).sum()
+            else:
+                output,target = remove_no_annot(output_dict["output_"+target_name],target)
+                
+                if regression:
+                    class_nb = class_nb_targ_dic[target_name]
+                    sub_loss = regression_loss(output,target,class_nb,plcc_weight,rank_weight)
+                else:
+                    sub_loss = F.cross_entropy(output, target,reduction="none")
+                
+                loss_dic[f"loss_{target_name}"] = sub_loss.data.sum().unsqueeze(0)
+
+                loss += (sub_loss/annot_nb_list_onlyannot).sum()
 
     loss_dic["loss"] = loss.unsqueeze(0)
 

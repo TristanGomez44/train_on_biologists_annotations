@@ -156,6 +156,14 @@ def supervised_step(model,batch,kwargs,valid_example_nb_dic,is_train=True,class_
     data, target_dic = batch[0], batch[1]
     valid_example_nb_dic = increment_valid_example_dic(target_dic,valid_example_nb_dic)
     output_dict = model(data)
+
+    if kwargs["master_net"] is not None:
+        with torch.no_grad():
+            mast_output_dict = kwargs["master_net"](data)
+            for key in mast_output_dict:
+                if "output" in key:
+                    output_dict["master_"+key] = mast_output_dict[key]
+
     loss_dic = compute_loss(kwargs["loss_func"],[target_dic,output_dict],backpropagate=is_train)
     metDictSample = metrics.compute_metrics(target_dic,output_dict,class_nb_dic=class_nb_dic)
     return model,loss_dic,metDictSample,output_dict,valid_example_nb_dic
@@ -472,6 +480,13 @@ def train(args,trial):
 
     bestMetricVal = -np.inf
     isBetter = lambda x, y: x > y
+
+    if args.master_net:
+        kwargsTr["master_net"] = init_model.initMasterNet(args)
+        kwargsVal["master_net"] = kwargsTr["master_net"]
+    else:
+        kwargsTr["master_net"] = None
+        kwargsVal["master_net"] = None
 
     loss_func = SelfSuperVisedLoss() if args.ssl else SupervisedLoss(regression=args.regression,args=args)
     if args.multi_gpu:
