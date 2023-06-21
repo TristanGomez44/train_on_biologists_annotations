@@ -75,24 +75,21 @@ def all_cat_var_dic(var_dic,resDict,mode,save_output_during_validation=False):
             norm = torch.sqrt(torch.pow(resDict["feat"],2).sum(dim=1,keepdim=True))
             var_dic = cat_var_dic(var_dic,"norm",norm)
     
-        for key in ["attMaps","feat_pooled","feat_pooled_per_head"]:
+        if "feat_pooled_per_head" in resDict:
+            norm = torch.sqrt(torch.pow(resDict["feat_pooled_per_head"],2).sum(dim=2,keepdim=True))
+            var_dic = cat_var_dic(var_dic,"norm_pooled_per_head",norm)
+
+        for key in ["attMaps","feat_pooled"]:
             if key in resDict:
                 var_dic = cat_var_dic(var_dic,key,resDict[key])
         
-    if (mode == "val" and save_output_during_validation) or mode =="test":
-        for var_name in resDict:
-            if "output" in var_name:
-                var_dic = cat_var_dic(var_dic,var_name,resDict[var_name])
-            elif "centroid" in var_name and (not var_name in var_dic):
-                var_dic = cat_var_dic(var_dic,var_name,resDict[var_name]) 
-                
     return var_dic
 
 def cat_var_dic(var_dic,tensor_name,tensor):
     
-    assert tensor.ndim <= 4
+    assert tensor.ndim in [2,4,5]
 
-    if tensor.ndim == 4:
+    if tensor.ndim >= 4:
         preproc_func = preproc_maps 
     else:
         preproc_func = preproc_vect
@@ -107,9 +104,12 @@ def cat_var_dic(var_dic,tensor_name,tensor):
     return var_dic
 
 def preproc_maps(maps):
-    maps = maps.detach()
-    maps_min = maps.min(dim=-1,keepdim=True)[0].min(dim=-2,keepdim=True)[0].min(dim=-3,keepdim=True)[0]
-    maps_max = maps.max(dim=-1,keepdim=True)[0].max(dim=-2,keepdim=True)[0].max(dim=-3,keepdim=True)[0]
+    if len(maps.shape) > 4:
+        dim_tuple = (-1,-2,-3,-4)
+    else:
+        dim_tuple = (-1,-2,-3)
+    maps_min = maps.amin(dim=dim_tuple,keepdim=True)[0]
+    maps_max = maps.amax(dim=dim_tuple,keepdim=True)[0]
     maps = (maps-maps_min)/(maps_max-maps_min)
     maps = (maps.cpu()*255).byte()
     return maps
@@ -119,11 +119,7 @@ def preproc_vect(vect):
 
 def save_variables(intermVarDict,exp_id,model_id,epoch,mode="val"):
 
-    key_list = ["attMaps","norm","feat_pooled_per_head","feat_pooled"]
-    for key in intermVarDict:
-        if "output" in key or "centroid" in key:
-            key_list.append(key)
-
+    key_list = ["attMaps","norm","norm_pooled_per_head"]
     for key in key_list:
         if key in intermVarDict:
             print("savevar",key)

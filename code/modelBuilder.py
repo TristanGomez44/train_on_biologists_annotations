@@ -330,6 +330,7 @@ class LinearSecondModel(SecondModel):
                 x = self.act(x)
                 x = x.reshape(x.shape[0],len(self.keys),x.shape[1]//len(self.keys),x.shape[2],x.shape[3])
 
+                retDict["feat_pooled_per_head"] = x
                 for i,key in enumerate(self.keys):
                     retDict["feat_"+key] = x[:,i]
 
