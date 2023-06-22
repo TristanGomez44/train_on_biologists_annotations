@@ -29,8 +29,11 @@ case $1 in
   "noneRed2_lr_r50")
     python trainVal.py -c grade.config --model_id noneRed2_lr_r50 --first_mod resnet50 --big_images False --batch_size 64 --val_batch_size 512
     ;;
+  "none_mast_r50_onefeatperhead_mapsim")
+    python trainVal.py -c grade.config --model_id none_mast_r50_onefeatperhead_mapsim --first_mod resnet50 --big_images True --batch_size 14 --val_batch_size 32 --one_feat_per_head True --map_sim_term_weight 1 --master_net True --m_model_id noneRed2_r50_onefeatperhead_mapsim --stride_lay3 1 --stride_lay4 1 
+    ;;
   "noneRed2_r50_onefeatperhead_mapsim")
-    python trainVal.py -c grade.config --model_id noneRed2_r50_onefeatperhead_mapsim --first_mod resnet50 --big_images True --batch_size 64 --val_batch_size 512 --one_feat_per_head True --map_sim_term_weight 1 --epochs 1
+    python trainVal.py -c grade.config --model_id noneRed2_r50_onefeatperhead_mapsim --first_mod resnet50 --big_images True --batch_size 64 --val_batch_size 512 --one_feat_per_head True --map_sim_term_weight 1
     ;;
   "noneRed2_r50_onefeatperhead")
     python trainVal.py -c grade.config --model_id noneRed2_r50_onefeatperhead --first_mod resnet50 --big_images True --batch_size 64 --val_batch_size 512 --one_feat_per_head True
