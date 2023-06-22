@@ -45,15 +45,19 @@ class SSLDataset(Dataset):
 
         focal_plane = all_focal_plane_paths[focal_plane_ind]
         all_img_paths = sorted(glob.glob(focal_plane+"/*."+self.img_ext),key=get_frame_ind)
-        frame_ind = torch.randint(0,high=len(os.listdir(video_path))-1,size=(1,)).item()
+        frame_ind = torch.randint(0,high=len(all_img_paths)-1,size=(1,)).item()
 
         if torch.rand((1,)).item() > 0.5:
             #Focal plane neighbors
             img_list = []
             for ind in [focal_plane_ind,focal_plane_ind+1]:
                 focal_plane = all_focal_plane_paths[ind]
-                img_path = sorted(glob.glob(focal_plane+"/*."+self.img_ext),key=get_frame_ind)[frame_ind]
-                #Open image and convert to color using PIL
+                all_img_paths = sorted(glob.glob(focal_plane+"/*."+self.img_ext),key=get_frame_ind)
+                
+                assert len(all_img_paths) > 0,focal_plane
+                assert frame_ind < len(all_img_paths),focal_plane+" "+str(frame_ind)+" "+str(len(all_img_paths))
+            
+                img_path = all_img_paths[frame_ind]
                 img = Image.open(img_path)
                 img = convert_to_rgb(img)
                 img = self.transf(img)
