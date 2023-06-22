@@ -45,7 +45,7 @@ def find_saliency_maps(viz_id,model_ids,exp_id,expl):
 
     for j in range(len(model_ids)):
         
-        if expl[j] not in ["attMaps","norm"]:
+        if expl[j] not in ["attMaps","norm","norm_pooled_per_head"]:
             paths = glob.glob(f"../results/{exp_id}/saliencymaps_{expl[j]}_{model_ids[j]}_epoch*_{viz_id}.npy")
         else:
             paths = glob.glob(f"../results/{exp_id}/{expl[j]}_{model_ids[j]}_epoch*.npy")
@@ -150,6 +150,9 @@ def showSalMaps(exp_id,img_nb,plot_id,nrows,class_index,inds,viz_id,args,
         for j in range(len(mapPaths)):
             
             all_attMaps = np.load(mapPaths[j],mmap_mode="r")
+            if expl[j] == "norm_pooled_per_head":
+                all_attMaps = all_attMaps[:,:,0]
+
             attMap = all_attMaps[i] if direct_ind[j] else all_attMaps[inds[i]]
 
             if attMap.shape[0] != 1 and maps_inds[j] != -1:
