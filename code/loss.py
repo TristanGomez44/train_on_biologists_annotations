@@ -76,13 +76,16 @@ def supervised_loss(target_dic, output_dict,regression,class_nb_targ_dic,plcc_we
             annot_nb_list_onlyannot = _remove_no_annot(annot_nb_list,target)
     
             if "master_output_"+target_name in output_dict:
+                output = output_dict["output_"+target_name]
+                master_output = output_dict["master_output_"+target_name]
+                kl = F.kl_div(F.log_softmax(output/kl_temp, dim=1),F.softmax(master_output/kl_temp, dim=1),reduction="sum")
+                
                 output,target_onlyannot = remove_no_annot(output_dict["output_"+target_name],target)
-                master_output,target_onlyannot = remove_no_annot(output_dict["master_output_"+target_name],target)
-
-                kl = F.kl_div(F.log_softmax(output/kl_temp, dim=1),F.softmax(master_output/kl_temp, dim=1),reduction="none")
-                ce = F.cross_entropy(output, target_onlyannot,reduction="none")
-                loss = (kl*kl_interp*kl_temp*kl_temp+ce*(1-kl_interp))
-
+                ce = F.cross_entropy(output , target_onlyannot,reduction="sum")
+                
+                sub_loss = (kl*kl_interp*kl_temp*kl_temp+ce*(1-kl_interp))
+                loss_dic[f"loss_{target_name}"] = sub_loss.data.unsqueeze(0)
+                loss += sub_loss            
             else:
                 output,target = remove_no_annot(output_dict["output_"+target_name],target)     
                 if regression:
@@ -90,6 +93,7 @@ def supervised_loss(target_dic, output_dict,regression,class_nb_targ_dic,plcc_we
                     sub_loss = regression_loss(output,target,class_nb,plcc_weight,rank_weight)
                 else:
                     sub_loss = F.cross_entropy(output, target,reduction="none")
+            
                 loss_dic[f"loss_{target_name}"] = sub_loss.data.sum().unsqueeze(0)
                 loss += (sub_loss/annot_nb_list_onlyannot).sum()
 
