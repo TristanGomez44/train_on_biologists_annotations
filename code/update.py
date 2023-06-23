@@ -83,6 +83,10 @@ def all_cat_var_dic(var_dic,resDict,mode,save_output_during_validation=False):
             if key in resDict:
                 var_dic = cat_var_dic(var_dic,key,resDict[key])
         
+        for output_name in resDict:
+            if "output" in output_name:
+                var_dic = cat_var_dic(var_dic,output_name,resDict[output_name])
+
     return var_dic
 
 def cat_var_dic(var_dic,tensor_name,tensor):
@@ -120,6 +124,10 @@ def preproc_vect(vect):
 def save_variables(intermVarDict,exp_id,model_id,epoch,mode="val"):
 
     key_list = ["attMaps","norm","norm_pooled_per_head"]
+    for key in intermVarDict:
+        if "output" in key:
+            key_list.append(key)
+    
     for key in key_list:
         if key in intermVarDict:
             print("savevar",key)
