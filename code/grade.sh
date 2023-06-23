@@ -48,7 +48,7 @@ case $1 in
     python trainVal.py -c grade.config --model_id none_mast_r50 --master_net True --m_model_id noneRed2_r50 --first_mod resnet50 --big_images True --batch_size 28 --val_batch_size 128 --task_to_train icm --stride_lay3 1 --stride_lay4 1
     ;;
   "noneRed2_ssl")
-    python trainVal.py -c ssl.config --model_id noneRed2_ssl --epochs 100 --first_mod resnet50  --big_images True --batch_size 16 --val_batch_size 32 --ssl True --dataset_path /LAB-DATA/LS2N/E144069X/DL4IVF/ --num_workers 2
+    python trainVal.py -c ssl.config --model_id noneRed2_ssl --epochs 1000 --first_mod resnet50  --big_images True --batch_size 16 --val_batch_size 32 --ssl True --dataset_path /LAB-DATA/LS2N/E144069X/DL4IVF/ --num_workers 2
     ;;
   "noneRed2_lr_swin_ssl")
     python trainVal.py -c ssl.config --model_id noneRed2_swin_ssl --epochs 100 --first_mod swin_b_16  --big_images False --batch_size 64 --val_batch_size 128 --ssl True
