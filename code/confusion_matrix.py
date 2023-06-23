@@ -37,6 +37,7 @@ def main(argv=None):
 
     labels_csv = np.genfromtxt("../data/Blastocyst_Dataset/Gardner_test_gold_onlyGardnerScores.csv",delimiter=";",dtype=str)
 
+    task_dic = {}
     for task in ["exp","icm","te"]:
 
         path = glob.glob(f"../results/{args.exp_id}/output_{task}_{args.model_id}_epoch*_test.npy")[0]
@@ -53,8 +54,6 @@ def main(argv=None):
         pred = pred[labels!="-1"].astype("int")    
 
         conf_mat = sklearn.metrics.confusion_matrix(labels_int,pred,normalize="pred")
-
-        print(conf_mat)
 
         plt.figure()
         plt.imshow(conf_mat)
@@ -75,19 +74,36 @@ def main(argv=None):
         plt.savefig(f"../vis/{args.exp_id}/conf_mat_{args.model_id}_{task}.png")
         plt.close()
 
-        acc = sklearn.metrics.accuracy_score(labels_int,pred)
-        recall = sklearn.metrics.recall_score(labels_int,pred,average="macro")
-        precision = sklearn.metrics.precision_score(labels_int,pred,average="macro")
-        f1 = sklearn.metrics.f1_score(labels_int,pred,average="macro")
-        frequency_of_most_frequent_class = np.bincount(labels_int).max()
-        most_freq_acc = frequency_of_most_frequent_class/len(labels_int)
+        #Saves the metric values in a dictionnary 
+        metrics = {}
+        metrics["acc"] = sklearn.metrics.accuracy_score(labels_int,pred)
+        occurency_of_most_frequent_class = np.bincount(labels_int).max()
+        metrics["most_freq_acc"] = occurency_of_most_frequent_class/len(labels_int)
+        metrics["recall"] = sklearn.metrics.recall_score(labels_int,pred,average="macro")
+        metrics["precision"] = sklearn.metrics.precision_score(labels_int,pred,average="macro")
+        metrics["f1"] = sklearn.metrics.f1_score(labels_int,pred,average="macro")
+        
+        #Saves the metrics in a csv file
+        with open(f"../results/{args.exp_id}/metrics_{task}_{args.model_id}.csv","w") as f:
+            f.write("metric,value\n")
+            for key in metrics.keys():
+                f.write(f"{key},{metrics[key]}\n")
 
-        with open(f"../results/{args.exp_id}/classification_metrics_{args.model_id}_{task}.csv","w") as f:
-            f.write(f"acc;{acc}\n")
-            f.write(f"most_freq_acc;{most_freq_acc}\n")
-            f.write(f"recall;{recall}\n")
-            f.write(f"precision;{precision}\n")
-            f.write(f"f1;{f1}\n")
-    
+        task_dic[task] = metrics
+
+    metric_nb = task_dic[list(task_dic.keys())[0]].keys().__len__()
+
+    #Saves task_dic in a .tex file 
+    with open(f"../results/{args.exp_id}/metrics_{args.model_id}.tex","w") as f:
+        f.write("\\begin{tabular}{c|c|"+"".join(["c" for _ in range(metric_nb-1)])+"}\n")
+        f.write("\\hline\n")
+        f.write("Task & Proportion of most frequent class & Accuracy & Recall & Precision & F1 \\\\\n")
+        f.write("\\hline\n")
+
+        for task in task_dic.keys():
+            f.write(f"{task.upper()} & {task_dic[task]['most_freq_acc']:.2f} & {task_dic[task]['acc']:.2f} & {task_dic[task]['recall']:.2f} & {task_dic[task]['precision']:.2f} & {task_dic[task]['f1']:.2f} \\\\\n")
+            f.write("\\hline\n")
+        f.write("\\end{tabular}\n")
+
 if __name__ == "__main__":
     main()
