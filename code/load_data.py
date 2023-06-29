@@ -33,7 +33,7 @@ def buildTrainLoader(args,shuffle=True):
     imgSize = get_img_size(args)
 
     if args.ssl:
-        train_dataset = ssl_dataset.SSLDataset(args.dataset_path,"train",args.train_prop,args.val_prop,imgSize)
+        train_dataset = ssl_dataset.SSLDataset(args.dataset_path,"train",args.train_prop,args.val_prop,imgSize,augment=args.ssl_data_augment)
     else:    
         train_dataset = grade_dataset.GradeDataset(args.dataset_train, True,imgSize)
 
@@ -64,7 +64,7 @@ def buildTestLoader(args, mode):
     imgSize = get_img_size(args)
     
     if args.ssl:
-        test_dataset = ssl_dataset.SSLDataset(args.dataset_path,mode,args.train_prop,args.val_prop,imgSize)
+        test_dataset = ssl_dataset.SSLDataset(args.dataset_path,mode,args.train_prop,args.val_prop,imgSize,augment=args.ssl_data_augment)
     else:
         test_dataset = grade_dataset.GradeDataset(args.dataset_train, mode=="val",imgSize)
 

@@ -359,7 +359,10 @@ def addSSLArgs(argreader):
 
     argreader.parser.add_argument('--ssl', type=str2bool, metavar='BOOL',
                                   help='To use self-supervised learning')
-
+    
+    argreader.parser.add_argument('--ssl_data_augment', type=str2bool, metavar='BOOL',
+                                  help='To use self-supervised learning')
+    
     argreader.parser.add_argument('--start_teach_temp', type=float, metavar='M',
                                   help='Starting temperature for the softmax of the teacher model.')
     

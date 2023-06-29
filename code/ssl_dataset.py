@@ -12,7 +12,7 @@ import torch
 
 class SSLDataset(Dataset):
 
-    def __init__(self,dataset_path,mode,train_prop,val_prop,img_size,img_ext="jpeg") -> None:
+    def __init__(self,dataset_path,mode,train_prop,val_prop,img_size,img_ext="jpeg",augment=True) -> None:
         super().__init__()
 
         video_pattern = os.path.join(dataset_path,"D*/")
@@ -32,7 +32,7 @@ class SSLDataset(Dataset):
         self.video_paths = self.video_paths[start:end]
 
         self.img_ext=img_ext
-        self.transf = get_transform(img_size)
+        self.transf = get_transform(img_size,augment=augment)
 
     def __len__(self):
         return len(self.video_paths)
@@ -90,12 +90,15 @@ def get_frame_ind(path):
     return frame_ind
 
 #Construct a basic torchvision transform
-def get_transform(img_size):
+def get_transform(img_size,augment=True):
 
-    transf = [transforms.RandomResizedCrop(img_size,scale=(0.9,1),ratio=(1,1)),
+    if augment:
+        transf = [transforms.RandomResizedCrop(img_size,scale=(0.9,1),ratio=(1,1)),
                 transforms.RandomVerticalFlip(0.5),
                 transforms.RandomHorizontalFlip(0.5),
                 transforms.RandomRotation(degrees=180)]
+    else:
+        transf = [transforms.Resize(img_size)]
 
     transf.extend([transforms.ToTensor()])
     transf.extend([transforms.Normalize(mean=[0.485, 0.456, 0.406], 
