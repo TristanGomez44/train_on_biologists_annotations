@@ -1,5 +1,3 @@
-
-
 import os,argparse 
 
 def main():
@@ -21,8 +19,8 @@ def main():
     with open(tex_path, 'r') as f:
         tex = f.read()
 
-    if not tex.startswith("\documentclass{article}"):
-        latex_header = "\documentclass{article} \n \\begin{document}"
+    if not tex.startswith("\documentclass{standalone}"):
+        latex_header = "\documentclass{standalone} \n \\begin{document}"
         tex = latex_header + tex
         latex_footer = "\end{document}"
         tex = tex + latex_footer
