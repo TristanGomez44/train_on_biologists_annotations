@@ -26,7 +26,7 @@ def getOptim_and_Scheduler(lastEpoch,net,args):
 
     optim = optimConst(net.parameters(), **kwargs)
 
-    if args.swa or args.ssl:
+    if (args.swa or args.ssl) and args.use_scheduler:
         def warmup_lambda_func(epoch):
             alpha = epoch/(args.warmup_epochs-1)
             lr = (alpha*args.lr+(1-alpha)*args.warmup_lr)/args.lr
@@ -41,6 +41,8 @@ def getOptim_and_Scheduler(lastEpoch,net,args):
             scheduler.step()
     else:
         scheduler = None
+
+    print("Scheduler is",scheduler)
 
     return optim, scheduler
 
