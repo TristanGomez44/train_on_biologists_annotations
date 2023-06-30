@@ -12,7 +12,7 @@ import torch
 
 class SSLDataset(Dataset):
 
-    def __init__(self,dataset_path,mode,train_prop,val_prop,img_size,img_ext="jpeg",augment=True) -> None:
+    def __init__(self,dataset_path,mode,train_prop,val_prop,img_size,img_ext="jpeg",augment=True,only_center_plane=False) -> None:
         super().__init__()
 
         video_pattern = os.path.join(dataset_path,"D*/")
@@ -31,8 +31,9 @@ class SSLDataset(Dataset):
         
         self.video_paths = self.video_paths[start:end]
 
-        self.img_ext=img_ext
+        self.img_ext = img_ext
         self.transf = get_transform(img_size,augment=augment)
+        self.only_center_plane = only_center_plane
 
     def __len__(self):
         return len(self.video_paths)
@@ -40,14 +41,18 @@ class SSLDataset(Dataset):
     def __getitem__(self,i):
 
         video_path = self.video_paths[i]
-        all_focal_plane_paths = sorted(glob.glob(video_path+"/F*"),key=get_focal_plane_value)
-        focal_plane_ind = torch.randint(0,high=len(all_focal_plane_paths)-1,size=(1,)).item()
 
-        focal_plane = all_focal_plane_paths[focal_plane_ind]
+        if self.only_center_plane:
+            focal_plane = video_path+"/F0"
+        else:
+            all_focal_plane_paths = sorted(glob.glob(video_path+"/F*"),key=get_focal_plane_value)
+            focal_plane_ind = torch.randint(0,high=len(all_focal_plane_paths)-1,size=(1,)).item()
+            focal_plane = all_focal_plane_paths[focal_plane_ind]
+
         all_img_paths = sorted(glob.glob(focal_plane+"/*."+self.img_ext),key=get_frame_ind)
         frame_ind = torch.randint(0,high=len(all_img_paths)-1,size=(1,)).item()
 
-        if torch.rand((1,)).item() > 0.5:
+        if torch.rand((1,)).item() > 0.5 and not self.only_center_plane:
             #Focal plane neighbors
             img_list = []
             for ind in [focal_plane_ind,focal_plane_ind+1]:

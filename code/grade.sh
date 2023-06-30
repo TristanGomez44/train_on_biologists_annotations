@@ -53,6 +53,9 @@ case $1 in
   "noneRed2_ssl_noaug")
     python trainVal.py -c ssl.config --model_id noneRed2_ssl_noaug --epochs 1000 --first_mod resnet50  --big_images True --batch_size 16 --val_batch_size 32 --ssl True --dataset_path /LAB-DATA/LS2N/E144069X/DL4IVF/ --num_workers 2 --ssl_data_augment False
     ;;
+  "noneRed2_ssl_noaug_only_center")
+    python trainVal.py -c ssl.config --model_id noneRed2_ssl_noaug_only_center --epochs 1000 --first_mod resnet50  --big_images True --batch_size 16 --val_batch_size 32 --ssl True --dataset_path /LAB-DATA/LS2N/E144069X/DL4IVF/ --num_workers 2 --ssl_data_augment False --only_center_plane True
+    ;;
   "noneRed2_lr_swin_ssl")
     python trainVal.py -c ssl.config --model_id noneRed2_swin_ssl --epochs 100 --first_mod swin_b_16  --big_images False --batch_size 64 --val_batch_size 128 --ssl True
     ;;
