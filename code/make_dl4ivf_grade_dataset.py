@@ -4,7 +4,7 @@ import math
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt 
-from PIL import Image,ImageEnhance,ImageFile,UnidentifiedImageError
+from PIL import Image,ImageEnhance,ImageFile
 ImageFile.LOAD_TRUNCATED_IMAGES = True
 from skimage import transform
 import subprocess
@@ -71,18 +71,22 @@ def get_img_ind(img_path):
     return img_ind 
 
 def safe_open(path):
-    try:
-        img = np.array(Image.open(path))
-    except UnidentifiedImageError:
-        img = None 
-    return img 
+
+    if not os.path.exists(path):
+        img = None
+    else:
+        try:
+            img = np.array(Image.open(path))
+        except:
+            img = None 
+        return img 
 
 def prevent_empty_well_image(image_paths,img_ind,mask,thres=20):
     
     img = safe_open(image_paths[img_ind])
 
     if img is not None:
-        mask = transform.resize(mask,img.shape,order=0)
+        mask = transform.resize(mask,img.shape,order=0).astype(bool)
         std = img[~mask].std()
     else:
         std = None
@@ -108,7 +112,6 @@ def get_focal_plane(path):
     focal_plane = int(focal_plane.replace("F",""))
     return focal_plane
 
-
 def exctract_blast_img(path,dest_fold,img_ind,mask,empty_list,var_thres,frame_and_plane_dicts):
      
     orig_img_ind = img_ind
@@ -116,36 +119,34 @@ def exctract_blast_img(path,dest_fold,img_ind,mask,empty_list,var_thres,frame_an
     fold_name = path.split("/")[-2]
 
     if fold_name in frame_and_plane_dicts:
-
         dic = frame_and_plane_dicts[fold_name]
-
         img_ind = dic["frame_to_use"]
 
-        if "focal_plane" in dic:
-            focal_plane = dic["focal_plane"]
-        else:
-            focal_plane = "F0"
-
     else:
-        focal_plane = "F0"
-        paths = sorted(glob.glob(os.path.join(path,focal_plane,"*.*")),key=get_img_ind)
+        paths = sorted(glob.glob(os.path.join(path,"F0","*.*")),key=get_img_ind)
         img_ind = prevent_empty_well_image(paths,img_ind,mask,thres=var_thres)
-        focal_plane = "F0"
 
     if img_ind is None:
         empty_list.append(path)
     else:
-        try:
-            img_path = glob.glob(os.path.join(path,focal_plane,"*_RUN"+str(img_ind)+".jpeg"))[0]
-        except IndexError:
-            print(os.path.join(path,focal_plane,"*_RUN"+str(img_ind)+".jpeg"),orig_img_ind)
-            sys.exit(0)
+        focal_plane_list = sorted(glob.glob(os.path.join(path,"F*")))
+       
+        print(path,len(focal_plane_list))
+        for focal_plane in focal_plane_list:
+            #print("\t",focal_plane)
 
-        img_name = os.path.basename(img_path)
-        dest_path = os.path.join(dest_fold,img_name)
-        if not os.path.exists(dest_path):
-            os.makedirs(dest_fold,exist_ok=True)
-            shutil.copyfile(img_path,dest_path)
+            try:
+                img_path = glob.glob(os.path.join(path,focal_plane,"*_RUN"+str(img_ind)+".jpeg"))[0]
+            except IndexError:
+                img_nb = len(glob.glob(os.path.join(path,focal_plane,"*_RUN*.jpeg")))
+                print(os.path.join(path,focal_plane,"*_RUN"+str(img_ind)+".jpeg"),orig_img_ind,img_nb)
+                continue
+
+            img_name = focal_plane.split("/")[-1]+"_"+os.path.basename(img_path)
+            dest_path = os.path.join(dest_fold,img_name)
+            if not os.path.exists(dest_path):
+                os.makedirs(dest_fold,exist_ok=True)
+                shutil.copyfile(img_path,dest_path)
 
     return empty_list
 
@@ -178,7 +179,7 @@ def fix_contrast(dest_dataset_root,h,w,mask,var_thres):
 
             try:
                 img = Image.open(path)
-            except UnidentifiedImageError:
+            except:
                 corrupted_list.append(filename)
                 continue
 
@@ -303,6 +304,11 @@ def process_video(path,early_csv,late_csv,grade_annot_csv,dest_dataset_root,grad
                 if img_nb > 0:
                     img_ind = int(img_nb*get_prop(row,time)) - 1
                     img_ind = max(img_ind,0)
+                    
+                    wrong_img_file_paths = glob.glob(path+"/*jpeg")
+                    for wrong_img_file_path in wrong_img_file_paths:
+                        os.remove(wrong_img_file_path)
+
                     empty_list = exctract_blast_img(path,dest_fold,img_ind,mask,empty_list,var_thres,frame_and_plane_dict)
                 else:
                     uncomplete_folders.append(path)
@@ -319,7 +325,7 @@ def main():
     x = np.arange(w)[np.newaxis]
     y = np.arange(h)[:,np.newaxis]
     center_x,center_y = w//2,h//2
-    mask = (np.sqrt((x-center_x)**2+(y-center_y)**2) > r)
+    mask = (np.sqrt((x-center_x)**2+(y-center_y)**2) > r).astype(bool)
     
     #Make dataset
     if not os.path.exists(dest_dataset_root+"/blast_and_grade_annot"):
