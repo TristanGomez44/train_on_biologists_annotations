@@ -41,9 +41,9 @@ def make_grid(img,row_nb):
 
     return grid
 
-def save_image(img,path,mask=None,row_nb=None,**kwargs):
+def save_image(img,path,mask=None,row_nb=None,apply_inv_norm=True,**kwargs):
     
-    if img.shape[1] == 3:
+    if img.shape[1] == 3 and apply_inv_norm:
         if mask is None:
             mask = (img!=0)
         img = inv_imgnet_norm(img)*mask

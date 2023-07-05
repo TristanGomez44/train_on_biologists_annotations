@@ -20,8 +20,6 @@ def get_img_size(args):
         imgSize = 192
     elif args.first_mod=="swin_b_8":
         imgSize = 224
-    elif args.debug:
-        imgSize = 32,32
     elif args.big_images:
         imgSize = 512,384
     else:
@@ -66,7 +64,7 @@ def buildTestLoader(args, mode):
     if args.ssl:
         test_dataset = ssl_dataset.SSLDataset(args.dataset_path,mode,args.train_prop,args.val_prop,imgSize,augment=args.ssl_data_augment)
     else:
-        test_dataset = grade_dataset.GradeDataset(args.dataset_train, mode=="val",imgSize)
+        test_dataset = grade_dataset.GradeDataset(args.dataset_train,False,imgSize)
 
         if mode == "val" and args.dataset_train == args.dataset_val:
             np.random.seed(1)
