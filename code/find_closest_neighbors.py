@@ -105,29 +105,37 @@ def find_closest_neighbor(result_dic,args):
 
     return closest_train_idx
 
-def similarity_map(feat_ref,feat,orig_map_shape):
-    most_active_feat = feat_ref[:,np.argmax(feat_ref.sum(axis=0))][:,None]
+def similarity_map(train_feat,test_feat,maps_shape):
 
-    most_active_feat = most_active_feat.transpose()
-    feat = feat.transpose()
+    train_feat = train_feat.transpose()
+    test_feat = test_feat.transpose()
+
+    train_feat = train_feat[:,None,:]
+    test_feat = test_feat[None,:,:]
 
     #cosine similarity between the most active feature and the other features
-    sim_map = (most_active_feat*feat).sum(axis=1)/(np.linalg.norm(most_active_feat,axis=1)*np.linalg.norm(feat,axis=1))
+    #sim_matrix = (train_feat*test_feat).sum(axis=-1)/(np.linalg.norm(train_feat,axis=-1)*np.linalg.norm(test_feat,axis=-1))
+    sim_matrix = (train_feat*test_feat).sum(axis=-1)
 
-    sim_map = sim_map.reshape((orig_map_shape))
-    return sim_map
+    train_sim_map = sim_matrix.max(axis=-1)
+    test_sim_map = sim_matrix.max(axis=0)
+
+    train_sim_map = train_sim_map.reshape(maps_shape)
+    test_sim_map = test_sim_map.reshape(maps_shape)
+
+    return train_sim_map,test_sim_map
         
 def similarity_maps(args,result_dic,closest_train_idx):
     #For each train example - test example pair,
     #compute the similarity map between the most active train feature and the test features 
     #and the similarity map between the most active test feature and the train features
-    train_to_test_path = f"../results/{args.exp_id}/train_to_test_{args.model_id}.npy"
-    test_to_train_path = f"../results/{args.exp_id}/test_to_train_{args.model_id}.npy"
+    test_maps_path = f"../results/{args.exp_id}/test_maps_{args.model_id}.npy"
+    train_maps_path = f"../results/{args.exp_id}/train_maps_{args.model_id}.npy"
     
-    if not os.path.exists(train_to_test_path) or not os.path.exists(test_to_train_path):
+    if not os.path.exists(test_maps_path) or not os.path.exists(train_maps_path):
         
-        train_to_test = []
-        test_to_train = []
+        test_maps = []
+        train_maps = []
         for i in range(len(closest_train_idx)):
 
             test_feat = result_dic["test"]["features"][i]
@@ -139,31 +147,33 @@ def similarity_maps(args,result_dic,closest_train_idx):
             test_feat = test_feat.reshape(test_feat.shape[0],-1)
             train_feat = train_feat.reshape(train_feat.shape[0],-1)
 
-            train_to_test.append(similarity_map(train_feat,test_feat,maps_shape))
-            test_to_train.append(similarity_map(test_feat,train_feat,maps_shape))
-            
-        train_to_test = np.array(train_to_test)
-        test_to_train = np.array(test_to_train)
+            train_map,test_map= similarity_map(train_feat,test_feat,maps_shape)
 
-        np.save(train_to_test_path,train_to_test)
-        np.save(test_to_train_path,test_to_train)
+            train_maps.append(train_map)
+            test_maps.append(test_map)
+
+        test_maps = np.array(test_maps)
+        train_maps = np.array(train_maps)
+
+        np.save(test_maps_path,test_maps)
+        np.save(train_maps_path,train_maps)
 
     else:
-        train_to_test = np.load(train_to_test_path)
-        test_to_train = np.load(test_to_train_path)
+        test_maps = np.load(test_maps_path)
+        train_maps = np.load(train_maps_path)
 
-    return train_to_test,test_to_train
+    return train_maps,test_maps
 
 def preproc_map(img,sal_map,cmap):
     sal_map = utils.normalize_tensor(sal_map)
     sal_map = cmap(sal_map)[:,:,:3]
-    sal_map = cv2.resize(sal_map, (img.shape[2], img.shape[1])).astype(np.float32)
+    sal_map = cv2.resize(sal_map, (img.shape[2], img.shape[1]),interpolation = cv2.INTER_NEAREST).astype(np.float32)
     sal_map = sal_map.transpose(2,0,1)
     img = img.mean(axis=0,keepdim=True).expand(3,-1,-1)  
     sal_map = 0.2*img + 0.8*sal_map
     return sal_map
 
-def show_similarity_map(args,test_dataset,train_dataset,closest_train_idx,train_to_test,test_to_train,cmap="plasma"):
+def show_similarity_map(args,test_dataset,train_dataset,closest_train_idx,train_maps,test_maps,cmap="plasma"):
     #For each train example - test example pair,
     #Show the train image, the test image, the similarity map between the most active train feature and the test features 
     #and the similarity map between the most active test feature and the train features
@@ -185,13 +195,13 @@ def show_similarity_map(args,test_dataset,train_dataset,closest_train_idx,train_
         test_img = utils.inv_imgnet_norm(test_img)
         train_img = utils.inv_imgnet_norm(train_img)
 
-        test_to_train_map = preproc_map(train_img,test_to_train[i],cmap)
-        train_to_test_map = preproc_map(test_img,train_to_test[i],cmap)
+        train_map = preproc_map(train_img,train_maps[i],cmap)
+        test_map = preproc_map(test_img,test_maps[i],cmap)
 
         grid.append(test_img)
-        grid.append(test_to_train_map)
+        grid.append(train_map)
         grid.append(train_img)
-        grid.append(train_to_test_map)
+        grid.append(test_map)
     
         if args.debug and i==5:
             break
@@ -237,9 +247,9 @@ def main(argv=None):
 
     closest_train_idx = find_closest_neighbor(result_dic,args)
 
-    train_to_test,test_to_train = similarity_maps(args,result_dic,closest_train_idx)
+    train_maps,test_maps = similarity_maps(args,result_dic,closest_train_idx)
 
-    show_similarity_map(args,test_dataset,train_dataset,closest_train_idx,train_to_test,test_to_train)
+    show_similarity_map(args,test_dataset,train_dataset,closest_train_idx,train_maps,test_maps)
 
 if __name__ == "__main__":
     main()
