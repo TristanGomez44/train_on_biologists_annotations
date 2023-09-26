@@ -113,6 +113,10 @@ def make_multicenter_split(path_to_dataset,train_prop,json_file_name="splits.jso
 
 	train_csv = train_csv.rename(column_match_dic,axis=1)
 
+	#Deleting duplicate annotation 
+	inds = train_csv.index[train_csv['image_name'] == "838_02.png"]
+	train_csv = train_csv.drop(inds[1])
+
 	splits = make_split(train_csv,train_prop,val_prop=None,seed=0)
 	splits["test"] = list(pd.read_csv(path_to_test_annot,delimiter=";")["Image"])
 
