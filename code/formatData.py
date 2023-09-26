@@ -1,5 +1,5 @@
 
-import os
+import os,sys
 import zipfile
 import shutil
 import json
@@ -11,7 +11,7 @@ from args import ArgReader
 
 from grade_dataset import Tasks
 
-def format_dataset(path_to_zip,path_to_annot_csv,dest_folder,train_prop,fold_name="blastocyst_dataset",json_file_name="splits.json",seed=0):
+def format_dl4ivf_dataset(path_to_zip,path_to_annot_csv,dest_folder,train_prop,val_prop,fold_name="blastocyst_dataset",json_file_name="splits.json",seed=0):
 
 	os.makedirs(dest_folder,exist_ok=True)
 
@@ -50,26 +50,37 @@ def format_dataset(path_to_zip,path_to_annot_csv,dest_folder,train_prop,fold_nam
 
 	all_aggr_annot.to_csv(path_to_aggr_annot_csv,index=False)
 	
-	splits = make_split(grouped,train_prop,seed)
+	splits = make_split(all_aggr_annot,train_prop,val_prop,seed)
 
 	json_file_path = os.path.join(dest_folder,json_file_name)
 	with open(json_file_path, 'w') as fp:
 		json.dump(splits, fp)
 
-def make_split(grouped,train_prop,seed=0):
+def make_split(all_aggr_annot,train_prop,val_prop,seed=0):
 
-	img_names = sorted([img_name for (img_name,_) in list(grouped["image_name"])])
+	groups = all_aggr_annot.groupby([task.value for task in Tasks])
 	
-	img_names = np.array(img_names)
 	np.random.seed(seed)
-	np.random.shuffle(img_names)
 
-	train_size = int(len(img_names)*train_prop)
+	train_set,val_set,test_set = [],[],[]
 
-	train_set = img_names[:train_size].tolist()
-	eval_set = img_names[train_size:].tolist()
+	for (_,sub_df) in groups:
+		
+		img_names = list(sub_df["image_name"])
+		img_names = np.array(img_names)
 
-	return {"train":train_set,"eval":eval_set}
+		np.random.shuffle(img_names)
+
+		train_size = round(len(img_names)*train_prop)
+		val_size = round(len(img_names)*val_prop)
+
+		train_set.extend(img_names[:train_size].tolist())
+		val_set.extend(img_names[train_size:train_size+val_size].tolist())
+		test_set.extend(img_names[train_size+val_size:])
+
+	print(len(train_set),len(val_set),len(test_set))
+
+	return {"train":sorted(train_set),"val":sorted(val_set),"test":sorted(test_set)}
 
 def main(argv=None):
 
@@ -80,7 +91,8 @@ def main(argv=None):
 	argreader.parser.add_argument('--path_to_zip',type=str)
 	argreader.parser.add_argument('--path_to_annot_csv',type=str)
 	argreader.parser.add_argument('--dest_folder',type=str,default="../data/dl4ivf_blastocysts/")
-	argreader.parser.add_argument('--train_prop',type=float,nargs=2,default=0.5)
+	argreader.parser.add_argument('--train_prop',type=float,default=0.4)
+	argreader.parser.add_argument('--val_prop',type=float,default=0.1)
 
 	#Reading the comand row arg
 	argreader.getRemainingArgs()
@@ -88,6 +100,7 @@ def main(argv=None):
 	#Getting the args from command row and config file
 	args = argreader.args
 
-	format_dataset(args.path_to_zip,args.path_to_annot_csv,args.dest_folder,args.train_prop)
+	format_dl4ivf_dataset(args.path_to_zip,args.path_to_annot_csv,args.dest_folder,args.train_prop,args.val_prop)
+
 if __name__ == "__main__":
     main()
