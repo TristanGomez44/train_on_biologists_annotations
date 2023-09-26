@@ -33,21 +33,13 @@ def buildTrainLoader(args,shuffle=True):
     if args.ssl:
         train_dataset = ssl_dataset.SSLDataset(args.dataset_path,"train",args.train_prop,args.val_prop,imgSize,augment=args.ssl_data_augment)
     else:    
-        train_dataset = grade_dataset.GradeDataset(args.dataset_train, True,imgSize)
-
-        totalLength = len(train_dataset)
-
-        train_prop = args.train_prop
+        train_dataset = grade_dataset.GradeDataset(args.dataset_name,args.dataset_path,"train",imgSize)
 
         np.random.seed(1)
         torch.manual_seed(1)
         if args.cuda:
             torch.cuda.manual_seed(1)
         
-        if args.dataset_train == args.dataset_val:
-            train_dataset, _ = torch.utils.data.random_split(train_dataset, [int(totalLength * train_prop),
-                                                                        totalLength - int(totalLength * train_prop)])
-
     bsz = args.batch_size
     bsz = bsz if bsz < args.max_batch_size_single_pass else args.max_batch_size_single_pass
 
@@ -64,24 +56,7 @@ def buildTestLoader(args, mode):
     if args.ssl:
         test_dataset = ssl_dataset.SSLDataset(args.dataset_path,mode,args.train_prop,args.val_prop,imgSize,augment=args.ssl_data_augment)
     else:
-        test_dataset = grade_dataset.GradeDataset(args.dataset_train,False,imgSize)
-
-        if mode == "val" and args.dataset_train == args.dataset_val:
-            np.random.seed(1)
-            torch.manual_seed(1)
-            if args.cuda:
-                torch.cuda.manual_seed(1)
-
-            train_prop = args.train_prop
-
-            totalLength = len(test_dataset)
-            _, test_dataset = torch.utils.data.random_split(test_dataset, [int(totalLength * train_prop),
-                                                                        totalLength - int(totalLength * train_prop)])
-
-            np.random.seed(args.seed)
-            torch.manual_seed(args.seed)
-            if args.cuda:
-                torch.cuda.manual_seed(args.seed)
+        test_dataset = grade_dataset.GradeDataset(args.dataset_name,args.dataset_path,mode,imgSize)
 
     if args.val_batch_size == -1:
         args.val_batch_size = int(args.max_batch_size*3.5)
@@ -108,7 +83,9 @@ def addArgs(argreader):
                                   help='The proportion of the dataset to use for validation')
 
     argreader.parser.add_argument('--dataset_path', type=str, metavar='N')
-                                  
+
+    argreader.parser.add_argument('--dataset_name', type=str, metavar='N')
+                              
     argreader.parser.add_argument('--shuffle_test_set', type=args.str2bool, metavar='BOOL',
                                   help='To shuffle the test set.')
 

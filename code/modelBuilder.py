@@ -15,6 +15,8 @@ from torch.autograd import Function
 from load_data import get_img_size,get_class_nb
 import utils 
 
+from enums import Tasks
+
 def buildFeatModel(featModelName, **kwargs):
     ''' Build a visual feature model
 
@@ -262,16 +264,19 @@ class DINOHead(torch.nn.Module):
     
 class LinearSecondModel(SecondModel):
 
-    def __init__(self, nbFeat, nb_class_dic, dropout,bias=True,one_feat_per_head=False,ssl=False,regression=False,regression_to_classif=False,init_range_for_reg_to_class_centroid=20,keys=["exp","icm","te"],args=None):
+    def __init__(self, nbFeat, nb_class_dic, dropout,bias=True,one_feat_per_head=False,ssl=False,regression=False,regression_to_classif=False,init_range_for_reg_to_class_centroid=20,tasks=None,args=None):
 
         super().__init__(nbFeat, 1)
         self.dropout = nn.Dropout(p=dropout)
         
-        self.keys = np.array(keys)
+        if tasks is None:
+            tasks = [task.value for task in Tasks]
+
+        self.tasks = np.array(tasks)
 
         self.regression_to_classif = regression_to_classif
         init_range = init_range_for_reg_to_class_centroid
-        for task in self.keys:
+        for task in self.tasks:
             if regression_to_classif:
                 layer = nn.Linear(self.nbFeat, 1,bias=bias)
                 setattr(self,"lin_lay_"+task,layer)
@@ -302,7 +307,7 @@ class LinearSecondModel(SecondModel):
 
     def get_output(self,x):
         output_dic = {}
-        for i,key in enumerate(self.keys):
+        for i,key in enumerate(self.tasks):
 
             x_ = self.get_feat(x,i)
             if self.regression_to_classif:
@@ -328,23 +333,23 @@ class LinearSecondModel(SecondModel):
                 x = self.norm(x)
                 x = self.conv1x1_feat_per_head(x)
                 x = self.act(x)
-                x = x.reshape(x.shape[0],len(self.keys),x.shape[1]//len(self.keys),x.shape[2],x.shape[3])
+                x = x.reshape(x.shape[0],len(self.tasks),x.shape[1]//len(self.tasks),x.shape[2],x.shape[3])
 
                 retDict["feat_pooled_per_head"] = x
-                for i,key in enumerate(self.keys):
+                for i,key in enumerate(self.tasks):
                     retDict["feat_"+key] = x[:,i]
 
                 x = x.mean(dim=(3,4))
                 x = x.view(x.shape[0],-1)
                 x = self.dropout(x)
-                x = x.view(x.shape[0],len(self.keys),x.shape[1]//len(self.keys))
+                x = x.view(x.shape[0],len(self.tasks),x.shape[1]//len(self.tasks))
 
             else:
                 x = retDict["feat_pooled"]
                 x = self.dropout(x)
 
                 if self.regression_to_classif:
-                    for key in self.keys:  
+                    for key in self.tasks:  
                         retDict["centroid_"+key] = getattr(self,"centroids_"+key)
             
             output_dic = self.get_output(x)
@@ -426,7 +431,8 @@ def netBuilder(args,gpu=None):
     ############### Second Model #######################
     if args.second_mod == "linear":
         nb_class_dic = utils.make_class_nb_dic(args)
-        secondModel = LinearSecondModel(nbFeat, nb_class_dic, args.dropout,args.lin_lay_bias,args.one_feat_per_head,args.ssl,args.regression,args.regression_to_classif,args.init_range_for_reg_to_class_centroid,args=args)
+        tasks = [task.value for task in Tasks]
+        secondModel = LinearSecondModel(nbFeat, nb_class_dic, args.dropout,args.lin_lay_bias,args.one_feat_per_head,args.ssl,args.regression,args.regression_to_classif,args.init_range_for_reg_to_class_centroid,tasks,args=args)
     else:
         raise ValueError("Unknown second model type : ", args.second_mod)
 

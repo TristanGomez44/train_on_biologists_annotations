@@ -281,7 +281,7 @@ def evaluation(model, loader, epoch, args, mode="val",**kwargs):
     if args.ssl:
         return metrDict["loss"]
     else:
-        return metrDict["Accuracy_exp"]
+        return metrDict["Accuracy_"+("EXP" if args.task_to_train == "all" else args.task_to_train)] 
 
 def writeSummaries(metrDict, valid_example_nb_dic,total_example_nb, epoch, mode, model_id, exp_id):
  
@@ -640,11 +640,10 @@ def main(argv=None):
 
     args = argreader.args
 
-    if os.path.exists("/home/E144069X"):
-        print("Debugging on laptop.")
-        args.debug = True
-        args.batch_size=2
-        args.val_batch_size=2
+    if args.debug:
+        args.epochs = 1
+        args.batch_size = 2
+        args.val_batch_size = 2
 
     args.cuda = args.cuda and torch.cuda.is_available()
 
