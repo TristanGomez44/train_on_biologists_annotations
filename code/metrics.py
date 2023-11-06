@@ -10,6 +10,7 @@ from sklearn.metrics import roc_auc_score
 from sklearn import svm
  
 from utils import remove_no_annot
+from grade_dataset import NO_ANNOT
 
 #Keys for ECE metric 
 COUNT = 'count'
@@ -86,7 +87,7 @@ def compAccuracy(output,target,class_nb=None):
     else:
         pred = output.argmax(dim=-1)
     
-    acc = (pred == target).float().sum()
+    acc = (pred == target)[target!=NO_ANNOT].float().sum()
     return acc.item()
 
 def compSparsity(norm):

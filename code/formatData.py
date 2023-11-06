@@ -73,6 +73,9 @@ def aggregate_annotations(new_path_to_annot_file):
 
 	return aggr_annot
 
+def get_header():
+	return ["image_name"]+[task.value for task in Tasks]
+
 def format_annotations(path_to_annot_file,dest_folder):
 	annot_file_name = os.path.basename(path_to_annot_file)
 	new_path_to_annot_file = os.path.join(dest_folder,annot_file_name)
@@ -80,8 +83,9 @@ def format_annotations(path_to_annot_file,dest_folder):
 	new_path_to_annot_file = convert_db_to_csv(new_path_to_annot_file)	
 	aggr_annot = aggregate_annotations(new_path_to_annot_file)
 	path_to_aggr_annot_csv = os.path.join(dest_folder,"aggregated_annotations.csv")
-	np.savetxt(path_to_aggr_annot_csv,aggr_annot,"%s")
-	return aggr_annot
+	header = get_header()
+	np.savetxt(path_to_aggr_annot_csv,aggr_annot,header=" ".join(header),fmt="%s",comments='')
+	return aggr_annot,header
 
 def format_dl4ivf_dataset(path_to_zip,path_to_annot_file,dest_folder,train_prop,val_prop,fold_name="blastocyst_dataset",json_file_name="splits.json",seed=0):
 
@@ -99,10 +103,9 @@ def format_dl4ivf_dataset(path_to_zip,path_to_annot_file,dest_folder,train_prop,
 	if not os.path.exists(new_img_folder_path):
 		os.rename(img_folder_path,new_img_folder_path)
 
-	aggr_annot = format_annotations(path_to_annot_file,dest_folder)
-	headers = ["image_name"]+[task.value for task in Tasks]
+	aggr_annot,header = format_annotations(path_to_annot_file,dest_folder)
 
-	splits = make_split(aggr_annot,headers,train_prop,val_prop,seed)
+	splits = make_split(aggr_annot,header,train_prop,val_prop,seed)
 
 	json_file_path = os.path.join(dest_folder,json_file_name)
 	with open(json_file_path, 'w') as fp:

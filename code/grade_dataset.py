@@ -1,4 +1,5 @@
 import os
+import math 
 
 from PIL import Image
 import numpy as np
@@ -21,9 +22,13 @@ def preproc_annot_dl4ivf(x,task):
 
     annot_enum = annot_enum_dic[task]
 
-    assert x in [annot.value for annot in annot_enum],f"{x}, {task}, {annot_enum}"
+    if type(x) is str or not math.isnan(x):
+        assert x in [annot.value for annot in annot_enum],f"{x}, {task}, {annot_enum}"
+    
+        return list(annot_enum).index(annot_enum(x))
 
-    return list(annot_enum).index(annot_enum(x))
+    else:
+        return NO_ANNOT
 
 def make_annot_dict(dataset_name,dataset_path,mode):
 
@@ -50,15 +55,14 @@ def make_dl4ivf_annot_dict(dataset_path,mode,split_file_name="splits.json",annot
     split = get_videos_in_split(dataset_path,mode,split_file_name)
 
     annot_file_path = os.path.join(dataset_path,annot_file_name)
-    annot_csv = pd.read_csv(annot_file_path)
+    annot_csv = pd.read_csv(annot_file_path,delimiter=" ")
     annot_dict = {}
-    
+ 
     def fill_dict(x):
         if x["image_name"] in split:
             annot_dict[x["image_name"]] = {task.value:preproc_annot_dl4ivf(x[task.value],task) for task in Tasks}
 
     annot_csv.apply(fill_dict,axis=1)
-    
     return annot_dict
 
 def make_multicenter_annot_dict(dataset_path,mode,split_file_name="splits.json",train_annot_file_name="Gardner_train_silver.csv",eval_annot_file_name="Gardner_test_gold_onlyGardnerScores.csv"):
@@ -154,7 +158,7 @@ if __name__ == "__main__":
 
     for dataset in Datasets:
         print(dataset.value)
-        
+                
         imgs_list = []
 
         for mode in ["train","val","test"]:
