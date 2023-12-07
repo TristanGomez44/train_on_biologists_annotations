@@ -101,18 +101,18 @@ def make_multicenter_annot_dict(dataset_path,mode,split_file_name="splits.json",
 
     return dic 
 
-def get_transform(size,mode='train'):
+def get_transform(size,mode='train',random_transf=True):
 
     if type(size) == int:
         kwargs={"size":(size,size)}
     else:
         kwargs={"size":(size[0], size[1])}
 
-    if mode == 'train':
+    if mode == 'train' and random_transf:
         transf = [transforms.RandomResizedCrop(size,scale=(0.9,1),ratio=(1,1)),
                     transforms.RandomVerticalFlip(0.5),
-                    transforms.RandomHorizontalFlip(0.5),
-                    transforms.RandomRotation(degrees=180)]
+                    transforms.RandomHorizontalFlip(0.5)]#,
+                    #transforms.RandomRotation(degrees=180)]
     else:
         transf = [transforms.Resize(**kwargs)]
 
@@ -125,7 +125,7 @@ def get_transform(size,mode='train'):
 
 class GradeDataset(Dataset):
 
-    def __init__(self,dataset_name,dataset_path,mode,size):
+    def __init__(self,dataset_name,dataset_path,mode,size,random_transf=True):
 
         self.mode = mode
         self.annot_dict = make_annot_dict(dataset_name,dataset_path,mode)
@@ -133,7 +133,7 @@ class GradeDataset(Dataset):
         self.image_list = sorted(self.annot_dict.keys())
 
         self.image_fold = os.path.join(dataset_path,"Images")
-        self.transf = get_transform(size,mode=mode)
+        self.transf = get_transform(size,mode=mode,random_transf=random_transf)
 
     def __getitem__(self, item):
 

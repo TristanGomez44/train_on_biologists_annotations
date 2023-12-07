@@ -26,14 +26,15 @@ def get_img_size(args):
         imgSize = 256,192
     return imgSize
 
-def buildTrainLoader(args,shuffle=True):
+def buildTrainLoader(args,shuffle=True,random_transf=True):
 
     imgSize = get_img_size(args)
 
     if args.ssl:
         train_dataset = ssl_dataset.SSLDataset(args.dataset_path,"train",args.train_prop,args.val_prop,imgSize,augment=args.ssl_data_augment)
     else:    
-        train_dataset = grade_dataset.GradeDataset(args.dataset_name,args.dataset_path,"train",imgSize)
+
+        train_dataset = grade_dataset.GradeDataset(args.dataset_name,args.dataset_path,"train",imgSize,random_transf=random_transf)
 
         np.random.seed(1)
         torch.manual_seed(1)
@@ -50,13 +51,13 @@ def buildTrainLoader(args,shuffle=True):
 
     return trainLoader, train_dataset
 
-def buildTestLoader(args, mode):
+def buildTestLoader(args, mode,random_transf=False):
     imgSize = get_img_size(args)
     
     if args.ssl:
         test_dataset = ssl_dataset.SSLDataset(args.dataset_path,mode,args.train_prop,args.val_prop,imgSize,augment=args.ssl_data_augment)
     else:
-        test_dataset = grade_dataset.GradeDataset(args.dataset_name,args.dataset_path,mode,imgSize)
+        test_dataset = grade_dataset.GradeDataset(args.dataset_name,args.dataset_path,mode,imgSize,random_transf=random_transf)
 
     if args.val_batch_size == -1:
         args.val_batch_size = int(args.max_batch_size*3.5)

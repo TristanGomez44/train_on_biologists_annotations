@@ -151,10 +151,61 @@ def self_supervised_step(model,batch,args,kwargs,is_train=True):
     output_dict = {"feat":student_dict["feat1"]}       
     return model,loss_dic,metDictSample,output_dict
 
-def supervised_step(model,batch,kwargs,valid_example_nb_dic,is_train=True,class_nb_dic=None):
+def compute_norm(feat):
+    return torch.sqrt(torch.pow(feat.sum(dim=1,keepdim=True),2))
+
+def min_max_norm(tensor):
+    tensor_min,tensor_max = tensor,tensor
+    for i in [1,2,3]:
+        tensor_min = tensor.min(dim=i,keepdim=True)[0]
+        tensor_max = tensor.max(dim=i,keepdim=True)[0]
+    return (tensor-tensor_min)/(tensor_max-tensor_min)
+
+def crop_to_attention(data,output_dict,threshold=0.25):
+
+    if not "attMaps" in output_dict:
+        attMaps = compute_norm(output_dict["feat"])
+    else:
+        attMaps = output_dict["attMaps"].mean(dim=1,keepdim=True)
+
+    attMaps = min_max_norm(attMaps)
+
+    utils.save_image(torch.nn.functional.interpolate(attMaps,size=(256,256)),"../vis/data_attMaps.png")
+
+    masks = attMaps>threshold
+
+    print(masks.float().mean())
+
+    orig_size = data.size()[2:]
+
+    ratio = orig_size[-1]//attMaps.size(-1)
+
+    cropped_img_list = []
+    for k in range(len(masks)):
+
+        salient_area_coords = torch.argwhere(masks[k,0]>0)
+
+        min_i = salient_area_coords[:,0].min()*ratio
+        max_i = salient_area_coords[:,0].max()*ratio
+        min_j = salient_area_coords[:,1].min()*ratio
+        max_j = salient_area_coords[:,1].max()*ratio
+
+        print(min_i.item(),max_i.item(),min_j.item(),max_j.item())
+
+        cropped_img = data[k:k+1,:,min_i:max_i,min_j:max_j]
+        print(cropped_img.shape,orig_size)
+        cropped_img = torch.nn.functional.interpolate(cropped_img,size=orig_size)
+        cropped_img_list.append(cropped_img)
+
+    cropped_img_batch = torch.cat(cropped_img_list,dim=0)
+
+    return cropped_img_batch
+
+def supervised_step(model,batch,kwargs,valid_example_nb_dic,is_train=True,class_nb_dic=None,train_on_master_masks=False):
     data, target_dic = batch[0], batch[1]
     valid_example_nb_dic = increment_valid_example_dic(target_dic,valid_example_nb_dic)
-    output_dict = model(data)
+
+    output_dict = {}
 
     if kwargs["master_net"] is not None:
         with torch.no_grad():
@@ -162,6 +213,14 @@ def supervised_step(model,batch,kwargs,valid_example_nb_dic,is_train=True,class_
             for key in mast_output_dict:
                 if "output" in key:
                     output_dict["master_"+key] = mast_output_dict[key]
+
+            if train_on_master_masks:
+                utils.save_image(data,"../vis/data_orig.png")
+                data = crop_to_attention(data,mast_output_dict)
+                utils.save_image(data,"../vis/data_cropped.png")
+                sys.exit(0)
+
+    output_dict.update(model(data))
 
     loss_dic = compute_loss(kwargs["loss_func"],[target_dic,output_dict],backpropagate=is_train)
     metDictSample = metrics.compute_metrics(target_dic,output_dict,class_nb_dic=class_nb_dic)
@@ -200,7 +259,7 @@ def training_epoch(model, optim, loader, epoch, args, **kwargs):
         if args.ssl:
             model,loss_dic,metDictSample,output_dict = self_supervised_step(model,batch,args,kwargs,is_train=True)
         else:
-            model,loss_dic,metDictSample,output_dict,valid_example_nb_dic = supervised_step(model,batch,kwargs,valid_example_nb_dic,is_train=True,class_nb_dic=kwargs["class_nb_dic"])
+            model,loss_dic,metDictSample,output_dict,valid_example_nb_dic = supervised_step(model,batch,kwargs,valid_example_nb_dic,is_train=True,class_nb_dic=kwargs["class_nb_dic"],train_on_master_masks=args.train_on_master_masks)
 
         if args.log_gradient_norm_frequ is not None and batch_idx%args.log_gradient_norm_frequ==0:
             log_gradient_norms(args.exp_id,args.model_id,model,epoch,batch_idx)
@@ -255,7 +314,7 @@ def evaluation(model, loader, epoch, args, mode="val",**kwargs):
         if args.ssl:
             model,loss_dic,metDictSample,output_dict = self_supervised_step(model,batch,args,kwargs,is_train=False)
         else:
-            model,loss_dic,metDictSample,output_dict,valid_example_nb_dic = supervised_step(model,batch,kwargs,valid_example_nb_dic,is_train=False,class_nb_dic=kwargs["class_nb_dic"])
+            model,loss_dic,metDictSample,output_dict,valid_example_nb_dic = supervised_step(model,batch,kwargs,valid_example_nb_dic,is_train=False,class_nb_dic=kwargs["class_nb_dic"],train_on_master_masks=args.train_on_master_masks)
 
         # Metrics
         metDictSample = metrics.add_losses_to_dic(metDictSample,loss_dic)
@@ -284,7 +343,7 @@ def evaluation(model, loader, epoch, args, mode="val",**kwargs):
         return metrDict["Accuracy_"+("EXP" if args.task_to_train == "all" else args.task_to_train)] 
 
 def writeSummaries(metrDict, valid_example_nb_dic,total_example_nb, epoch, mode, model_id, exp_id):
- 
+
     for metric in metrDict.keys():
         if metric == "loss":
             metrDict[metric] /= total_example_nb
@@ -342,8 +401,8 @@ def addOptimArgs(argreader):
     argreader.parser.add_argument('--optim', type=str, metavar='OPTIM',
                                   help='the optimizer to use (default: \'SGD\')')
 
-    argreader.parser.add_argument('--bil_clus_soft_sched', type=str2bool, metavar='BOOL',
-                                  help='Added schedule to increase temperature of the softmax of the bilinear cluster model.')
+    argreader.parser.add_argument('--train_on_master_masks', type=str2bool, metavar='BOOL',
+                                  help='When training with a master, crop student input to the area focused on by the master.')
 
     return argreader
 
