@@ -91,7 +91,7 @@ def all_cat_var_dic(var_dic,resDict,mode,save_output_during_validation=False):
 
 def cat_var_dic(var_dic,tensor_name,tensor):
     
-    assert tensor.ndim in [2,4,5]
+    assert tensor.ndim in [2,3,4,5]
 
     if tensor.ndim >= 4:
         preproc_func = preproc_maps 
