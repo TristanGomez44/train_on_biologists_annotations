@@ -136,46 +136,6 @@ def buildImageAttention(inFeat,outChan=1):
     attention.append(resnet.conv1x1(inFeat, outChan))
     return nn.Sequential(*attention)
 
-def representativeVectors(x,nbVec,no_refine=False,randVec=False):
-
-    xOrigShape = x.size()
-
-    x = x.permute(0,2,3,1).reshape(x.size(0),x.size(2)*x.size(3),x.size(1))
-    norm = torch.sqrt(torch.pow(x,2).sum(dim=-1)) + 0.00001
-
-    if randVec:
-        raw_reprVec_score = torch.rand(norm.size()).to(norm.device)
-    else:
-        raw_reprVec_score = norm.clone()
-
-    repreVecList = []
-    simList = []
-    for _ in range(nbVec):
-        _,ind = raw_reprVec_score.max(dim=1,keepdim=True)
-        raw_reprVec_norm = norm[torch.arange(x.size(0)).unsqueeze(1),ind]
-        raw_reprVec = x[torch.arange(x.size(0)).unsqueeze(1),ind]
-        sim = (x*raw_reprVec).sum(dim=-1)/(norm*raw_reprVec_norm)
-
-        simNorm = sim/sim.sum(dim=1,keepdim=True)
-
-        reprVec = (x*simNorm.unsqueeze(-1)).sum(dim=1)
-
-        if not no_refine:
-            repreVecList.append(reprVec)
-        else:
-            repreVecList.append(raw_reprVec[:,0])
-
-        if randVec:
-            raw_reprVec_score = torch.rand(norm.size()).to(norm.device)
-        else:
-            raw_reprVec_score = (1-sim)*raw_reprVec_score
-
-        simReshaped = simNorm.reshape(sim.size(0),1,xOrigShape[2],xOrigShape[3])
-
-        simList.append(simReshaped)
-
-    return repreVecList,simList
-
 class CNN2D_bilinearAttPool(FirstModel):
 
     def __init__(self, featModelName,inFeat=512,nb_parts=3,cluster=False,no_refine=False,rand_vec=False,**kwargs):
@@ -186,14 +146,8 @@ class CNN2D_bilinearAttPool(FirstModel):
         self.nb_parts = nb_parts
         self.cluster = cluster
 
-        if not cluster:
-            self.attention = buildImageAttention(inFeat,nb_parts+1)
-            self.attention_activation = torch.relu
-        else:
-            self.attention = None
-            self.attention_activation = None
-            self.no_refine = no_refine
-            self.rand_vec = rand_vec
+        self.attention = buildImageAttention(inFeat,nb_parts)
+        self.attention_activation = torch.relu
 
     def forward(self, x):
         # N x C x H x L
@@ -202,18 +156,11 @@ class CNN2D_bilinearAttPool(FirstModel):
         retDict = self.featMod(x)
 
         features = retDict["feat"]
-  
-        if not self.cluster:
-            spatialWeights = self.attention_activation(self.attention(features))
-            features_weig = (spatialWeights[:,:self.nb_parts].unsqueeze(2)*features.unsqueeze(1)).reshape(features.size(0),features.size(1)*(spatialWeights.size(1)-1),features.size(2),features.size(3))
-            features_agr = self.avgpool(features_weig)
-            features_agr = features_agr.view(features.size(0), -1)
-        else:
 
-            vecList,simList = representativeVectors(features,self.nb_parts,self.no_refine,self.rand_vec)
-
-            features_agr = torch.cat(vecList,dim=-1)
-            spatialWeights = torch.cat(simList,dim=1)
+        spatialWeights = self.attention_activation(self.attention(features))
+        features_weig = (spatialWeights.unsqueeze(2)*features.unsqueeze(1)).reshape(features.size(0),spatialWeights.size(1),features.size(1),features.size(2),features.size(3))
+        features_agr = self.avgpool(features_weig).squeeze(-1).squeeze(-1)
+        #features_agr = features_agr.view(features.size(0), -1)
 
         retDict["feat_pooled"] = features_agr
         retDict["attMaps"] = spatialWeights
@@ -264,7 +211,7 @@ class DINOHead(torch.nn.Module):
     
 class LinearSecondModel(SecondModel):
 
-    def __init__(self, nbFeat, nb_class_dic, dropout,bias=True,one_feat_per_head=False,ssl=False,regression=False,regression_to_classif=False,init_range_for_reg_to_class_centroid=20,tasks=None,args=None):
+    def __init__(self, nbFeat, nb_class_dic, dropout,bias=True,tasks=None,ssl=False):
 
         super().__init__(nbFeat, 1)
         self.dropout = nn.Dropout(p=dropout)
@@ -274,50 +221,30 @@ class LinearSecondModel(SecondModel):
 
         self.tasks = np.array(tasks)
 
-        self.regression_to_classif = regression_to_classif
-        init_range = init_range_for_reg_to_class_centroid
         for task in self.tasks:
-            if regression_to_classif:
-                layer = nn.Linear(self.nbFeat, 1,bias=bias)
-                setattr(self,"lin_lay_"+task,layer)
-                class_nb = nb_class_dic[task]
-                centroids = 2*(torch.arange(class_nb)/(class_nb-1)-0.5)*init_range
-                centroids = nn.Parameter(centroids,requires_grad=True)
-                setattr(self,"centroids_"+task,centroids)
-
-            else:
-                output_dim = 1 if regression else nb_class_dic[task]
-                layer = nn.Linear(self.nbFeat, output_dim,bias=bias)
-                setattr(self,"lin_lay_"+task,layer)
+            output_dim = nb_class_dic[task]
+            layer = nn.Linear(self.nbFeat, output_dim,bias=bias)
+            setattr(self,"lin_lay_"+task,layer)
  
-        self.one_feat_per_head = one_feat_per_head
-        if self.one_feat_per_head:
-            self.conv1x1_feat_per_head = nn.Conv2d(self.nbFeat, self.nbFeat*3,1,bias=bias)
-            self.act = torch.nn.GELU()
-            ratio = getResnetDownSampleRatio(args)
-            img_size = load_data.get_img_size(args)
-            self.norm = torch.nn.LayerNorm((self.nbFeat,img_size[0]//ratio,img_size[1]//ratio))
-        
         self.ssl = ssl
         if self.ssl:
             self.ssl_head = DINOHead(self.nbFeat)
 
     def get_feat(self,x,key_ind):
-        return x[:,key_ind] if self.one_feat_per_head else x
+        if len(x.size()) == 3:
+            return x[:,key_ind]
+        elif len(x.size()) == 2:
+            return x
+        else:
+            raise ValueError("Unkown size of x",x.size(),". x should have 2 or 3 dimensions.")
 
     def get_output(self,x):
         output_dic = {}
         for i,key in enumerate(self.tasks):
 
             x_ = self.get_feat(x,i)
-            if self.regression_to_classif:
-                scalar_output = getattr(self,"lin_lay_"+key)(x_)
-                centroids = getattr(self,"centroids_"+key)
-                output_dic["scalar_output_"+key] = scalar_output
-                output_dic["output_"+key] = -torch.abs(scalar_output-centroids)
-
-            else:
-                output_dic["output_"+key] = getattr(self,"lin_lay_"+key)(x_)
+  
+            output_dic["output_"+key] = getattr(self,"lin_lay_"+key)(x_)
 
         return output_dic
     
@@ -328,30 +255,8 @@ class LinearSecondModel(SecondModel):
             x = self.ssl_head(x)
             retDict["output"] = x
         else:
-            if self.one_feat_per_head:
-                x = retDict["feat"]
-                x = self.norm(x)
-                x = self.conv1x1_feat_per_head(x)
-                x = self.act(x)
-                x = x.reshape(x.shape[0],len(self.tasks),x.shape[1]//len(self.tasks),x.shape[2],x.shape[3])
-
-                retDict["feat_pooled_per_head"] = x
-                for i,key in enumerate(self.tasks):
-                    retDict["feat_"+key] = x[:,i]
-
-                x = x.mean(dim=(3,4))
-                x = x.view(x.shape[0],-1)
-                x = self.dropout(x)
-                x = x.view(x.shape[0],len(self.tasks),x.shape[1]//len(self.tasks))
-
-            else:
-                x = retDict["feat_pooled"]
-                x = self.dropout(x)
-
-                if self.regression_to_classif:
-                    for key in self.tasks:  
-                        retDict["centroid_"+key] = getattr(self,"centroids_"+key)
-            
+            x = retDict["feat_pooled"]
+            x = self.dropout(x)
             output_dic = self.get_output(x)
             retDict.update(output_dic)
 
@@ -403,36 +308,30 @@ def advNetBuilder(args):
     return adv_mlp
 
 
-def netBuilder(args,gpu=None):
-    ############### Visual Model #######################
+def netBuilder(args):
 
     nbFeat = getResnetFeat(args.first_mod, args.resnet_chan)
 
     if args.resnet_bilinear:
         CNNconst = CNN2D_bilinearAttPool
-        kwargs = {"inFeat":nbFeat,"nb_parts":args.resnet_bil_nb_parts,\
-                    "cluster":args.bil_cluster,
-                    "no_refine":args.bil_cluster_norefine,\
-                    "rand_vec":args.bil_cluster_randvec}
+        att_map_nb = len(Tasks) if args.task_to_train=="all" else 1
 
-        nbFeat *= args.resnet_bil_nb_parts
-
+        kwargs = {"inFeat":nbFeat,"nb_parts":att_map_nb,"strideLay2":args.stride_lay2,"strideLay3":args.stride_lay3,"strideLay4":args.stride_lay4}
     else:
         CNNconst = CNN2D
         if "vit" in args.first_mod:
             kwargs = {"image_size":get_img_size(args)}
         else:
             kwargs = {"chan":args.resnet_chan, "stride":args.resnet_stride,\
-                        "strideLay2":args.stride_lay2,"strideLay3":args.stride_lay3,\
+                        "strideLay2":args.stride_lay2,"strideLay3":args.stride_lay3,
                         "strideLay4":args.stride_lay4} 
         
     firstModel = CNNconst(args.first_mod,**kwargs)
 
-    ############### Second Model #######################
     if args.second_mod == "linear":
         nb_class_dic = utils.make_class_nb_dic(args)
         tasks = [task.value for task in Tasks]
-        secondModel = LinearSecondModel(nbFeat, nb_class_dic, args.dropout,args.lin_lay_bias,args.one_feat_per_head,args.ssl,args.regression,args.regression_to_classif,args.init_range_for_reg_to_class_centroid,tasks,args=args)
+        secondModel = LinearSecondModel(nbFeat, nb_class_dic, args.dropout,args.lin_lay_bias,tasks,args.ssl)
     else:
         raise ValueError("Unknown second model type : ", args.second_mod)
 

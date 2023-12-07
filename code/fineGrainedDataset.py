@@ -34,6 +34,7 @@ class FineGrainedDataset(Dataset):
         self.image_path = {}
         self.image_label = {}
         self.root = "../data/"+root
+
         self.phase = phase
         self.resize = resize
         self.image_id = []
@@ -82,31 +83,9 @@ class FineGrainedDataset(Dataset):
         image_id = self.image_id[item]
         image = Image.open(self.image_path[image_id]).convert('RGB')  # (C, H, W)
 
-        # image
         image = self.transform(image)
 
-        if self.other_image_batch:
-
-            candidate_class_labels = [i for i in range(self.num_classes)]
-            candidate_class_labels.remove(self.image_label[image_id])
-            
-            rand_ind = np.random.randint(0,self.num_classes-1,size=(1,))[0]
-            class_to_sample_from = candidate_class_labels[rand_ind]
-
-            candidate_img_list = self.class_to_id[class_to_sample_from]
-            rand_ind = np.random.randint(0,len(candidate_img_list),size=(1,))[0]
-            img_to_sample_id = candidate_img_list[rand_ind]
-            
-            other_image = Image.open(self.image_path[img_to_sample_id]).convert('RGB')  # (C, H, W)
-            other_image = self.transform(other_image)
-
-            assert self.image_label[image_id] != class_to_sample_from
-
-            return image,self.image_label[image_id],other_image 
-        
-        else:
-
-            return image, self.image_label[image_id]
+        return image, self.image_label[image_id]
 
     def __len__(self):
         return len(self.image_id)
