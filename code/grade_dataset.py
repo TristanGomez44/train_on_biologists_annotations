@@ -1,6 +1,9 @@
 import os
 import math 
+import json 
+from collections import defaultdict
 
+import torch
 from PIL import Image
 import numpy as np
 import pandas as pd
@@ -8,7 +11,6 @@ import torchvision.transforms as transforms
 from torch.utils.data import Dataset
 
 from enums import annot_enum_dic,Datasets,Tasks
-import json 
 
 NO_ANNOT = -1
 
@@ -19,18 +21,10 @@ def preproc_annot_multicenter(x):
         return NO_ANNOT
 
 def preproc_annot_dl4ivf(x,task):
-
     annot_enum = annot_enum_dic[task]
+    return list(annot_enum).index(annot_enum(x))
 
-    if type(x) is str or not math.isnan(x):
-        assert x in [annot.value for annot in annot_enum],f"{x}, {task}, {annot_enum}"
-    
-        return list(annot_enum).index(annot_enum(x))
-
-    else:
-        return NO_ANNOT
-
-def make_annot_dict(dataset_name,dataset_path,mode):
+def make_annot_dict(dataset_name,dataset_path,mode,distr_learn):
 
     datasets_names = set(dataset.value for dataset in Datasets)
     assert dataset_name in datasets_names,f"choose one dataset among {Datasets}"
@@ -40,7 +34,7 @@ def make_annot_dict(dataset_name,dataset_path,mode):
     else:
         make_annot_dic_func = make_dl4ivf_annot_dict
 
-    annot_dict = make_annot_dic_func(dataset_path,mode)
+    annot_dict = make_annot_dic_func(dataset_path,mode,distr_learn=distr_learn)
 
     return annot_dict
 
@@ -50,22 +44,40 @@ def get_videos_in_split(dataset_path,mode,split_file_name):
         splits = json.load(fp)
     return splits[mode]   
 
-def make_dl4ivf_annot_dict(dataset_path,mode,split_file_name="splits.json",annot_file_name="aggregated_annotations.csv"):
+def make_dl4ivf_annot_dict(dataset_path,mode,split_file_name="splits.json",annot_file_name="aggregated_annotations.csv",distr_learn=False):
 
     split = get_videos_in_split(dataset_path,mode,split_file_name)
 
     annot_file_path = os.path.join(dataset_path,annot_file_name)
     annot_csv = pd.read_csv(annot_file_path,delimiter=" ")
-    annot_dict = {}
- 
-    def fill_dict(x):
-        if x["image_name"] in split:
-            annot_dict[x["image_name"]] = {task.value:preproc_annot_dl4ivf(x[task.value],task) for task in Tasks}
 
-    annot_csv.apply(fill_dict,axis=1)
+    if not distr_learn:
+        annot_dict = {}
+        def fill_dict(x):
+            if x["image_name"] in split:
+                annot_dict[x["image_name"]] = {task.value:preproc_annot_dl4ivf(x[task.value],task) for task in Tasks}
+
+        annot_csv.apply(fill_dict,axis=1)
+    else:
+        annot_dict = defaultdict(lambda:defaultdict(lambda:{}))
+
+        for task in Tasks:
+
+            possible_values = list(annot_enum_dic[task])
+            def fill_dict(x):
+                if x["image_name"] in split:
+                    values = torch.tensor([x[value.value] for value in possible_values]).int()
+                    annot_dict[x["image_name"]][task.value] = values/values.sum()
+
+            distr_annot_csv = pd.read_csv(annot_file_path.replace(".csv","_"+task.value+".csv"),delimiter=" ")
+
+            distr_annot_csv.apply(fill_dict,axis=1)
+            
     return annot_dict
 
-def make_multicenter_annot_dict(dataset_path,mode,split_file_name="splits.json",train_annot_file_name="Gardner_train_silver.csv",eval_annot_file_name="Gardner_test_gold_onlyGardnerScores.csv"):
+def make_multicenter_annot_dict(dataset_path,mode,split_file_name="splits.json",train_annot_file_name="Gardner_train_silver.csv",eval_annot_file_name="Gardner_test_gold_onlyGardnerScores.csv",distr_learn=None):
+
+    assert distr_learn is None,"Cannot use distribution learning on this dataset."
 
     split = get_videos_in_split(dataset_path,mode,split_file_name)
 
@@ -125,10 +137,10 @@ def get_transform(size,mode='train',random_transf=True):
 
 class GradeDataset(Dataset):
 
-    def __init__(self,dataset_name,dataset_path,mode,size,random_transf=True):
+    def __init__(self,dataset_name,dataset_path,mode,size,random_transf=True,distr_learn=False):
 
         self.mode = mode
-        self.annot_dict = make_annot_dict(dataset_name,dataset_path,mode)
+        self.annot_dict = make_annot_dict(dataset_name,dataset_path,mode,distr_learn)
 
         self.image_list = sorted(self.annot_dict.keys())
 

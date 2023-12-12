@@ -10,21 +10,25 @@ class Tasks(enum.Enum):
     EXP = "EXP"
 
 class EXP_Annot(enum.Enum):
-    one = 1
-    two = 2
-    three = 3
-    four = 4
-    five = 5
-    six = 6
+    ONE = 1
+    TWO = 2
+    THREE = 3
+    FOUR = 4
+    FIVE = 5
+    SIX = 6
+    NULL = "Null"
+
 
 class ICM_Annot(enum.Enum):
     A = "A"
     B = "B"
     C = "C"
+    NULL = "Null"
 
 class TE_Annot(enum.Enum):
     A = "A"
     B = "B"
     C = "C"
+    NULL = "Null"
 
 annot_enum_dic = {Tasks.EXP:EXP_Annot,Tasks.ICM:ICM_Annot,Tasks.TE:TE_Annot}

@@ -17,6 +17,12 @@ case $1 in
   "bilRed2_r50_all_moreannot")
     python trainVal.py -c grade_dl4ivf.config --model_id bilRed2_r50_all_moreannot --first_mod resnet50 --big_images True --batch_size 32 --val_batch_size 215 --start_mode scratch --task_to_train all --resnet_bilinear True --bil_cluster False $2
     ;;
+  "bilRed2_r50_all_moreannot_null")
+    python trainVal.py -c grade_dl4ivf.config --model_id bilRed2_r50_all_moreannot_null --first_mod resnet50 --big_images True --batch_size 32 --val_batch_size 215 --start_mode scratch --task_to_train all --resnet_bilinear True --bil_cluster False $2
+    ;;
+  "bilRed2_r50_all_moreannot_null_distr")
+    python trainVal.py -c grade_dl4ivf.config --model_id bilRed2_r50_all_moreannot_null_distr --first_mod resnet50 --big_images True --batch_size 32 --val_batch_size 215 --start_mode scratch --task_to_train all --resnet_bilinear True --bil_cluster False --distribution_learning True $2
+    ;;
   "noneRed2_r50_multicenter")
     python trainVal.py -c grade_multicenter.config --model_id noneRed2_r50 --first_mod resnet50 --big_images True --batch_size 64 --val_batch_size 512 --start_mode scratch $2
     ;;

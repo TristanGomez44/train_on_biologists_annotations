@@ -23,8 +23,11 @@ class SupervisedLoss(torch.nn.Module):
         self.map_sim_term_weight= args.map_sim_term_weight
         print(args.map_sim_term_weight)
 
+        self.distribution_learning = args.distribution_learning
+        print(self.distribution_learning)
+
     def forward(self,target_dic,output_dict):
-        return supervised_loss(target_dic, output_dict,self.regression,self.class_nb_targ_dic,self.plcc_weight,self.rank_weight,self.task_to_train,map_sim_term_weight=self.map_sim_term_weight)
+        return supervised_loss(target_dic, output_dict,self.regression,self.class_nb_targ_dic,self.plcc_weight,self.rank_weight,self.task_to_train,map_sim_term_weight=self.map_sim_term_weight,distr_learn=self.distribution_learning)
 
 def plcc_loss(y_pred, y):
     y_pred = y_pred.squeeze(1)
@@ -62,19 +65,15 @@ def feat_norm(feat_maps):
     norm = norm/(norm_max-norm_min)
     return norm
 
-def supervised_loss(target_dic, output_dict,regression,class_nb_targ_dic,plcc_weight,rank_weight,task_to_train,kl_temp=1,kl_interp=0.5,map_sim_term_weight=0):
+def supervised_loss(target_dic, output_dict,regression,class_nb_targ_dic,plcc_weight,rank_weight,task_to_train,kl_temp=1,kl_interp=0.5,map_sim_term_weight=0,distr_learn=False):
     loss_dic = {}
 
     loss = 0
 
-    annot_nb_list = [target_dic[key] != NO_ANNOT for key in target_dic]
-    annot_nb_list = torch.stack(annot_nb_list,axis=0).sum(axis=0)
-
     for target_name,target in target_dic.items():
 
         if task_to_train=="all" or target_name==task_to_train:
-            annot_nb_list_onlyannot = _remove_no_annot(annot_nb_list,target)
-    
+
             if "master_output_"+target_name in output_dict:
                 output = output_dict["output_"+target_name]
                 master_output = output_dict["master_output_"+target_name]
@@ -92,10 +91,13 @@ def supervised_loss(target_dic, output_dict,regression,class_nb_targ_dic,plcc_we
                     class_nb = class_nb_targ_dic[target_name]
                     sub_loss = regression_loss(output,target,class_nb,plcc_weight,rank_weight)
                 else:
-                    sub_loss = F.cross_entropy(output, target,reduction="none")
+                    if distr_learn:
+                        sub_loss =  F.kl_div(F.log_softmax(output,dim=-1),target,reduction="none")
+                    else:
+                        sub_loss = F.cross_entropy(output, target,reduction="none")
             
                 loss_dic[f"loss_{target_name}"] = sub_loss.data.sum().unsqueeze(0)
-                loss += (sub_loss/annot_nb_list_onlyannot).sum()
+                loss += sub_loss.sum()
 
     if map_sim_term_weight>0:
         icm_map,te_map,exp_map = feat_norm(output_dict["feat_icm"]),feat_norm(output_dict["feat_te"]),feat_norm(output_dict["feat_exp"])

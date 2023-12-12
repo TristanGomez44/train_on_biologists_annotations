@@ -99,14 +99,6 @@ def optim_step(model,optim,acc_nb):
 
     return model,optim,accumulated_size,acc_nb
 
-def increment_valid_example_dic(target_dic,valid_example_nb_dic):
-    for key in target_dic:
-        if not key in valid_example_nb_dic:
-            valid_example_nb_dic[key] = 0
-        target = target_dic[key]
-        valid_example_nb_dic[key] += len(_remove_no_annot(target,reference=target))
-    return valid_example_nb_dic
-
 def add_suff(dic,suff):
     new_dic = {}
     for key in dic:
@@ -201,9 +193,8 @@ def crop_to_attention(data,output_dict,threshold=0.25):
 
     return cropped_img_batch
 
-def supervised_step(model,batch,kwargs,valid_example_nb_dic,is_train=True,class_nb_dic=None,train_on_master_masks=False):
+def supervised_step(model,batch,kwargs,is_train=True,class_nb_dic=None):
     data, target_dic = batch[0], batch[1]
-    valid_example_nb_dic = increment_valid_example_dic(target_dic,valid_example_nb_dic)
 
     output_dict = {}
 
@@ -214,17 +205,11 @@ def supervised_step(model,batch,kwargs,valid_example_nb_dic,is_train=True,class_
                 if "output" in key:
                     output_dict["master_"+key] = mast_output_dict[key]
 
-            if train_on_master_masks:
-                utils.save_image(data,"../vis/data_orig.png")
-                data = crop_to_attention(data,mast_output_dict)
-                utils.save_image(data,"../vis/data_cropped.png")
-                sys.exit(0)
-
     output_dict.update(model(data))
 
     loss_dic = compute_loss(kwargs["loss_func"],[target_dic,output_dict],backpropagate=is_train)
     metDictSample = metrics.compute_metrics(target_dic,output_dict,class_nb_dic=class_nb_dic)
-    return model,loss_dic,metDictSample,output_dict,valid_example_nb_dic
+    return model,loss_dic,metDictSample,output_dict
 
 def training_epoch(model, optim, loader, epoch, args, **kwargs):
 
@@ -237,7 +222,6 @@ def training_epoch(model, optim, loader, epoch, args, **kwargs):
 
     accumulated_size = 0
     acc_nb = 0
-    valid_example_nb_dic = {}
     total_example_nb = 0 
 
     var_dic = {}
@@ -259,7 +243,7 @@ def training_epoch(model, optim, loader, epoch, args, **kwargs):
         if args.ssl:
             model,loss_dic,metDictSample,output_dict = self_supervised_step(model,batch,args,kwargs,is_train=True)
         else:
-            model,loss_dic,metDictSample,output_dict,valid_example_nb_dic = supervised_step(model,batch,kwargs,valid_example_nb_dic,is_train=True,class_nb_dic=kwargs["class_nb_dic"],train_on_master_masks=args.train_on_master_masks)
+            model,loss_dic,metDictSample,output_dict = supervised_step(model,batch,kwargs,is_train=True,class_nb_dic=kwargs["class_nb_dic"])
 
         if args.log_gradient_norm_frequ is not None and batch_idx%args.log_gradient_norm_frequ==0:
             log_gradient_norms(args.exp_id,args.model_id,model,epoch,batch_idx)
@@ -283,7 +267,7 @@ def training_epoch(model, optim, loader, epoch, args, **kwargs):
     else:
         optuna_suff = ""
 
-    writeSummaries(metrDict, valid_example_nb_dic,total_example_nb,epoch, "train", args.model_id+optuna_suff, args.exp_id)
+    writeSummaries(metrDict,total_example_nb,epoch, "train", args.model_id+optuna_suff, args.exp_id)
 
     return metrDict
 
@@ -296,7 +280,6 @@ def evaluation(model, loader, epoch, args, mode="val",**kwargs):
     metrDict = None
     validBatch = 0
 
-    valid_example_nb_dic = {}
     total_example_nb = 0  
 
     var_dic = {}
@@ -314,7 +297,7 @@ def evaluation(model, loader, epoch, args, mode="val",**kwargs):
         if args.ssl:
             model,loss_dic,metDictSample,output_dict = self_supervised_step(model,batch,args,kwargs,is_train=False)
         else:
-            model,loss_dic,metDictSample,output_dict,valid_example_nb_dic = supervised_step(model,batch,kwargs,valid_example_nb_dic,is_train=False,class_nb_dic=kwargs["class_nb_dic"],train_on_master_masks=args.train_on_master_masks)
+            model,loss_dic,metDictSample,output_dict = supervised_step(model,batch,kwargs,is_train=False,class_nb_dic=kwargs["class_nb_dic"])
 
         # Metrics
         metDictSample = metrics.add_losses_to_dic(metDictSample,loss_dic)
@@ -335,21 +318,17 @@ def evaluation(model, loader, epoch, args, mode="val",**kwargs):
     else:
         optuna_suff = ""
 
-    writeSummaries(metrDict, valid_example_nb_dic,total_example_nb, epoch, mode, args.model_id+optuna_suff, args.exp_id)
+    writeSummaries(metrDict,total_example_nb, epoch, mode, args.model_id+optuna_suff, args.exp_id)
 
     if args.ssl:
         return metrDict["loss"]
     else:
         return metrDict["Accuracy_"+("EXP" if args.task_to_train == "all" else args.task_to_train)] 
 
-def writeSummaries(metrDict, valid_example_nb_dic,total_example_nb, epoch, mode, model_id, exp_id):
+def writeSummaries(metrDict,total_example_nb, epoch, mode, model_id, exp_id):
 
     for metric in metrDict.keys():
-        if metric == "loss":
-            metrDict[metric] /= total_example_nb
-        else:
-            key = metric.split("_")[-1]
-            metrDict[metric] /= valid_example_nb_dic[key]
+        metrDict[metric] /= total_example_nb
 
     header_list = ["epoch"]
     header_list += [metric.lower().replace(" ", "_") for metric in metrDict.keys()]
@@ -400,9 +379,6 @@ def addOptimArgs(argreader):
 
     argreader.parser.add_argument('--optim', type=str, metavar='OPTIM',
                                   help='the optimizer to use (default: \'SGD\')')
-
-    argreader.parser.add_argument('--train_on_master_masks', type=str2bool, metavar='BOOL',
-                                  help='When training with a master, crop student input to the area focused on by the master.')
 
     return argreader
 
@@ -681,6 +657,8 @@ def main(argv=None):
     argreader.parser.add_argument('--log_gradient_norm_frequ', type=int, help='The step frequency at which to save gradient norm.')
 
     argreader.parser.add_argument('--save_output_during_validation', type=str2bool, help='To save model output during validation.')
+
+    argreader.parser.add_argument('--distribution_learning', type=str2bool, help='To learn target distribution instead of vote. Works only for DL4IVF dataset.')
 
     argreader = addInitArgs(argreader)
     argreader = addOptimArgs(argreader)

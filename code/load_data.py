@@ -34,7 +34,7 @@ def buildTrainLoader(args,shuffle=True,random_transf=True):
         train_dataset = ssl_dataset.SSLDataset(args.dataset_path,"train",args.train_prop,args.val_prop,imgSize,augment=args.ssl_data_augment)
     else:    
 
-        train_dataset = grade_dataset.GradeDataset(args.dataset_name,args.dataset_path,"train",imgSize,random_transf=random_transf)
+        train_dataset = grade_dataset.GradeDataset(args.dataset_name,args.dataset_path,"train",imgSize,random_transf=random_transf,distr_learn=args.distribution_learning)
 
         np.random.seed(1)
         torch.manual_seed(1)
@@ -57,7 +57,7 @@ def buildTestLoader(args, mode,random_transf=False):
     if args.ssl:
         test_dataset = ssl_dataset.SSLDataset(args.dataset_path,mode,args.train_prop,args.val_prop,imgSize,augment=args.ssl_data_augment)
     else:
-        test_dataset = grade_dataset.GradeDataset(args.dataset_name,args.dataset_path,mode,imgSize,random_transf=random_transf)
+        test_dataset = grade_dataset.GradeDataset(args.dataset_name,args.dataset_path,mode,imgSize,random_transf=random_transf,distr_learn=args.distribution_learning)
 
     if args.val_batch_size == -1:
         args.val_batch_size = int(args.max_batch_size*3.5)

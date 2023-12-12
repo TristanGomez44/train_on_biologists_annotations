@@ -13,16 +13,14 @@ import pandas as pd
 
 from args import ArgReader
 
-from grade_dataset import Tasks
+from enums import annot_enum_dic
+from grade_dataset import Tasks,NO_ANNOT
 
 def get_task_and_value(annot):
 
 	assert len(annot) in [3,6],f"Annot has incorect length:{annot}"
 
 	pref,value = annot[:2],annot[2:]
-
-	if value == "Null":
-		value = "NaN"
 
 	assert pref in ["Tr","Bo","Ex","Na"],f"Inccorect annotation prefix:{pref}"
 
@@ -54,37 +52,57 @@ def aggregate_annotations(new_path_to_annot_file):
 		rows = [line.rstrip() for line in file]
 	aggr_dic = defaultdict(lambda:{task:[] for task in Tasks})
 	aggr_annot = []
+	distr_aggr_annot = defaultdict(lambda :[])
 	for row in rows[1:]:
 		image_name,annot = row.split(",")
 		task,value = get_task_and_value(annot)
 		if task is not None:
 			aggr_dic[image_name][task].append(value)
+	
+	
 	for image_name in aggr_dic:
 		csv_row = [image_name]
 		for task in Tasks:
 			annot_list = aggr_dic[image_name][task]
-			annot_list = list(filter(lambda x:x!="NaN",annot_list))
-			if len(annot_list)==0:
-				csv_row.append("nan")
-			else:
-				counter = Counter(annot_list)
-				csv_row.append(counter.most_common(1)[0][0])
+			#annot_list = list(map(lambda x:x if x!="NaN" else NO_ANNOT,annot_list))
+
+			possible_annot_values = list(annot_enum_dic[task])
+
+			distr_row = [image_name]
+
+			counter = Counter(annot_list)
+			csv_row.append(counter.most_common(1)[0][0])
+			
+			for value in possible_annot_values:
+				distr_row.append(counter[str(value.value)])
+			
+			distr_aggr_annot[task].append(distr_row)
+
 		aggr_annot.append(csv_row)
 
-	return aggr_annot
+	return aggr_annot,distr_aggr_annot
 
 def get_header():
 	return ["image_name"]+[task.value for task in Tasks]
+
+def get_distr_csv_header(task):
+	possible_values = list(annot_enum_dic[task])
+	return ["image_name"]+[str(value.value) for value in possible_values]
 
 def format_annotations(path_to_annot_file,dest_folder):
 	annot_file_name = os.path.basename(path_to_annot_file)
 	new_path_to_annot_file = os.path.join(dest_folder,annot_file_name)
 	shutil.copy(path_to_annot_file,new_path_to_annot_file)
 	new_path_to_annot_file = convert_db_to_csv(new_path_to_annot_file)	
-	aggr_annot = aggregate_annotations(new_path_to_annot_file)
+	aggr_annot,distr_aggr_annot = aggregate_annotations(new_path_to_annot_file)
 	path_to_aggr_annot_csv = os.path.join(dest_folder,"aggregated_annotations.csv")
 	header = get_header()
 	np.savetxt(path_to_aggr_annot_csv,aggr_annot,header=" ".join(header),fmt="%s",comments='')
+
+	for task in Tasks:
+		task_header = get_distr_csv_header(task)
+		np.savetxt(path_to_aggr_annot_csv.replace(".csv","_"+task.value+".csv"),distr_aggr_annot[task],fmt="%s",comments='',header=" ".join(task_header))
+
 	return aggr_annot,header
 
 def format_dl4ivf_dataset(path_to_zip,path_to_annot_file,dest_folder,train_prop,val_prop,fold_name="blastocyst_dataset",json_file_name="splits.json",seed=0):
