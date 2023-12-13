@@ -510,8 +510,7 @@ def train(args,trial):
     kwargsTr["class_nb_dic"] = class_nb_dic
     kwargsVal["class_nb_dic"] = class_nb_dic
 
-    startEpoch = init_model.initialize_Net_And_EpochNumber(net, args.exp_id, args.model_id, args.cuda, args.start_mode,
-                                                args.init_path,args.optuna,ssl=args.ssl)
+    startEpoch = init_model.initialize_Net_And_EpochNumber(net, args.exp_id, args.      model_id, args.cuda, args.start_mode,args.init_path,args.optuna,ssl=args.ssl,strict=args.strict_init)
 
     kwargsTr["optim"],scheduler = init_model.getOptim_and_Scheduler(startEpoch,net,args)
 

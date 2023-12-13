@@ -23,6 +23,9 @@ case $1 in
   "bilRed2_r50_all_moreannot_null_distr")
     python trainVal.py -c grade_dl4ivf.config --model_id bilRed2_r50_all_moreannot_null_distr --first_mod resnet50 --big_images True --batch_size 32 --val_batch_size 215 --start_mode scratch --task_to_train all --resnet_bilinear True --bil_cluster False --distribution_learning True $2
     ;;
+  "bilRed2_r50_all_moreannot_null_FT")
+    python trainVal.py -c grade_dl4ivf.config --model_id bilRed2_r50_all_moreannot_null_FT --first_mod resnet50 --big_images True --batch_size 32 --val_batch_size 215 --task_to_train all --resnet_bilinear True --bil_cluster False --start_mode fine_tune --init_path ../models/EMB/modelBaseline_best_epoch7 --strict_init False $2
+    ;;
   "noneRed2_r50_multicenter")
     python trainVal.py -c grade_multicenter.config --model_id noneRed2_r50 --first_mod resnet50 --big_images True --batch_size 64 --val_batch_size 512 --start_mode scratch $2
     ;;

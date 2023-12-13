@@ -46,7 +46,7 @@ def getOptim_and_Scheduler(lastEpoch,net,args):
 
     return optim, scheduler
 
-def initialize_Net_And_EpochNumber(net, exp_id, model_id, cuda, start_mode, init_path,optuna,ssl=False):
+def initialize_Net_And_EpochNumber(net, exp_id, model_id, cuda, start_mode, init_path,optuna,ssl=False,strict=True):
 
     if start_mode == "auto":
         if (not optuna) and len(glob.glob("../models/{}/model{}_epoch*".format(exp_id, model_id))) > 0:
@@ -66,7 +66,7 @@ def initialize_Net_And_EpochNumber(net, exp_id, model_id, cuda, start_mode, init
         if init_path == "None":
             init_path = sorted(glob.glob("../models/{}/model{}_epoch*".format(exp_id, model_id)), key=utils.findLastNumbers)[-1]
 
-        net = preprocessAndLoadParams(init_path,cuda,net,ssl=ssl)
+        net = preprocessAndLoadParams(init_path,cuda,net,ssl=ssl,strict=strict)
 
         filename = os.path.basename(init_path)
         model_id_init_path = filename.split("model")[1]
@@ -87,7 +87,7 @@ def removeExcessModule(params):
         new_params[new_key] = params[key]
     return new_params
 
-def preprocessAndLoadParams(init_path,cuda,net,verbose=True,ssl=False):
+def preprocessAndLoadParams(init_path,cuda,net,verbose=True,ssl=False,strict=True):
     if verbose:
         print("Init from",init_path)
     params = torch.load(init_path, map_location="cpu" if not cuda else None)
@@ -111,8 +111,9 @@ def preprocessAndLoadParams(init_path,cuda,net,verbose=True,ssl=False):
         if len(unexpectedKeys)==1 and "n_averaged" in unexpectedKeys[0]:
             unexpectedKeys = []
 
-    assert len(missingKeys) == 0 and len(unexpectedKeys)==0,"Some keys were missing/unexpected. See message above."
-        
+    if strict:
+        assert len(missingKeys) == 0 and len(unexpectedKeys)==0,"Some keys were missing/unexpected. See message above."
+
     return net
 
 def addOrRemoveModule(params,net):
