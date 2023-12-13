@@ -4,7 +4,7 @@ import sys
 import torch
 from torch.nn import functional as F
 
-from utils import remove_no_annot,_remove_no_annot,make_class_nb_dic
+from utils import remove_no_annot,make_class_nb_dic
 from grade_dataset import NO_ANNOT 
 
 def agregate_losses(loss_dic):
@@ -86,18 +86,24 @@ def supervised_loss(target_dic, output_dict,regression,class_nb_targ_dic,plcc_we
                 loss_dic[f"loss_{target_name}"] = sub_loss.data.unsqueeze(0)
                 loss += sub_loss            
             else:
-                output,target = remove_no_annot(output_dict["output_"+target_name],target)     
+                    
                 if regression:
+                    output,target = remove_no_annot(output_dict["output_"+target_name],target) 
                     class_nb = class_nb_targ_dic[target_name]
                     sub_loss = regression_loss(output,target,class_nb,plcc_weight,rank_weight)
                 else:
                     if distr_learn:
+                        output = output_dict["output_"+target_name]
                         sub_loss =  F.kl_div(F.log_softmax(output,dim=-1),target,reduction="none")
                     else:
+                        output,target = remove_no_annot(output_dict["output_"+target_name],target) 
                         sub_loss = F.cross_entropy(output, target,reduction="none")
             
                 loss_dic[f"loss_{target_name}"] = sub_loss.data.sum().unsqueeze(0)
                 loss += sub_loss.sum()
+
+    if task_to_train == "all":
+        loss /= 3
 
     if map_sim_term_weight>0:
         icm_map,te_map,exp_map = feat_norm(output_dict["feat_icm"]),feat_norm(output_dict["feat_te"]),feat_norm(output_dict["feat_exp"])
