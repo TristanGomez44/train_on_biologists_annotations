@@ -21,10 +21,13 @@ def preproc_annot_multicenter(x):
         return NO_ANNOT
 
 def preproc_annot_dl4ivf(x,task):
-    annot_enum = annot_enum_dic[task]
-    return list(annot_enum).index(annot_enum(x))
+    if type(x) is str:
+        annot_enum = annot_enum_dic[task]
+        return list(annot_enum).index(annot_enum(x))
+    else:
+        return x
 
-def make_annot_dict(dataset_name,dataset_path,mode,distr_learn):
+def make_annot_dict(dataset_name,dataset_path,mode,distr_learn,zmos):
 
     datasets_names = set(dataset.value for dataset in Datasets)
     assert dataset_name in datasets_names,f"choose one dataset among {Datasets}"
@@ -34,7 +37,7 @@ def make_annot_dict(dataset_name,dataset_path,mode,distr_learn):
     else:
         make_annot_dic_func = make_dl4ivf_annot_dict
 
-    annot_dict = make_annot_dic_func(dataset_path,mode,distr_learn=distr_learn)
+    annot_dict = make_annot_dic_func(dataset_path,mode,distr_learn=distr_learn,zmos=zmos)
 
     return annot_dict
 
@@ -44,9 +47,12 @@ def get_videos_in_split(dataset_path,mode,split_file_name):
         splits = json.load(fp)
     return splits[mode]   
 
-def make_dl4ivf_annot_dict(dataset_path,mode,split_file_name="splits.json",annot_file_name="aggregated_annotations.csv",distr_learn=False):
+def make_dl4ivf_annot_dict(dataset_path,mode,split_file_name="splits.json",annot_file_name="aggregated_annotations.csv",distr_learn=False,zmos=False):
 
     split = get_videos_in_split(dataset_path,mode,split_file_name)
+
+    if zmos:
+        annot_file_name = annot_file_name.replace(".csv","_ZRECMOS.csv")
 
     annot_file_path = os.path.join(dataset_path,annot_file_name)
     annot_csv = pd.read_csv(annot_file_path,delimiter=" ")
@@ -75,9 +81,10 @@ def make_dl4ivf_annot_dict(dataset_path,mode,split_file_name="splits.json",annot
             
     return annot_dict
 
-def make_multicenter_annot_dict(dataset_path,mode,split_file_name="splits.json",train_annot_file_name="Gardner_train_silver.csv",eval_annot_file_name="Gardner_test_gold_onlyGardnerScores.csv",distr_learn=None):
+def make_multicenter_annot_dict(dataset_path,mode,split_file_name="splits.json",train_annot_file_name="Gardner_train_silver.csv",eval_annot_file_name="Gardner_test_gold_onlyGardnerScores.csv",distr_learn=None,zmos=None):
 
     assert distr_learn is None,"Cannot use distribution learning on this dataset."
+    assert zmos is None,"Cannot use ZMOS scores on this dataset."
 
     split = get_videos_in_split(dataset_path,mode,split_file_name)
 
@@ -137,10 +144,10 @@ def get_transform(size,mode='train',random_transf=True):
 
 class GradeDataset(Dataset):
 
-    def __init__(self,dataset_name,dataset_path,mode,size,random_transf=True,distr_learn=False):
+    def __init__(self,dataset_name,dataset_path,mode,size,random_transf=True,distr_learn=False,zmos=False):
 
         self.mode = mode
-        self.annot_dict = make_annot_dict(dataset_name,dataset_path,mode,distr_learn)
+        self.annot_dict = make_annot_dict(dataset_name,dataset_path,mode,distr_learn,zmos)
 
         self.image_list = sorted(self.annot_dict.keys())
 

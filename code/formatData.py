@@ -1,12 +1,10 @@
 
-import os,sys
+import os
 import zipfile
 import shutil
 import json
-import sqlite3
 import subprocess 
 from collections import defaultdict,Counter
-import math
 
 import numpy as np
 import pandas as pd
@@ -14,7 +12,50 @@ import pandas as pd
 from args import ArgReader
 
 from enums import annot_enum_dic
-from grade_dataset import Tasks,NO_ANNOT
+from grade_dataset import Tasks
+
+from ZREC_Mos_Recovery import zrec_mos_recovery
+
+def zmos_recovery(image_names,dest_folder):
+
+	annotations = pd.read_csv(os.path.join(dest_folder,"database.csv"),dtype=str,keep_default_na=False)
+	annotations.reset_index()
+
+	idUsers = sorted(list(set(annotations["idUser"])))
+	image_names = sorted(image_names)
+
+	idUser_dic = {idUsers[i]:i for i in range(len(idUsers))}
+	nameImage_dic = {image_names[i]:i for i in range(len(image_names))}	
+
+	matrix_dic = {task:np.nan*np.ones((len(idUsers),len(image_names))) for task in Tasks}
+
+	annot_enum_fmt_dic = {task:[str(annot.value) for annot in annot_enum_dic[task]] for task in Tasks}
+
+	for _,(image_name,annot,idUser) in annotations.iterrows():
+		
+		task,value = get_task_and_value(annot)
+
+		if task is not None:
+			task = Tasks(task)		
+			value = list(annot_enum_fmt_dic[task]).index(value)+1
+			matrix_dic[task][idUser_dic[idUser]][nameImage_dic[image_name]] = value
+
+	col_list= [image_names]
+
+	for task in Tasks:
+
+		mos_scores = zrec_mos_recovery(matrix_dic[task],dest_folder)-1
+		col_list.append(mos_scores)
+	
+	col_list = np.stack(col_list,axis=1)
+
+	mos_csv = pd.DataFrame(data=col_list,columns=["image_name"]+[task.value for task in Tasks])
+
+	mos_csv.to_csv(os.path.join(dest_folder,"aggregated_annotations_ZRECMOS.csv"),index=False,sep=" ")
+
+	#mos_csv = np.stack(col_list)
+	
+	#np.savetxt(dest_folder+"aggregated_annotations_ZRECMOS.csv",mos_csv,fmt="%s")
 
 def get_task_and_value(annot):
 
@@ -41,7 +82,7 @@ def convert_db_to_csv(new_path_to_annot_file):
 	csv_dirname = os.path.dirname(new_path_to_annot_file)
 	csv_path = os.path.join(csv_dirname,csv_filename)
 
-	queries = ["sqlite3",new_path_to_annot_file,".mode csv",".headers on",f".output {csv_path}","select nameImage,idTag from annotation join image on annotation.idImg=image.id"]
+	queries = ["sqlite3",new_path_to_annot_file,".mode csv",".headers on",f".output {csv_path}","select nameImage,idTag,idUser from annotation join image on annotation.idImg=image.id join user on user.id==annotation.idUser where username != 'debug'"]
 
 	subprocess.call(queries)
 
@@ -50,20 +91,19 @@ def convert_db_to_csv(new_path_to_annot_file):
 def aggregate_annotations(new_path_to_annot_file):
 	with open(new_path_to_annot_file) as file:
 		rows = [line.rstrip() for line in file]
-	aggr_dic = defaultdict(lambda:{task:[] for task in Tasks})
+	all_annot_dic = defaultdict(lambda:{task:[] for task in Tasks})
 	aggr_annot = []
 	distr_aggr_annot = defaultdict(lambda :[])
 	for row in rows[1:]:
-		image_name,annot = row.split(",")
+		image_name,annot,_ = row.split(",")
 		task,value = get_task_and_value(annot)
 		if task is not None:
-			aggr_dic[image_name][task].append(value)
-	
-	
-	for image_name in aggr_dic:
+			all_annot_dic[image_name][task].append(value)
+
+	for image_name in sorted(all_annot_dic.keys()):
 		csv_row = [image_name]
 		for task in Tasks:
-			annot_list = aggr_dic[image_name][task]
+			annot_list = all_annot_dic[image_name][task]
 			#annot_list = list(map(lambda x:x if x!="NaN" else NO_ANNOT,annot_list))
 
 			possible_annot_values = list(annot_enum_dic[task])
@@ -80,7 +120,7 @@ def aggregate_annotations(new_path_to_annot_file):
 
 		aggr_annot.append(csv_row)
 
-	return aggr_annot,distr_aggr_annot
+	return aggr_annot,distr_aggr_annot,all_annot_dic.keys()
 
 def get_header():
 	return ["image_name"]+[task.value for task in Tasks]
@@ -94,7 +134,7 @@ def format_annotations(path_to_annot_file,dest_folder):
 	new_path_to_annot_file = os.path.join(dest_folder,annot_file_name)
 	shutil.copy(path_to_annot_file,new_path_to_annot_file)
 	new_path_to_annot_file = convert_db_to_csv(new_path_to_annot_file)	
-	aggr_annot,distr_aggr_annot = aggregate_annotations(new_path_to_annot_file)
+	aggr_annot,distr_aggr_annot,img_names = aggregate_annotations(new_path_to_annot_file)
 	path_to_aggr_annot_csv = os.path.join(dest_folder,"aggregated_annotations.csv")
 	header = get_header()
 	np.savetxt(path_to_aggr_annot_csv,aggr_annot,header=" ".join(header),fmt="%s",comments='')
@@ -103,7 +143,7 @@ def format_annotations(path_to_annot_file,dest_folder):
 		task_header = get_distr_csv_header(task)
 		np.savetxt(path_to_aggr_annot_csv.replace(".csv","_"+task.value+".csv"),distr_aggr_annot[task],fmt="%s",comments='',header=" ".join(task_header))
 
-	return aggr_annot,header
+	return aggr_annot,header,img_names
 
 def format_dl4ivf_dataset(path_to_zip,path_to_annot_file,dest_folder,train_prop,val_prop,fold_name="blastocyst_dataset",json_file_name="splits.json",seed=0):
 
@@ -121,7 +161,9 @@ def format_dl4ivf_dataset(path_to_zip,path_to_annot_file,dest_folder,train_prop,
 	if not os.path.exists(new_img_folder_path):
 		os.rename(img_folder_path,new_img_folder_path)
 
-	aggr_annot,header = format_annotations(path_to_annot_file,dest_folder)
+	aggr_annot,header,img_names = format_annotations(path_to_annot_file,dest_folder)
+
+	zmos_recovery(img_names,dest_folder)
 
 	splits = make_split(aggr_annot,header,train_prop,val_prop,seed)
 

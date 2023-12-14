@@ -659,6 +659,8 @@ def main(argv=None):
 
     argreader.parser.add_argument('--distribution_learning', type=str2bool, help='To learn target distribution instead of vote. Works only for DL4IVF dataset.')
 
+    argreader.parser.add_argument('--zmos', type=str2bool, help='To use ZMOS scores when training regression model')
+
     argreader = addInitArgs(argreader)
     argreader = addOptimArgs(argreader)
     argreader = addSSLArgs(argreader)

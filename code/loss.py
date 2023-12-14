@@ -52,7 +52,7 @@ def rank_loss(y_pred, y):
 def regression_loss(output,target,class_nb,plcc_weight,rank_weight):
 
     target = (target+1)/(class_nb+1)
-
+    target = target.float()
     p_loss, r_loss = plcc_loss(output, target), rank_loss(output, target)
     loss = plcc_weight*p_loss + rank_weight*r_loss
     return loss

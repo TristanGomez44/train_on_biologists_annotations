@@ -211,7 +211,7 @@ class DINOHead(torch.nn.Module):
     
 class LinearSecondModel(SecondModel):
 
-    def __init__(self, nbFeat, nb_class_dic, dropout,bias=True,tasks=None,ssl=False):
+    def __init__(self, nbFeat, nb_class_dic, dropout,bias=True,tasks=None,ssl=False,regression=False):
 
         super().__init__(nbFeat, 1)
         self.dropout = nn.Dropout(p=dropout)
@@ -220,9 +220,13 @@ class LinearSecondModel(SecondModel):
             tasks = [task.value for task in Tasks]
 
         self.tasks = np.array(tasks)
+        self.regression = regression
 
         for task in self.tasks:
-            output_dim = nb_class_dic[task]
+            if regression:
+                output_dim=1
+            else:
+                output_dim = nb_class_dic[task]
             layer = nn.Linear(self.nbFeat, output_dim,bias=bias)
             setattr(self,"lin_lay_"+task,layer)
  
@@ -241,10 +245,10 @@ class LinearSecondModel(SecondModel):
     def get_output(self,x):
         output_dic = {}
         for i,key in enumerate(self.tasks):
-
             x_ = self.get_feat(x,i)
-  
-            output_dic["output_"+key] = getattr(self,"lin_lay_"+key)(x_)
+            output = getattr(self,"lin_lay_"+key)(x_)
+            
+            output_dic["output_"+key] = output
 
         return output_dic
     
@@ -331,7 +335,7 @@ def netBuilder(args):
     if args.second_mod == "linear":
         nb_class_dic = utils.make_class_nb_dic(args)
         tasks = [task.value for task in Tasks]
-        secondModel = LinearSecondModel(nbFeat, nb_class_dic, args.dropout,args.lin_lay_bias,tasks,args.ssl)
+        secondModel = LinearSecondModel(nbFeat, nb_class_dic, args.dropout,args.lin_lay_bias,tasks,args.ssl,args.regression)
     else:
         raise ValueError("Unknown second model type : ", args.second_mod)
 
@@ -408,9 +412,7 @@ def addArgs(argreader):
     
     argreader.parser.add_argument('--one_feat_per_head', type=args.str2bool, metavar='M',
                                   help='To compute one feature per prediction head. Is useful for example-based explanations.')       
-    
-    argreader.parser.add_argument('--regression_to_classif', type=args.str2bool, metavar='M',
-                                  help='To compute a single scalar that is used to compute the class logits.')       
+         
     argreader.parser.add_argument('--init_range_for_reg_to_class_centroid', type=float, metavar='M',
                                   help='The range to use to init the reg to class centroids.')       
 
