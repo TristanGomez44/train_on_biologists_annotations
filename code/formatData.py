@@ -16,6 +16,11 @@ from grade_dataset import Tasks
 
 from ZREC_Mos_Recovery import zrec_mos_recovery
 
+def normalize(subject_inconsistency):
+	min_incons = subject_inconsistency.min()
+	max_incons = subject_inconsistency.max()
+	return (subject_inconsistency-min_incons)/(max_incons-min_incons)
+
 def zmos_recovery(image_names,dest_folder):
 
 	annotations = pd.read_csv(os.path.join(dest_folder,"database.csv"),dtype=str,keep_default_na=False)
@@ -40,22 +45,40 @@ def zmos_recovery(image_names,dest_folder):
 			value = list(annot_enum_fmt_dic[task]).index(value)+1
 			matrix_dic[task][idUser_dic[idUser]][nameImage_dic[image_name]] = value
 
-	col_list= [image_names]
+	zmos_col_list= [image_names]
+	pondered_vote_col_list = [image_names]
 
 	for task in Tasks:
 
-		mos_scores = zrec_mos_recovery(matrix_dic[task],dest_folder)-1
-		col_list.append(mos_scores)
-	
-	col_list = np.stack(col_list,axis=1)
+		mos_scores,subject_inconsistency = zrec_mos_recovery(matrix_dic[task],dest_folder)
+		mos_scores -= 1
+		
+		print(task,matrix_dic[task].shape,mos_scores.shape,subject_inconsistency.shape)
+		
+		norm_consistency = 1-normalize(subject_inconsistency)
 
-	mos_csv = pd.DataFrame(data=col_list,columns=["image_name"]+[task.value for task in Tasks])
+		possible_values = list(annot_enum_dic[task])
+		possible_values_class_inds = [possible_values.index(value)+1 for value in possible_values]
 
-	mos_csv.to_csv(os.path.join(dest_folder,"aggregated_annotations_ZRECMOS.csv"),index=False,sep=" ")
+		pondered_votes = []
+		for j in range(len(mos_scores)):
+			weights = []
+			for value in possible_values_class_inds:		
+				weights.append(norm_consistency[matrix_dic[task][:,j]==value].sum())
+			maj_category = possible_values[np.argmax(np.array(weights))].value
+			pondered_votes.append(maj_category)
+		pondered_votes = np.array(pondered_votes)
 
-	#mos_csv = np.stack(col_list)
-	
-	#np.savetxt(dest_folder+"aggregated_annotations_ZRECMOS.csv",mos_csv,fmt="%s")
+		zmos_col_list.append(mos_scores)
+		pondered_vote_col_list.append(pondered_votes)
+
+	for col_list,suff in zip([zmos_col_list,pondered_vote_col_list],["ZRECMOS","PONDERED_VOTE"]):
+
+		col_list = np.stack(col_list,axis=1)
+
+		csv = pd.DataFrame(data=col_list,columns=["image_name"]+[task.value for task in Tasks])
+
+		csv.to_csv(os.path.join(dest_folder,f"aggregated_annotations_{suff}.csv"),index=False,sep=" ")
 
 def get_task_and_value(annot):
 
