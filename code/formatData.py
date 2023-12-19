@@ -45,9 +45,9 @@ def zmos_recovery(image_names,dest_folder):
 			value = list(annot_enum_fmt_dic[task]).index(value)+1
 			matrix_dic[task][idUser_dic[idUser]][nameImage_dic[image_name]] = value
 
-	zmos_col_list= [image_names]
+	zmos_col_list = [image_names]
 	pondered_vote_col_list = [image_names]
-
+	conf_col_list = [image_names]
 	for task in Tasks:
 
 		mos_scores,subject_inconsistency = zrec_mos_recovery(matrix_dic[task],dest_folder)
@@ -61,18 +61,24 @@ def zmos_recovery(image_names,dest_folder):
 		possible_values_class_inds = [possible_values.index(value)+1 for value in possible_values]
 
 		pondered_votes = []
+		confidences = []
 		for j in range(len(mos_scores)):
 			weights = []
 			for value in possible_values_class_inds:		
 				weights.append(norm_consistency[matrix_dic[task][:,j]==value].sum())
-			maj_category = possible_values[np.argmax(np.array(weights))].value
-			pondered_votes.append(maj_category)
+			weights = np.array(weights)
+
+			pondered_votes.append(possible_values[np.argmax(weights)].value)
+			confidences.append(np.max(weights)/np.sum(weights))
+
 		pondered_votes = np.array(pondered_votes)
+		confidences = np.array(confidences)
 
 		zmos_col_list.append(mos_scores)
 		pondered_vote_col_list.append(pondered_votes)
+		conf_col_list.append(confidences)
 
-	for col_list,suff in zip([zmos_col_list,pondered_vote_col_list],["ZRECMOS","PONDERED_VOTE"]):
+	for col_list,suff in zip([zmos_col_list,pondered_vote_col_list,conf_col_list],["ZRECMOS","PONDERED_VOTE","CONFIDENCE"]):
 
 		col_list = np.stack(col_list,axis=1)
 
