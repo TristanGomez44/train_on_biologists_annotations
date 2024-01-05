@@ -174,7 +174,7 @@ def format_annotations(path_to_annot_file,dest_folder):
 
 	return aggr_annot,header,img_names
 
-def format_dl4ivf_dataset(path_to_zip,path_to_annot_file,dest_folder,train_prop,val_prop,fold_name="blastocyst_dataset",json_file_name="splits.json",seed=0):
+def format_dl4ivf_dataset(path_to_zip,path_to_annot_file,dest_folder,train_prop,val_prop,fold_name="blastocyst_dataset",json_file_name="splits.json",seed=0,train_last=False):
 
 	os.makedirs(dest_folder,exist_ok=True)
 
@@ -194,13 +194,13 @@ def format_dl4ivf_dataset(path_to_zip,path_to_annot_file,dest_folder,train_prop,
 
 	zmos_recovery(img_names,dest_folder)
 
-	splits = make_split(aggr_annot,header,train_prop,val_prop,seed)
+	splits = make_split(aggr_annot,header,train_prop,val_prop,seed,train_last=train_last)
 
 	json_file_path = os.path.join(dest_folder,json_file_name)
 	with open(json_file_path, 'w') as fp:
 		json.dump(splits, fp)
 
-def make_split(all_aggr_annot,headers,train_prop,val_prop=None,seed=0):
+def make_split(all_aggr_annot,headers,train_prop,val_prop=None,seed=0,train_last=False):
 
 	all_aggr_annot = pd.DataFrame(all_aggr_annot,columns=headers)
 	groups = all_aggr_annot.groupby([task.value for task in Tasks])
@@ -220,9 +220,15 @@ def make_split(all_aggr_annot,headers,train_prop,val_prop=None,seed=0):
 		else:
 			val_size = round(len(img_names)*val_prop)
 
-		train_set.extend(img_names[:train_size].tolist())
-		val_set.extend(img_names[train_size:train_size+val_size].tolist())
-		test_set.extend(img_names[train_size+val_size:])
+		if train_last:
+			test_size = len(img_names) - train_size - val_size
+			val_set.extend(img_names[:val_size].tolist())
+			test_set.extend(img_names[val_size:val_size+test_size])
+			train_set.extend(img_names[val_size+test_size:].tolist())
+		else:
+			train_set.extend(img_names[:train_size].tolist())
+			val_set.extend(img_names[train_size:train_size+val_size].tolist())
+			test_set.extend(img_names[train_size+val_size:])
 
 	return {"train":sorted(train_set),"val":sorted(val_set),"test":sorted(test_set)}
 
@@ -279,6 +285,7 @@ def main(argv=None):
 	argreader.parser.add_argument('--path_to_zip',type=str)
 	argreader.parser.add_argument('--path_to_dl4ivf_annot',type=str)
 	argreader.parser.add_argument('--dest_folder',type=str,default="../data/dl4ivf_blastocysts/")
+	argreader.parser.add_argument('--train_last',action="store_true")
 
 	argreader.parser.add_argument('--format_multicenter_dataset',action="store_true")
 	argreader.parser.add_argument('--path_to_multicenter_dataset',type=str)
@@ -297,8 +304,9 @@ def main(argv=None):
 	assert os.path.splitext(args.path_to_dl4ivf_annot)[1] == ".db",'Annotations should be in database format'
 
 	if args.format_dl4ivf_dataset:
-		format_dl4ivf_dataset(args.path_to_zip,args.path_to_dl4ivf_annot,args.dest_folder,args.train_prop,args.val_prop)
+		format_dl4ivf_dataset(args.path_to_zip,args.path_to_dl4ivf_annot,args.dest_folder,args.train_prop,args.val_prop,train_last=args.train_last)
 	else:
 		make_multicenter_split(args.path_to_multicenter_dataset,args.train_prop)
+
 if __name__ == "__main__":
     main()
