@@ -17,8 +17,6 @@ def get_output(args):
         with open(split_file) as f:
             train_images_dic[i] = json.load(f)["train"]
 
-    #tasks = [task.value for task in enums.Tasks]
-
     output_dic = {}
     image_name_to_output = collections.defaultdict(lambda :{})
     for task in enums.Tasks:
@@ -76,7 +74,11 @@ def main():
             icm_conf = subdic[enums.Tasks.ICM]["confidence"]
             exp_conf = subdic[enums.Tasks.EXP]["confidence"]
 
+            original_size = image.size
+
             image_with_annot = add_annot(image,te,icm,exp,te_conf,icm_conf,exp_conf,args.low_conf_thres,args.high_conf_thres)
+
+            image_with_annot = image_with_annot.resize(original_size, Image.Resampling.LANCZOS)
 
             filename = os.path.basename(path)
             image_with_annot.save(os.path.join(args.out_fold_path,filename))
