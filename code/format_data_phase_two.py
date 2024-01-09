@@ -9,11 +9,11 @@ from enums import Tasks
 
 def conf_to_label(confidence,low_thres,high_thres):
     if confidence < low_thres:
-        return "weak"
+        return "faible"
     elif confidence < high_thres:
-        return "moderate"
+        return "moyenne"
     else:
-        return "strong"
+        return "forte"
 
 def get_annot_str(te,icm,exp,te_conf,icm_conf,exp_conf,low_conf_thres,high_conf_thres):
         annot_str = ""
@@ -23,7 +23,7 @@ def get_annot_str(te,icm,exp,te_conf,icm_conf,exp_conf,low_conf_thres,high_conf_
             conf = conf_to_label(conf,low_conf_thres,high_conf_thres)
             
             if annot != "Null":
-                annot_str += f"{label} : {annot} ({conf} confidence) "
+                annot_str += f"{label} : {annot} (confiance {conf}) "
             else:
                 annot_str += f"{label} : N/A"
 
@@ -31,14 +31,15 @@ def get_annot_str(te,icm,exp,te_conf,icm_conf,exp_conf,low_conf_thres,high_conf_
 
         return annot_str
 
-def add_annot(img,te,icm,exp,te_conf,icm_conf,exp_conf,low_conf_thres,high_conf_thres,fontsize=25,margin=10):
+def add_annot(img,te,icm,exp,te_conf,icm_conf,exp_conf,low_conf_thres,high_conf_thres,fontsize=25,margin=10,padd_size=50):
     
         # Create a new image with the same width and extra height for the banner
-        new_height = img.height + 50  # You can adjust the banner height as needed
-        new_img = Image.new('RGB', (img.width, new_height), color='black')
+        new_width = img.width + padd_size
+        new_height = img.height + padd_size  # You can adjust the banner height as needed
+        new_img = Image.new('RGB', (new_width, new_height), color='black')
 
         # Paste the original image onto the new image
-        new_img.paste(img, (0, 0))
+        new_img.paste(img, (padd_size//2, 0))
 
         # Create a drawing object
         draw = ImageDraw.Draw(new_img)
